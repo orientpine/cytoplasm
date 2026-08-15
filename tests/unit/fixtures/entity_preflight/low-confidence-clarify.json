@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case_id": "low-confidence-clarify",
+  "category": "low_confidence",
+  "synthetic": true,
+  "description": "정확 표기라도 약한 후보원(수발신 이력) 하나만으로는 자동 선택 하한에 못 미친다. exact-spelling-auto와 같은 표면형·다른 출처 대조.",
+  "request": {
+    "request_id": "ef3-req-lowconf-1",
+    "raw_text": "한가상 워크숍 준비를 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "한가상", "entity_kind": "person"}
+    ],
+    "relationship_queries": []
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "addressbook.history",
+      "normalized_value": "한가상",
+      "display_value": "한가상",
+      "confidence": 0.9,
+      "source_ref": "private://fixture/history/lowconf-1",
+      "relationship_query_id": null
+    }
+  ],
+  "expected": {
+    "auto_normalization": false,
+    "needs_confirmation": true,
+    "decision": "confirmation_required",
+    "reason": "low_confidence",
+    "selected": {},
+    "clarify_mentions": ["m-1"]
+  }
+}

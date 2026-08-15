@@ -1,0 +1,18 @@
+{
+  "decisions": [
+    "w2e6-fixture-meeting-marker 중간보고서 8월 1일 제출 확정",
+    "학회 초록 초안 담당은 차"
+  ],
+  "todos": [
+    {"title": "w2e6-fixture-meeting-marker 데이터셋 사전(변수 정의서) 작성", "deadline": "2026-07-24", "basis": "차: w2e6-fixture-meeting-marker 데이터셋 사전 7/24까지 작성"},
+    {"title": "IRB 변경신청 초안 작성", "deadline": "2026-07-31", "basis": "차: IRB 변경신청 초안 7/31까지"}
+  ],
+  "milestones": [
+    {"title": "w2e6-fixture-meeting-marker 중간보고서 제출", "deadline": "2026-08-01", "basis": "중간보고서는 8월 1일 제출로 확정"},
+    {"title": "학회 초록 마감", "deadline": "2026-08-15", "basis": "학회 초록 마감은 8월 15일"}
+  ],
+  "others": [
+    {"owner": "박", "title": "센서 펌웨어 코드 리뷰", "deadline": "2026-07-22", "basis": "박이 7월 22일까지 진행"},
+    {"owner": "김", "title": "실험 장비 예약", "deadline": "2026-07-20", "basis": "김: 장비 예약 7/20까지"}
+  ]
+}

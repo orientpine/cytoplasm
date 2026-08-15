@@ -1,0 +1,1 @@
+$NODE_OPS_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-converge-origin-main

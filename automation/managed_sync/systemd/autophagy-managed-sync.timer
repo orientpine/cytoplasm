@@ -1,0 +1,18 @@
+[Unit]
+# 30 minutes is the interval the subscriber contract is written against (W-F2.5-E step ④:
+# "admin publishes -> the member has the verified release in quarantine within 30 minutes").
+Description=Poll the managed-skill channel every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+# Catch up after downtime: a release published while the node was off must still land in
+# quarantine when it returns. Nothing is activated by catching up — quarantine delivery is
+# automatic, MOUNTING still needs the subscriber's own ✅ (D3).
+Persistent=true
+# Two ticks may still overlap after a long catch-up; the wrapper's FileKeyLease makes the
+# second one exit 0 silently, so this is a convenience, not the correctness boundary.
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

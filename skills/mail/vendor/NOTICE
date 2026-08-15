@@ -1,0 +1,28 @@
+Vendored mailon source
+======================
+
+`skills/mail/vendor/mailon/` is vendored, unmodified source from the
+`orientpine/emailAutomation` repository. The source was added to this
+repository by commit `ba67e73a94f8f650ac2364f51018b8c588a45dea` on
+2026-07-30 (`feat(mail): vendor mailon engine into repo (integrate emailAutomation)`).
+
+Per the repository owner's D9 attestation (2026-08-11), this vendored source
+is the owner's work and is covered by the repository's Apache-2.0 license.
+The vendored source files are kept byte-identical to the upstream material.
+
+The private development repository preserves those bytes. Public-history
+snapshots run `automation/public_export_redaction.py` against the materialized
+copy only, replacing identifying fixture/comment values without changing the
+tracked vendor files or the private upstream provenance.
+
+The following third-party packages are version-pinned runtime dependencies
+only; their source is not vendored here:
+
+* pyotp==2.10.0
+* python-dotenv==1.2.2
+* beautifulsoup4==4.15.0
+* lxml==6.1.1
+
+Transitive dependencies are also pinned in `requirements.txt` for
+reproducibility. Their own licensing terms remain applicable to those
+dependencies.

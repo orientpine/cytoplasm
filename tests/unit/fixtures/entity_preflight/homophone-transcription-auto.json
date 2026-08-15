@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case_id": "homophone-transcription-auto",
+  "category": "homophone_transcription",
+  "synthetic": true,
+  "description": "유사음 전사 오류(삼/상)를 단일 고신뢰 로컬 후보가 교정한다. 표면형과 정규화 값이 달라야 한다.",
+  "request": {
+    "request_id": "ef3-req-homophone-1",
+    "raw_text": "한가삼 부모님 상담 일정을 캘린더에 추가해줘",
+    "target_system": "google_calendar",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "한가삼", "entity_kind": "person"}
+    ],
+    "relationship_queries": []
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "personal_rag",
+      "normalized_value": "한가상",
+      "display_value": "한가상",
+      "confidence": 0.96,
+      "source_ref": "private://fixture/rag/homophone-1",
+      "relationship_query_id": null
+    }
+  ],
+  "expected": {
+    "auto_normalization": true,
+    "needs_confirmation": false,
+    "decision": "auto_selected",
+    "reason": "single_high_confidence",
+    "selected": {"m-1": "한가상"},
+    "clarify_mentions": []
+  }
+}

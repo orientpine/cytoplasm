@@ -1,0 +1,13 @@
+[Unit]
+# Two minutes is the worst case between the owner reacting and the deploy resuming.
+Description=Poll supply-chain approval reactions every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+# Catch up after downtime: an approval given while the node was off must still be acted
+# on when it returns, not wait for the next interval — the point is that no ✅ is missed.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

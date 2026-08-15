@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case_id": "spacing-variant-auto",
+  "category": "spacing_variant",
+  "synthetic": true,
+  "description": "띄어쓰기 차이. 표면형은 공백을 포함하지만 정규화 값은 붙여 쓴 이름이다.",
+  "request": {
+    "request_id": "ef3-req-spacing-1",
+    "raw_text": "정 샘플 연구원 미팅 준비를 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "정 샘플", "entity_kind": "person"}
+    ],
+    "relationship_queries": []
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "addressbook.contacts",
+      "normalized_value": "정샘플",
+      "display_value": "정샘플",
+      "confidence": 0.99,
+      "source_ref": "private://fixture/contacts/spacing-1",
+      "relationship_query_id": null
+    }
+  ],
+  "expected": {
+    "auto_normalization": true,
+    "needs_confirmation": false,
+    "decision": "auto_selected",
+    "reason": "single_high_confidence",
+    "selected": {"m-1": "정샘플"},
+    "clarify_mentions": []
+  }
+}

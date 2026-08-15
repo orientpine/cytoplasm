@@ -1,0 +1,11 @@
+title = "autophagy gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "synthetic E2E scenario markers only — NOT real secrets"
+paths = [
+  '''^tests/e2e/drivers/''',
+  '''^tests/e2e/fixtures/''',
+]

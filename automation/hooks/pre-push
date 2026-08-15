@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Refuse direct main updates only from linked session worktrees.
+# Installed into the shared common hooks directory by automation/worktree.sh.
+set -u
+
+git_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+gitdir_line=""
+if [[ -f "$git_root/.git" ]]; then
+  IFS= read -r gitdir_line < "$git_root/.git" || true
+fi
+
+linked_worktree=0
+if [[ "$gitdir_line" =~ ^gitdir:\ .*/\.git/worktrees/[^/]+$ ]]; then
+  linked_worktree=1
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if (( linked_worktree )) && [[ "$remote_ref" == "refs/heads/main" ]]; then
+    cat >&2 <<'REFUSAL_EOF'
+[pre-push] REFUSED — a session worktree cannot push refs/heads/main directly.
+
+  Push the session branch and open a PR instead. Main-checkout landing remains
+  available through automation/land.sh.
+REFUSAL_EOF
+    exit 1
+  fi
+done
+
+exit 0

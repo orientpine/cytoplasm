@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import datetime
+from typing import Final, Literal, TypeAlias, TypeGuard, assert_never
+
+from .apply import ApplyOutcome
+from .model import RelocationRecord, RelocationState
+
+RuntimeRelocationStatus: TypeAlias = Literal[
+    "proposed",
+    "posted",
+    "approved",
+    "written",
+    "ingested",
+    "reconciled",
+    "abandoned",
+]
+ReactionVerdict: TypeAlias = Literal["approved", "cancelled", "pending", "missing"]
+
+_RUNTIME_STATUSES: Final = frozenset(
+    {"proposed", "posted", "approved", "written", "ingested", "reconciled", "abandoned"}
+)
+_REACTION_VERDICTS: Final = frozenset({"approved", "cancelled", "pending", "missing"})
+
+
+def _is_runtime_status(value: str) -> TypeGuard[RuntimeRelocationStatus]:
+    return value in _RUNTIME_STATUSES
+
+
+def _is_reaction_verdict(value: str) -> TypeGuard[ReactionVerdict]:
+    return value in _REACTION_VERDICTS
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveEffects:
+    post_approval: Callable[[RelocationRecord], tuple[str, str] | None]
+    probe_reaction: Callable[[RelocationRecord], str]
+    write_obsidian: Callable[[RelocationRecord], tuple[str, str] | None]
+    verify_rag: Callable[[RelocationRecord], bool]
+    apply_delete: Callable[[RelocationRecord], ApplyOutcome]
+    now: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveResult:
+    state: RelocationState
+    posted: tuple[str, ...]
+    written: tuple[str, ...]
+    reconciled: tuple[str, ...]
+    abandoned: tuple[str, ...]
+
+
+def resolve_tick(
+    state: RelocationState,
+    *,
+    effects: ResolveEffects,
+    max_posts: int = 1,
+) -> ResolveResult:
+    relocations = dict(state.relocations)
+    posted: list[str] = []
+    written: list[str] = []
+    reconciled: list[str] = []
+    abandoned: list[str] = []
+    transition_time = effects.now.isoformat()
+
+    for key in sorted(relocations):
+        record = relocations[key]
+        status = str(record.status)
+        if status.startswith("legacy") or not _is_runtime_status(status):
+            continue
+
+        match status:
+            case "proposed":
+                if len(posted) >= max_posts or record.message_id is not None:
+                    continue
+                receipt = effects.post_approval(record)
+                if receipt is None:
+                    continue
+                message_id, channel_id = receipt
+                if message_id and channel_id:
+                    relocations[key] = replace(
+                        record,
+                        status="posted",
+                        message_id=message_id,
+                        channel_id=channel_id,
+                    )
+                    posted.append(key)
+
+            case "posted":
+                verdict = effects.probe_reaction(record)
+                if not _is_reaction_verdict(verdict):
+                    continue
+                match verdict:
+                    case "approved":
+                        relocations[key] = replace(
+                            record,
+                            status="approved",
+                            approved_at=transition_time,
+                        )
+                    case "cancelled":
+                        relocations[key] = replace(record, status="abandoned")
+                        abandoned.append(key)
+                    case "missing":
+                        relocations[key] = replace(
+                            record,
+                            status="proposed",
+                            message_id=None,
+                        )
+                    case "pending":
+                        pass
+                    case unreachable:
+                        assert_never(unreachable)
+
+            case "approved":
+                write_receipt = effects.write_obsidian(record)
+                if write_receipt is not None:
+                    remote_ref, note_content_sha256 = write_receipt
+                    relocations[key] = replace(
+                        record,
+                        status="written",
+                        remote_ref=remote_ref,
+                        note_content_sha256=note_content_sha256,
+                        written_at=transition_time,
+                    )
+                    written.append(key)
+
+            case "written":
+                if effects.verify_rag(record):
+                    outcome = effects.apply_delete(record)
+                    if outcome.deleted:
+                        relocations[key] = replace(
+                            record,
+                            status="reconciled",
+                            reconciled_at=transition_time,
+                            backup_path=outcome.backup_path,
+                            last_block_reason=None,
+                        )
+                        reconciled.append(key)
+                    else:
+                        relocations[key] = replace(
+                            record,
+                            last_block_reason=outcome.reason,
+                        )
+
+            case "ingested" | "reconciled" | "abandoned":
+                pass
+            case unreachable:
+                assert_never(unreachable)
+
+    return ResolveResult(
+        state=RelocationState(version=state.version, relocations=relocations),
+        posted=tuple(posted),
+        written=tuple(written),
+        reconciled=tuple(reconciled),
+        abandoned=tuple(abandoned),
+    )

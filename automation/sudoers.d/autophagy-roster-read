@@ -1,0 +1,1 @@
+$NODE_OPS_ACCOUNT ALL=($NODE_AGENT_ACCOUNT) NOPASSWD: /usr/bin/cat -- $NODE_AGENT_HOME/.hermes/roster.yaml

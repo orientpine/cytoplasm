@@ -1,0 +1,26 @@
+# W5-6: classified prompt addition must retain its body only in the private
+# workspace. The actor uses a synthetic marker generated at runtime; no body is
+# recorded in this scenario or its report.
+version: 1
+id: w5-prompt
+title: "W5 prompt classified-storage E2E bank"
+driver: tests/e2e/drivers/w5_local.sh
+actor: tests/e2e/drivers/w5_prompt_actor.py
+
+cases:
+  - id: classified_private_split
+    kind: security
+    steps:
+      - "add a classified synthetic prompt through the real prompt CLI"
+      - "require metadata-only overlay storage and a 0700 private body path"
+      - "require the generated marker to be absent from the repository history"
+    expect:
+      add_exit: 0
+      classified: true
+      private_path_created: true
+      private_dir_mode: "0700"
+      overlay_body_empty: true
+      overlay_is_metadata_only: true
+      repo_body_absent: true
+      git_history_body_absent: true
+      error: null

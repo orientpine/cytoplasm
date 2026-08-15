@@ -1,0 +1,74 @@
+[Unit]
+# The node-side authority for "origin/main is what prod runs". A CI runner is a
+# low-latency trigger, never a guarantee — offline runner, deleted workflow or a
+# renamed label all turn "merge a PR" back into silence.
+Description=Autophagy deploy reconciliation (origin/main -> release runtime)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=$NODE_OPS_ACCOUNT
+Group=$NODE_OPS_ACCOUNT
+WorkingDirectory=$NODE_RELEASE_CURRENT
+Environment=PYTHONPATH=$NODE_RELEASE_CURRENT
+# The owner-notice credential. Deliberately the SAME file the repair watcher already
+# reads (root:ops 0640) — this unit runs as ops too, so wiring the alarm up adds no new
+# secret, no new file, no new token and no new sudoers rule. Nothing is inlined here:
+# a token-shaped literal in a tracked unit would (rightly) fail secret-scan.
+EnvironmentFile=/etc/autophagy/repair-approval.env
+ExecStart=/usr/bin/python3 $NODE_RELEASE_CURRENT/automation/deploy_reconcile_cli.py
+# tmpfs, NOT yes — and that is not a weakening. Both hide every home from this unit
+# (`tmpfs` mounts an empty read-only filesystem over /home, /root, /run/user).
+#
+# It must be tmpfs because ProtectHome ALONE makes this timer a silent no-op: origin
+# is an SSH remote (git@github.com:) and ssh resolves ~/.ssh from the passwd entry,
+# not $HOME, so an emptied /home takes the key away. `ls-remote` then fails, and the
+# tick treats an unresolved origin as "transport trouble, not drift" and exits 0 — no
+# failure count, no notice. Measured 2026-08-02: the timer had run ~450 times over 15
+# hours and the state file had not been written once since the last manual run.
+#
+# So the one directory it needs is bound back in, read-only. Copying the key to /srv
+# instead would create a second copy to drift; read-only keeps the timer from touching
+# it. And systemd.exec(5) is explicit that this pairing REQUIRES tmpfs:
+#
+#   "it is not possible to use those options for mount points nested underneath paths
+#    specified in InaccessiblePaths=, or under /home/ and other protected directories
+#    if ProtectHome=yes is specified. TemporaryFileSystem= with ":ro" or
+#    ProtectHome=tmpfs should be used instead."
+#
+# Switching this back to `yes` therefore does not harden anything — it silently stops
+# prod from ever converging again. Pinned by tests/unit/test_deploy_reconcile_cli.py.
+ProtectHome=tmpfs
+BindReadOnlyPaths=$NODE_OPS_HOME/.ssh
+BindReadOnlyPaths=-$NODE_OPS_HOME/.hermes/node.toml
+BindReadOnlyPaths=-$NODE_AGENT_HOME/.hermes/roster.yaml
+# DELIBERATE, and pinned by tests/unit/test_deploy_reconcile_cli.py:
+#
+# PrivateTmp=no — kept, but the original reason no longer holds and saying so matters.
+#   The shared convergence lock used to be /tmp/autophagy-release-converge.lock, and a
+#   private /tmp would have split it in two (this timer and land.sh installing out of
+#   order, flipping the runtime BACKWARDS). It now lives under /srv/autophagy-private,
+#   because /tmp could not host it at all: fs.protected_regular=2 refuses a cross-owner
+#   open in a sticky world-writable directory, so root could never open the lock ops
+#   had created (2026-08-01). The setting stays so this timer's temp behaviour is
+#   identical to the ops-side converger — one less difference between the two paths.
+#
+# NoNewPrivileges is NOT set — the neighbouring repair unit sets it and copying that
+#   line is the obvious mistake. This tick's entire job is `sudo -n` to the privileged
+#   converge helper; with it set the timer would run every two minutes and be unable
+#   to converge anything, quietly.
+PrivateTmp=no
+# The lock directory is listed too: it is writable today (no ProtectSystem here), but
+# a later `ProtectSystem=strict` would otherwise break convergence silently.
+#
+# The resident mirror is listed for that same reason and no other. Converging the
+# release builds a DETACHED snapshot worktree, so it never moves that checkout's HEAD —
+# before `sync_mirror` every landing left the observation post behind until a human ran
+# land.sh, and branch work reaching main by PR never runs it (447 healthcheck failures,
+# 07-29..08-03). The tick fast-forwards it only on the shared `mirror-behind` verdict and
+# only once prod has already reached origin/main; a dirty or ahead checkout is never
+# touched, because that work exists nowhere else.
+ReadWritePaths=$NODE_PRIVATE_ROOT/deploy-reconcile $NODE_PRIVATE_ROOT/locks $NODE_DEPLOY_CHECKOUT
+
+[Install]
+WantedBy=multi-user.target

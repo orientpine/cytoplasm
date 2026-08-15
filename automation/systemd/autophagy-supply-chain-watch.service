@@ -1,0 +1,31 @@
+[Unit]
+# Makes the owner's approval final: without this, pressing the reaction leaves the
+# request unread until a human tells an agent session about it.
+Description=Autophagy supply-chain approval watcher (resume the deploy the owner approved)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The account whose $HOME holds the gate records. deploy-skill.sh writes them with
+# `run_as agent`, so no other account can see them.
+User=$NODE_AGENT_ACCOUNT
+Group=$NODE_AGENT_ACCOUNT
+WorkingDirectory=$NODE_RELEASE_CURRENT
+Environment=PYTHONPATH=$NODE_RELEASE_CURRENT
+# DISCORD_BOT_TOKEN lives here; provision-agent.sh maintains the file. Same arrangement
+# the report-hub collector already runs in production.
+EnvironmentFile=$NODE_AGENT_HOME/.env.secrets
+ExecStart=/usr/bin/python3 $NODE_RELEASE_CURRENT/automation/supply_chain_watch_cli.py
+# DELIBERATE, and pinned by tests/unit/test_supply_chain_watch_cli.py:
+#
+# ProtectHome=no — ALL THREE things this watcher reads are under the record owner's
+#   $HOME: the pending records (~/.hermes/skill-gate), the interop config carrying the
+#   owner id (~/.hermes/interop/config.json), and the bot token (~/.env.secrets).
+#   Setting ProtectHome=yes replaces /home with an empty directory, so the owner-id
+#   lookup exits 2 — and if it survived, enumeration would return zero records every
+#   tick, forever, without a single error line. The neighbouring repair unit sets that
+#   option safely only because all of ITS state lives under /srv.
+ProtectHome=no
+
+[Install]
+WantedBy=multi-user.target

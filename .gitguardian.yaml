@@ -1,0 +1,9 @@
+# GitGuardian config — mirror of the .gitleaks.toml allowlist intent.
+# synthetic E2E scenario markers only — not real secrets (e.g. the
+# `w2e6-fixture-*-marker` RAG-search fixtures under tests/e2e/).
+# Keep NARROW: test paths only; configs/, automation/, skills/, .env* stay scanned.
+version: 2
+secret:
+  ignored-paths:
+    - "tests/e2e/fixtures/**"
+    - "tests/e2e/drivers/**"

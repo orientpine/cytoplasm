@@ -1,0 +1,1 @@
+deploy-runner ALL=(root) NOPASSWD: /usr/local/libexec/autophagy-converge-origin-main

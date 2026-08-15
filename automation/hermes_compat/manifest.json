@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "description": "Local compatibility patch carrier for the vendored Hermes gateway. Tracked in the autophagy repo, applied idempotently on deploy, reversible via backup.",
+  "upstream": {
+    "product": "Hermes Agent",
+    "version": "v0.18.2",
+    "head": "46e87b14",
+    "install_method": "git",
+    "install_dir": "~/.hermes/hermes-agent"
+  },
+  "patches": [
+    {
+      "id": "busy-path-pre-gateway-dispatch",
+      "target": "gateway/run.py",
+      "applier": "patch_busy_dispatch.py",
+      "marker": "_hermes_pgd_done",
+      "backup_suffix": ".autophagy-orig",
+      "reason": "pre_gateway_dispatch is only invoked in _handle_message; messages arriving during an active turn are queued and consumed by a recursive _run_agent continuation that never invokes the hook. This bypasses skill-generation observation (W6-4) and the meeting-gate fail-closed veto (W2-3). The patch invokes the hook exactly once at busy-entry (_handle_active_session_busy_message), guarded by an event.metadata marker; fail-safe (only an explicit skip drops).",
+      "removal_condition": "Remove once an upstream Hermes release invokes pre_gateway_dispatch for busy-path / queued follow-up messages (its documented 'fired once per incoming MessageEvent' contract).",
+      "upstream_pr": "TODO: submit upstream — pre_gateway_dispatch not fired on busy/continuation path"
+    },
+    {
+      "id": "owner-dm-busy-fifo",
+      "target": "gateway/run.py",
+      "applier": "patch_busy_fifo.py",
+      "marker": "_hermes_busyfifo_done",
+      "backup_suffix": ".autophagy-orig",
+      "reason": "In busy_input_mode=queue, consecutive same-sender owner Discord DM text arriving during a long turn is newline-merged into ONE follow-up turn (the seam return False defers to base.py _flush_text_debounce_now -> merge_pending_message_event(merge_text=True)), mixing unrelated requests. This routes owner Discord DM text through relatedness-aware FIFO segmentation instead: UNRELATED -> separate sequential turns (arrival order in _pending_messages head + _queued_events overflow), RELATED (<=1.0s burst measured from the last physical DM, or reply-to-tail) -> merge into tail; the long task finishes uninterrupted (no interrupt/steer). Also: over-cap (>32) sends a rate-limited notice AND marks the rejected DM's receipt failed; the _MAX_INTERRUPT_DEPTH cap re-queues by prepend; each FIFO-drained follow-up turn finalizes its own per-physical-DM receipts (on_processing_complete only fires for the outer turn); and gateway start() reconciles any receipts left 'received' by a prior crash to failed. Fail-safe: any error defers to the original return False.",
+      "runtime_deps": "~/.hermes/hermes-compat/hermes_compat_boot.py (flat) + ~/.hermes/hermes-compat/automation/hermes_compat/{owner_dm_relatedness,owner_dm_signal,owner_dm_dispatch,receipt_tracker,receipt_ledger,receipt_apply}.py; injected code imports via bootstrap (__path__ merge) + absolute automation.hermes_compat.*",
+      "removal_condition": "Remove once an upstream Hermes release segments queue-mode busy text per message (no newline-merge) with relatedness batching.",
+      "upstream_pr": "TODO: submit upstream — queue-mode busy text newline-merges unrelated messages"
+    },
+    {
+      "id": "discord-per-message-receipts",
+      "target": "plugins/platforms/discord/adapter.py",
+      "applier": "patch_discord_receipts.py",
+      "marker": "_hermes_receipts_done",
+      "backup_suffix": ".autophagy-orig",
+      "reason": "The 👀/✅/❌ receipt reaction attaches only to the message that STARTS a turn; merged/queued DMs get processed without any receipt. This (1) preserves ALL raw messages through the ingress text-batch merge, (2) adds 👀 at receipt to every physical owner DM, (3) resolves ✅/❌ per physical DM of the completing logical turn, with a content-free crash-visibility ledger (channel_id/message_id/state only). Fail-safe throughout.",
+      "runtime_deps": "~/.hermes/hermes-compat/hermes_compat_boot.py + automation/hermes_compat/{receipt_ledger,receipt_tracker,receipt_apply}.py; content-free ledger at ~/.hermes/owner-dm-receipts/receipts.sqlite3",
+      "removal_condition": "Remove once upstream Hermes gives a per-message receipt lifecycle for merged/queued messages.",
+      "upstream_pr": "TODO: submit upstream — receipt reaction is per-turn, not per-message"
+    }
+  ],
+  "notes": [
+    "hermes update overwrites the vendored install; re-run automation/hermes_compat/deploy.sh after any update.",
+    "healthcheck should surface a missing patch (see automation/healthcheck.sh).",
+    "This carrier does NOT hard-block gateway startup; a fail-closed ExecStartPre gate is a deliberate opt-in next step (brick risk)."
+  ]
+}

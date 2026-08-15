@@ -1,0 +1,15 @@
+[Unit]
+Description=Autophagy ops repair owner-approval reaction watcher
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=$NODE_OPS_ACCOUNT
+Group=$NODE_OPS_ACCOUNT
+WorkingDirectory=$NODE_RELEASE_CURRENT
+Environment=PYTHONPATH=$NODE_RELEASE_CURRENT
+EnvironmentFile=/etc/autophagy/repair-approval.env
+ExecStart=/usr/bin/python3 $NODE_RELEASE_CURRENT/automation/repair/repair_ops_reaction_watch.py
+NoNewPrivileges=yes
+ProtectHome=yes
+ReadWritePaths=$NODE_REPAIR_WORK $NODE_PRIVATE_ROOT/repair-logs $NODE_PRIVATE_ROOT/repair-plans $NODE_PRIVATE_ROOT/repair-approvals.jsonl $NODE_PRIVATE_ROOT/repair-approval-pending $NODE_PRIVATE_ROOT/repair-state

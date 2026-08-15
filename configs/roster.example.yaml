@@ -1,0 +1,32 @@
+# Immutable seed only. Copy to ~/.hermes/roster.yaml and replace every synthetic value.
+schema: 1
+# Monotonic publication counter — bump it on EVERY signed roster you publish.
+# A signature proves who wrote a roster, never when: without this, a feed host that
+# cannot sign can still rewind the roster branch and re-serve an older genuinely
+# signed roster, undoing a member removal. Subscribers refuse any roster that does
+# not advance the revision they already hold (ROSTER-ROLLBACK).
+revision: 1
+group_id: example-lab
+admin:
+  name: Example Admin
+  discord_user_id: "1001"
+  publisher_principal: publisher-example-admin@autophagy
+  signing_public_key: >-
+    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g roster-example-admin
+members:
+  - name: Example Active Member
+    discord_user_id: "1002"
+    node_label: example-active-node
+    status: active
+  - name: Example Removed Member
+    discord_user_id: "1003"
+    node_label: example-removed-node
+    status: removed
+
+# Omit update_channel to receive software updates directly from upstream (the v1 default).
+# To opt in to another channel explicitly, set a non-empty value such as:
+# update_channel: https://updates.example.invalid/autophagy.git
+
+# Omit announce_channel_id to keep managed-skill release announcements off Discord.
+# To announce every published release in one group channel, set its numeric id:
+# announce_channel_id: "1004"

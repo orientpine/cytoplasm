@@ -1,0 +1,24 @@
+# W5-6: proposal bodies live only in the private workspace; repository status
+# metadata contains no body material.
+version: 1
+id: w5-proposal
+title: "W5 proposal private-assembly E2E bank"
+driver: tests/e2e/drivers/w5_local.sh
+actor: tests/e2e/drivers/w5_proposal_actor.py
+
+cases:
+  - id: private_assembly_review
+    kind: security
+    steps:
+      - "assemble three synthetic private sections and one folded contribution"
+      - "require a single non-GLM final review"
+      - "require status metadata and Git history to remain body-free"
+    expect:
+      assembled_sections: 3
+      contribution_folded: true
+      review_calls: 1
+      review_provider_nonglm: true
+      workspace_private: true
+      status_metadata_body_absent: true
+      git_history_body_absent: true
+      error: null

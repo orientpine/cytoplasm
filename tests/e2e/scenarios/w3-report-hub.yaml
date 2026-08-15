@@ -1,0 +1,65 @@
+# W3-6 scenario bank: the Wave-3 report hub (W3-4) collect + dashboard path.
+#
+# Flow under test (unattended, one synthetic strict Interop v0 report):
+#   agent-cha bot posts a format_report() block to the real #agents-log ->
+#   the W3-4 collector (10s REST polling, ops@<primary-node>) classifies + persists
+#   it into reports.db as registered -> the tailnet dashboard (Basic auth,
+#   fail-closed 401 unauthenticated) renders it -> cleanup deletes the DB
+#   row(s) AND the Discord message so the bank leaves zero residue.
+#
+# Idempotency / safety:
+#   * task_id is unique per run (W3-6-bank-<epoch>); cleanup deletes every
+#     W3-6-bank-% row, self-healing residue from any crashed prior run;
+#   * the collector watermark is asserted to survive cleanup, so the deleted
+#     message can never be re-ingested by a restart backfill;
+#   * the hub bot is read-only (cannot post) and the agents-log chatter probe
+#     asserts no bot replied to the synthetic report (cascade guard);
+#   * dashboard credentials are read ops-side only and never printed.
+version: 1
+id: w3-report-hub
+title: "W3 report-hub collect + dashboard E2E bank (with full cleanup)"
+driver: tests/e2e/drivers/w3_report_hub.sh
+remote_host: <primary-node>
+remote_account: ops
+
+cases:
+  - id: collect
+    kind: happy
+    steps:
+      - "agent-cha bot posts one strict v0 report (deployed W1-6 format_report) to #agents-log"
+      - "collector persists it into reports.db within 60s, classified registered (peers.yaml match)"
+    expect:
+      post_exit: 0
+      report_posted: true
+      db_row_within_60s: true
+      db_agent_id: "agent-cha"
+      db_task_match: true
+      db_status: "done"
+      db_registered: 1
+      db_registration_note: "registered"
+      error: null
+
+  - id: dashboard
+    kind: happy
+    steps:
+      - "unauthenticated dashboard GET -> 401 (fail-closed auth, liveness proof in one probe)"
+      - "authenticated GET -> 200 and the page shows the synthetic task id"
+    expect:
+      unauth_401: true
+      authed_200: true
+      dashboard_shows_task: true
+      error: null
+
+  - id: cleanup
+    kind: happy
+    steps:
+      - "delete all W3-6-bank-% rows from reports.db (self-healing), verify none remain"
+      - "collector watermark preserved -> no re-ingestion after message deletion"
+      - "no other bot message landed after the synthetic report (cascade guard), then the Discord message is deleted"
+    expect:
+      bank_rows_deleted: true
+      db_rows_absent_after: true
+      watermark_preserved: true
+      agents_log_no_chatter_after: true
+      discord_message_deleted: true
+      error: null

@@ -1,0 +1,16 @@
+[Unit]
+Description=Autophagy sandbox-only deployment smoke
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=$NODE_OPS_ACCOUNT
+Group=$NODE_OPS_ACCOUNT
+WorkingDirectory=$NODE_RELEASE_CURRENT
+ExecStart=/usr/bin/bash $NODE_RELEASE_CURRENT/automation/deploy-smoke.sh
+UMask=0077
+ProtectHome=no
+PrivateTmp=no
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,76 @@
+# W3-6 scenario bank: the Wave-3 agent-to-agent coordination protocol (W3-3),
+# wrapped around the already-verified E2E orchestrator
+# tests/e2e/w3_3_coordination.sh (reused as-is — wrap, don't duplicate).
+#
+# What the wrapped script proves per run (all unattended, deterministic peer
+# brain, signed-injection owner confirms under E2E_TEST_MODE scoped to the
+# runner processes only):
+#   happy    peer offers slots -> agent proposes -> peer accepts -> injected
+#            owner confirm -> gated gws insert (+2 audit records) -> terse
+#            #team notice + owner DM -> 120s cascade monitor (bot-skip prefix
+#            rule: notices=1 others=0) -> gated delete restores the calendar.
+#   refusal  peer declines twice -> exactly 1 renegotiation -> exit 5,
+#            termination DM, ZERO calendar writes.
+#   deadlock peer gateway stopped -> injected 15s timeout -> exit 4,
+#            escalation DM ("인간 협의"), ZERO calendar writes; peer gateway
+#            restarted afterwards.
+#   overall  both gateways active at the end; script exit 0 only if all pass.
+#
+# The wrapped script asserts each observable itself (approvals deltas, event
+# counts, DM presence, cascade monitor); this scenario re-exposes those
+# self-asserted markers to the bank judge for failure isolation.
+version: 1
+id: w3-coordination
+title: "W3 agent-to-agent coordination E2E bank (happy + refusal + deadlock)"
+driver: tests/e2e/drivers/w3_coordination.sh
+# The bank may rerun this full live Discord/SSH integration once after a
+# transient driver failure; unmarked offline scenarios always remain exact,
+# single-attempt checks.  Every retry reruns the same strict self-assertions.
+live_retry: true
+remote_host: <primary-node>
+remote_account: agent
+
+cases:
+  - id: happy
+    kind: happy
+    steps:
+      - "live peer slot negotiation -> injected owner confirm -> gated calendar write (+2 approvals, +1 event)"
+      - "result DM found; 120s #team cascade monitor: exactly 1 terse notice, 0 other bot messages"
+      - "gated delete cleanup: event count restored to baseline"
+    expect:
+      happy_pass: true
+      cascade_notice_only: true
+      team_monitor_clean: true
+      error: null
+
+  - id: deadlock
+    kind: failure
+    fault: "peer gateway stopped -> coordination times out (15s injected)"
+    steps:
+      - "request against stopped peer -> exit 4 + escalation DM (인간 협의)"
+      - "zero calendar writes proven (approvals delta 0, event count unchanged)"
+    expect:
+      deadlock_pass_full: true
+      error: null
+
+  - id: refusal
+    kind: failure
+    fault: "peer declines every candidate (simulate marker)"
+    steps:
+      - "peer declines twice -> exactly 1 renegotiation -> exit 5 + termination DM"
+      - "zero calendar writes proven"
+    expect:
+      refusal_pass_full: true
+      error: null
+
+  - id: overall
+    kind: happy
+    steps:
+      - "wrapped script exit 0 (its own PASS gate over all scenarios)"
+      - "both hermes gateways (agent, peer) active at the end of the run"
+    expect:
+      script_exit: 0
+      e2e_pass: true
+      gateway_agent_active: true
+      gateway_peer_active: true
+      error: null

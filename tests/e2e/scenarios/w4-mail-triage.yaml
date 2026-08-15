@@ -1,0 +1,107 @@
+# W4-5 scenario bank: institutional mail triage -> draft -> approval gate ->
+# send (W4-2), mail-mode full-go (W0-7c) => GO branch.
+#
+# Approval-gate focus (the security core of this scenario):
+#   * the auto-send path NEVER fires before an owner-bound approval record —
+#     the confirm transport is the W1-6 HMAC signed injection (headless stand-in
+#     for cha's manual ✅), accepted only inside this runner's E2E env;
+#   * per-branch approval-log accounting: the ONE approved send appends exactly
+#     2 records (1 external_effect.approval + 1 mail.reply_send audit) with the
+#     W0-6 schema ({timestamp, target_id, hash} + action/approval/result);
+#   * gate-bypass NEGATIVE: a direct mailon-send tool call with NO approval
+#     record is fail-closed by the deployed pre_tool_call gate rules, and a
+#     signed E2E record is REJECTED outside E2E mode (production guard);
+#   * peer-bot NEGATIVE: forged signature / non-owner (bot) approval => 0 send.
+#
+# Isolation: fully offline (stub mailon/LLMs/calendar/send transports in a
+# temp dir); E2E_TEST_MODE only on the actor's subprocesses; zero real sends;
+# zero production paths; the fixture canary must never reach GLM or stdout.
+version: 1
+id: w4-mail-triage
+title: "W4 mail triage GO-branch E2E bank (approval-gate hardened)"
+driver: tests/e2e/drivers/w4_local.sh
+actor: tests/e2e/drivers/w4_mail_triage_actor.py
+
+cases:
+  - id: triage_draft
+    kind: happy
+    steps:
+      - "triage tick over 5 fixture mails: spam skip, normal no-action, seminar -> calendar delegation, 2 reply drafts"
+      - "sensitivity gate BEFORE LLM: patent mail never reaches GLM (4 GLM calls, 3 non-GLM), canary confined"
+      - "zero sends and zero approval records before any confirm; reprocess tick is idempotent"
+    expect:
+      process_exit: 0
+      processed_n: 5
+      drafts_created: 2
+      spam_skipped: true
+      normal_no_action: true
+      calendar_delegated: true
+      sensitive_draft_created: true
+      glm_calls: 4
+      nonglm_calls: 3
+      sensitive_body_reached_glm: false
+      canary_on_approvals_surface: false
+      sends_before_approval: 0
+      approval_records_before_approval: 0
+      reprocess_idempotent: true
+      error: null
+
+  - id: approved_send
+    kind: happy
+    steps:
+      - "owner-signed injected approval (W1-6) -> confirm -> exactly 1 frozen-argv mailon send"
+      - "approvals.jsonl gains exactly 2 records (1 gate approval + 1 sent audit), W0-6 schema, owner-bound"
+      - "deployed gate rules allow the SAME action hash in E2E mode but reject the E2E record in production mode"
+      - "double confirm is refused with no second send; send log masks the recipient"
+    expect:
+      confirm_exit: 0
+      sent_via_signed_injection: true
+      mailon_send_calls: 1
+      send_argv_is_mailon_send: true
+      approval_records_total: 2
+      gate_approval_records: 1
+      audit_sent_records: 1
+      approval_schema_valid: true
+      approval_target_id: "tool:mailon_send:python3"
+      approval_owner_bound: true
+      gate_hash_matches_record: true
+      gate_allows_approved_hash_e2e: true
+      production_rejects_e2e_record: true
+      double_confirm_rejected: true
+      sends_after_double_confirm: 1
+      send_log_sent: true
+      recipient_leaked_in_send_log: false
+      error: null
+
+  - id: gate_bypass
+    kind: failure
+    fault: "direct external-effect tool call without any owner-bound approval record"
+    steps:
+      - "evaluate a fresh mailon-send tool call against the deployed denylist: external effect, BLOCKED (approval_required)"
+      - "confirm without any approval fails closed; watch tick refuses to run under E2E_TEST_MODE (production guard)"
+      - "send count and approval-log line count unchanged"
+    expect:
+      bypass_is_external_effect: true
+      bypass_blocked: true
+      bypass_reason: "approval_required"
+      confirm_without_approval_rejected: true
+      sends_after_bypass_attempts: 1
+      approval_records_after_bypass: 2
+      watch_refuses_e2e_env: true
+      error: null
+
+  - id: peer_bot_approval
+    kind: failure
+    fault: "bot(peer) approval reaction / forged signature instead of the owner"
+    steps:
+      - "forged-signature injected approval -> rejected; non-owner (peer bot) approval -> rejected"
+      - "peer-bot signed event is refused by the gate's record path (no record appended)"
+      - "0 additional sends, 0 additional approval records; the rejected draft is discarded"
+    expect:
+      forged_signature_rejected: true
+      peer_bot_confirm_rejected: true
+      peer_bot_gate_record_refused: true
+      sends_after_peer_attempts: 1
+      approval_records_after_peer: 2
+      rejected_draft_discarded: true
+      error: null

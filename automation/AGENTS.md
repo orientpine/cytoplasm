@@ -1,0 +1,40 @@
+# automation/ — 오케스트레이션·게이트·워처·배치 코어
+
+에이전트 실시간 로직 밖의 모든 자동화. 순수 로직은 stdlib 전용, 외부효과는 승인 게이트 경유.
+대부분 서브패키지는 `python3 -m automation.<pkg>` 또는 `<pkg>/*_cli.py`로 실행.
+
+## 서브패키지 맵
+| 경로 | 역할 | wave |
+|------|------|------|
+| `interop/` | 외부효과 게이트 + 인터롭 규약 코어 (자체 AGENTS.md 있음) | W1-5/6, W3-3 |
+| `entity_preflight/` | 외부 쓰기 전 개인 고유명사 해석 계약·결정 정책·PII 감사 경계·API 재조회 상태 모델. 미확정 시 **승인 게이트가 아니라 대화 내 clarify**(`clarify.render_clarify` → `ENTITY-CLARIFY` + non-zero exit; calendar `ROUTING-CLARIFY` 선례) — 새 승인 표면·watcher 신설 금지(단위 테스트가 강제). 임계값 단일 위치=`policy.POLICY_SEED_PATH`. 호출 흐름은 `docs/guide/personal-entity-preflight.md` | 계약 |
+| `repair/` | 자가수리: 진단→RED 재현→패치→샌드박스 회귀→소유자 승인→적용. `repair_cli.py`(사용자) vs `repair_ops_*`(ops 경계) 분리. raw 로그 비노출(redaction 경계), 승인 표면은 repair bot 자체 자격증명으로 연 소유자 DM 바인딩으로 검증하고 저장 레코드에서만 다시 연다(`repair_ops_discord.py`). **승인은 패치 내용에 바인딩**된다 — `repair_patch_diff.py`가 unified diff를 변경파일·라인증감으로 요약하고(요약할 수 없는 diff는 거부), `repair_patch_binding.py`가 바이트 sha256+요약을 preimage로 하는 `sha256:` 해시를 만들며, `repair_approval_render.py`가 그것을 DM으로 렌더한다(**v1 동결**, 본문 비노출·경로만 안내, 1900자 fail-closed). 요약은 레코드에 영속된다 — 워처가 패치 없이 메시지를 재현해 비교하기 때문. 바인딩 4필드는 승인 binding 필드 **앞**에 둔다(binding이 마지막 4개여야 한다는 conformance). 보고 경계는 agent가 발급한 `repair_capability` → ops의 enum-only `repair_report_queue` → agent 소유 `repair_report_consumer`의 카드 readback·전송 → 신원·의미 영수증 순서이며, `repair_report_reconcile`이 종결 lifecycle의 누락 요청을 복구한다. **라이브 배포는 자매 rollout 계획이 소유한다.** **capability 인증 범위의 잔여 위험**: 티켓·occurrence만 인증하며 operation·사유는 ops가 결정하므로, 유효 capability당 발화 상한은 occurrence당 7건이다. | W6-1/2, RRC |
+| `regression_bank/` | 회귀 뱅크 성장 + `weekly_bank.py`. 뱅크 green이어야 repair apply 허용 — 상태 UNKNOWN=fail-closed(`bank_state.allows_patch_application`) | W6-3 |
+| `skill_generation/` | 반복작업 감지 → 스킬 자동 제안(주 3건 상한). `dispatch.sh`로만 W1-8 파이프라인 전달 | W6-4 |
+| `rag_ingest/` | 개인 RAG 인제스트. content-hash 멱등. embedding API 직접 호출 금지(파이프라인 경유). obsidian 소스 sync 실패 시 해당 source만 skip. `cron/rag_ingest_watch.py`(수동 인덱서=폴링 허용) | W2-4 |
+| `twin_distill/` | LLM 기반 판단 근거 추출(inferred). patent-sensitive 증거는 프롬프트에서 제외, 출력은 draft-only(위키 게이트 경유) | — |
+| `twin_observe/` | 게이트 원장(ledger) 관찰 기반 판단 근거 분석(observed). advisory-only — 제안일 뿐 실행권한 아님 | — |
+| `memory_curator/` | Hermes 자체 메모리(MEMORY.md/USER.md) no-agent 큐레이터: 무손실 정리(자율)+durable 판단 트윈 승격(오너-DM ✅)+검증 후 자체 메모리 삭제(reconcile: 노트 해시·마커·source-qualified digest 일치+단일 항목일 때만, fail-closed)+변화감지 24h cooldown 경보. 승격은 회수 크기 큰 후보부터(`reclaim.order_by_reclaim`). v3 상태(`state.py`, atomic 0600, v1/v2 마이그레이션)는 게시·삭제 owner notice를 `promotion_key#phase` outbox로 먼저 체크포인트해 cooldown과 독립적으로 at-least-once 전송한다. **LLM 분류기**(`classify*.py`, glm-main 주입, TWIN/OPS_REFERENCE/KEEP_NATIVE/UNCERTAIN)는 cue 놓친 durable을 잡으나 cron은 LLM-free로 유지(주입형, `test_memory_curator_cron_is_llm_free` 강제); `shadow_cli.py`=비파괴 진단 리포트(쓰기·게시 0, 소유자 수동). 승인은 위키 게이트 `create_draft`+`post_confirm_message` 재사용(approval_lifecycle 무접촉, `test_memory_curator_boundary`가 강제). `legacy_rebind.py`=구승격 재개(소유자 실행). 배포 `deploy.sh`(tar-over-ssh). 상세 `docs/기능소개/메모리-큐레이터.md` | t_dacb601c |
+| `memory_relocate/` | 큐레이터가 `OPS_REFERENCE`로 분류한 운영 사실을 오너 ✅ 후 Obsidian 운영-참조 노트로 재배치+RAG 검증 후 네이티브 삭제(큐레이터 boundary test 회피용 **별도 패키지**; 큐레이터는 순수 제안자 유지). `apply.py`=5-게이트(owner ✅+composite action_hash 미변경·Obsidian 존재·RAG 인제스트·native snapshot digest 일치·단일 항목)을 순서대로 모두 통과할 때만 `memory_curator.deletion.delete_entry` 단일 경로로 삭제. `binding.relocation_action_hash`=composite(source_kind+entry_digest+note_plan_sha256+delete_intent, 난수 없음 — 쓰기+삭제 단일 ✅ 인가). 승인은 `ApprovalKind.OBSIDIAN_WRITE`(오너 DM) producer 패턴 재사용(`approval_gate.py`, conformance 등록). `render.py`=v1 동결(원문+목적지+회수 글자수+"승인 시 삭제" 명시, 1900자 fail-closed). `rag_verify.py`=read-only 인제스트 digest 확인. `watch_step.resolve_tick`+`effects_live.py`+`cron/memory_relocate_watch.py`=리액션 워처(proposed→게시→✅→쓰기→RAG→삭제). USER.md는 v1 재배치 대상 아님. 워처는 ops 체크아웃에서 실행(automation.* repo root import), `deploy.sh`=provenance→ops ff-pull→워처 배포→리액션 cron. 상세 `docs/기능소개/메모리-재배치.md` | t_dacb601c |
+| `report_hub/` | `#agents-log` 콜렉터(SQLite) + 대시보드(tailnet + Basic auth, 인증 없으면 fail-closed 미기동, 읽기 전용) | W3-4 |
+| `managed_skills/` | 관리형 스킬 발행 + 개인→그룹 제출. 제출은 personal HEAD tarball·`ManagedManifest` v1을 `approval_lifecycle`의 `skill-submit`으로 검토 요청할 뿐 자동 import하지 않으며, 관리자 `publish_cli --submission-*` 명시 실행만 기존 발행 게이트로 넘긴다 | W-F3, W-F4-B |
+| `reminder_poller/` | 이벤트/마일스톤 리마인더 cron+SQLite 멱등 | W3-2 |
+| `research_trends/` · `cost-report/` | 주간 arXiv / 일일 spend 리포트 (dedup 미구현 수용 대상) | W5-2, W1-7 |
+| `notes_organize/` | 노트 정리 no-agent 래퍼(실패 시 한 줄 마스킹 로그) | — |
+| `final/` | F-웨이브 감사 스크립트(f1_audit/f2_quality/f4_scope) — 계획 문서 대조 검증 | F1-F4 |
+| `hermes_compat/` | 벤더 Hermes 게이트웨이 호환 패치 캐리어(추적·멱등·되돌리기 가능, exact-preimage+백업+compile-gate). `manifest.json`에 3패치: (1) `patch_busy_dispatch.py`—`pre_gateway_dispatch`를 busy 진입 시 1회 발화(skill_generation 관측·meeting-gate veto 우회 수정, W6-4/W2-3). (2) `patch_busy_fifo.py`—queue 모드 owner DM 텍스트를 관련성-FIFO로 세그멘트(비관련→별도 순차 턴, 관련=마지막 물리 DM 기준 ≤1.0s 버스트 또는 reply-to-tail→tail 병합, 긴 작업 무중단), over-cap(>32)→❌+안내, depth-cap→prepend, **FIFO 드레인 후속 턴마다 자기 결과로 물리별 영수증 종결**(프레임 예외/취소 시 부모 finally가 ❌), 시작 시 크래시 미해결 영수증 reconcile. (3) `patch_discord_receipts.py`—모든 물리 DM에 👀 + 턴 완료 시 물리별 ✅/❌(공유 `receipt_apply.resolve_receipts` 멱등 경계, ledger-first) + content-free SQLite 원장(`~/.hermes/owner-dm-receipts/`). 순수로직은 `owner_dm_*`·`receipt_*` 모듈(host-tested), 주입 코드는 `hermes_compat_boot.py`(automation.__path__ 병합, interop shadow 무력화)를 거쳐 absolute import. 배포=`deploy-owner-dm.sh`(트랜잭셔널·owner-gated): preflight(복사본)→fail-closed 원장기반 drain-guard(`owner-dm-drain-check.py`)→스냅샷(소스+런타임+bytecode 캐시)+활성화+적용(`owner-dm-txn.sh`)→실패 시 모든 파일 byte-exact 롤백(`owner-dm-restore.sh`, present/absent 매니페스트)→agent+peer 독립 재시동+복구. `hermes update` 시 전 패치 재적용 필요 | W6-4/W2-3 + owner-DM |
+## 루트 스크립트/모듈
+- `deploy-skill.sh` — 스킬 배포 4단계 게이트 (SANDBOX→REVIEW→owner ✅→MOUNT). `peer_attest_mode=discord|signed`를 명시적으로 전달하고 signed 모드에서는 peer stdout의 단일 SSH 서명 레코드를 gate stdin으로 운반한다(공유 상태 없음, unset=거부). owner 결정은 시간 비만료, peer 증명만 TTL 만료 시 같은 바인딩 자동 재검증. 스킬별 실행 lease가 refresh→consume을 직렬화한다. 배포 판정=live 심링크 해시.
+- `update_trust.py` + `git_tag_signature.py` — 공개 `origin/main`과 같은 commit을 가리키는 annotated tag만 임시 bare repo에서 가져와 update trust principal로 검증한다. 미서명 head·lightweight tag·교체 전 키는 pre-convergence에서 차단하고 healthcheck 기존 티켓 경로로 사유를 낸다.
+- `skill_gate.py`(+`skill_gate_review.py`·`skill_gate_e2e.py` 서명 주입 E2E 경로) / `skill_review.py`(결정론적 해시 바인딩 보안 리뷰) / `skill_store.py` — 배포 승인·리뷰·레지스트리.
+- `skill_gate_retire.py` — pending 레코드 **회수(retirement)**: MOUNT 성공 후 `consume`(=`(skill, hash, message_id)` compare-and-swap 삭제, 실패해도 마운트를 되돌리지 않음 — deploy-skill.sh가 `CONSUME-WARN`으로 경고만) + 소유자 결정이 소비될 수 없을 때의 감사 탈출구 `abandon`(3필드 완전 일치 강제, `logs/approval-abandons.jsonl`에 fsync 감사 후 삭제, Discord 메시지는 절대 삭제하지 않음). 요청 경로와 **같은 key lease**를 사용.
+- `healthcheck.sh` · `provision-agent.sh`(멱등) · `peer_attest.py`(Discord 또는 `autophagy-peer-attest` namespace SSH 서명 생성·refresh) + `peer_attest_runtime.py`(CLI 입력·Discord transport·승인 표면 해석) + `peer_attestation.py`(두 모드 공유 wire contract + attestation 시각 기준 TTL·root-owned 공개키 검증기) · `deploy_execution_lock.py`(기존 `FileKeyLease` 재사용) · `bootstrap-accounts.sh` — 노드 운영·프로비저닝.
+- `sudoers.d/`, `*/systemd/` — 배포 대상 권한·유닛 정의.
+
+## 이 디렉터리의 규칙
+- **cron 워처는 Discord 리액션만 폴링** (메시지/첨부는 실시간 에이전트 단독 소유 — 경쟁 소비자 금지).
+  예외: 행동 없는 수동 인덱서(`rag_ingest`, `report_hub` 폴링, `managed_sync` git remote 폴링).
+  별도 분류: **Discord 수신 없는 내부 큐 executor**(`repair_report_consume_watch`) — Discord 메시지·첨부를 수신하거나 폴링하지 않고, capability-bound 내부 큐를 소비해 카드 readback 뒤 보고를 송신하므로 실시간 에이전트와 경쟁 소비자를 만들지 않는다.
+- **no-agent cron**: `~/.env.secrets` 자가 로드 + repo `sys.path` 래퍼 + 자식 subprocess에 자격증명 `env=` 명시 전파.
+- 상세 설계 규약: [docs/guide/watcher-cron-설계규약.md](../docs/guide/watcher-cron-설계규약.md).
+- **구독자 틱은 둘이 아니라 하나다** — `managed_sync/cron/managed_sync_watch.py`를 Hermes cron(`managed_sync/deploy.sh`)과 systemd 타이머(`managed_sync/systemd/`, 설치기 opt-in)가 함께 쓴다. 놓은 잠금·자격증명 전파·D3 경계를 배포 경로별로 다시 구현하지 말 것. 같은 tick 안에서도 skill tag fetch와 roster ref fetch는 같은 mirror를 쓰되 호출·실패 상태를 분리한다 — roster 브랜치 부재가 skill 배달을 막으면 안 된다.

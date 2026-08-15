@@ -1,0 +1,10 @@
+# The supply-chain watcher runs as `agent` and must be able to finish a deploy the owner
+# already approved. This is the ONLY escalation it gets: one absolute path, one argument
+# shape. `agent` deliberately receives NO shell as ops or peer — that account executes
+# LLM-directed code, and `ops` reaches /srv/autophagy-private (the repair push key) and
+# holds the release-install grant.
+#
+# Triggering is not authorizing: the helper sources the skill from the sealed release
+# (whose tree must byte-match origin/main), and the pipeline still re-verifies the owner
+# decision, the peer attestation and the artifact digest before anything is mounted.
+$NODE_AGENT_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-resume-deploy --skill *

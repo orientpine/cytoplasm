@@ -1,0 +1,13 @@
+[Unit]
+# Two minutes is the worst-case staleness when the low-latency trigger is unavailable.
+Description=Reconcile the release runtime to origin/main every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+# Catch up after downtime: a node that was off during a merge must converge on boot,
+# not wait for the next interval — the whole point is that no merge is ever forgotten.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

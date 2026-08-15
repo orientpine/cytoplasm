@@ -1,0 +1,16 @@
+
+[Unit]
+Description=Autophagy report hub dashboard (W3-4, tailnet-only + Basic auth)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$NODE_OPS_HOME/report-hub
+Environment=PYTHONPATH=$NODE_OPS_HOME/report-hub
+EnvironmentFile=$NODE_OPS_HOME/report-hub/hub.env
+ExecStart=/usr/bin/python3 -m automation.report_hub.dashboard
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

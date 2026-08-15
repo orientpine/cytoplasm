@@ -1,0 +1,45 @@
+{
+  "mcp_base_url": "http://REPLACE-RAG-NODE-HOST:8765",
+  "secrets_file": "/home/agent/.env.secrets",
+  "api_key_env": "RAG_MCP_API_KEY",
+  "state_dir": "/home/agent/.hermes/rag-ingest",
+  "wiki_dir": "/home/agent/wiki",
+  "notes_dir": "/home/agent/notes",
+  "meetings_dir": "/home/agent/notes/meetings",
+  "hermes_db": "/home/agent/.hermes/state.db",
+  "max_chunk_chars": 1500,
+  "perspective": {
+    "agent_id": "agent",
+    "owner": "cha",
+    "role": "personal-research-agent",
+    "project": "autophagy",
+    "interest_tags": "autophagy,research,rag,wiki,team-protocol"
+  },
+  "discord": {
+    "enabled": true,
+    "guild_id": "REPLACE-GUILD-ID",
+    "team_channel": "team",
+    "agents_log_channel": "agents-log",
+    "token_env": "DISCORD_BOT_TOKEN",
+    "bootstrap_limit": 50
+  },
+  "obsidian": {
+    "enabled": false,
+    "repo_url": "REPLACE-OBSIDIAN-REPO-URL",
+    "mirror_dir": "REPLACE-OBSIDIAN-MIRROR-DIR",
+    "ssh_key_path": "REPLACE-OBSIDIAN-SSH-KEY-PATH",
+    "branch": "main",
+    "exclude_names": [
+      ".obsidian",
+      ".omo",
+      ".sisyphus",
+      ".omo-backup*",
+      "999_limbo",
+      "Excalidraw",
+      ".claude",
+      ".cursor",
+      ".playwright-mcp"
+    ],
+    "sensitivity_rules_path": "REPLACE-SENSITIVITY-RULES-PATH"
+  }
+}

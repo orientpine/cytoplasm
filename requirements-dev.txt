@@ -1,0 +1,8 @@
+# The main tree is stdlib-centric, not stdlib-exclusive. PyYAML is an existing
+# runtime dependency of shipped config parsers; declaring it here makes that
+# production fact reproducible instead of introducing a new dependency.
+PyYAML==6.0.2
+
+# Development and CI tools are pinned so gate behavior changes deliberately.
+pytest==7.4.4
+ruff==0.15.7

@@ -1,0 +1,21 @@
+# W5-6: classified notes must take the non-GLM route and never enter Git.
+version: 1
+id: w5-report
+title: "W5 report classified-note routing E2E bank"
+driver: tests/e2e/drivers/w5_local.sh
+actor: tests/e2e/drivers/w5_report_actor.py
+
+cases:
+  - id: classified_note_nonglm
+    kind: security
+    steps:
+      - "render the real report pipeline from one classified synthetic note"
+      - "require non-GLM routing with zero GLM calls"
+      - "require the generated note marker to be absent from Git history"
+    expect:
+      report_exit: 0
+      sensitive_route_nonglm: true
+      glm_calls: 0
+      output_private: true
+      git_history_note_absent: true
+      error: null

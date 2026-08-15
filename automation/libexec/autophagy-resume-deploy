@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# automation/libexec/autophagy-resume-deploy — the ONE command the supply-chain watcher
+# may escalate, so that an owner's ✅ finishes without a human in the loop.
+#
+# WHY it exists. The watcher runs as `agent` (the account whose $HOME holds the gate
+# records, unit: User=agent). The deploy pipeline escalates per step — `sudo -n -u peer`
+# for the sandbox, `sudo -n -u ops` for the release converge — and `agent` has no sudo at
+# all. So the autonomous path could never finish: it read the approval correctly and then
+# died at `sudo: a password is required` (2026-08-02 실측).
+#
+# WHY NOT just grant `agent` sudo to ops/peer. This repo already answered that question
+# for the CI runner (`provision-deploy-runner.sh`): "the question is never 'is the
+# workflow safe' but 'what can the account it runs as reach'. Running it as `ops` was
+# rejected for exactly that: `ops` can read /srv/autophagy-private — the repair push key
+# lives there — and holds the release-install grant." `agent` is the account that
+# executes LLM-directed code, so it is the LAST account that should reach either. This
+# helper is therefore ONE absolute path with ONE argument shape, mirroring the existing
+# `autophagy-install-skill` grant.
+#
+# WHY triggering is not authorizing. Everything that decides WHAT gets mounted is
+# re-verified downstream and none of it is reachable from here:
+#   * the skill SOURCE is the sealed, root-owned, read-only release, whose whole tree
+#     must byte-match origin/main (`release_provenance.py`) — so code the agent wrote
+#     cannot be deployed, because it is not in origin/main;
+#   * the owner's ✅ must still be bound to the artifact digest, and ⛔ still wins;
+#   * the peer bot's independent attestation must still be present.
+# The worst this grant can do is re-run a pipeline that then refuses.
+#
+# WHY PYTHONDONTWRITEBYTECODE. The pipeline runs as root, and root is not stopped by the
+# release's `dr-xr-xr-x` seal — CPython would drop `__pycache__/*.pyc` next to every module
+# it imports. release-provenance requires the tree to match the commit EXACTLY, so those
+# caches make the first run block every later one (2026-08-03 실측). The release is sealed;
+# nothing this launches may write into it.
+# WHY the environment is rebuilt rather than passed through. `deploy-skill.sh` reads
+# several env vars that WEAKEN it — most sharply DEPLOY_ALLOW_UNPUSHED, which switches
+# off the provenance guard. sudo's env_reset already drops them, but this path is the one
+# place where an LLM-driven account reaches a privileged pipeline, so it does not depend
+# on a sudoers default staying configured the way it is today.
+set -euo pipefail
+
+readonly RELEASE_CURRENT="$NODE_RELEASE_CURRENT"
+readonly PIPELINE="$RELEASE_CURRENT/automation/deploy-skill.sh"
+#: Same shape the gate's own request binding accepts; anything else is not a skill name.
+readonly SKILL_PATTERN='^[a-z0-9][a-z0-9-]{1,40}$'
+#: `publish-` is reserved: a deploy record and a publish record would collide on one
+#: pending path. `deploy-skill.sh` refuses it too — refusing here as well means the
+#: privileged edge never even starts the pipeline for a name that cannot be legal.
+readonly RESERVED_PREFIX="publish-"
+
+die() { printf '[resume-deploy] ERROR: %s\n' "$1" >&2; exit 2; }
+
+[[ $# -eq 2 && "$1" == "--skill" ]] || die "usage: autophagy-resume-deploy --skill <name>"
+skill="$2"
+[[ "$skill" =~ $SKILL_PATTERN ]] || die "not a skill name: refusing"
+[[ "$skill" != "$RESERVED_PREFIX"* ]] || die "'${RESERVED_PREFIX}' is a reserved prefix"
+
+[[ -x /usr/bin/env ]] || die "env is missing"
+[[ -f "$PIPELINE" ]] || die "release pipeline is absent: $PIPELINE"
+
+# Exit code survives VERBATIM. The watcher's outcome table reads 8 (another execution
+# holds the lease) and 9 (the owner pressed stop) as opposite meanings, and collapsing
+# them would either retire a live approval or re-invoke a deploy the owner stopped.
+exec /usr/bin/env -i \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/root \
+  PYTHONDONTWRITEBYTECODE=1 \
+  bash "$PIPELINE" "$skill"

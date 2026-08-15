@@ -1,0 +1,14 @@
+[Unit]
+Description=Personal RAG stack (embedding, Qdrant, MCP)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/personal-rag
+Environment=COMPOSE_PROJECT_NAME=personal_rag
+ExecStart=/usr/bin/sg docker -c '/usr/bin/docker compose --env-file .env.secrets -f compose.yaml up -d --build --remove-orphans'
+ExecStop=/usr/bin/sg docker -c '/usr/bin/docker compose --env-file .env.secrets -f compose.yaml down'
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target

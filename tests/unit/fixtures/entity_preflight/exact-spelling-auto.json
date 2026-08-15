@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case_id": "exact-spelling-auto",
+  "category": "exact_spelling",
+  "synthetic": true,
+  "description": "정확 표기. 단일 고신뢰 personal RAG 후보가 표면형과 동일한 정규화 값을 준다.",
+  "request": {
+    "request_id": "ef3-req-exact-1",
+    "raw_text": "한가상 기관 공개행사 준비를 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "한가상", "entity_kind": "person"}
+    ],
+    "relationship_queries": []
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "personal_rag",
+      "normalized_value": "한가상",
+      "display_value": "한가상",
+      "confidence": 0.98,
+      "source_ref": "private://fixture/rag/exact-1",
+      "relationship_query_id": null
+    }
+  ],
+  "expected": {
+    "auto_normalization": true,
+    "needs_confirmation": false,
+    "decision": "auto_selected",
+    "reason": "single_high_confidence",
+    "selected": {"m-1": "한가상"},
+    "clarify_mentions": []
+  }
+}

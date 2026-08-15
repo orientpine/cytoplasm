@@ -1,0 +1,39 @@
+# Deterministic pre-LLM sensitivity gate rules (constraint 6).
+# Consumed by skills/meeting/scripts/meeting_gate.py — the gate runs on the
+# EXTRACTED TEXT immediately after extraction, BEFORE any LLM sees content.
+#
+# Contract:
+# - A hit on any keyword (substring, case-insensitive) or pattern (regex)
+#   tags the document. Tag `patent-sensitive` forces NON-GLM routing
+#   (openai-codex) and confines the original + detail to ~agent/notes/meetings/
+#   (mode 700). LiteLLM additionally hard-blocks `patent-sensitive`-tagged
+#   requests to glm-main (W1-1 PatentSensitiveGlmBlocker, HTTP 403) as the
+#   fail-closed second layer.
+# - Keep rules DETERMINISTIC: plain keywords + explicit regexes only.
+#   No LLM/classifier may participate in this decision.
+version: 1
+tags:
+  patent-sensitive:
+    keywords:
+      - 특허
+      - 발명
+      - 출원
+      - 청구항
+      - 기술이전
+      - 발명자
+      - 우선권
+      - 지재권
+      - 지식재산
+      - 실용신안
+      - 명세서 초안
+      - 선행기술
+      - 변리사
+    patterns:
+      - "(?i)\\bpatent(s|able|ability)?\\b"
+      - "(?i)\\bclaims?\\b"
+      - "(?i)\\binvention(s)?\\b"
+      - "(?i)\\bprior\\s+art\\b"
+      - "(?i)\\bIP\\s+(filing|transfer|licensing)\\b"
+      - "(?i)\\btech(nology)?\\s+transfer\\b"
+      - "(?i)\\bPCT\\b"
+      - "(?i)\\bUSPTO\\b|\\bKIPO\\b|\\bEPO\\b"

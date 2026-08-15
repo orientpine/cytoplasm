@@ -1,0 +1,21 @@
+# Pinned runtime dependencies for the vendored mailon package.
+# Versions locked to the set validated on prod (<primary-node>, CPython 3.13.14,
+# aarch64) — see docs/guide/기관메일-인터페이스.md. Exact pins (==) keep the
+# scoped venv reproducible across redeploys (Oracle risk #2: `>=` ranges can
+# resolve to a different environment under the same skill digest).
+#
+# Direct dependencies used by mailon/:
+#   pyotp          — mailon/totp.py  (RFC 6238 TOTP)
+#   python-dotenv  — mailon/config.py (optional .env load; secrets normally
+#                    arrive via subprocess env with override=False)
+#   beautifulsoup4 — mailon/scraper.py (email HTML extraction)
+#   lxml           — beautifulsoup4 parser backend ("lxml"); the only
+#                    C-extension, which is why a scoped venv is required.
+pyotp==2.10.0
+python-dotenv==1.2.2
+beautifulsoup4==4.15.0
+lxml==6.1.1
+
+# Transitive (pinned for reproducibility):
+soupsieve==2.8.4
+typing_extensions==4.16.0

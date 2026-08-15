@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -u
+
+cat >&2 <<'REFUSAL_EOF'
+[pre-commit] REFUSED — this is the ops deploy checkout, not a place to commit.
+
+It is a one-way mirror of origin/main. The only writes allowed here are git fetch
+and git pull --ff-only. Commit in a workstation checkout and deploy from origin/main.
+
+Already have work here? Do not discard it. Preserve it with git format-patch,
+apply it in a workstation checkout with git am, then realign by ff-only pull.
+REFUSAL_EOF
+exit 1

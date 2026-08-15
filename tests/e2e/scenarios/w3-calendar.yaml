@@ -1,0 +1,75 @@
+# W3-6 scenario bank: the Wave-3 calendar chain (W3-1 register + W3-2 remind),
+# plus the calendar-API 401 failure injection required by the W3-6 QA gate.
+#
+# Chain under test (unattended, deterministic, E2E mode only on the actuator
+# process tree — production units keep refusing E2E_TEST_MODE at boot):
+#   W3-1 gated create: draft -> HMAC signed injection (W1-6 adapter) -> owner
+#   confirm -> real gws insert (audited in the real approvals.jsonl) ->
+#   W3-2 deployed reminder poller dry-run at T-60min composes the reminder ->
+#   W3-1 gated delete restores the exact baseline (idempotent bank).
+#
+# Failure injection (plan W3-6 QA line): CALENDAR_GWS_BIN aimed at a 401 shim
+# so the approved execution hits an auth failure. PASS only when the error
+# surfaces on the documented error path — CLI exit 6, GATE-REFUSED stderr with
+# the 401 cause, and a `failed` audit record — while the REAL calendar shows
+# zero side effect and the real approvals.jsonl is untouched (isolated log).
+#
+# Isolation rules:
+#   * CALENDAR_GATE_DIR is a per-run temp dir (no draft residue);
+#   * the 401 case also isolates CALENDAR_APPROVAL_LOG + the gws binary;
+#   * poller runs with REMINDER_DRY_RUN=1 + temp REMINDER_DB — no DM is sent,
+#     the production reminders.db is never touched;
+#   * the marker event lives tomorrow morning and is deleted within the run,
+#     far outside the production poller's 55-65min window (no stray DM).
+version: 1
+id: w3-calendar
+title: "W3 calendar register/remind E2E bank (happy + 401 failure injection)"
+driver: tests/e2e/drivers/w3_calendar.sh
+remote_host: <primary-node>
+remote_account: agent
+
+cases:
+  - id: register_remind
+    kind: happy
+    steps:
+      - "baseline: real gws list for the W36-BANK marker (expect 0) + approvals.jsonl line count"
+      - "W3-1 register: draft-create -> sign (HMAC injection) -> confirm -> EXECUTED, real event visible via list"
+      - "audit: real approvals.jsonl grows by exactly 2 records (approval + executed audit)"
+      - "W3-2 remind: deployed poll_reminders.py dry-run with REMINDER_NOW=T-60min sees the event (DRY-RUN line)"
+      - "cleanup: gated draft-delete -> sign -> confirm -> event gone, baseline restored (+2 more audit records)"
+    expect:
+      baseline_events: 0
+      create_exit: 0
+      confirm_create_exit: 0
+      executed_create: true
+      events_delta_after_create: 1
+      approvals_delta_after_create: 2
+      poller_exit: 0
+      remind_dry_run_hit: true
+      confirm_delete_exit: 0
+      events_after_cleanup_equals_baseline: true
+      approvals_total_delta: 4
+      error: null
+
+  - id: auth_401_error_report
+    kind: failure
+    fault: "calendar API returns HTTP 401 on the approved mutation (gws shim)"
+    steps:
+      - "isolated gate dir + isolated approvals log + CALENDAR_GWS_BIN=401 shim"
+      - "draft-create -> sign -> confirm: execution hits the 401"
+      - "expect exit 6 + GATE-REFUSED stderr carrying the 401 cause (error REPORTED, not swallowed)"
+      - "expect `failed` audit record appended (isolated log: approval + failed audit = 2 records)"
+      - "expect zero leak: shim saw the insert argv, real calendar has no W36-BANK-401 event, real approvals.jsonl delta 0"
+    expect:
+      draft_exit: 0
+      confirm_exit: 6
+      stderr_has_gate_refused: true
+      stderr_has_401: true
+      shim_called: true
+      shim_saw_insert: true
+      isolated_approval_records: 2
+      audit_failed_recorded: true
+      audit_action: "calendar.create"
+      real_calendar_leak: false
+      real_approvals_delta: 0
+      error: null

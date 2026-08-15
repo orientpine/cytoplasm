@@ -1,0 +1,24 @@
+# W5-6: sensitive topics are refused before either external arXiv transport or
+# GLM can be reached. The actor supplies only generated synthetic input.
+version: 1
+id: w5-research-trends
+title: "W5 research-trends sensitive-topic refusal E2E bank"
+driver: tests/e2e/drivers/w5_local.sh
+actor: tests/e2e/drivers/w5_research_trends_actor.py
+
+cases:
+  - id: sensitive_topic_refused
+    kind: security
+    steps:
+      - "submit a classified synthetic topic through the real topics CLI"
+      - "require refusal and no registry persistence"
+      - "run the weekly path with stub transports and require zero arXiv and GLM calls"
+    expect:
+      refused: true
+      registry_contains_topic: false
+      arxiv_calls: 0
+      semscholar_calls: 0
+      glm_calls: 0
+      codex_calls: 0
+      report_written: false
+      error: null

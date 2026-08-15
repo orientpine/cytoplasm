@@ -1,0 +1,218 @@
+"""Approval-surface INVENTORY — who may post an owner approval, and the ledger of
+every deliberate exception (AS-1.3, split out under AS-1.11).
+
+Helper module, not a test module: the name carries no ``test_`` prefix so pytest
+does not collect it. It holds data only — no AST walk, no assertion — and is
+imported by ``approval_conformance_ast`` and by the conformance tests.
+
+Every entry below is an audit record of a decision an owner signed off on. The
+Korean reason strings are the evidence; retiring one is a task of its own, never
+a cleanup.
+"""
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Final
+
+_REPO: Final = Path(__file__).resolve().parents[2]
+_RULE: Final = "AGENTS.md 「승인 메시지 단일성 규칙」"
+
+# Public producer surfaces. Gate adapters below own post/commit; their lifecycle host owns
+# the façade call where the existing module boundary separates those responsibilities.
+APPROVAL_PRODUCERS: Final[Mapping[str, str]] = {
+    "automation/skill_gate.py::cmd_request": "automation/skill_gate_approval.py",
+    "automation/skill_gate_publish.py::cmd_publish_request": "automation/skill_gate_approval.py",
+    "automation/managed_skills/submission_cli.py::submit": "automation/managed_skills/submission_approval.py",
+    "automation/repair/repair_ops_posting.py::PostingOwnerApproval.permits": "automation/repair/repair_ops_approval_gate.py",
+    "skills/wiki/scripts/wiki_gate.py::post_confirm_message": "skills/wiki/scripts/wiki_approval.py",
+    "skills/calendar/scripts/calendar_approval.py::request_confirmation": "skills/calendar/scripts/calendar_approval.py",
+    "skills/coordination/scripts/coordination_approval.py::request_confirmation": "skills/coordination/scripts/coordination_approval.py",
+    "skills/mail/scripts/triage_approval.py::request_approval": "skills/mail/scripts/triage_approval.py",
+    "skills/budget/scripts/budget_approval.py::request_approval": "skills/budget/scripts/budget_approval.py",
+    "skills/patent-prep/scripts/patent_export.py::prepare_export": "skills/patent-prep/scripts/patent_export_approval.py",
+    "automation/obsidian_write/gate_binding.py::request_approval": "automation/obsidian_write/gate_binding.py",
+    "automation/memory_relocate/approval_gate.py::request_approval": "automation/memory_relocate/approval_gate.py",
+}
+
+_LIFECYCLE_HOSTS: Final[Mapping[str, str]] = {
+    "automation/skill_gate_approval.py": "automation/skill_gate_request.py",
+    "automation/managed_skills/submission_approval.py": "automation/managed_skills/submission_approval.py",
+    "automation/repair/repair_ops_approval_gate.py": "automation/repair/repair_ops_posting.py",
+    "skills/wiki/scripts/wiki_approval.py": "skills/wiki/scripts/wiki_gate.py",
+    "skills/calendar/scripts/calendar_approval.py": "skills/calendar/scripts/calendar_approval.py",
+    "skills/coordination/scripts/coordination_approval.py": "skills/coordination/scripts/coordination_approval.py",
+    "skills/mail/scripts/triage_approval.py": "skills/mail/scripts/triage_approval.py",
+    "skills/budget/scripts/budget_approval.py": "skills/budget/scripts/budget_approval.py",
+    "skills/patent-prep/scripts/patent_export_approval.py": "skills/patent-prep/scripts/patent_export.py",
+    "automation/obsidian_write/gate_binding.py": "automation/obsidian_write/gate_binding.py",
+    "automation/memory_relocate/approval_gate.py": "automation/memory_relocate/approval_gate.py",
+}
+
+_ADAPTER_POSTERS: Final[frozenset[str]] = frozenset({
+    "automation/repair/repair_ops_approval_gate.py::RepairApprovalGate.post",
+    "automation/skill_gate_approval.py::SkillApprovalGate.post",
+    "automation/managed_skills/submission_approval.py::PersonalSubmissionGate.post",
+    "skills/wiki/scripts/wiki_approval.py::WikiApprovalGate.post",
+    "skills/calendar/scripts/calendar_approval.py::CalendarApprovalGate.post",
+    "skills/coordination/scripts/coordination_approval.py::CoordinationApprovalGate.post",
+    "skills/mail/scripts/triage_approval.py::MailApprovalGate.post",
+    "skills/budget/scripts/budget_approval.py::BudgetApprovalGate.post",
+    "skills/patent-prep/scripts/patent_export_approval.py::PatentApprovalGate.post",
+    "automation/memory_relocate/approval_gate.py::RelocateApprovalGate.post",
+})
+
+_POSTING_PRIMITIVE_IMPLEMENTATIONS: Final[frozenset[str]] = frozenset({
+    "automation/repair/repair_ops_discord.py::RepairDiscordApi.post_approval",
+    "skills/budget/scripts/budget_confirm.py::post_approval_request",
+    "skills/calendar/scripts/calendar_confirm.py::post_confirmation_message",
+    "skills/coordination/scripts/coordinate_io.py::post_message",
+    "skills/mail/scripts/triage_confirm.py::post_approval_request",
+    "skills/patent-prep/scripts/patent_export_gate.py::post_approval_request",
+})
+
+_EXEMPT: Final[Mapping[str, str]] = {
+    "automation/reminder_poller/poll_reminders.py::DmSender.send": "SQLite claim()으로 중복을 막는 알림 DM이며 승인 메시지 포인터가 없다.",
+    "skills/budget/scripts/budget_confirm.py::dm_owner": "승인 결과 안내 DM이며 승인 요청 메시지를 저장하지 않는다.",
+    "skills/calendar/scripts/calendar_confirm.py::send_owner_dm": "확정 결과 알림 DM이며 pending 승인 메시지를 만들지 않는다.",
+    "skills/coordination/scripts/confirm_reaction_watch.py::DiscordApi.send_owner_dm": "워처의 처리 결과 알림이며 승인 요청을 게시하지 않는다.",
+    "skills/coordination/scripts/coordination_lifecycle.py::finish": "피어 조율 완료 통지이며 승인 메시지 포인터를 만들지 않는다.",
+    "skills/coordination/scripts/coordination_lifecycle.py::send_owner_dm": "조율 완료 알림 DM이며 승인 게이트가 아니다.",
+    "skills/mail/scripts/triage_confirm.py::dm_owner": "승인 결과 안내 DM이며 draft message_id를 쓰지 않는다.",
+    "skills/patent-prep/scripts/patent_export_gate.py::dm_owner": "승인 결과 안내 DM이며 manifest message_id를 쓰지 않는다.",
+}
+
+_POST_NAMES: Final[frozenset[str]] = frozenset({
+    "post",
+    "send",
+    "dm",
+    "post_message",
+    "post_approval",
+    "post_approval_request",
+    "post_confirmation_message",
+})
+
+# ── AS-1.3 · approval-surface conformance ──────────────────────────────────
+# Producer surface → the `ApprovalKind` VALUE that flow posts under. Membership
+# is checked against the enum itself, never against a duplicated member list.
+APPROVAL_KINDS: Final[Mapping[str, str]] = {
+    "automation/skill_gate.py::cmd_request": "skill-deploy",
+    "automation/skill_gate_publish.py::cmd_publish_request": "skill-publish",
+    "automation/managed_skills/submission_cli.py::submit": "skill-submit",
+    "automation/repair/repair_ops_posting.py::PostingOwnerApproval.permits": "repair",
+    "skills/wiki/scripts/wiki_gate.py::post_confirm_message": "wiki",
+    "skills/calendar/scripts/calendar_approval.py::request_confirmation": "calendar",
+    "skills/coordination/scripts/coordination_approval.py::request_confirmation": "coordination",
+    "skills/mail/scripts/triage_approval.py::request_approval": "mail-reply",
+    "skills/budget/scripts/budget_approval.py::request_approval": "budget-mail",
+    "skills/patent-prep/scripts/patent_export.py::prepare_export": "patent-export",
+    "automation/obsidian_write/gate_binding.py::request_approval": "obsidian-write",
+    "automation/memory_relocate/approval_gate.py::request_approval": "obsidian-write",
+}
+
+# Commit surface (the ONLY writer of a flow's message_id) → the module that
+# constructs that flow's pending record. That record must carry the binding.
+_RECORD_WRITERS: Final[Mapping[str, str]] = {
+    "automation/repair/repair_ops_approval_gate.py::RepairApprovalGate.commit": "automation/repair/repair_ops_pending.py",
+    "automation/skill_gate_approval.py::SkillApprovalGate.commit": "automation/skill_gate_specs.py",
+    "automation/managed_skills/submission_approval.py::PersonalSubmissionGate.commit": "automation/managed_skills/submission_approval.py",
+    "skills/wiki/scripts/wiki_approval.py::WikiApprovalGate.commit": "skills/wiki/scripts/wiki_gate.py",
+    "skills/calendar/scripts/calendar_approval.py::CalendarApprovalGate.commit": "skills/calendar/scripts/calendar_pending.py",
+    "skills/coordination/scripts/coordination_approval.py::CoordinationApprovalGate.commit": "skills/coordination/scripts/coordination_pending.py",
+    "skills/mail/scripts/triage_approval.py::MailApprovalGate.commit": "skills/mail/scripts/triage_gate.py",
+    "skills/budget/scripts/budget_approval.py::BudgetApprovalGate.commit": "skills/budget/scripts/budget_gate.py",
+    "skills/patent-prep/scripts/patent_export_approval.py::PatentApprovalGate.commit": "skills/patent-prep/scripts/patent_export_manifest.py",
+    "automation/memory_relocate/approval_gate.py::RelocateApprovalGate.commit": "automation/memory_relocate/model.py",
+}
+
+# The migration ledger. Key = the `+`-joined path(s) one R1 flow owns; value =
+# the flow label, the Korean reason and the task that deletes the entry. Each
+# Wave-3 task's RED step is deleting its own line; AS-1.11 asserts it is empty.
+_PENDING_MIGRATION: Final[Mapping[str, str]] = {
+    # Empty, and kept that way by test_pending_migration_entries_are_not_stale: an
+    # entry here exempts its file from the surface-naming guard, so one that outlives
+    # its reason silently un-guards the file it was written about. The last entry
+    # (budget_core.py, spent once AS-2.2 neutralised the outbound wording) was exactly
+    # that case — see docs/qa/AS-3/as-3-3-spent-ledger-entry-red.txt.
+}
+
+# `/users/@me/channels` call sites that are NOT approval surfaces (SI-2 scope
+# limit). Keys are copied verbatim from `_KNOWN_DM_OPENERS` in
+# tests/unit/test_approval_surface_inventory.py.
+# Derivation (mechanical, not hand-typed): `_KNOWN_DM_OPENERS` (14) minus the
+# eight approval-flow openers of Codified decision 1 — see docs/qa/AS-1/.
+_NON_APPROVAL_DM_SENDERS: Final[Mapping[str, str]] = {
+    "automation/cost-report/send_cost_report.py::send_dm":
+        "비용 리포트 DM이며 pending 레코드도 리액션 소비도 없다.",
+    "automation/interop/gate_driver.py::main":
+        "W1-5 게이트 드라이버의 결과 전달이며 승인 메시지를 게시하지 않는다.",
+    "automation/interop/hermes_plugin/__init__.py::_send_direct_result":
+        "인터롭 결과 전달 DM이며 message_id 포인터를 저장하지 않는다.",
+    "automation/reminder_poller/poll_reminders.py::DmSender.send":
+        "리마인더 알림 DM이며 SQLite claim()이 중복을 막는다.",
+    "automation/research_trends/research_trends.py::_send_dm":
+        "연구동향 리포트 DM이며 승인 게이트가 아니다.",
+    "skills/procurement/scripts/procure_review.py::send_review":
+        "검토 알림 DM이며 pending 레코드·리액션 소비·supersede가 없다.",
+}
+
+# Text that legitimately tells the owner WHERE to look (digest footer, CLI help).
+# Text that legitimately tells the owner WHERE to look, or reports on a surface
+# to ops. Everything else must go through `approval_surface.reaction_instruction`.
+_SURFACE_NAMING_ALLOWED: Final[Mapping[str, str]] = {
+    "automation/hermes_compat/owner-dm-drain-check.py::<module>":
+        "owner DM 백로그 드레인 점검 도구 — 점검 대상이 표면 그 자체다.",
+    "automation/hermes_compat/patch_busy_fifo.py::<module>":
+        "게이트웨이 패치 설명문 — 소유자에게 어느 표면이 영향받는지 알린다.",
+    "automation/hermes_compat/patch_discord_receipts.py::<module>":
+        "게이트웨이 패치 설명문 — 소유자에게 어느 표면이 영향받는지 알린다.",
+    "automation/install/discord_check.py::<module>":
+        "설치 전 Discord 전제 점검기 — 어느 서버의 어느 채널이 필요한지가 이 도구의 출력 그 자체다. "
+        + "승인을 게시하지 않고(전부 GET) 표면을 해석하지도 않는다.",
+    "automation/install/discord_check.py::evaluate_permissions":
+        "봇이 어느 서버에도 초대되지 않았을 때의 조치 안내문 — 승인 표면 해석이 아니다.",
+    "automation/interop/hermes_plugin/__init__.py::_send_direct_result":
+        "승인 게이트가 아닌 결과 전달 DM이며 수신 위치를 알려주는 문구다.",
+    "automation/memory_curator/effects.py::<module>":
+        "메모리 큐레이터의 근접 경고/트윈 승격 효과 설명문이며, 재사용하는 wiki 게이트를 지목할 뿐 자체 승인 표면이 아니다.",
+    "automation/research_trends/research_trends.py::_send_dm":
+        "연구동향 리포트 DM 본문이며 승인 표면과 무관하다.",
+    "skills/calendar/scripts/confirm_reaction_watch.py::DiscordApi.send_owner_dm":
+        "ops 대면 전송 실패 진단 라벨 — 어느 표면이 실패했는지가 진단의 내용 자체다.",
+    "skills/doctype/scripts/doctype_review.py::send_review":
+        "문서종 검토 알림 — 소유자에게 어디서 볼지 알려주는 안내문이다.",
+    "skills/proposal/scripts/proposal_dm.py::send_review":
+        "제안서 검토 알림 — 소유자에게 어디서 볼지 알려주는 안내문이다.",
+}
+
+_APPROVAL_DIRECTORY: Final = "automation/interop/approval_directory.py"
+_APPROVAL_POLICY: Final = "automation/interop/approval_surface.py"
+_LEGACY_MIGRATOR: Final = f"{_APPROVAL_POLICY}::legacy_binding"
+# The SSOT pair: the directory resolves surfaces and the policy module owns the
+# ONE formatter allowed to name one. Naming a surface is their job, by design.
+_SURFACE_SSOT: Final[tuple[str, ...]] = (_APPROVAL_DIRECTORY, _APPROVAL_POLICY)
+_DM_OPEN_PATH: Final = "/users/@me/channels"
+
+_BANNED_RESOLVER_NAMES: Final[frozenset[str]] = frozenset({
+    "approvals_channel_id",
+    "_approvals_channel_id",
+    "owner_dm_channel_id",
+    "owner_dm_channel",
+    "confirm_via_dm_scan",
+})
+
+_BANNED_RESOLVER_LITERALS: Final[frozenset[str]] = frozenset({
+    "personal_approvals_channel_id",
+    _DM_OPEN_PATH,
+})
+
+_BANNED_ENV_OVERRIDE: Final = re.compile(r"^[A-Z_]*APPROVALS_CHANNEL_ID$")
+
+_SURFACE_LITERALS: Final[frozenset[str]] = frozenset({"#approvals", "owner DM", "승인 DM", "개인 서버"})
+
+_BINDING_FIELDS: Final[frozenset[str]] = frozenset({"kind", "surface", "channel_id", "policy_version"})
+
+# Historical evidence must never gate the build; a guard that fails on history
+# is a guard someone deletes.
+_HISTORY_ROOTS: Final[tuple[str, ...]] = ("docs/qa/", "docs/patch/", ".omo/", "tests/")

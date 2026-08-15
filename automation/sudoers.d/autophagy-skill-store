@@ -1,0 +1,3 @@
+$NODE_OPERATOR_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-install-skill install --skill * --hash *
+$NODE_OPERATOR_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-install-skill install-managed --publisher * --skill * --hash *
+$NODE_OPERATOR_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-install-skill remove --skill *

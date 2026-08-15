@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "case_id": "shared-name-homonym-conflict",
+  "category": "shared_name_homonym",
+  "synthetic": true,
+  "description": "같은 이름을 쓰는 연락처 2명. 서로 다른 정규화 값을 임의로 병합하지 않고 대화 clarify로 넘긴다.",
+  "request": {
+    "request_id": "ef3-req-homonym-1",
+    "raw_text": "오모의 미팅 후속 조치를 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "오모의", "entity_kind": "person"}
+    ],
+    "relationship_queries": []
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "addressbook.contacts",
+      "normalized_value": "오모의(합성연구소)",
+      "display_value": "오모의(합성연구소)",
+      "confidence": 0.96,
+      "source_ref": "private://fixture/contacts/homonym-1",
+      "relationship_query_id": null
+    },
+    {
+      "candidate_id": "c-2",
+      "mention_id": "m-1",
+      "source": "addressbook.contacts",
+      "normalized_value": "오모의(예시학교)",
+      "display_value": "오모의(예시학교)",
+      "confidence": 0.93,
+      "source_ref": "private://fixture/contacts/homonym-2",
+      "relationship_query_id": null
+    }
+  ],
+  "expected": {
+    "auto_normalization": false,
+    "needs_confirmation": true,
+    "decision": "confirmation_required",
+    "reason": "candidate_conflict",
+    "selected": {},
+    "clarify_mentions": ["m-1"]
+  }
+}

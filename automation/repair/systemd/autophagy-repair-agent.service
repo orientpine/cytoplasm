@@ -1,0 +1,13 @@
+[Unit]
+Description=Autophagy ops repair agent
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$NODE_RELEASE_CURRENT
+Environment=PYTHONPATH=$NODE_RELEASE_CURRENT
+EnvironmentFile=-/etc/autophagy/repair-approval.env
+ExecStart=/usr/bin/python3 $NODE_RELEASE_CURRENT/automation/repair/repair_ops_cli.py
+NoNewPrivileges=yes
+ProtectHome=yes
+ReadWritePaths=$NODE_REPAIR_WORK $NODE_PRIVATE_ROOT/repair-logs $NODE_PRIVATE_ROOT/repair-plans $NODE_PRIVATE_ROOT/repair-approvals.jsonl $NODE_PRIVATE_ROOT/repair-approval-pending $NODE_PRIVATE_ROOT/repair-state

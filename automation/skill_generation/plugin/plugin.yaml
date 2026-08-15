@@ -1,0 +1,8 @@
+name: 05-skill-generation
+version: "1"
+description: >
+  Records owner task-pattern hashes and creates only supervised auto-skill
+  drafts. Generated mounts without a W1-8 pipeline record are removed before
+  dispatch; non-triggering events remain untouched.
+provides_hooks:
+  - pre_gateway_dispatch

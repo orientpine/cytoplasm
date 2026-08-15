@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "case_id": "spelling-variant-auto",
+  "category": "spelling_variant",
+  "synthetic": true,
+  "description": "흔한 철자 변형(에/예). 주소록 고신뢰 후보가 정규화하고, 저신뢰 이력 잡음은 자동 선택을 막지 않는다.",
+  "request": {
+    "request_id": "ef3-req-variant-1",
+    "raw_text": "박에시 선생님께 회신할 일을 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "박에시", "entity_kind": "person"}
+    ],
+    "relationship_queries": []
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "addressbook.contacts",
+      "normalized_value": "박예시",
+      "display_value": "박예시",
+      "confidence": 0.97,
+      "source_ref": "private://fixture/contacts/variant-1",
+      "relationship_query_id": null
+    },
+    {
+      "candidate_id": "c-2",
+      "mention_id": "m-1",
+      "source": "addressbook.history",
+      "normalized_value": "박애시",
+      "display_value": "박애시",
+      "confidence": 0.6,
+      "source_ref": "private://fixture/history/variant-2",
+      "relationship_query_id": null
+    }
+  ],
+  "expected": {
+    "auto_normalization": true,
+    "needs_confirmation": false,
+    "decision": "auto_selected",
+    "reason": "single_high_confidence",
+    "selected": {"m-1": "박예시"},
+    "clarify_mentions": []
+  }
+}

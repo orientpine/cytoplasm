@@ -1,0 +1,31 @@
+.env*
+logs/*
+!logs/.gitkeep
+*.db
+.codegraph
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+
+# Agent run-state — ephemeral session continuation files and boulder state.
+# Plans / evidence / notepads under .omo/ are tracked explicitly for history.
+.omo/run-continuation/
+.omo/boulder.json
+
+# Browser-tool residue — Playwright MCP drops page snapshots / console logs here
+# while reviewing local pages. Machine dumps of files already tracked, not source.
+/.playwright-mcp/
+
+# mail-mode: tracked seed = configs/mail-mode.default.json; the old live path is
+# runtime-only residue and must never re-enter the index. .repair-plans/ = prod runtime state.
+/configs/mail-mode.json
+/configs/peers.yaml
+/.repair-plans/
+
+# patent-prep backup: real invention material / ciphertext must never enter the repo.
+# Authoritative drafts live in ~/patent-drafts outside the checkout; these guard stray copies.
+*.age
+skills/patent-prep/**/draft.md
+tests/fixtures/patent-export/*.md
+!tests/fixtures/patent-export/synthetic_*.md

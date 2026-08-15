@@ -1,0 +1,40 @@
+# PR 검증 게이트 — 머지 전에 lint + 단위 테스트를 GitHub에서 돌린다.
+#
+# 이 워크플로는 GitHub-hosted 러너에서만 돌고 `contents: read` 밖의 권한이 없다.
+# 프로덕션(`<primary-node>`)에는 접근하지 않는다 — 배포는 여전히 노드 쪽 경로가 소유한다.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# 같은 브랜치에 새 푸시가 오면 이전 실행을 취소한다(무료 플랜의 Actions 분 절약).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+
+      # skills/mail/vendor 는 무수정 vendoring 트리다(AGENTS.md: "소스는 byte-identical 유지").
+      # 고칠 수 없는 트리를 린트하면 CI가 영구히 빨간불이 되므로 제외한다.
+      - name: Lint
+        run: ruff check . --exclude skills/mail/vendor
+
+      - name: Unit tests
+        run: python -m pytest tests/unit -q

@@ -1,0 +1,221 @@
+"""Idempotent Drive folder/file upsert over the existing ``gws drive`` CLI.
+
+Generalizes ``procure_review._drive_upload``: find-or-create each folder in the
+project tree (ids cached so re-syncs never duplicate folders), then upsert each
+file by (name, parent) — update media if present, else ``+upload``. A ``runner``
+seam lets unit tests inject an in-memory fake gws; production shells out.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+from automation.interop.external_effect_gate import JsonValue
+
+_JsonResult = dict[str, JsonValue] | list[JsonValue]
+CommandRunner = Callable[[list[str]], _JsonResult]
+_FOLDER_MIME = "application/vnd.google-apps.folder"
+_PUBLIC_TYPES = frozenset({"anyone", "domain"})
+_WRITE_ROLES = frozenset({"writer", "organizer", "fileOrganizer"})
+_PERMISSION_FIELDS = "permissions(id,type,role)"
+
+
+class DriveClientError(RuntimeError):
+    """A gws Drive call failed or returned an unusable response (fail closed)."""
+
+
+def _q_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _result_id(result: _JsonResult) -> str:
+    return str(result.get("id", "")) if isinstance(result, dict) else ""
+
+
+def _permission_rows(result: _JsonResult) -> list[dict[str, JsonValue]]:
+    raw = result.get("permissions", []) if isinstance(result, dict) else []
+    if not isinstance(raw, list):
+        return []
+    return [row for row in raw if isinstance(row, dict)]
+
+
+def _reject_reason(ptype: str, role: str) -> str | None:
+    """Name why a single permission breaks owner-only, or ``None`` when it is the owner."""
+    if ptype in _PUBLIC_TYPES:
+        return f"공개/도메인 공유 감지 type={ptype} role={role}"
+    if role in _WRITE_ROLES:
+        return f"소유자 외 쓰기 권한 감지 role={role}"
+    if role != "owner":
+        return f"소유자 외 권한 감지 type={ptype} role={role}"
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class DriveClient:
+    gws_bin: str
+    folder_cache: Path
+    runner: CommandRunner | None = None
+
+    def _run(self, argv: list[str], *, cwd: Path | None = None) -> _JsonResult:
+        if self.runner is not None:
+            return self.runner(argv)
+        proc = subprocess.run(  # noqa: S603
+            argv, capture_output=True, text=True, timeout=600, check=False, cwd=cwd
+        )
+        if proc.returncode != 0:
+            raise DriveClientError(
+                f"{' '.join(argv[:4])} 실패 rc={proc.returncode}: {proc.stderr.strip()[:200]}"
+            )
+        decoded, _ = json.JSONDecoder().raw_decode(proc.stdout.strip() or "{}")
+        return decoded
+
+    def _list_first_id(self, query: str) -> str | None:
+        result = self._run(
+            [self.gws_bin, "drive", "files", "list", "--params",
+             json.dumps({"q": query, "fields": "files(id,name)", "pageSize": 10})]
+        )
+        files = result.get("files", []) if isinstance(result, dict) else []
+        if not isinstance(files, list) or not files:
+            return None
+        first = files[0]
+        file_id = str(first.get("id", "")) if isinstance(first, dict) else ""
+        return file_id or None
+
+    def _find_folder(self, name: str, parent: str) -> str | None:
+        query = (
+            f"name = '{_q_escape(name)}' and '{parent}' in parents "
+            f"and mimeType = '{_FOLDER_MIME}' and trashed = false"
+        )
+        return self._list_first_id(query)
+
+    def _create_folder(self, name: str, parent: str) -> str:
+        result = self._run(
+            [self.gws_bin, "drive", "files", "create", "--json",
+             json.dumps({"name": name, "mimeType": _FOLDER_MIME, "parents": [parent]})]
+        )
+        folder_id = _result_id(result)
+        if not folder_id:
+            raise DriveClientError(f"폴더 생성 응답에 id 없음: {name}")
+        return folder_id
+
+    def _find_file(self, name: str, parent: str) -> str | None:
+        return self._list_first_id(
+            f"name = '{_q_escape(name)}' and '{parent}' in parents and trashed = false"
+        )
+
+    def _upload_new(self, local: Path, name: str, parent: str) -> str:
+        result = self._run(
+            [self.gws_bin, "drive", "+upload", str(local), "--parent", parent, "--name", name]
+        )
+        file_id = _result_id(result)
+        if not file_id:
+            raise DriveClientError(f"업로드 응답에 id 없음: {name}")
+        return file_id
+
+    def _update_media(self, file_id: str, local: Path) -> str:
+        result = self._run(
+            [self.gws_bin, "drive", "files", "update", "--params",
+             json.dumps({"fileId": file_id}), "--upload", str(local)]
+        )
+        return _result_id(result) or file_id
+
+    def _web_view_link(self, file_id: str) -> str:
+        result = self._run(
+            [self.gws_bin, "drive", "files", "get", "--params",
+             json.dumps({"fileId": file_id, "fields": "webViewLink"})]
+        )
+        link = str(result.get("webViewLink", "")) if isinstance(result, dict) else ""
+        return link or f"https://drive.google.com/file/d/{file_id}/view"
+
+    def _load_cache(self) -> dict[str, str]:
+        try:
+            data = json.loads(self.folder_cache.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+    def _save_cache(self, cache: dict[str, str]) -> None:
+        self.folder_cache.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.folder_cache.write_text(
+            json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        )
+        self.folder_cache.chmod(0o600)
+
+    def ensure_folder_path(self, parts: tuple[str, ...]) -> str:
+        if not parts:
+            raise DriveClientError("folder path is empty")
+        cache = self._load_cache()
+        parent = "root"
+        walked: list[str] = []
+        changed = False
+        for name in parts:
+            walked.append(name)
+            key = "/".join(walked)
+            cached = cache.get(key)
+            if cached:
+                parent = cached
+                continue
+            resolved = self._find_folder(name, parent) or self._create_folder(name, parent)
+            cache[key] = resolved
+            parent = resolved
+            changed = True
+        if changed:
+            self._save_cache(cache)
+        return parent
+
+    def upsert_file(
+        self, local: Path, name: str, parent_id: str, prior_id: str | None = None
+    ) -> dict[str, str]:
+        existing = prior_id or self._find_file(name, parent_id)
+        if existing:
+            file_id = self._update_media(existing, local)
+            action = "updated"
+        else:
+            file_id = self._upload_new(local, name, parent_id)
+            action = "created"
+        return {"id": file_id, "webViewLink": self._web_view_link(file_id), "action": action}
+
+    def verify_owner_only(self, file_id: str) -> None:
+        """Fail closed unless the owner is the sole principal holding ``file_id``."""
+        result = self._run(
+            [self.gws_bin, "drive", "permissions", "list", "--params",
+             json.dumps({"fileId": file_id, "fields": _PERMISSION_FIELDS})]
+        )
+        rows = _permission_rows(result)
+        if not rows:
+            raise DriveClientError(f"권한 목록이 비어 판정 불가(fail-closed): {file_id}")
+        for row in rows:
+            reason = _reject_reason(str(row.get("type", "")), str(row.get("role", "")))
+            if reason is not None:
+                raise DriveClientError(f"{reason}: {file_id}")
+        if len(rows) != 1:
+            raise DriveClientError(
+                f"소유자 권한이 유일하지 않음({len(rows)}건, fail-closed): {file_id}"
+            )
+
+    def download_and_verify(self, file_id: str, local: Path) -> str:
+        """Re-download ``file_id`` and fail closed unless its sha256 matches ``local``."""
+        expected = hashlib.sha256(local.read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="drive-verify-") as tmp:
+            fetched = Path(tmp) / "remote.bin"
+            output_path = str(fetched) if self.runner is not None else fetched.name
+            self._run(
+                [self.gws_bin, "drive", "files", "get", "--params",
+                 json.dumps({"fileId": file_id, "alt": "media"}), "-o", output_path],
+                cwd=Path(tmp),
+            )
+            if not fetched.is_file():
+                raise DriveClientError(f"재다운로드 산출물 없음(fail-closed): {file_id}")
+            actual = hashlib.sha256(fetched.read_bytes()).hexdigest()
+        if actual != expected:
+            raise DriveClientError(
+                f"재다운로드 sha256 불일치 {file_id}: "
+                f"local={expected[:12]}… remote={actual[:12]}…"
+            )
+        return actual

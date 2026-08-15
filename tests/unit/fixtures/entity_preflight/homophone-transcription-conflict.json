@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "case_id": "homophone-transcription-conflict",
+  "category": "homophone_transcription",
+  "synthetic": true,
+  "description": "원인 사고 회귀 잠금: 음성 전사가 만든 그럴듯한 오표기와 진짜 이름이 경합한다. 어느 쪽도 자동으로 외부에 쓰지 않는다.",
+  "request": {
+    "request_id": "ef3-req-homophone-2",
+    "raw_text": "한가삼 선물 목록을 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "한가삼", "entity_kind": "person"}
+    ],
+    "relationship_queries": []
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "personal_rag",
+      "normalized_value": "한가상",
+      "display_value": "한가상",
+      "confidence": 0.9,
+      "source_ref": "private://fixture/rag/homophone-2",
+      "relationship_query_id": null
+    },
+    {
+      "candidate_id": "c-2",
+      "mention_id": "m-1",
+      "source": "addressbook.contacts",
+      "normalized_value": "한가삼",
+      "display_value": "한가삼",
+      "confidence": 0.88,
+      "source_ref": "private://fixture/contacts/homophone-2",
+      "relationship_query_id": null
+    }
+  ],
+  "expected": {
+    "auto_normalization": false,
+    "needs_confirmation": true,
+    "decision": "confirmation_required",
+    "reason": "candidate_conflict",
+    "selected": {},
+    "clarify_mentions": ["m-1"]
+  }
+}

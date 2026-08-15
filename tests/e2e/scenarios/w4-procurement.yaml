@@ -1,0 +1,63 @@
+# W4-5 scenario bank: procurement/service document drafting (W4-4) — the
+# documents path generates files for owner review and performs ZERO external
+# sends, GO branch or not ("서류 경로 외부 발송 0건").
+#
+# Fail-closed refusals under test: binary .hwp => conversion request with zero
+# generation attempts; missing required fields => refusal with no output file;
+# non-numeric amount => answer rejected. The stdlib hwpx leg keeps the bank
+# free of optional dependencies (python-docx/openpyxl legs live in the W1-8
+# sandbox smoke, not here).
+#
+# Zero-send accounting: the review DM size branches (attach vs >25MiB Drive
+# link) run against stub Discord/gws transports and the stub call log must
+# contain ZERO `gmail +send` / mailon invocations; no approvals.jsonl is ever
+# created — documents need review, not an external-effect approval record.
+version: 1
+id: w4-procurement
+title: "W4 procurement docs E2E bank (zero external send)"
+driver: tests/e2e/drivers/w4_local.sh
+actor: tests/e2e/drivers/w4_procurement_actor.py
+
+cases:
+  - id: generate_verify
+    kind: happy
+    steps:
+      - "preflight detects hwpx with the pinned zip+XML parser"
+      - "binary .hwp: conversion request (exit 3) and generate refused with ZERO generation attempts, no output"
+      - "conversational collection: non-numeric amount rejected (exit 2), missing fields refuse generate (exit 5)"
+      - "complete collection -> hwpx generated and verified (stdlib zip+XML)"
+    expect:
+      preflight_hwpx_ok: true
+      hwp_conversion_request_exit: 3
+      hwp_conversion_request: true
+      hwp_generate_refused_exit: 3
+      hwp_generation_attempts: 0
+      hwp_output_absent: true
+      nonnumeric_amount_exit: 2
+      nonnumeric_amount_rejected: true
+      missing_field_exit: 5
+      missing_field_refused: true
+      refused_output_absent: true
+      collection_complete: true
+      hwpx_generated_verified: true
+      error: null
+
+  - id: zero_external_send
+    kind: happy
+    steps:
+      - "small file review takes the attach branch; 26MiB file takes the Drive-link branch (stub transports)"
+      - "stub call log shows the drive upload but ZERO gmail +send and ZERO mailon invocations"
+      - "the Drive-link upload is parented into Autophagy Project Archive/procurement/<YYYY-MM> (never the Drive root)"
+      - "no approvals.jsonl created and no external-effect record in the audit log (documents path sends nothing)"
+    expect:
+      large_hwpx_generated: true
+      small_review_attach: true
+      large_review_drive_link: true
+      drive_upload_via_stub: true
+      drive_folder_created: true
+      drive_upload_parented: true
+      gmail_send_calls: 0
+      mailon_send_calls: 0
+      approvals_file_created: false
+      external_effect_records_in_audit: 0
+      error: null

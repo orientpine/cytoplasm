@@ -1,0 +1,62 @@
+# Placeholder-only worked example for an untracked ~/.hermes/node.toml.
+# Angle-bracket concepts require installation-specific values; host/account examples
+# remain parser-valid so operators can validate the file before deployment.
+
+# Git remote fetched by the ops deployment checkout.
+origin_url = "https://example.invalid/<your-private-origin-url>"
+# Signed update verification is the safe default; disabling it trusts mutable main.
+require_signed_updates = true
+# Peer attestation mode: signed (recommended) or discord.
+peer_attest_mode = "signed"
+# Primary node that runs Hermes gateways, deployment, repair, and report-hub services.
+primary_node_name = "example-primary-node"
+# Secondary node that runs the private RAG services.
+rag_node_name = "example-rag-node"
+# SSH destination used by workstation-side deployment scripts; use an empty string locally.
+deploy_ssh_host = "example-primary-node"
+
+# Human/operator login allowed to orchestrate the service accounts through sudo.
+operator_account = "operator"
+# Primary Hermes service account.
+agent_account = "agent"
+# Independent peer-review Hermes service account.
+peer_account = "peer"
+# Infrastructure, deployment, repair, and report-hub service account.
+ops_account = "ops"
+# Shared Unix group that grants agent and peer read-only access to deployed code.
+service_group = "autophagy"
+
+# Common parent for immutable releases and service data.
+service_root = "/srv"
+# One-way ops checkout used as the Git object source and fallback runtime.
+deploy_checkout = "/srv/autophagy-agents"
+# Atomic symlink to the active immutable runtime release.
+release_current = "/srv/autophagy-agent-current"
+# Directory containing immutable runtime release generations.
+release_store = "/srv/autophagy-agent-releases"
+# Root for non-repository runtime state, locks, logs, and credentials.
+private_root = "/srv/autophagy-private"
+# Root for immutable mounted skill releases and the live skill index.
+skill_store = "/srv/autophagy-skills"
+# Dedicated mutable clone used by the repair workflow.
+repair_work = "/srv/autophagy-repair-work"
+# Ops-owned repair report request queue.
+repair_report_queue = "/srv/autophagy-repair-report-queue"
+# Agent-owned repair report acknowledgement store.
+repair_report_ack = "/srv/autophagy-repair-report-ack"
+# Agent-owned repair capability store.
+repair_capability = "/srv/autophagy-repair-capability"
+# Directory containing root-owned privileged helper executables.
+libexec_dir = "/usr/local/libexec"
+
+# Home directory of the primary Hermes account.
+agent_home = "/home/agent"
+# Home directory of the independent peer Hermes account.
+peer_home = "/home/peer"
+# Home directory of the infrastructure account.
+ops_home = "/home/ops"
+
+# systemd user unit used for the primary Hermes gateway.
+agent_gateway_unit = "hermes-gateway.service"
+# systemd user unit used for the peer Hermes gateway.
+peer_gateway_unit = "hermes-gateway.service"

@@ -1,0 +1,36 @@
+[Unit]
+# Without this, a published group skill only reaches the subscriber when a human
+# remembers to run `python3 -m automation.managed_sync sync` by hand — which is the
+# same silence the managed channel exists to remove.
+Description=Autophagy managed-skill subscriber sync (fetch, verify, quarantine only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The account whose $HOME holds every input this tick reads: the subscriber config
+# (~/.hermes/managed-sync/config.json), the group roster (~/.hermes/roster.yaml), the
+# read-only deploy key, and the quarantine tree it writes.
+User=$NODE_AGENT_ACCOUNT
+Group=$NODE_AGENT_ACCOUNT
+WorkingDirectory=$NODE_RELEASE_CURRENT
+Environment=PYTHONPATH=$NODE_RELEASE_CURRENT
+# Pin BOTH roots the wrapper propagates to its child (규약 (c)); leaving them unset would
+# make the child re-resolve and could split a tick across two code trees mid-run.
+Environment=AUTOPHAGY_REPO_ROOT=$NODE_RELEASE_CURRENT
+Environment=AUTOPHAGY_RUNTIME_ROOT=$NODE_RELEASE_CURRENT
+# DISCORD_BOT_TOKEN lives here (the staged-release notice needs it). The wrapper also
+# self-loads the same file (규약 (b)), so a node without systemd keeps working. The leading
+# `-` is deliberate: the notice is best-effort, so a node with no secrets file must still
+# deliver releases to quarantine rather than refuse to start.
+EnvironmentFile=-$NODE_AGENT_HOME/.env.secrets
+ExecStart=/usr/bin/python3 $NODE_RELEASE_CURRENT/automation/managed_sync/cron/managed_sync_watch.py
+NoNewPrivileges=yes
+# ProtectHome=no is DELIBERATE and pinned by tests/unit/test_managed_sync_deploy.py.
+# Every input above lives under the agent's $HOME; ProtectHome=yes replaces /home with an
+# empty directory, so load_config() would exit 2 with "config not found" on every single
+# tick — a permanent, self-inflicted fail-closed that looks exactly like a missing install.
+# The neighbouring repair unit can set it safely only because all of ITS state is on /srv.
+ProtectHome=no
+
+[Install]
+WantedBy=multi-user.target

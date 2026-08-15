@@ -1,0 +1,23 @@
+# W5-6: patent preparation always forces a patent-sensitive non-GLM plan and
+# preserves the generated synthetic invention marker outside Git.
+version: 1
+id: w5-patent
+title: "W5 patent-prep forced non-GLM E2E bank"
+driver: tests/e2e/drivers/w5_local.sh
+actor: tests/e2e/drivers/w5_patent_actor.py
+
+cases:
+  - id: forced_nonglm_private_draft
+    kind: security
+    steps:
+      - "draft from a synthetic private brief with the route tag initially omitted"
+      - "require automatic patent-sensitive tagging and zero GLM calls"
+      - "require the generated marker to be absent from Git history"
+    expect:
+      draft_exit: 0
+      tag_auto_attached: true
+      provider_nonglm: true
+      glm_calls: 0
+      workspace_private: true
+      git_history_invention_absent: true
+      error: null

@@ -1,0 +1,12 @@
+Vendored HWPX components
+=========================
+
+`form_mapper.py`, `slot_filler.py`, and `fix_namespaces.py` are adapted from
+orientpine/honeypot's `hwpx-generator` plugin.  They are used under the MIT
+license.  Copyright (c) Baekdong Cha and honeypot contributors.
+
+The small `analyze_template.py` and `zip_surgery.py` compatibility modules are
+original autophagy-agents code.  The upstream checkout available while this
+vendoring work was performed did not include the modules imported by the two
+vendored scripts, so these minimal offline implementations retain the public
+contracts required by the deterministic mapper/filler pipeline.

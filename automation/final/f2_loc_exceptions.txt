@@ -1,0 +1,32 @@
+automation/bootstrap-accounts.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
+automation/deploy-skill.sh | Four-stage deployment pipeline; splitting requires a separate staging/approval contract cycle.
+automation/hermes_compat/patch_busy_fifo.py | Compatibility patch carrier; byte-preserving host patch structure is maintained as one deployable unit.
+automation/install/discord_check.py | Read-only Discord prerequisite checker; application, intent, guild, channel, and permission probes share one diagnostic contract.
+automation/install/plan.py | Install desired-state planner; account, directory, key, repository, and trust-check actions share one deterministic plan contract.
+automation/managed_sync/cli.py | Managed-skill sync CLI; fetch, verify, quarantine, and activation dispatch share one fail-closed command contract.
+automation/memory_relocate/effects_live.py | Owner-approved relocation effects; write, RAG verification, and native deletion are one composite action boundary.
+automation/openclaw-arm64-smoke.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
+automation/public_export.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
+automation/repair/repair_report_consumer.py | Agent-owned repair report queue executor; lock discipline, hardened reads, identity and reservation checks, phase state machine, and receipt ordering form one fail-closed tick boundary.
+automation/research_trends/research_trends.py | Weekly report orchestration entrypoint; source collection and report emission share the operational contract.
+automation/skill_gate.py | 분할 시 deploy-skill.sh staging 목록과 충돌하므로 별도 사이클
+automation/skill_gate_approval.py | Approval record transition adapter; legacy and current schemas are intentionally normalized in one gate boundary.
+automation/skill_store.py | Skill installation and managed-skill routing share the reserved-prefix and collision checks.
+skills/budget/scripts/budget_gate.py | Budget mutation gate; owner confirmation, hash binding, and fail-closed effect checks are one decision boundary.
+skills/calendar/scripts/calendar_confirm.py | Calendar confirmation workflow; reaction resolution and owner-bound execution remain one gate contract.
+skills/mail/scripts/scenario.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
+skills/mail/scripts/triage_approval.py | Mail triage approval state machine; draft binding and reaction resolution must stay aligned.
+skills/mail/scripts/triage_cli.py | Mail triage CLI; mode routing, persistence, and result rendering share the user-facing command contract.
+skills/mail/scripts/triage_core.py | Mail triage pipeline core; classification and fail-open item handling are coupled by the digest contract.
+skills/mail/scripts/triage_digest.py | Mail digest builder; grouping, failure annotations, and output formatting form one stable report boundary.
+skills/mail/scripts/triage_gate.py | Mail triage external-effect gate; recipient checks and owner approval are inseparable safety checks.
+skills/mail/vendor/mailon/browser.py | byte-identical vendoring policy forbids modification
+skills/mail/vendor/mailon/main.py | byte-identical vendoring policy forbids modification
+skills/mail/vendor/mailon/scraper.py | byte-identical vendoring policy forbids modification
+skills/mail/vendor/mailon/send.py | byte-identical vendoring policy forbids modification
+skills/mail/vendor/mailon/send_trigger.py | byte-identical vendoring policy forbids modification
+skills/mail/vendor/tests/test_offline.py | byte-identical vendoring policy forbids modification
+skills/meeting/scripts/meeting_actions.py | Calendar/coordination action routing and mutation guards share one deterministic dispatch boundary.
+skills/wiki/scripts/scenario.sh | Shell scenario harness; scenario setup and teardown are intentionally kept as one executable fixture.
+skills/wiki/scripts/wiki_gate.py | Wiki write gate; schema validation, draft hashing, and owner approval form one fail-closed boundary.
+skills/wiki/scripts/wiki_store.py | Wiki persistence; five-field schema validation and atomic upsert behavior share one storage contract.

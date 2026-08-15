@@ -1,0 +1,13 @@
+name: 00-meeting-gate
+version: "1"
+description: >
+  W2-3 meeting ingest pre-dispatch gate. Intercepts owner meeting inputs with
+  explicit bounded !meeting commands or trusted boolean meeting_intent metadata
+  BEFORE the main agent LLM sees any content. File suffix, MIME, name, or DM
+  placement alone never establishes intent. The deterministic sensitivity gate
+  (constraint 6) therefore runs first for explicit meeting inputs and patent-
+  sensitive text never reaches a GLM tier. The "00-" prefix is
+  load-bearing: user plugins register hooks in sorted directory order and
+  this hook must run before interop-protocol's pre_gateway_dispatch.
+provides_hooks:
+  - pre_gateway_dispatch

@@ -1,0 +1,4 @@
+$NODE_OPS_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-install-release install --sha *
+$NODE_OPS_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-install-release rollback --failed-sha * --sha * --store-root $NODE_SERVICE_ROOT
+$NODE_OPS_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-gateway-pair restart
+$NODE_OPS_ACCOUNT ALL=(root) NOPASSWD: $NODE_LIBEXEC_DIR/autophagy-gateway-pair health

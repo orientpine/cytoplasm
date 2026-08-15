@@ -1,0 +1,84 @@
+# MS-E1: entirely local managed-skill publication/subscription lifecycle.
+# The driver creates keys, a bare remote, a temporary HOME, and its Discord
+# transport mock at runtime; it never contacts a network service.
+version: 1
+id: ms-managed-channel
+title: "Managed skill channel E2E bank (signed lifecycle and fail-closed negatives)"
+driver: tests/e2e/drivers/ms_managed_channel.sh
+offline: true
+
+cases:
+  - id: publish_v1
+    kind: happy
+    expect:
+      publish_line: "PUBLISHED skill=managed-hello-autophagy tag=managed-hello-autophagy/v1"
+      signed_tag: true
+      clean_clone_verifies: true
+      error: null
+
+  - id: subscriber_sync
+    kind: happy
+    expect:
+      sync_staged: "SYNC-STAGED skill=managed-hello-autophagy sequence=1 digest=ac3c91217d8f507707c41e9d7a6c20ff0cbfd52ce04a6a31eed19fa865a1ebc6"
+      sync_summary: "SYNC-SUMMARY staged=1 skipped=0 failed=0 removal_requests=0 rolled_back=0"
+      state_sequence: 1
+      quarantined: true
+      error: null
+
+  - id: bad_signature
+    kind: failure
+    expect:
+      sync_failed: "SYNC-FAILED skill=managed-hello-autophagy tag=managed-hello-autophagy/v1 reason=BAD-SIGNATURE"
+      sync_summary: "SYNC-SUMMARY staged=0 skipped=0 failed=1 removal_requests=0 rolled_back=0"
+      quarantine_empty: true
+      error: null
+
+  - id: tampered_tag
+    kind: failure
+    expect:
+      sync_failed: "SYNC-FAILED skill=managed-hello-autophagy tag=managed-hello-autophagy/v1 reason=MANIFEST-BINDING"
+      quarantine_empty: true
+      error: null
+
+  - id: wrong_digest
+    kind: failure
+    expect:
+      sync_failed: "SYNC-FAILED skill=managed-hello-autophagy tag=managed-hello-autophagy/v1 reason=DIGEST-MISMATCH"
+      quarantine_empty: true
+      error: null
+
+  - id: replay
+    kind: failure
+    expect:
+      verify_prefix: "SEQUENCE-REPLAY"
+      error: null
+
+  - id: offline_catch_up
+    kind: happy
+    expect:
+      sync_staged: "SYNC-STAGED skill=managed-hello-autophagy sequence=3 digest=6eda1215e230f5f6e0af2cd772913a2cb4a711007387a1ab0992c33a36b3ff27"
+      sync_summary: "SYNC-SUMMARY staged=1 skipped=0 failed=0 removal_requests=0 rolled_back=0"
+      quarantined_releases: 2
+      activation_sequence: 3
+      error: null
+
+  - id: revocation
+    kind: failure
+    expect:
+      sync_removal_request: "SYNC-REMOVAL-REQUEST skill=managed-hello-autophagy digest=6eda1215e230f5f6e0af2cd772913a2cb4a711007387a1ab0992c33a36b3ff27 reason=activated digest 6eda1215e230f5f6e0af2cd772913a2cb4a711007387a1ab0992c33a36b3ff27 is revoked; owner must run `automation/deploy-skill.sh managed-hello-autophagy --remove`"
+      sync_summary: "SYNC-SUMMARY staged=1 skipped=0 failed=0 removal_requests=1 rolled_back=0"
+      v3_verify_prefix: "REVOKED"
+      live_symlink_present: true
+      error: null
+
+  - id: collision
+    kind: failure
+    expect:
+      activation_error: "COLLISION-BLOCK: managed skill managed-hello-autophagy conflicts with live base hello-autophagy; remove one with --remove"
+      error: null
+
+  - id: prefix_forgery
+    kind: failure
+    expect:
+      store_error: "SKILL-STORE-BLOCK: managed namespace is publisher-fed: managed-hello-autophagy"
+      error: null

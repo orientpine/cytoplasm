@@ -1,0 +1,12 @@
+# Classification-only peer registry template. Never use this file as an attestation trust root.
+# Copy it to the private runtime path used by report-hub/calendar and replace every placeholder.
+version: 1
+peers:
+  owner-agent:
+    bot_user_id: "<owner-agent-bot-user-id>"
+    bot_name: <owner-agent-bot-name>
+    account: agent
+  peer-agent:
+    bot_user_id: "<peer-agent-bot-user-id>"
+    bot_name: <peer-agent-bot-name>
+    account: peer

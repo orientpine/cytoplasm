@@ -1,0 +1,114 @@
+# W2-6 scenario bank: the Wave-2 personal-memory chain, codified.
+#
+# Chain under test (all deterministic CLI paths, unattended, E2E_TEST_MODE=1):
+#   meeting upload -> action items -> Kanban cards + milestones -> wiki (owner
+#   gate via W1-6 signed injection) -> RAG index (W2-4 pipeline, real W2-1 MCP
+#   node) -> next-day recall with source attribution (W2-5).
+#
+# Isolation rules (constraint 7/8, cascade-safety):
+#   * every case runs in a per-run agent-home temp dir (notes/wiki/state/logs
+#     all overridden via the CLIs' env hooks) — production watcher dirs,
+#     production wiki, production milestones.yaml are never touched;
+#   * zero Discord traffic: no --notify-channel, meeting config carries no
+#     team_channel_id, rag config carries no discord block;
+#   * the happy path ingests fixed synthetic vectors into the real
+#     personal_cha collection and DELETES them in the cleanup step (fixed
+#     content => fixed uuid5 point ids => a crashed run is self-healed by the
+#     next run's overwrite+cleanup);
+#   * E2E_TEST_MODE=1 is set only for the runner's own processes — the
+#     production gateway keeps refusing it at boot (W1-6 guard).
+#
+# Judging contract: the remote actuator only OBSERVES (emits one JSON object
+# per case); the judge compares every key in each case's `expect` block
+# against the observations by exact equality. A failure case therefore only
+# passes when its specific, distinct failure signature is observed.
+version: 1
+id: w2-personal-memory
+title: "W2 personal-memory chain E2E bank (happy + 3 failure injections)"
+driver: tests/e2e/drivers/w2_personal_memory.sh
+remote_host: <primary-node>
+remote_account: agent
+
+cases:
+  - id: happy_path
+    kind: happy
+    steps:
+      - "meeting ingest: fixture md + recorded LLM extraction (provider=recorded, glm untouched)"
+      - "kanban: 2 my-todo cards really created on the agent board (unassigned => dispatcher-safe), visible via show --json"
+      - "milestones: 2 entries merged into isolated milestones.yaml"
+      - "wiki: draft -> HMAC signed injection (W1-6 adapter) -> confirm -> note saved in isolated WIKI_ROOT"
+      - "rag: W2-4 pipeline ingests meeting note + wiki note into real personal_cha (isolated state dir)"
+      - "recall: unique-token queries answer with meeting:/wiki: source attribution (next-day persistence equivalent)"
+      - "cleanup: fixture files removed -> vectors REMOVED from personal_cha, cards archived+purged"
+    expect:
+      meeting_exit: 0
+      meeting_provider: "recorded"
+      glm_called: false
+      team_posted: false
+      cards_created: 2
+      card_ids_count: 2
+      kanban_card_visible: true
+      milestones_added: 2
+      milestones_file_has_token: true
+      wiki_saved: true
+      wiki_method: "signed_injection_e2e"
+      wiki_note_exists: true
+      rag_ingest_exit: 0
+      rag_ingested_meeting: true
+      rag_ingested_wiki: true
+      rag_network_only_mcp: true
+      recall_meeting_status: "hit"
+      recall_meeting_source_is_meeting: true
+      recall_meeting_attribution_present: true
+      recall_wiki_status: "hit"
+      recall_wiki_source_is_wiki: true
+      recall_wiki_attribution_present: true
+      cleanup_vectors_removed: true
+      kanban_cleanup_ok: true
+      error: null
+
+  - id: empty_meeting
+    kind: failure
+    fault: "meeting file contains no meaningful text"
+    steps:
+      - "meeting ingest on whitespace-only md fixture"
+      - "expect deterministic Korean refusal (exit 5), zero side effects"
+    expect:
+      meeting_exit: 5
+      notice_empty_doc: true
+      note_created: false
+      cards_created: 0
+      refusal_logged: true
+      error: null
+
+  - id: rag_node_down
+    kind: failure
+    fault: "RAG MCP node unreachable (config aimed at a closed loopback port)"
+    steps:
+      - "rag ingest against down node: exit 0, jobs durably queued for next tick"
+      - "recall against down node: single attempt, status=unavailable, no fabricated results"
+    expect:
+      rag_ingest_exit: 0
+      queued_notice: true
+      queue_jobs_persisted: true
+      state_not_advanced: true
+      recall_exit: 0
+      recall_status: "unavailable"
+      recall_message_unavailable: true
+      recall_attempts: 1
+      recall_results_empty: true
+      error: null
+
+  - id: scanned_pdf
+    kind: failure
+    fault: "pdf without any text layer (scanned/image-only)"
+    steps:
+      - "generate deterministic no-text-operator pdf (meeting skill fixture generator)"
+      - "meeting ingest: expect manual-conversion refusal (exit 4), zero side effects"
+    expect:
+      meeting_exit: 4
+      notice_manual_conversion: true
+      note_created: false
+      cards_created: 0
+      refusal_logged: true
+      error: null

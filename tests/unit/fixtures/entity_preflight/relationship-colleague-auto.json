@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "case_id": "relationship-colleague-auto",
+  "category": "relationship_colleague",
+  "synthetic": true,
+  "description": "동료 관계 표현. 관계 질의가 조직도 후보원에서 소속 팀을 단일 고신뢰로 해석한다.",
+  "request": {
+    "request_id": "ef3-req-relation-2",
+    "raw_text": "박예시 동료 팀에 공유할 자료 정리를 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "박예시", "entity_kind": "person"}
+    ],
+    "relationship_queries": [
+      {
+        "query_id": "q-1",
+        "subject_mention_id": "m-1",
+        "relation": "works_in_team",
+        "target_kind": "organization",
+        "question": "박예시가 속한 팀은?"
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "addressbook.organization",
+      "normalized_value": "합성연구2팀",
+      "display_value": "합성연구2팀",
+      "confidence": 0.94,
+      "source_ref": "private://fixture/organization/relation-2",
+      "relationship_query_id": "q-1"
+    }
+  ],
+  "expected": {
+    "auto_normalization": true,
+    "needs_confirmation": false,
+    "decision": "auto_selected",
+    "reason": "single_high_confidence",
+    "selected": {"m-1": "합성연구2팀"},
+    "clarify_mentions": []
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "version": "entity-preflight-v1",
+  "thresholds": {
+    "auto_select_min_confidence": 0.85,
+    "conflict_min_confidence": 0.65,
+    "ambiguity_margin": 0.15
+  },
+  "metrics": {
+    "min_sample_size": 20,
+    "max_auto_normalization_rate": 0.98,
+    "max_bypass_count": 0,
+    "max_verification_failure_rate": 0.02,
+    "max_p95_latency_ms": 2000
+  },
+  "source_weights": {
+    "explicit_input": 1.0,
+    "relationship_query": 1.0,
+    "addressbook.organization": 0.95,
+    "addressbook.contacts": 0.9,
+    "addressbook.history": 0.75,
+    "personal_rag": 0.9,
+    "hermes_memory": 0.95
+  }
+}

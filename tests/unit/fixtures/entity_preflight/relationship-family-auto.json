@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "case_id": "relationship-family-auto",
+  "category": "relationship_family",
+  "synthetic": true,
+  "description": "가족 관계 표현. 관계 질의가 지목한 대상 이름이 Hermes memory에서 단일 고신뢰로 해석된다.",
+  "request": {
+    "request_id": "ef3-req-relation-1",
+    "raw_text": "한가상 어머니께 드릴 안내문 발송을 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "한가상", "entity_kind": "person"}
+    ],
+    "relationship_queries": [
+      {
+        "query_id": "q-1",
+        "subject_mention_id": "m-1",
+        "relation": "parent_of",
+        "target_kind": "person",
+        "question": "한가상의 어머니는 누구인가?"
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "candidate_id": "c-1",
+      "mention_id": "m-1",
+      "source": "hermes_memory",
+      "normalized_value": "한가온",
+      "display_value": "한가온",
+      "confidence": 0.95,
+      "source_ref": "private://fixture/memory/relation-1",
+      "relationship_query_id": "q-1"
+    }
+  ],
+  "expected": {
+    "auto_normalization": true,
+    "needs_confirmation": false,
+    "decision": "auto_selected",
+    "reason": "single_high_confidence",
+    "selected": {"m-1": "한가온"},
+    "clarify_mentions": []
+  }
+}

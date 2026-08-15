@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "case_id": "no-candidate-clarify",
+  "category": "no_candidate",
+  "synthetic": true,
+  "description": "어떤 후보원도 값을 주지 못한 경우. 표면형을 그대로 외부에 쓰지 않고 정규화 값을 대화에서 직접 묻는다.",
+  "request": {
+    "request_id": "ef3-req-nocand-1",
+    "raw_text": "최테스트 자료 검토를 할 일에 추가해줘",
+    "target_system": "google_tasks",
+    "operation": "create"
+  },
+  "detection": {
+    "entities": [
+      {"mention_id": "m-1", "surface": "최테스트", "entity_kind": "person"}
+    ],
+    "relationship_queries": []
+  },
+  "candidates": [],
+  "expected": {
+    "auto_normalization": false,
+    "needs_confirmation": true,
+    "decision": "confirmation_required",
+    "reason": "no_candidate",
+    "selected": {},
+    "clarify_mentions": ["m-1"]
+  }
+}

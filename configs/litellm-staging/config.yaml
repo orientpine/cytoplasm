@@ -1,0 +1,33 @@
+model_list:
+  - model_name: glm-main
+    litellm_params:
+      model: zai/glm-5.2
+      api_key: os.environ/ZAI_API_KEY
+      tags: ["default", "non-patent-sensitive"]
+    model_info:
+      id: glm-main-zai-glm-5-2
+      input_cost_per_token: 0.0000014
+      output_cost_per_token: 0.0000044
+
+router_settings:
+  enable_tag_filtering: true
+
+litellm_settings:
+  drop_params: true
+  callbacks: custom_callbacks.proxy_handler_instance
+  default_key_generate_params:
+    models: ["glm-main"]
+    max_budget: os.environ/LITELLM_MONTHLY_HARD_CAP
+  upperbound_key_generate_params:
+    max_budget: os.environ/LITELLM_MONTHLY_HARD_CAP
+    budget_duration: "30d"
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: false
+  fail_closed_budget_enforcement: true
+  alerting: ["webhook"]
+  alert_types: ["budget_alerts"]
+  alerting_args:
+    budget_alert_ttl: 86400

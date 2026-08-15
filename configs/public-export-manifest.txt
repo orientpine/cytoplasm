@@ -1,0 +1,78 @@
+# Public export exclusions. One tracked, repository-relative path per line.
+# Directories end with `/`; glob patterns and parent traversal are forbidden.
+
+.omo/
+docs/qa/
+
+# Conformance tests whose only inputs are the intentionally private trees above.
+tests/unit/test_features_board_conformance.py
+tests/unit/test_owner_ledger_format.py
+
+# Internal export-coverage control. The ledger records publish decisions for
+# governed directories and the conformance test asserts every governed file is
+# decided in exactly one of the two files. Both read exclusion entries that no
+# longer resolve once this manifest has been applied, so they are meaningless -
+# and would fail - inside the exported tree.
+configs/public-export-review.txt
+tests/unit/test_public_export_manifest_coverage.py
+
+# Installation-specific and personal operations runbooks.
+docs/guide/cost-report.md
+docs/guide/dg5-runtime-rollout-runbook.md
+docs/guide/discord-server-architecture.md
+docs/guide/gate-ledger-inventory.md
+docs/guide/incident-response.md
+docs/guide/managed-skill-channel.md
+docs/guide/onboarding-kit.md
+docs/guide/operations.md
+docs/guide/optional-sudoers-orchestration.md
+docs/guide/owner-dm-busy-fifo-receipts.md
+docs/guide/pending-user-actions.md
+docs/guide/personal-entity-preflight.md
+docs/guide/provision-agent-script.md
+docs/guide/reboot-recovery.md
+docs/guide/repair-detect-runtime-배포.md
+docs/guide/report-hub.md
+docs/guide/w0-4-account-setup.md
+docs/guide/w0-5-discord-setup.md
+docs/guide/w0-6-gws-oauth-setup.md
+docs/guide/w0-6-provider-keys-setup.md
+docs/guide/w0-9-openclaw-smoke.md
+docs/guide/watcher-cron-설계규약.md
+docs/guide/개인-위키.md
+docs/guide/과제비-운영.md
+docs/guide/기관메일-인터페이스.md
+docs/guide/기관메일-전송분석.md
+docs/guide/미러-로컬-브랜치-정리.md
+
+# Private infrastructure change logs. Public-safe design records stay included.
+docs/patch/2026-07-14-legacy-teardown.md
+docs/patch/2026-07-14-litellm-gateway-deploy.md
+docs/patch/2026-07-14-openclaw-arm64-smoke-stage1.md
+docs/patch/2026-07-14-w0-6-providers-gws-oauth.md
+docs/patch/2026-07-15-healthcheck.md
+docs/patch/2026-07-15-hermes-agent-install.md
+docs/patch/2026-07-15-litellm-gateway.md
+docs/patch/2026-07-15-provision-recipe-peer.md
+docs/patch/2026-07-15-rag-infra.md
+docs/patch/2026-07-16-glm-main-rebind-glm-5.2.md
+docs/patch/2026-07-17-e7-peer-attestation.md
+docs/patch/2026-07-19-mail-skill-redeploy-digest.md
+docs/patch/2026-07-20-mail-mode-seed-split.md
+docs/patch/2026-07-21-repair-plans-dir.md
+docs/patch/2026-07-22-agent-primary-model-sol.md
+docs/patch/2026-07-22-gws-oauth-tasks-inproduction.md
+docs/patch/2026-07-22-litellm-init-zombie-reap.md
+docs/patch/2026-07-24-drive-archive.md
+docs/patch/2026-07-24-patent-prep-drive-backup.md
+docs/patch/2026-07-25-approval-lifecycle-consolidation.md
+docs/patch/2026-07-25-drive-archive-resumable-upload.md
+docs/patch/2026-07-25-drive-archive-shared-approval-lifecycle.md
+docs/patch/2026-07-25-drive-archive-single-approval-message.md
+docs/patch/2026-07-25-node-checkout-perms.md
+docs/patch/2026-07-25-py311-fstring-guard-and-digest-retry.md
+docs/patch/2026-07-27-dashboard-credential-rotation.md
+docs/patch/2026-08-02-memory-relocate-approval-channel-binding.md
+docs/patch/2026-08-03-confirm-gate-rate-limit.md
+docs/patch/2026-08-03-promotion-approval-legibility.md
+docs/patch/2026-08-03-supply-chain-autonomous-deploy.md

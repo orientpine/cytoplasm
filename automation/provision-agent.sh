@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+eval "$(python3 "$REPO_ROOT/automation/node_config_sh.py" --print-env)"
+SERVICE_NAME="$NODE_AGENT_GATEWAY_UNIT"
+readonly HERMES_INSTALLER_URL="https://hermes-agent.nousresearch.com/install.sh"
+readonly LITELLM_BASE_URL="http://127.0.0.1:4000/v1"
+readonly LITELLM_MODEL="glm-main"
+readonly FALLBACK_PROVIDER="openai-codex"
+readonly FALLBACK_MODEL="gpt-5.3-codex"
+
+log() {
+  printf '[provision-agent] %s\n' "$*"
+}
+
+die() {
+  printf '[provision-agent] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: provision-agent.sh <account>
+
+Provision the named existing Linux account with the W1-2 Phase-A Hermes
+configuration. The account must already own a mode-0600 ~/.env.secrets file
+containing DISCORD_BOT_TOKEN and its account-specific LiteLLM key.
+EOF
+  exit 2
+}
+
+require_commands() {
+  local command_name
+  for command_name in "$@"; do
+    command -v "$command_name" >/dev/null 2>&1 || die "required command not found: $command_name"
+  done
+}
+
+run_as_account() {
+  sudo -n -u "$ACCOUNT" -H env \
+    "HOME=$ACCOUNT_HOME" \
+    "PATH=$ACCOUNT_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+    "$@"
+}
+
+user_systemctl() {
+  run_as_account env "XDG_RUNTIME_DIR=$USER_RUNTIME_DIR" systemctl --user "$@"
+}
+
+required_secret_is_present() {
+  local variable_name="$1"
+  local pattern
+
+  # Only validate the variable name and the presence of a non-empty value. The
+  # file is never sourced or printed, preventing credential expansion or leaks.
+  pattern="^[[:space:]]*(export[[:space:]]+)?${variable_name}=[\"']?[^[:space:]\"']"
+  run_as_account grep -Eq "$pattern" "$SECRETS_FILE"
+}
+
+validate_account_and_prerequisites() {
+  local account_record mode owner variable_name
+
+  [[ "$ACCOUNT" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid account name: '$ACCOUNT'"
+
+  if ! account_record="$(getent passwd "$ACCOUNT")"; then
+    die "account '$ACCOUNT' does not exist (getent passwd '$ACCOUNT' returned no entry)"
+  fi
+
+  ACCOUNT_HOME="$(printf '%s\n' "$account_record" | cut -d: -f6)"
+  [[ -n "$ACCOUNT_HOME" && -d "$ACCOUNT_HOME" ]] || \
+    die "account '$ACCOUNT' has no usable home directory: '${ACCOUNT_HOME:-<empty>}'"
+
+  ACCOUNT_UID="$(id -u "$ACCOUNT")"
+  USER_RUNTIME_DIR="/run/user/$ACCOUNT_UID"
+
+  sudo -n -u "$ACCOUNT" -H true >/dev/null 2>&1 || \
+    die "cannot run commands as '$ACCOUNT' without a password; grant the caller sudo -n -u $ACCOUNT or run as root"
+
+  SECRETS_FILE="$ACCOUNT_HOME/.env.secrets"
+  run_as_account test -f "$SECRETS_FILE" || \
+    die "required secrets file is missing: $SECRETS_FILE (populate it out-of-band before provisioning)"
+
+  mode="$(run_as_account stat -c '%a' "$SECRETS_FILE")"
+  owner="$(run_as_account stat -c '%U' "$SECRETS_FILE")"
+  [[ "$mode" == "600" && "$owner" == "$ACCOUNT" ]] || \
+    die "$SECRETS_FILE must be owned by '$ACCOUNT' and mode 600 (found owner=$owner mode=$mode)"
+  run_as_account test -r "$SECRETS_FILE" || die "$SECRETS_FILE is not readable by '$ACCOUNT'"
+
+  for variable_name in DISCORD_BOT_TOKEN "$LITELLM_KEY_ENV"; do
+    required_secret_is_present "$variable_name" || \
+      die "$SECRETS_FILE is missing a non-empty $variable_name entry"
+  done
+
+  HERMES_HOME="$ACCOUNT_HOME/.hermes"
+  HERMES_SOURCE_DIR="$HERMES_HOME/hermes-agent"
+  CONFIG_FILE="$HERMES_HOME/config.yaml"
+  DROPIN_DIR="$ACCOUNT_HOME/.config/systemd/user/${SERVICE_NAME}.d"
+  DROPIN_FILE="$DROPIN_DIR/10-env-secrets.conf"
+}
+
+ensure_linger() {
+  local linger
+
+  linger="$(loginctl show-user "$ACCOUNT" -p Linger --value)" || \
+    die "could not determine linger state for '$ACCOUNT'"
+  if [[ "$linger" != "yes" ]]; then
+    sudo -n loginctl enable-linger "$ACCOUNT" || \
+      die "could not enable linger for '$ACCOUNT'"
+    linger="$(loginctl show-user "$ACCOUNT" -p Linger --value)"
+  fi
+  [[ "$linger" == "yes" ]] || die "linger is not enabled for '$ACCOUNT'"
+  [[ -d "$USER_RUNTIME_DIR" ]] || \
+    die "runtime directory missing after enabling linger: $USER_RUNTIME_DIR"
+  log "linger: enabled for '$ACCOUNT'"
+}
+
+hermes_install_is_valid() {
+  run_as_account test -d "$HERMES_SOURCE_DIR" || return 1
+  run_as_account bash -c 'command -v hermes >/dev/null 2>&1 && hermes --version >/dev/null 2>&1'
+}
+
+install_hermes_if_needed() {
+  if hermes_install_is_valid; then
+    log "Hermes install: valid existing install at $HERMES_SOURCE_DIR — skipping"
+    return
+  fi
+
+  log "Hermes install: running the official installer for '$ACCOUNT'"
+  run_as_account bash -c "set -euo pipefail; curl -fsSL '$HERMES_INSTALLER_URL' | bash"
+  hermes_install_is_valid || die "official installer completed but no valid Hermes install was found for '$ACCOUNT'"
+  log "Hermes install: complete"
+}
+
+render_config() {
+  cat <<EOF
+model:
+  provider: custom:litellm
+  default: ${LITELLM_MODEL}
+
+custom_providers:
+  - name: litellm
+    base_url: ${LITELLM_BASE_URL}
+    key_env: ${LITELLM_KEY_ENV}
+    api_mode: chat_completions
+    default_model: ${LITELLM_MODEL}
+EOF
+
+  if [[ "$ACCOUNT" == "$NODE_AGENT_ACCOUNT" ]]; then
+    cat <<EOF
+
+fallback_providers:
+  - provider: ${FALLBACK_PROVIDER}
+    model: ${FALLBACK_MODEL}
+EOF
+  fi
+}
+
+render_dropin() {
+  cat <<EOF
+[Service]
+EnvironmentFile=${SECRETS_FILE}
+EOF
+}
+
+ensure_file_if_absent() {
+  local expected_file="$1"
+  local destination="$2"
+  local destination_dir="$3"
+  local label="$4"
+
+  if run_as_account test -e "$destination"; then
+    if run_as_account cmp -s "$expected_file" "$destination"; then
+      log "$label: already matches — skipping"
+    else
+      log "$label: already set — preserving (only-if-unset)"
+    fi
+    return
+  fi
+
+  run_as_account install -d -m 700 "$destination_dir"
+  run_as_account install -m 600 "$expected_file" "${destination}.tmp"
+  run_as_account mv -f "${destination}.tmp" "$destination"
+  FILE_CHANGED=1
+  log "$label: written"
+}
+
+ensure_initial_config_and_dropin() {
+  local desired_config="$WORK_DIR/config.yaml"
+  local desired_dropin="$WORK_DIR/autophagy-env.conf"
+
+  render_config > "$desired_config"
+  render_dropin > "$desired_dropin"
+  chmod 644 "$desired_config" "$desired_dropin"
+
+  ensure_file_if_absent "$desired_config" "$CONFIG_FILE" "$HERMES_HOME" "Hermes config"
+  ensure_file_if_absent "$desired_dropin" "$DROPIN_FILE" "$DROPIN_DIR" "systemd EnvironmentFile drop-in"
+}
+
+ensure_gateway_service() {
+  local service_was_present=0
+
+  if user_systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then
+    service_was_present=1
+    log "gateway unit: already installed — skipping Hermes unit generation"
+  else
+    log "gateway unit: installing Hermes user service"
+    run_as_account env "XDG_RUNTIME_DIR=$USER_RUNTIME_DIR" hermes gateway install --force --start-now
+    SERVICE_CHANGED=1
+  fi
+
+  if (( FILE_CHANGED || SERVICE_CHANGED )); then
+    user_systemctl daemon-reload
+    log "gateway unit: daemon-reload complete"
+  fi
+
+  if ! user_systemctl is-enabled --quiet "$SERVICE_NAME"; then
+    user_systemctl enable "$SERVICE_NAME"
+    SERVICE_CHANGED=1
+    log "gateway unit: enabled"
+  else
+    log "gateway unit: already enabled — skipping"
+  fi
+
+  if (( FILE_CHANGED && service_was_present )); then
+    user_systemctl restart "$SERVICE_NAME"
+    log "gateway unit: restarted after configuration change"
+  elif ! user_systemctl is-active --quiet "$SERVICE_NAME"; then
+    user_systemctl start "$SERVICE_NAME"
+    log "gateway unit: started"
+  else
+    log "gateway unit: already active — skipping"
+  fi
+}
+
+verify_gateway_service() {
+  local status
+
+  if ! status="$(user_systemctl is-active "$SERVICE_NAME" 2>/dev/null)"; then
+    die "$SERVICE_NAME is not active for '$ACCOUNT'"
+  fi
+  [[ "$status" == "active" ]] || die "$SERVICE_NAME is not active for '$ACCOUNT' (status=$status)"
+  log "verification: $SERVICE_NAME is active for '$ACCOUNT'"
+}
+
+[[ "$#" -eq 1 ]] || usage
+ACCOUNT="$1"
+[[ -n "$ACCOUNT" ]] || usage
+if [[ "$ACCOUNT" == "$NODE_PEER_ACCOUNT" ]]; then
+  SERVICE_NAME="$NODE_PEER_GATEWAY_UNIT"
+fi
+
+ACCOUNT_ENV_SUFFIX="$(printf '%s' "$ACCOUNT" | LC_ALL=C tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9_' '_')"
+LITELLM_KEY_ENV="LITELLM_${ACCOUNT_ENV_SUFFIX}_KEY"
+
+ACCOUNT_HOME=""
+ACCOUNT_UID=""
+USER_RUNTIME_DIR=""
+SECRETS_FILE=""
+HERMES_HOME=""
+HERMES_SOURCE_DIR=""
+CONFIG_FILE=""
+DROPIN_DIR=""
+DROPIN_FILE=""
+FILE_CHANGED=0
+SERVICE_CHANGED=0
+
+require_commands bash chmod cmp curl cut getent grep id install loginctl mktemp mv rm stat sudo systemctl tr
+validate_account_and_prerequisites
+ensure_linger
+
+WORK_DIR="$(mktemp -d)"
+chmod 755 "$WORK_DIR"
+trap 'rm -rf -- "$WORK_DIR"' EXIT
+
+log "provisioning account '$ACCOUNT' with key variable $LITELLM_KEY_ENV"
+ensure_initial_config_and_dropin
+install_hermes_if_needed
+ensure_gateway_service
+verify_gateway_service
+log "DONE: '$ACCOUNT' is provisioned; no OAuth or user DM test was attempted"

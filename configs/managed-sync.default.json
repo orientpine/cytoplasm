@@ -1,0 +1,15 @@
+{
+  "remote_url": "ssh://REPLACE_ME/managed-skills.git",
+  "publisher": "cha",
+  "allowed_signers": "/etc/autophagy/managed-skills-allowed-signers",
+  "mirror_dir": "~/.hermes/managed-sync/mirror",
+  "ssh_key_path": "~/.ssh/managed_skills_deploy",
+  "quarantine_dir": "~/.hermes/managed-sync/quarantine",
+  "state_path": "~/.hermes/managed-sync/state.json",
+  "skills": {
+    "managed-hello-autophagy": {
+      "opt_in": true,
+      "pin": null
+    }
+  }
+}
