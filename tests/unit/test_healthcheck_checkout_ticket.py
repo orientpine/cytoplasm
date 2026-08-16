@@ -173,6 +173,7 @@ def _quiet_release_probes(tmp_path: Path, checkout: Path) -> tuple[Path, Path, P
 def _sweep(tmp_path: Path, checkout: Path, *args: str, ssh_down: bool = False) -> Sweep:
     journal = tmp_path / "tickets.txt"
     env = dict(os.environ)
+    env["HOME"] = str(tmp_path / "isolated-home")
     env["PATH"] = f"{_fake_bin(tmp_path, ssh_down=ssh_down)}{os.pathsep}{env['PATH']}"
     env["HEALTHCHECK_LOG_DIR"] = str(tmp_path / "logs")
     env["HEALTHCHECK_SSH_USER"] = ""

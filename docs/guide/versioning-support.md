@@ -13,7 +13,7 @@
 
 | 버전 | 어디에 있나 | 현재 값 | 누가 올리나 |
 |---|---|---|---|
-| **코드 릴리스 버전** | 공개 저장소의 서명된 릴리스 태그(`v1.0.0` …) | 최초 릴리스 미배포 | 업스트림 유지보수자 |
+| **코드 릴리스 버전** | 공개 저장소의 서명된 릴리스 태그(`v1.0.0` …) | `v1.0.0` (2026-08-15, `orientpine/cytoplasm`) | 업스트림 유지보수자 |
 | **roster 스키마** | `automation/group_roster/schema.py`의 `SCHEMA_VERSION` | `1` | 업스트림 |
 | **관리형 스킬 매니페스트 스키마** | `automation/managed_skills/manifest.py`의 `SCHEMA_VERSION` | `1` | 업스트림 |
 | **managed-sync 런타임 상태 스키마** | `automation/managed_sync/state.py`의 `_SCHEMA_VERSION` | `1` | 업스트림 |
@@ -173,8 +173,8 @@ ops 체크아웃이 dirty해져 모든 `git pull --ff-only`가 막힌다. 런타
 ## 5. 관련 문서
 
 - [`SECURITY.md`](../../SECURITY.md) — 취약점 보고 경로·응답 약속
-- `docs/guide/manual-maintainer.md` (W-M3, 미작성) — 릴리스 절차, **업데이트 신뢰키
-  회전**, 나쁜 릴리스 대응. 키 회전은 이 문서가 아니라 그쪽이 소유한다.
+- [`docs/guide/manual-maintainer.md`](manual-maintainer.md) — 릴리스 절차, **업데이트 신뢰키
+  보관·회전**, 나쁜 릴리스 대응. 키 회전은 이 문서가 아니라 그쪽이 소유한다.
 - [`docs/guide/manual-group-admin.md`](manual-group-admin.md) — 스킬 발행·취소,
   `release_sequence` 운영
 - [`docs/guide/manual-member.md`](manual-member.md) — 관리형 스킬 도착 시 판단과 ✅

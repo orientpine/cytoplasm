@@ -56,7 +56,7 @@ def _get_mail(uid: str) -> dict:
 
 def _delegate_schedule(schedule_text: str, uid_opaque: str) -> str:
     calendar_cli = _env_path(
-        "TRIAGE_CALENDAR_CLI", "~/.hermes/skills/calendar/scripts/calendar_cli.py"
+        "TRIAGE_CALENDAR_CLI", "/srv/autophagy-skills/live/calendar/scripts/calendar_cli.py"
     )
     if not calendar_cli.exists():
         return "calendar-unavailable"

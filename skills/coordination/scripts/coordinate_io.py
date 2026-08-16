@@ -12,7 +12,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -20,6 +20,7 @@ API = "https://discord.com/api/v10"
 USER_AGENT = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
 POLL_SECONDS = 3.0
 GWS_TIMEOUT_S = 120
+_LIVE_CALENDAR_SCRIPTS: Final = "/srv/autophagy-skills/live/calendar/scripts"
 
 
 class CoordinationError(RuntimeError):
@@ -42,9 +43,7 @@ def ensure_runtime() -> None:
 
 
 def calendar_scripts() -> Path:
-    path = Path(
-        os.environ.get("CALENDAR_SCRIPTS", "~/.hermes/skills/calendar/scripts")
-    ).expanduser()
+    path = Path(os.environ.get("CALENDAR_SCRIPTS", _LIVE_CALENDAR_SCRIPTS)).expanduser()
     if not (path / "calendar_cli.py").exists():
         raise CoordinationError(f"calendar 스킬 스크립트 없음: {path}", 3)
     if str(path) not in sys.path:

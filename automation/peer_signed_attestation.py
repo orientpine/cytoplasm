@@ -21,11 +21,11 @@ _SNOWFLAKE: Final = r"[0-9]{1,20}"
 _SIGNED_RECORD: Final = re.compile(
     "".join(
         (
-            rf"\A(?P<preimage>autophagy-peer-attest-v1\n",
+            r"\A(?P<preimage>autophagy-peer-attest-v1\n",
             rf"request=(?P<request>{_NONCE.pattern})\n",
             rf"skill=(?P<skill>{_SKILL.pattern})\n",
             rf"sha256=(?P<digest>{_DIGEST.pattern})\n",
-            rf"verdict=(?P<verdict>PASS|FAIL)\n",
+            r"verdict=(?P<verdict>PASS|FAIL)\n",
             rf"reviewer={REVIEWER}\n",
             rf"attested_at=(?P<attested_at>{_RFC3339})\n",
             rf"approval_channel=(?P<channel>{_SNOWFLAKE})\n",

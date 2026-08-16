@@ -7,9 +7,10 @@ drafts — no auto-drafting: drafts are owner-initiated via the `draft`
 subcommand). no_agent semantics: empty stdout + exit 0 on success (silent tick);
 on failure prints one masked line and exits 1 so the scheduler records an
 alert. Deployed copy lives at ~/.hermes/scripts/mail_triage_watch.py (Hermes
-cron sandbox rule); the skill CLI stays the single implementation at
-~/.hermes/skills/mail/scripts/ — no import of it here, subprocess only
-(avoids the W3-2 cron-sandbox PYTHONPATH package-shadowing trap).
+cron sandbox rule); the skill CLI stays the single implementation in the
+immutable governed live store at /srv/autophagy-skills/live/mail/scripts/ — no
+import of it here, subprocess only (avoids the W3-2 cron-sandbox PYTHONPATH
+package-shadowing trap).
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-CLI = Path.home() / ".hermes" / "skills" / "mail" / "scripts" / "triage_cli.py"
+CLI = Path("/srv/autophagy-skills/live/mail/scripts/triage_cli.py")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _LONG_DIGITS = re.compile(r"\d{5,}")
 

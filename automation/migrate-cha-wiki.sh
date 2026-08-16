@@ -72,7 +72,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 dest = Path.home() / sys.argv[1]
-skill = Path.home() / ".hermes/skills/wiki/scripts"
+skill = Path("/srv/autophagy-skills/live/wiki/scripts")
 sys.path.insert(0, str(skill))
 try:
     import wiki_store  # mounted W2-2 skill: authoritative schema

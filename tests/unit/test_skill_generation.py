@@ -93,6 +93,51 @@ def test_audit_when_generated_skill_is_copied_without_pipeline_then_removes_and_
     assert "BYPASS-REJECTED" in service.paths.registry.read_text(encoding="utf-8")
 
 
+def test_audit_when_mounted_proposal_dir_appears_in_writable_root_then_still_removes_it(tmp_path: Path) -> None:
+    # Given: a formerly governed generated skill is copied into the writable primary root.
+    now = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    service = _service(tmp_path, FakePipeline(PipelineExit.MOUNTED))
+    _ = service.observe("자동 스킬 1을 만들어줘", now - timedelta(days=2))
+    _ = service.observe("자동 스킬 2을 만들어줘", now - timedelta(days=1))
+    proposal = service.observe("자동 스킬 3을 만들어줘", now)
+    assert proposal is not None
+    bypassed = service.paths.mounted / proposal.name
+    _ = bypassed.mkdir(parents=True)
+    _ = (bypassed / "SKILL.md").write_text("---\nautophagy_generated: true\n---\n", encoding="utf-8")
+
+    # When: the audit observes the generated marker in the writable root.
+    rejected = service.audit_mounts()
+
+    # Then: the copy is removed and the append-only ledger records the bypass rejection.
+    assert rejected == (proposal.name,)
+    assert not bypassed.exists()
+    assert "BYPASS-REJECTED" in service.paths.proposals.read_text(encoding="utf-8")
+
+
+def test_audit_when_dir_has_no_generated_marker_then_it_is_never_touched(tmp_path: Path) -> None:
+    # Given: self-authored skills and internal state entries in the writable primary root.
+    service = _service(tmp_path, FakePipeline(PipelineExit.AWAITING_OWNER))
+    self_authored = service.paths.mounted / "research-helper"
+    archive = service.paths.mounted / ".archive"
+    hub = service.paths.mounted / ".hub"
+    hidden_state = service.paths.mounted / ".state.json"
+    _ = self_authored.mkdir(parents=True)
+    _ = archive.mkdir()
+    _ = hub.mkdir()
+    _ = (self_authored / "SKILL.md").write_text("---\nname: research-helper\n---\n", encoding="utf-8")
+    _ = hidden_state.write_text("{}\n", encoding="utf-8")
+
+    # When: the audit executes.
+    rejected = service.audit_mounts()
+
+    # Then: only generated-marker drafts are in scope; all unmarked entries remain untouched.
+    assert rejected == ()
+    assert self_authored.exists()
+    assert archive.exists()
+    assert hub.exists()
+    assert hidden_state.exists()
+
+
 def test_router_when_auto_draft_routes_then_uses_only_w1_8_with_auto_source(tmp_path: Path) -> None:
     # Given: a generated draft and a pipeline spy.
     source = tmp_path / "auto-draft"

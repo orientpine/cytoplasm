@@ -67,13 +67,13 @@
 python3 -m automation.install \
     --config /tmp/node.toml \
     --update-trust-key <bundle>/update-trust.pub \
-    --expect-update-trust-fingerprint 'SHA256:<공지된-지문>' \
+    --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA' \
     --dry-run
 
 # 실제 설치 (멱등 — 막히면 고치고 같은 명령을 다시 실행한다)
 sudo python3 -m automation.install --config /tmp/node.toml \
     --update-trust-key <bundle>/update-trust.pub \
-    --expect-update-trust-fingerprint 'SHA256:<공지된-지문>'
+    --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
 
 업데이트 신뢰키의 지문은 이 README와 각 릴리스 노트에 공지되며, 설치 직후

@@ -11,13 +11,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from pathlib import Path
-from typing import Protocol, assert_never
+from typing import Final, Protocol, assert_never
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 
-_SCRIPTS = Path(
-    os.environ.get("COORDINATION_SCRIPTS", "~/.hermes/skills/coordination/scripts")
-).expanduser()
+_LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/coordination/scripts"
+_SCRIPTS = Path(os.environ.get("COORDINATION_SCRIPTS", _LIVE_SCRIPTS)).expanduser()
 if _SCRIPTS.exists() and str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 

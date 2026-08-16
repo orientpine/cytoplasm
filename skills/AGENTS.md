@@ -1,7 +1,28 @@
 # skills/ — 에이전트 스킬 (autophagy 고유 저작 규약)
 
-스킬 하나 = `skills/<name>/` 디렉터리 하나. Hermes는 `~/.hermes/skills/<name>/`에
-드롭되면 자동 발견(install 불필요). 배포는 루트 `automation/deploy-skill.sh` 4단계 게이트.
+스킬 하나 = `skills/<name>/` 디렉터리 하나. Hermes는 스킬 루트에 `<name>/`이 드롭되면
+자동 발견한다(install 불필요). 배포는 루트 `automation/deploy-skill.sh` 4단계 게이트.
+
+## 이 트리에 없는 것 — 에이전트 자가 스킬 (SS-1, 2026-08-15)
+
+에이전트(agent·peer)가 **스스로 지은** Hermes 스킬은 이 리포에 없다. 그것들은 각 계정이
+소유한 **쓰기 가능한 자기 Hermes 1차 루트**(`~/.hermes/skills`, 계정 소유 0700)에만 산다.
+
+- **W1-8을 거치지 않는다.** 샌드박스·peer 검토·소유자 ✅·live 마운트는 이 트리에 착지한
+  스킬에만 적용된다. 자가 스킬을 그 파이프라인에 올리려면 먼저 `skills/<name>/`으로 옮겨
+  커밋·푸시하는 것이 유일한 경로다 — 그 전에는 배포 판정
+  (`readlink <skill_store>/live/<name>`)에 아무 지분도 없다.
+- **통제는 배포 게이트가 아니라 감사 원장 + `hermes curator`다.** 자가 저작은 소유자 승인
+  없이 착지하고(소유자 결정 2026-08-15: 자유 저작 + 사후 감사), `automation/selfskill_audit/`가
+  콘텐츠 해시 델타를 원장에 적고 주기적으로 마스킹 요약을 소유자에게 DM한다. 회수는
+  `hermes curator archive/pin`이다.
+- **이름은 양방향으로 막힌다.** 자가 스킬이 배포 스킬 이름을 선점하려 하면 Hermes가
+  `skill_manage(create)`에서 거부하고, 배포가 자가 저작물을 덮어쓰려 하면 `deploy-skill.sh`가
+  `SELF-SKILL-COLLISION-BLOCK`(exit 4)으로 멈춘다.
+- **`~/.hermes/skills` 아래에 있는 것을 관리자 배포본으로 읽지 않는다.** 반전 전에는 그
+  경로가 live 스토어의 read-only bind였기에 그 가정이 통했지만, 지금 관리자 배포본은
+  `<skill_store>/live`에 남아 Hermes `skills.external_dirs`로 읽기 전용 발견된다.
+  상세: [docs/기능소개/에이전트-자가-스킬.md](../docs/기능소개/에이전트-자가-스킬.md).
 
 ## 디렉터리 형식
 ```

@@ -105,7 +105,10 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         return refusal.exit_code
 
     rules = meeting_gate.load_rules(
-        _env_path("MEETING_RULES_FILE", "~/.hermes/skills/meeting/configs/sensitivity-rules.yaml")
+        _env_path(
+            "MEETING_RULES_FILE",
+            "/srv/autophagy-skills/live/meeting/configs/sensitivity-rules.yaml",
+        )
     )
     gate = meeting_gate.evaluate(extracted.text, rules)
     ref = hashlib.sha256(extracted.text.encode("utf-8")).hexdigest()[:8]
@@ -124,7 +127,8 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             extracted.text,
             sensitive=gate.sensitive,
             prompt_path=_env_path(
-                "MEETING_PROMPT_FILE", "~/.hermes/skills/meeting/prompts/meeting-extraction-v3.md"
+                "MEETING_PROMPT_FILE",
+                "/srv/autophagy-skills/live/meeting/prompts/meeting-extraction-v3.md",
             ),
             my_names=str(config.get("my_names", "cha,차")),
             base_url=os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:4000/v1"),
@@ -215,7 +219,10 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 def cmd_gate(args: argparse.Namespace) -> int:
     rules = meeting_gate.load_rules(
-        _env_path("MEETING_RULES_FILE", "~/.hermes/skills/meeting/configs/sensitivity-rules.yaml")
+        _env_path(
+            "MEETING_RULES_FILE",
+            "/srv/autophagy-skills/live/meeting/configs/sensitivity-rules.yaml",
+        )
     )
     extracted = meeting_extract.extract_file(Path(args.file))
     gate = meeting_gate.evaluate(extracted.text, rules)

@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 KST = timezone(timedelta(hours=9), "KST")
-CLI = str(Path.home() / ".hermes/skills/calendar/scripts/calendar_cli.py")
+CLI = "/srv/autophagy-skills/live/calendar/scripts/calendar_cli.py"
 POLLER = str(Path.home() / ".hermes/scripts/poll_reminders.py")
 REAL_APPROVALS = Path("/srv/autophagy-agents/logs/approvals.jsonl")
 MARKER = "W36-BANK"

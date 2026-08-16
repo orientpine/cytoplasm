@@ -19,8 +19,9 @@ _SYNTHETIC = (
 )
 
 
-def _env(*, secure_path: str = _SECURE_PATH) -> dict[str, str]:
+def _env(tmp_path: Path, *, secure_path: str = _SECURE_PATH) -> dict[str, str]:
     env = dict(os.environ)
+    env["HOME"] = str(tmp_path / "isolated-home")
     env["HEALTHCHECK_REPAIR_SECURE_PATH"] = secure_path
     env["HEALTHCHECK_REPAIR_AGENT_UID"] = _AGENT_UID
     env["HEALTHCHECK_SSH_USER"] = ""
@@ -28,18 +29,22 @@ def _env(*, secure_path: str = _SECURE_PATH) -> dict[str, str]:
     return env
 
 
-def _manifest(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _manifest(
+    tmp_path: Path,
+    *args: str,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ("bash", str(_MANIFEST_SCRIPT), *args),
         capture_output=True,
         text=True,
         check=False,
-        env=env or _env(),
+        env=env or _env(tmp_path),
         cwd=_REPO,
     )
 
 
-def _definitions() -> list[str]:
+def _definitions(tmp_path: Path) -> list[str]:
     script = (
         f'source "{_HEALTHCHECK}"; '
         'printf "%s\\n" "${LIVE_CHECKS[@]}"; '
@@ -50,7 +55,7 @@ def _definitions() -> list[str]:
         capture_output=True,
         text=True,
         check=False,
-        env=_env(),
+        env=_env(tmp_path),
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout.splitlines()
@@ -78,7 +83,7 @@ def _capture_report_repair(tmp_path: Path, definition: str, index: int) -> str:
     case.mkdir()
     fake_bin, journal = _fake_ssh(case)
     check_name, probe_type, *_rest = definition.split("|")
-    env = _env()
+    env = _env(tmp_path)
     env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
     env["SSH_COMMAND_JOURNAL"] = str(journal)
     script = f'source "{_HEALTHCHECK}"; report_repair "{check_name}" "{probe_type}"'
@@ -107,44 +112,48 @@ def test_healthcheck_has_a_source_execution_guard() -> None:
     assert 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi' in body
 
 
-def test_manifest_prints_all_sixteen_d1_commands() -> None:
-    result = _manifest("--print")
+def test_manifest_prints_all_seventeen_d1_commands(tmp_path: Path) -> None:
+    result = _manifest(tmp_path, "--print")
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert len(lines) == 16
+    assert len(lines) == 17
     assert all("sudo -n -u agent -H env PATH=" in line for line in lines)
     assert all("XDG_RUNTIME_DIR=/run/user/4242" in line for line in lines)
     assert all("/usr/bin/python3 -I" in line for line in lines)
 
 
-def test_committed_manifest_matches_generator_bytes() -> None:
-    env = _env(secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+def test_committed_manifest_matches_generator_bytes(tmp_path: Path) -> None:
+    env = _env(tmp_path, secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
     env["HEALTHCHECK_REPAIR_AGENT_UID"] = "1002"
-    result = _manifest("--print", env=env)
+    result = _manifest(tmp_path, "--print", env=env)
 
     assert result.returncode == 0, result.stderr
     assert _COMMITTED_MANIFEST.read_bytes() == result.stdout.encode()
 
 
-def test_report_repair_matches_manifest_through_sixteen_independent_calls(
+def test_report_repair_matches_manifest_through_seventeen_independent_calls(
     tmp_path: Path,
 ) -> None:
-    definitions = _definitions()
-    expected = _manifest("--print").stdout.splitlines()
+    definitions = _definitions(tmp_path)
+    expected = _manifest(tmp_path, "--print").stdout.splitlines()
 
     captured = [
         _capture_report_repair(tmp_path, definition, index)
         for index, definition in enumerate(definitions)
     ]
 
-    assert len(captured) == 16
+    assert len(captured) == 17
     _assert_manifest_matches(captured, expected)
 
 
 def test_different_builder_anchors_are_detected_as_red(tmp_path: Path) -> None:
-    definitions = _definitions()
-    expected = _manifest("--print", env=_env(secure_path="/anchor-a/bin")).stdout.splitlines()
+    definitions = _definitions(tmp_path)
+    expected = _manifest(
+        tmp_path,
+        "--print",
+        env=_env(tmp_path, secure_path="/anchor-a/bin"),
+    ).stdout.splitlines()
     captured: list[str] = []
     for index, definition in enumerate(definitions):
         original = _SECURE_PATH
@@ -160,10 +169,10 @@ def test_different_builder_anchors_are_detected_as_red(tmp_path: Path) -> None:
 def test_manifest_check_failure_prints_the_regeneration_command(tmp_path: Path) -> None:
     stale = tmp_path / "stale-manifest.txt"
     _ = stale.write_text("stale\n", encoding="utf-8")
-    env = _env()
+    env = _env(tmp_path)
     env["HEALTHCHECK_ALLOWLIST_MANIFEST_FILE"] = str(stale)
 
-    result = _manifest("--check", env=env)
+    result = _manifest(tmp_path, "--check", env=env)
 
     assert result.returncode != 0
     assert "bash automation/healthcheck_allowlist_manifest.sh --print" in result.stderr

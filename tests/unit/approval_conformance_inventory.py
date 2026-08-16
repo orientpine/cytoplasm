@@ -73,6 +73,7 @@ _POSTING_PRIMITIVE_IMPLEMENTATIONS: Final[frozenset[str]] = frozenset({
 })
 
 _EXEMPT: Final[Mapping[str, str]] = {
+    "automation/selfskill_audit/report.py::send_report": "자체 스킬 감사 알림이며 승인 포인터를 생성하지 않는다.",
     "automation/reminder_poller/poll_reminders.py::DmSender.send": "SQLite claim()으로 중복을 막는 알림 DM이며 승인 메시지 포인터가 없다.",
     "skills/budget/scripts/budget_confirm.py::dm_owner": "승인 결과 안내 DM이며 승인 요청 메시지를 저장하지 않는다.",
     "skills/calendar/scripts/calendar_confirm.py::send_owner_dm": "확정 결과 알림 DM이며 pending 승인 메시지를 만들지 않는다.",

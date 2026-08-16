@@ -6,9 +6,9 @@ Thin wrapper: runs the mounted mail skill CLI `digest` subcommand. no_agent
 semantics: empty stdout + exit 0 on success (silent tick); on failure prints one
 masked line and exits 1 so the scheduler records an alert. Deployed copy lives
 at ~/.hermes/scripts/mail_digest_watch.py (Hermes cron sandbox rule); the skill
-CLI stays the single implementation at ~/.hermes/skills/mail/scripts/ — no
-import of it here, subprocess only (avoids the W3-2 cron-sandbox PYTHONPATH
-package-shadowing trap).
+CLI stays the single implementation in the immutable governed live store at
+/srv/autophagy-skills/live/mail/scripts/ — no import of it here, subprocess
+only (avoids the W3-2 cron-sandbox PYTHONPATH package-shadowing trap).
 
 The CLI and this wrapper speak one contract: every digest failure surfaces as
 exactly one structured ``DIGEST-FAIL stage=... retry_safe=... code=...`` line.
@@ -33,7 +33,7 @@ import sys
 import time
 from pathlib import Path
 
-CLI = Path.home() / ".hermes" / "skills" / "mail" / "scripts" / "triage_cli.py"
+CLI = Path("/srv/autophagy-skills/live/mail/scripts/triage_cli.py")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _LONG_DIGITS = re.compile(r"\d{5,}")
 _MARKER = re.compile(r"^DIGEST-FAIL stage=\S+ retry_safe=(true|false) code=\S+")

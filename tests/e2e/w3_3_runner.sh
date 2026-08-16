@@ -10,8 +10,8 @@ export PYTHONPATH="$HOME/.hermes/interop_runtime"
 export E2E_TEST_MODE=1
 INTEROP_E2E_SECRET="$(cat "$HOME/.w33-e2e.secret")"
 export INTEROP_E2E_SECRET
-CLI="$HOME/.hermes/skills/coordination/scripts/coordinate_cli.py"
-CAL="$HOME/.hermes/skills/calendar/scripts/calendar_cli.py"
+CLI="/srv/autophagy-skills/live/coordination/scripts/coordinate_cli.py"
+CAL="/srv/autophagy-skills/live/calendar/scripts/calendar_cli.py"
 PROBE="$HOME/.w33_probe.py"
 APPR=/srv/autophagy-agents/logs/approvals.jsonl
 SUMMARY="W3-3 조율 테스트 미팅"

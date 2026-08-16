@@ -289,7 +289,8 @@ source-sha:$source_commit"
 # D8: this is the UPDATE TRUST key for public release tags, not the separate
 # managed-skill group key. Git's native SSH-tag namespace is always `git`.
 git -C "$target_dir" -c gpg.format=ssh -c "user.signingkey=$signing_key" \
-  -c "user.email=$UPDATE_TRUST_PRINCIPAL" tag -s "$version" -m "$tag_message" \
+  -c user.name="Autophagy Update Trust" -c "user.email=$UPDATE_TRUST_PRINCIPAL" \
+  tag -s "$version" -m "$tag_message" \
   || block "signed update-trust tag creation failed"
 [[ "$(git -C "$target_dir" cat-file -t "refs/tags/$version")" == "tag" ]] \
   || block "release tag is not an annotated signed tag"

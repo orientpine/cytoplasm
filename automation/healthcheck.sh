@@ -19,7 +19,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/checkout_mirror_probe.sh"
 # The skill-mount verdict + its recovery text live in a sibling library for the same
 # reason as the checkout one: this file must stay under the 250 pure-LOC gate.
 # shellcheck source=automation/skill_mount_probe.sh
-source "$(dirname "${BASH_SOURCE[0]}")/skill_mount_probe.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/skill_mount_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/selfskill_root_probe.sh"
 # shellcheck source=automation/release_store_probe.sh
 source "$(dirname "${BASH_SOURCE[0]}")/release_store_probe.sh"
 # shellcheck source=automation/release_helper_probe.sh
@@ -72,6 +72,7 @@ readonly -a LIVE_CHECKS=(
   "$PRIMARY_NODE release matches origin/main|release_matches_origin|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_DEPLOY_CHECKOUT"
   "$PRIMARY_NODE privileged release helpers match release|release_helper_drift|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_LIBEXEC_DIR"
   "$PRIMARY_NODE skill mounts match the release|skill_mounts_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
+  "$PRIMARY_NODE agent selfskill root topology|agent_selfskill_root_topology|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
   "$PRIMARY_NODE release store usage|release_store_usage|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_RELEASE_STORE"
 )
 
@@ -80,7 +81,7 @@ readonly -a LIVE_CHECKS=(
 # guard from collapsing N tickets into one INFRA_FAILURE (regression d7ed0ad / γ).
 # One declaration on purpose — the same rule lived in two comparisons and the second
 # copy is always the one that gets forgotten.
-readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current release_store_usage"
+readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage"
 UPDATE_TRUST_BLOCK_REPORTED=0
 RELEASE_STALE_REPORTED=0
 
@@ -134,7 +135,7 @@ repair_guidance() {
       checkout_mirror_guidance "${HEALTHCHECK_OPS_CHECKOUT:-$NODE_DEPLOY_CHECKOUT}"
       ;;
     skill_mounts_current) skill_mount_guidance ;;
-    release_store_usage) release_store_guidance ;;
+    agent_selfskill_root_topology) selfskill_root_guidance ;; release_store_usage) release_store_guidance ;;
     *) ;;
   esac
 }
@@ -271,6 +272,7 @@ run_check() {
     release_helper_drift) probe_release_helper_drift "$node" "$account" "$target" ;;
     skill_mounts_current) probe_skill_mounts_current "$node" "$account" "$target" ;;
     release_store_usage) probe_release_store_usage "$node" "$account" "$target" ;;
+    agent_selfskill_root_topology) probe_selfskill_root_topology "$node" "$account" "$target" ;;
     *) log "ERROR: ${check_name} has unsupported probe type ${probe_type}"; return 1 ;;
   esac
 }
@@ -290,7 +292,7 @@ main() {
   esac
   [[ "$#" -le 1 ]] || usage
 
-  require_commands chmod date du grep mkdir ssh tee timeout
+  require_commands awk chmod date du grep mkdir mountpoint sed ssh stat tee timeout
   if [[ -n "$SSH_IDENTITY" && ! -r "$SSH_IDENTITY" ]]; then
     printf '[healthcheck] ERROR: SSH identity is not readable: %s\n' "$SSH_IDENTITY" >&2
     return 1

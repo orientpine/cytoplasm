@@ -33,7 +33,8 @@ _CACHE_PREFIX: Final = re.compile(r"^doc_[0-9a-f]{12}_")
 _MEETING_COMMAND: Final = re.compile(r"^\s*!meeting(?=\s|$)", re.IGNORECASE)
 MEETING_INTENT_METADATA_KEY: Final = "meeting_intent"
 _CONFIG_PATH: Final = Path("~/.hermes/meeting/config.json").expanduser()
-_CLI_PATH: Final = Path("~/.hermes/skills/meeting/scripts/meeting_cli.py").expanduser()
+_LIVE_CLI: Final = "/srv/autophagy-skills/live/meeting/scripts/meeting_cli.py"
+_CLI_PATH: Final = Path(os.environ.get("MEETING_CLI", _LIVE_CLI)).expanduser()
 _INBOX: Final = Path("~/.hermes/meeting/inbox").expanduser()
 _SPAWN_LOG_DIR: Final = Path("~/.hermes/meeting/logs").expanduser()
 ENV_SECRETS: Final = Path("~/.env.secrets").expanduser()

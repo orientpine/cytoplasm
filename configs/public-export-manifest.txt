@@ -76,3 +76,4 @@ docs/patch/2026-08-02-memory-relocate-approval-channel-binding.md
 docs/patch/2026-08-03-confirm-gate-rate-limit.md
 docs/patch/2026-08-03-promotion-approval-legibility.md
 docs/patch/2026-08-03-supply-chain-autonomous-deploy.md
+docs/patch/2026-08-15-agent-selfskill-root-inversion.md

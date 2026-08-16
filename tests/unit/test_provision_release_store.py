@@ -1,7 +1,7 @@
 """provision-release-store.sh: idempotently install the root-only release helper
 and create the release store root — WITHOUT touching bootstrap-accounts.sh (C2).
 
-The provisioner mirrors provision-readonly-skills.sh: create /srv/autophagy-agent-releases
+The provisioner mirrors provision-skill-roots.sh: create /srv/autophagy-agent-releases
 (0755 root:root), install automation/release_store.py at
 /usr/local/libexec/autophagy-install-release, install the sudoers stanza. It is a
 new file precisely so it does not collide with repair-report-rollout's sole claimed

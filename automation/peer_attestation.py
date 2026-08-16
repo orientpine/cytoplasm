@@ -38,7 +38,7 @@ _NONCE: Final = re.compile(r"[0-9a-f]{32}")
 _BODY: Final = re.compile(
     "".join(
         (
-            rf"^\[skill-attest\] request=(?P<request>[0-9a-f]{{32}}|[0-9]+) ",
+            r"^\[skill-attest\] request=(?P<request>[0-9a-f]{32}|[0-9]+) ",
             rf"skill=(?P<skill>{_SKILL.pattern}) sha256=(?P<digest>{_DIGEST.pattern}) ",
             rf"verdict=(?P<verdict>PASS|FAIL) reviewer={REVIEWER}$",
         )

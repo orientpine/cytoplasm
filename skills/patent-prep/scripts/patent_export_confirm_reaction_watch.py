@@ -13,9 +13,11 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Final
 
-_SCRIPTS = Path(os.environ.get("PATENT_SCRIPTS", "~/.hermes/skills/patent-prep/scripts")).expanduser()
-_SKILL_ROOT = (_SCRIPTS if _SCRIPTS.exists() else Path(__file__).resolve().parent).parent
+_LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/patent-prep/scripts"
+_SCRIPTS = Path(os.environ.get("PATENT_SCRIPTS", _LIVE_SCRIPTS)).expanduser()
+_SKILL_ROOT = _SCRIPTS.parent
 if str(_SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(_SKILL_ROOT))
 

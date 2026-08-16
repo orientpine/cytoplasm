@@ -5,7 +5,7 @@
 # WHY it is its OWN file (2026-07-31): the release/runtime-root work must not touch
 # automation/bootstrap-accounts.sh, which the active repair-report-rollout plan
 # claims as its sole source change (collision C2). This provisioner mirrors
-# provision-readonly-skills.sh instead: create /srv/autophagy-agent-releases
+# provision-skill-roots.sh instead: create /srv/autophagy-agent-releases
 # (0755 root:root), install automation/release_store.py as the privileged helper,
 # and install the sudoers stanza that lets ops call it. Idempotent.
 #

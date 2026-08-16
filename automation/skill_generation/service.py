@@ -132,8 +132,8 @@ class AutoSkillService:
             if "autophagy_generated: true" not in self._read(marker):
                 continue
             proposal = self._latest(skill_dir.name)
-            if proposal is not None and proposal.status is ProposalStatus.MOUNTED:
-                continue
+            # 2026-08-15: 루트 반전 뒤 정상 배포본은 skills.external_dirs의 live에만 있으므로,
+            # agent writable primary root의 생성 마커 디렉터리는 우회 또는 무단 복사본이다.
             shutil.rmtree(skill_dir)
             rejected.append(skill_dir.name)
             if proposal is not None:

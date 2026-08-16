@@ -259,10 +259,10 @@ python3 automation/install/trust_key_bootstrap.py fingerprint --key <번들>/upd
 
 # ③ 공지값을 인자로 넘겨 설치한다. 불일치면 아무것도 쓰지 않고 non-zero로 끝난다.
 sudo python3 automation/install/trust_key_bootstrap.py install \
-  --key <번들>/update-trust-key.pub --expect-fingerprint 'SHA256:<공지값>'
+  --key <번들>/update-trust-key.pub --expect-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 
 # ④ 설치본을 다시 검증한다 (소유·모드·지문)
-python3 automation/install/trust_key_bootstrap.py verify --expect-fingerprint 'SHA256:<공지값>'
+python3 automation/install/trust_key_bootstrap.py verify --expect-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
 
 `--dry-run`을 붙이면 쓸 내용·경로·모드·지문만 출력하고 디스크를 건드리지 않는다.

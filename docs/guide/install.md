@@ -71,7 +71,7 @@ python3 automation/install/trust_key_bootstrap.py install --key <bundle>/update-
 ```bash
 python3 automation/install/trust_key_bootstrap.py install \
     --key <bundle>/update-trust.pub --dry-run \
-    --expect-fingerprint 'SHA256:<공지된-지문>'
+    --expect-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
 
 > 신뢰키는 두 개가 아니라 두 **종류**다. 여기서 다루는 것은 업스트림 코드 릴리스를
@@ -116,7 +116,7 @@ $EDITOR /tmp/node.toml
 python3 -m automation.install \
     --config /tmp/node.toml \
     --update-trust-key <bundle>/update-trust.pub \
-    --expect-update-trust-fingerprint 'SHA256:<공지된-지문>' \
+    --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA' \
     --dry-run
 ```
 
@@ -195,7 +195,7 @@ python3 automation/install/discord_check.py --config ~/.hermes/interop/config.js
 sudo python3 -m automation.install \
     --config /tmp/node.toml \
     --update-trust-key <bundle>/update-trust.pub \
-    --expect-update-trust-fingerprint 'SHA256:<공지된-지문>'
+    --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
 
 root가 아니면 계획만 출력하고 거부한다:
@@ -263,7 +263,7 @@ sudo runuser -u ops -- ssh-keyscan github.com >> /home/ops/.ssh/known_hosts   # 
 언제든 다시 확인할 수 있다:
 
 ```bash
-python3 automation/install/trust_key_bootstrap.py verify --expect-fingerprint 'SHA256:<공지된-지문>'
+python3 automation/install/trust_key_bootstrap.py verify --expect-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
 
 파일이 없으면 이렇게 나오고, 그 상태에서는 리컨실러가 **어떤 릴리스도 적용하지 않는다**:

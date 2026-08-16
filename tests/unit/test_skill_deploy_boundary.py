@@ -13,7 +13,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "automation" / "deploy-skill.sh"
-BOOTSTRAP = ROOT / "automation" / "provision-readonly-skills.sh"
 MEETING_SCENARIO = ROOT / "skills" / "meeting" / "scripts" / "scenario.sh"
 REPORT_SCENARIO = ROOT / "skills" / "report" / "scripts" / "scenario.sh"
 PROPOSAL_CLI = ROOT / "skills" / "proposal" / "scripts" / "proposal_cli.py"
@@ -163,18 +162,6 @@ def test_deploy_when_current_boundary_contract_is_read_then_required_text_is_pre
     assert required_text in script
 
 
-def test_bootstrap_when_activated_then_installs_read_only_persistent_bind_mount() -> None:
-    # Given
-    script = BOOTSTRAP.read_text(encoding="utf-8")
-
-    # When / Then
-    assert "install -m 0755 -o root -g root" in script
-    assert "$NODE_LIBEXEC_DIR/autophagy-install-skill" in script
-    assert "bind,ro,nosuid,nodev" in script
-    assert "visudo -cf" in script
-    assert "mountpoint -q" in script
-
-
 def test_sudoers_when_installed_then_grants_only_root_owned_helper() -> None:
     # Given
     sudoers = render_asset(
@@ -188,25 +175,6 @@ def test_sudoers_when_installed_then_grants_only_root_owned_helper() -> None:
         "operator ALL=(root) NOPASSWD: /usr/local/libexec/autophagy-install-skill install-managed --publisher * --skill * --hash *",
         "operator ALL=(root) NOPASSWD: /usr/local/libexec/autophagy-install-skill remove --skill *",
     ]
-
-
-def test_bootstrap_when_hermes_needs_hub_state_then_mounts_only_hidden_cache_writable() -> None:
-    # Given
-    script = BOOTSTRAP.read_text(encoding="utf-8")
-
-    # When / Then
-    assert 'HUB_STATE="$NODE_AGENT_HOME/.hermes/skill-hub-state"' in script
-    assert 'HUB_TARGET="$TARGET/.hub"' in script
-    assert "bind,rw,nosuid,nodev,noexec" in script
-    assert 'mountpoint -q "$HUB_TARGET"' in script
-
-
-def test_bootstrap_when_fstab_changes_then_reloads_systemd_mount_units() -> None:
-    # Given
-    script = BOOTSTRAP.read_text(encoding="utf-8")
-
-    # When / Then
-    assert "systemctl daemon-reload" in script
 
 
 def test_meeting_compile_when_skill_is_read_only_then_uses_temporary_pycache() -> None:
@@ -347,3 +315,123 @@ def test_deploy_when_python_runs_then_never_caches_bytecode_into_the_sealed_rele
     """
     script = DEPLOY.read_text(encoding="utf-8")
     assert "export PYTHONDONTWRITEBYTECODE=1" in script
+
+
+# --- SS-1: coexistence with agent/peer self-authored Hermes skills -----------
+#
+# The agent's primary root (/home/agent/.hermes/skills) stops being a read-only bind
+# mount of the governed store and becomes the agent's OWN writable space; the governed
+# store is discovered through skills.external_dirs instead. Hermes already refuses
+# `skill_manage(create)` for a name that exists in any root, which covers self→governed.
+# These tests pin the other direction — governed→self — plus the two things the
+# inversion breaks: the post-mount smoke's path, and peer staging that never got
+# cleaned because the shipped tree is sealed read-only.
+
+
+def test_deploy_when_agent_self_root_has_the_name_then_blocks_before_stage_one() -> None:
+    # Given
+    script = DEPLOY.read_text(encoding="utf-8")
+
+    # When: the guard is invoked after the reserved/managed name guards.
+    call = script.index("assert_agent_root_has_no_self_skill\n")
+    body_start = script.index("assert_agent_root_has_no_self_skill() {")
+    body = script[body_start : script.index("\n}", body_start)]
+
+    # Then: it runs before anything is staged, probes the agent account itself, and
+    # every non-`absent` answer — including an unreadable one — refuses with exit 4.
+    assert script.index('die "MANAGED-BLOCK: mounting a managed skill requires --activate-managed"') < call
+    assert call < script.index('log "stage 1/4 SANDBOX (peer, dummy secrets)"')
+    assert call < script.index('push_skill peer "$SRC_DIR" "$SKILL"')
+    assert 'run_as "$NODE_AGENT_ACCOUNT"' in body
+    assert "$HOME/.hermes/skills" in body
+    assert 'die "SELF-SKILL-COLLISION-BLOCK: cannot read the agent skill root' in body
+    assert '*) die "SELF-SKILL-COLLISION-BLOCK: agent skill root probe returned an invalid state" 4 ;;' in body
+    assert 'present) self_skill_collision_block "$NODE_AGENT_ACCOUNT"' in body
+
+    refusal = script[script.index("self_skill_collision_block() {") :]
+    refusal = refusal[: refusal.index("\n}")]
+    assert "SELF-SKILL-COLLISION-BLOCK" in refusal
+    assert "hermes curator archive $SKILL" in refusal
+    assert "owner remove" in refusal
+    assert '" 4' in refusal
+
+
+def test_deploy_when_peer_root_entry_is_not_pipeline_authored_then_blocks_fail_closed() -> None:
+    # Given: peer's ~/.hermes/skills is BOTH this pipeline's staging area and the home
+    # of peer's own self-authored skills, and push_skill overwrites whatever stands there.
+    script = DEPLOY.read_text(encoding="utf-8")
+
+    # When: the root is classified before the staging push.
+    region = script[
+        script.index("peer_skill_root_state() {") : script.index('push_skill peer "$SRC_DIR" "$SKILL"')
+    ]
+
+    # Then: only a proven leftover of our own is overwritten; everything else blocks,
+    # and an unreadable/unparseable record blocks too (never falls through to `absent`).
+    assert ".usage.json" in region
+    assert "created_by" in region
+    assert "agent_created" in region
+    assert "author: autophagy-agents" in region
+    assert 'agent-created) self_skill_collision_block "$NODE_PEER_ACCOUNT"' in region
+    assert 'foreign) self_skill_collision_block "$NODE_PEER_ACCOUNT"' in region
+    assert 'die "SELF-SKILL-COLLISION-BLOCK: cannot classify the peer skill root' in region
+    assert '*) die "SELF-SKILL-COLLISION-BLOCK: peer skill root probe returned an invalid state" 4 ;;' in region
+    assert "STAGING-RESIDUE-CLEANED" in region
+    assert region.index("staging-residue)") < region.index("STAGING-RESIDUE-CLEANED")
+
+
+def test_deploy_when_post_mount_smoke_runs_then_invokes_from_the_live_store() -> None:
+    # Given: after the inversion the mounted skill is no longer visible under the
+    # agent's home, so a smoke test reading from there would fail on every deploy.
+    script = DEPLOY.read_text(encoding="utf-8")
+
+    # When
+    start = script.index("INVOKE_OUT=")
+    statement = script[start : script.index('|| die "post-mount invoke smoke failed on agent"', start)]
+
+    # Then: it invokes the governed artifact in the live store, by way of STORE_ROOT.
+    assert 'STORE_ROOT="$NODE_SKILL_STORE"' in script
+    assert "$STORE_ROOT/live/$SKILL/scripts/scenario.sh" in statement
+    assert ".hermes/skills/" not in statement
+
+
+def test_deploy_when_sandbox_only_exits_then_peer_staging_is_removed() -> None:
+    # Given: staged trees ship sealed (0555/0444), so a bare `rm -rf` cannot remove
+    # them — every cleanup path had been failing silently and leaking staging copies.
+    script = DEPLOY.read_text(encoding="utf-8")
+
+    # When
+    sandbox_only = next(
+        line for line in script.splitlines() if line.startswith('[[ "$SANDBOX_ONLY" == 1 ]]')
+    )
+    trap_body = script[script.index("cleanup_deploy_temps() {") :]
+    trap_body = trap_body[: trap_body.index("\n}")]
+    guarded = script[script.index("cleanup_peer_staging() {") :]
+    guarded = guarded[: guarded.index("\n}")]
+    remover = script[script.index("remove_peer_skill_copy() {") :]
+    remover = remover[: remover.index("\n}")]
+
+    # Then: the sandbox-only success exit AND the EXIT trap both clean, the trap only
+    # fires when staging was actually pushed, and removal unseals before removing.
+    assert "cleanup_peer_staging" in sandbox_only
+    assert "cleanup_peer_staging" in trap_body
+    assert "trap cleanup_deploy_temps EXIT" in script
+    assert "PEER_STAGING_PUSHED" in guarded
+    assert remover.index("chmod -R u+w") < remover.index("rm -rf")
+    assert script.index("PEER_STAGING_PUSHED=1") < script.index('push_skill peer "$SRC_DIR" "$SKILL"')
+
+
+def test_deploy_when_remove_arm_runs_then_collision_guard_is_skipped() -> None:
+    # Given: --remove exists to resolve a collision. Guarding it would make the only
+    # in-pipeline way out of a collision itself refuse to run.
+    script = DEPLOY.read_text(encoding="utf-8")
+
+    # When
+    arm = script.index('if [[ "$REMOVE" == 1 ]]; then')
+    arm_exit = script.index("  exit 0\nfi", arm)
+    guard = script.index("assert_agent_root_has_no_self_skill\n")
+
+    # Then: the arm returns before the guard, and carries none of it.
+    assert arm < arm_exit < guard
+    assert "SELF-SKILL-COLLISION-BLOCK" not in script[arm:arm_exit]
+    assert "cleanup_peer_staging" not in script[arm:arm_exit]

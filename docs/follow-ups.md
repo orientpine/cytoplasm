@@ -4,6 +4,20 @@
 
 > 완료·배포된 기능에서 발견됐지만 이번 사이클에 처리하지 않은 잔여 부채·개선을 모은다. 기능 단위 묶음 항목으로, 불릿마다 "문제 → 조치" + 영향 범위·심각도를 적는다. 상세 규칙: 루트 `AGENTS.md`「후속 과제 기록 규칙」.
 
+## 에이전트 자가 스킬 공존(SS-1) 작업 중 발견한 후속 과제 (2026-08-15)
+
+자가 스킬 루트 반전과 감사 원장을 만들며 발견했다. 기능은 [소개](기능소개/에이전트-자가-스킬.md).
+
+- **`automation/worktree.sh start`가 `session`이라는 평면 브랜치 하나 때문에 전부 막힌다** — 로컬에 `session` 브랜치가 있으면 git의 D/F 충돌 규칙상 `session/<이름>` 브랜치를 만들 수 없어 모든 세션 시작이 실패하는데, 오류 문구가 그 원인을 말해주지 않아 원인을 찾는 데 시간이 든다 → `start`가 브랜치 생성 전에 네임스페이스 접두사와 같은 이름의 평면 ref가 있는지 확인해 사유와 조치(그 ref 이름 변경)를 함께 내게 한다. **데이터·보안 영향 없음 · 심각도 낮음(세션 시작 마찰)**.
+- **Hermes 네이티브 충돌 거부와 curator external-write 가드가 v0.18.2 실측에만 고정돼 있다** — self→governed 방향 차단(`skill_manage(create)`가 어느 루트든 동명을 거부)과 curator가 configured-external 스킬을 건드리지 않는 성질은 우리 코드가 아니라 벤더 동작이며, 회귀로 못박을 수단이 없다 → **`hermes update`마다 S4·S5 QA 명령을 재실행**해 두 성질이 유지되는지 확인한다(S4: 배포 스킬 이름으로 생성 지시 후 디렉터리 미생성, S5: `hermes curator archive <배포 스킬>` 거부 + live readlink 불변 + 쓰기 `Permission denied`). **현재 동작 정상 · 심각도 중간(업데이트로 이름 선점 방어가 조용히 약해질 수 있음)**.
+- **curator 노브를 기본값 그대로 수용했다** — stale 30일 / archive 90일 / consolidate off는 벤더 기본값이며, 자가 스킬의 실제 사용 주기에 맞는지 근거가 아직 없다 → **첫 감사 리포트 몇 회분을 받아본 뒤** 재검토한다(자주 쓰지 않지만 필요한 스킬이 90일에 걸려 아카이브되면 원장에 `archived` 델타로 보이고 `restore`·`pin`으로 되돌릴 수 있으므로 유실은 아니다). **동작 결함 아님 · 심각도 낮음(정책 조율 미완)**.
+- **운영자 워크스테이션에 `~/.hermes/node.toml`이 없으면 배포가 DNS 오류로 죽는다** — 비식별화 이후 `DEPLOY_SSH_HOST`가 예제 플레이스홀더(`example-primary-node`)로 해석돼 `Could not resolve hostname`으로 실패하는데, 실제 원인은 "노드 설정 미구성"이다(이번 샌드박스 검증에서 실측; `DEPLOY_SSH_HOST=<host>`를 명시해 우회했다) → 배포 진입점에서 노드 설정이 예제값그대로인지 확인해 사유와 조치(`~/.hermes/node.toml` 생성)를 먼저 낸다. **브랜치 무관·트렁크 전체 영향 · 심각도 중간(첫 배포 시도가 원인 모를 오류로 막힐다)**.
+- **peer의 `~/.hermes/skills/prompt` 잔여물이 다음 `prompt` 배포를 막는다** — 그 사본의 SKILL.md에는 `author: autophagy-agents` 마커가 없어(리포 원본에도 없다) 새 분류기가 `foreign`으로 판정해 fail-closed로 차단한다 — 설계대로의 동작이지만 원인이 오래된 잔여물이다(2026-08-01 배포 잔재, 모드 775) → 소유자가 `sudo -n -u peer rm -rf ~peer/.hermes/skills/prompt` 한 번으로 정리하면 이후엔 자가 치유된다(정리 수리가 이번 PR에 포함). 다른 5종은 이번 검증에서 실제로 정리됐다(봉인된 `coordination` 잔여물 포함). **심각도 낮음(해당 스킬 1종 배포만 지연)**.
+
+인벤토리가 짚은 **governed CLI 경로 12건은 이번 PR에서 전부 수정됐다**(후속 과제 아님) — calendar·coordination·mail·meeting·patent-prep 워처와 플러그인, `migrate-cha-wiki.sh`, W3 remote E2E 둘이 모두 불변 live 스토어 기본값으로 옮겨갔고 `tests/unit/test_governed_skill_paths.py`가 그것과 override 우선순위를 고정한다. 반전 전에 그대로 둓다면 승인 워처와 회의록 플러그인이 통째로 멈추었을 곳이다.
+
+증적: `docs/qa/SS-1/reference-inventory.md`(참조 154건 분류 · 위 12개 코드 행의 원문 판정 포함).
+
 ## 인증·인가 보안 감사 후속 과제 (2026-08-15)
 
 - **team-mode 미가동으로 인증/인가 감사가 5-agent 병렬 교차검증 없이 단독 조사로 진행됐다** — `.omo/notepads/public-release/issues.md`의 2026-08-15 보안 감사 항목은 승인 생명주기 파사드 우회·SSH 서명 신뢰 3계대·fail-closed 경계·roster principal 일반화(W-F3-A) 4개 focus area를 codegraph 소스 추적 + 수동 adversarial 입력 시도로 검증해 후보 5건 전부 REJECTED(PASS)로 판정했으나, `security-research` 스킬이 요구하는 3-hunter+2-poc 병렬 `team_create`는 이 세션에 `team_*` 도구가 없어 수행하지 못했다 → team-mode가 활성화된 세션에서 동일 4개 focus area를 독립적으로 재조사해 교차검증한다. **보안 결함 발견 아님 — 방법론 커버리지 보강 목적 · 심각도 낮음(이미 3773건 unit 테스트 + gitleaks 클린 통과, 재조사는 신뢰도 제고 목적)**.
@@ -274,3 +288,10 @@ F3 최종 검증 웨이브가 A3.1 샌드박스 E2E를 4회 신규 재실행하�
 - ~~**공개 export가 `third-party-runtime-prereqs.md`를 지우는데 공개되는 문서들이 그것을 가리킨다**~~ — **해소됨 (2026-08-15, 소유자 결정: 공개)**: 그 문서는 첫 줄이 스스로 “대상 독자: 공개본을 받아 자기 인프라에 자기 에이전트를 처음 세우는 사람”이라고 선언하고(P0-6의 존재 이유 자체), 사적 식별자는 0건이며, 온보딩 체인의 나머지 4개(`install.md`·`quickstart-install.md`·`manual-member.md`·`manual-group-admin.md`)는 전부 공개 원장에 있었다. 제외 목록의 “Installation-specific and personal operations runbooks” 일괄 블록에 알파벳순으로 휘쒸려 들어간 것으로 판단해 `configs/public-export-review.txt`(공개 결정 원장)으로 옴긴다.
 
 증적: `docs/qa/W-F2.5-E/quickstart-wrapper.md` · `.omo/notepads/public-release/learnings.md`의 「[2026-08-15] Task: W-F2.5-E 사전 준비」 항목.
+
+## 플랫폼 운영자 매뉴얼(W-M3) 작성 중 발견한 후속 과제
+
+- **`trust_key_bootstrap install`은 신뢰키 회전의 전환기 도구가 될 수 없다** — `plan_signer_install`이 **단일 엔트리**로 `/etc/autophagy/update-allowed-signers` 전체를 렌더해 교체하므로, 그것으로 새 키를 넣으면 구 키가 사라진다. 그런데 회전은 신키로 서명한 릴리스를 컷하기 **전에** 전 노드가 두 키를 함께 신뢰해야 안전하다. 파일 형식·`parse_allowed_signers`·`render_allowed_signers`·`_check_content`(`any(...)`)는 이미 다중 엔트리를 지원하므로 막힌 곳은 CLI 하나뿐이다. **보안 결함 아님 · 심각도 중** — 순서를 어기면 노드가 fail-closed로 멈출 뿐 잘못된 코드를 받지는 않는다. 다만 **`UPDATE-TRUST-BLOCK`은 rc 0이라 알람이 없어** 발견이 늦는다 → 기존 엔트리를 보존하며 병합하는 `install --add`(또는 `add-signer`) 서브커맨드를 추가하고, 매뉴얼 §3.4의 수동 파일 조립 단계를 그것으로 대체한다. 현재는 `docs/guide/manual-maintainer.md` §3.3이 이 제약을 명시해 문서로 덮고 있다.
+- **공개본에서 끊기는 문서 링크가 있다** — 공개 원장에 있는 매뉴얼들이 export 제외 문서를 링크한다: `manual-group-admin.md` → `managed-skill-channel.md`(기존), `manual-maintainer.md` → `operations.md`·`incident-response.md`·`reboot-recovery.md`(신규). 공개 트리에서는 그 대상이 존재하지 않아 404가 된다. **보안·동작 무관, 문서 탐색성만 영향 · 심각도 낮음** → 세 가지 중 하나를 고른다: (a) 해당 문서를 공개 대상으로 승격 (b) 공개되는 문서에서 링크를 걷어내고 산문으로만 언급 (c) export 시 제외 대상 링크를 검출하는 conformance 테스트를 추가해 최소한 새로 늘지 않게 한다. 신규 3건은 이번에 `*(개발 저장소 전용 — 공개본에 포함되지 않는다)*` 주석을 달아 오해만 막아 두었다.
+
+증적: `.omo/notepads/public-release/learnings.md`의 「[2026-08-15] Task: W-M3 플랫폼 운영자 매뉴얼」 항목.

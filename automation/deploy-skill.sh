@@ -18,7 +18,8 @@
 #                Owner ✅ (or E2E injection) AND peer attestation are required.
 #   ④ MOUNT    — current digest, agent review, peer attestation, and owner
 #                approval are all rechecked before the reviewed artifact is
-#                published by the root-owned store helper; Hermes discovery and invoke smoke run.
+#                published by the root-owned store helper; Hermes discovery and an
+#                invoke smoke against the live store run.
 #
 # Usage:
 #   deploy-skill.sh <skill> [--request-only] [--approve-only] [--fresh] [--sandbox-only] [--remove]
@@ -36,7 +37,8 @@
 #   DEPLOY_NONCE         nonce bound to APPROVAL_MESSAGE_ID.
 #
 # Exit codes: 0 ok | 1 approval absent/invalid (no mount) | 2 sandbox block
-#             3 weekly auto-proposal rate limit | 4 usage/env error
+#             3 weekly auto-proposal rate limit | 4 usage/env error or a collision
+#               with a self-authored skill on the agent/peer account
 #             5 review missing/failed/hash-mismatched (no mount)
 #             6 approval-lifecycle refusal (an existing live request is preserved)
 #             8 another execution holds this skill's refresh-to-consume lease
@@ -103,6 +105,93 @@ push_skill() { # push_skill <account> <src_dir> <name>
   [[ "$(basename "$src")" == "$name" ]] || die "source dir basename must equal skill name"
   skill_archive_stream "$src" "$name" \
     | run_as "$acct" "chmod -R u+w \"\$HOME/.hermes/skills/$name\" 2>/dev/null; rm -rf \"\$HOME/.hermes/skills/$name\" && mkdir -p \"\$HOME/.hermes/skills\" && tar -xzf - -C \"\$HOME/.hermes/skills\""
+}
+
+PEER_STAGING_PUSHED=0
+
+# Staged trees arrive SEALED — E9 seals releases 0555/0444 and tar preserves those modes —
+# and a directory without write permission cannot have its own entries removed, even by
+# their owner. push_skill unseals for exactly that reason; every cleanup path needs the
+# same treatment or the copy silently survives (measured 2026-08-15: coordination, prompt
+# and wiki were still staged on peer from 2026-08-01/08-04, all dr-xr-xr-x).
+remove_peer_skill_copy() { # remove_peer_skill_copy <name>
+  run_as "$NODE_PEER_ACCOUNT" "chmod -R u+w \"\$HOME/.hermes/skills/$1\" 2>/dev/null; rm -rf \"\$HOME/.hermes/skills/$1\"" || true
+}
+
+# Peer staging must not outlive this execution on ANY exit path, so the EXIT trap owns the
+# guarantee. Guarded, because that same root holds peer's OWN self-authored skills: a run
+# that never staged must remove nothing. Idempotent, so the explicit call sites below do
+# not pay a second round-trip.
+cleanup_peer_staging() {
+  [[ "$PEER_STAGING_PUSHED" == 1 ]] || return 0
+  PEER_STAGING_PUSHED=0
+  remove_peer_skill_copy "$SKILL"
+}
+
+# ---------- SS-1: coexistence with agent/peer self-authored skills ----------
+# The agent's primary Hermes root is being inverted: $NODE_AGENT_HOME/.hermes/skills stops being
+# a read-only bind mount of the governed store and becomes the agent's OWN writable space
+# (self-authored skills, audited after the fact, no per-write approval), while the governed
+# store stays discoverable through skills.external_dirs. Hermes already refuses
+# `skill_manage(create)` for a name that exists in any root, which covers self→governed;
+# these guards cover governed→self. Fail-closed on both sides: a root that cannot be read
+# or classified blocks the deploy rather than mounting over the account's own work.
+self_skill_collision_block() { # self_skill_collision_block <account> <evidence>
+  die "SELF-SKILL-COLLISION-BLOCK: $SKILL already exists as a self-authored skill on $1 ($2). Resolve it, then re-run this deploy: as $1 run 'hermes curator archive $SKILL', or have the owner remove that directory from the account's ~/.hermes/skills" 4
+}
+
+# `mountpoint` separates the two topologies with no guesswork. While the read-only bind
+# mount is still installed EVERY governed name is present under the agent root, so a bare
+# existence check would refuse every re-deploy of a live skill; once the node is
+# re-provisioned and that mount is gone the root is self-authored space only and this guard
+# becomes live. Depth 2 is included because Hermes files self-authored skills under a
+# category directory (measured on peer: software-development/autophagy-interop).
+assert_agent_root_has_no_self_skill() {
+  local state
+  state="$(run_as "$NODE_AGENT_ACCOUNT" "if mountpoint -q \"\$HOME/.hermes/skills\"; then printf governed-mount; elif find \"\$HOME/.hermes/skills\" -mindepth 1 -maxdepth 2 -type d -name '$SKILL' -print -quit 2>/dev/null | grep -q .; then printf present; else printf absent; fi")" \
+    || die "SELF-SKILL-COLLISION-BLOCK: cannot read the agent skill root for $SKILL (ssh/sudo denied)" 4
+  case "$state" in
+    absent) ;;
+    governed-mount) log "agent skill root is still the read-only governed bind mount; no self-authored space to collide with yet" ;;
+    present) self_skill_collision_block "$NODE_AGENT_ACCOUNT" "$NODE_AGENT_HOME/.hermes/skills/$SKILL" ;;
+    *) die "SELF-SKILL-COLLISION-BLOCK: agent skill root probe returned an invalid state" 4 ;;
+  esac
+}
+
+# Peer's ~/.hermes/skills is a NORMAL writable root: this pipeline's sandbox staging area
+# AND the home of peer's own self-authored skills. push_skill overwrites whatever stands
+# there, so overwriting is only defensible when the thing standing there is our own
+# leftover. `.usage.json` is Hermes' own registry (created_by "agent" is the account's word
+# that it wrote that skill) and `author: autophagy-agents` in the frontmatter is this
+# repo's signature. Everything else is foreign — including an unreadable or unparseable
+# record, which exits non-zero here and blocks at the call site.
+peer_skill_root_state() {
+  run_as "$NODE_PEER_ACCOUNT" "python3 - \"\$HOME/.hermes/skills\" \"$SKILL\" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+name = sys.argv[2]
+staged = root / name
+nested = [path for path in sorted(root.glob(\"*/\" + name)) if path.is_dir()]
+if not nested and not staged.is_dir():
+    print(\"absent\")
+    raise SystemExit(0)
+usage = root / \".usage.json\"
+record = json.loads(usage.read_text(encoding=\"utf-8\")).get(name) if usage.is_file() else None
+if record is not None and not isinstance(record, dict):
+    raise SystemExit(\"unreadable .usage.json record for \" + name)
+if isinstance(record, dict) and (record.get(\"created_by\") == \"agent\" or record.get(\"agent_created\") is True):
+    print(\"agent-created\")
+    raise SystemExit(0)
+if nested or not staged.is_dir():
+    print(\"foreign\")
+    raise SystemExit(0)
+parts = (staged / \"SKILL.md\").read_text(encoding=\"utf-8\").split(\"---\n\")
+if len(parts) < 3:
+    raise SystemExit(\"staged SKILL.md carries no frontmatter\")
+signed = any(line.strip() == \"author: autophagy-agents\" for line in parts[1].splitlines())
+print(\"staging-residue\" if signed else \"foreign\")
+PY
+"
 }
 
 install_reviewed_skill() {
@@ -389,6 +478,7 @@ cleanup_deploy_provenance() {
 
 cleanup_deploy_temps() {
   release_execution_lock
+  cleanup_peer_staging
   cleanup_e2e_injection
   cleanup_deploy_provenance
 }
@@ -436,7 +526,7 @@ fi
 
 if [[ "$REMOVE" == 1 ]]; then
   remove_live_skill "$SKILL" || die "privileged skill removal failed"
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\""
+  remove_peer_skill_copy "$SKILL"
   for acct in "$NODE_AGENT_ACCOUNT" "$NODE_PEER_ACCOUNT"; do
     if hermes_lists_skill "$acct" "$SKILL"; then die "removal failed: $SKILL still listed on $acct"; fi
     log "REMOVED $SKILL from $acct (hermes skills list: absent)"
@@ -531,12 +621,33 @@ if [[ "$ACTIVATE_MANAGED" == 0 && "$PERSONAL" == 0 && "$SANDBOX_ONLY" == 0 && -z
   deploy_provenance_check "$REPO_ROOT" "$SRC_DIR" || exit 4
 fi
 
+# SS-1 collision guard. It covers every arm that can stage or mount (--remove returned
+# above, by design: --remove is the way OUT of a collision). It sits after the purely
+# LOCAL validations — usage, quarantine layout, personal provenance, digest, deploy
+# provenance — because it is the first step that leaves this host: a missing quarantine
+# directory must fail as itself, not as an ssh error. It still precedes stage 1, so no
+# ops sync, no execution lease and nothing staged on peer happens before it.
+assert_agent_root_has_no_self_skill
+
 # ---------- stage 1: sandbox on peer with DUMMY secrets ----------
-sandbox_block() { run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true; die "SANDBOX-BLOCK: $1" 2; }
+sandbox_block() { cleanup_peer_staging; die "SANDBOX-BLOCK: $1" 2; }
 
 log "stage 1/4 SANDBOX (peer, dummy secrets)"
 sync_ops_checkout_for_peer_attest
 start_execution_lock
+# Classify peer's root BEFORE overwriting it. The execution lease is already held, so the
+# classification and the overwrite cannot interleave with another deploy.
+PEER_ROOT_STATE="$(peer_skill_root_state)" \
+  || die "SELF-SKILL-COLLISION-BLOCK: cannot classify the peer skill root for $SKILL (unreadable or ambiguous)" 4
+case "$PEER_ROOT_STATE" in
+  absent) ;;
+  staging-residue) log "STAGING-RESIDUE-CLEANED: $SKILL under peer's root is this pipeline's own leftover sandbox copy; replacing it" ;;
+  agent-created) self_skill_collision_block "$NODE_PEER_ACCOUNT" "hermes .usage.json records $SKILL as agent-created" ;;
+  foreign) self_skill_collision_block "$NODE_PEER_ACCOUNT" "$NODE_PEER_HOME/.hermes/skills/$SKILL carries no 'author: autophagy-agents' marker" ;;
+  *) die "SELF-SKILL-COLLISION-BLOCK: peer skill root probe returned an invalid state" 4 ;;
+esac
+# Set BEFORE the push: a push that fails midway still leaves a partial tree to remove.
+PEER_STAGING_PUSHED=1
 push_skill peer "$SRC_DIR" "$SKILL"
 
 # Modules the staged gate imports at runtime. skill_gate.py imports the shared
@@ -673,7 +784,7 @@ log "scenario: $(tail -n1 <<<"$SCENARIO_OUT")"
 run_as "$NODE_PEER_ACCOUNT" "if [ -r $NODE_AGENT_HOME/.env.secrets ]; then echo ISOLATION-FAIL; exit 1; else echo 'ISOLATION-OK peer cannot read agent secrets'; fi" \
   || sandbox_block "isolation probe failed: peer could read agent secrets"
 log "sandbox PASS (lint + discovery + dummy-secret scenario + isolation)"
-[[ "$SANDBOX_ONLY" == 1 ]] && { run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\""; exit 0; }
+[[ "$SANDBOX_ONLY" == 1 ]] && { cleanup_peer_staging; exit 0; }
 
 # ---------- stage 2: deterministic, hash-bound review on agent ----------
 log "stage 2/4 REVIEW (agent, deterministic hash-bound verdict)"
@@ -686,7 +797,7 @@ REVIEWED=0
 review review --skill "$SKILL" --skill-dir "\$HOME/.hermes/skill-gate/review-staging/$SKILL/$DIGEST/$SKILL" \
   --hash "$DIGEST" --scenario-output-file "\$HOME/.hermes/skill-gate/review-staging/$SKILL/$DIGEST/scenario.out" >&2 || REVIEWED=$?
 if [[ "$REVIEWED" != 0 ]]; then
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+  cleanup_peer_staging
   cleanup_review_staging "$SKILL"
   die "REVIEW-BLOCK: deterministic security review failed" 5
 fi
@@ -738,7 +849,7 @@ log "approval request posted; peer attestation required"
 PEER_ATTESTED=0
 PEER_ATTEST_BLOB="$(peer_attest "$SKILL" "$DIGEST" "$MESSAGE_ID" "$DEPLOY_NONCE" "$DEPLOY_APPROVALS_CHANNEL_ID")" || PEER_ATTESTED=$?
 if [[ "$PEER_ATTESTED" != 0 ]]; then
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+  cleanup_peer_staging
   cleanup_review_staging "$SKILL"
   die "PEER-ATTEST-BLOCK: independent peer review failed" 5
 fi
@@ -749,7 +860,7 @@ if [[ "$NODE_PEER_ATTEST_MODE" == "discord" ]]; then
 else
   log "peer attestation PASS (signed stdout record captured)"
 fi
-[[ "$REQUEST_ONLY" == 1 ]] && { run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true; cleanup_review_staging "$SKILL"; log "request-only mode: attested but not mounting"; echo "$MESSAGE_ID"; exit 0; }
+[[ "$REQUEST_ONLY" == 1 ]] && { cleanup_peer_staging; cleanup_review_staging "$SKILL"; log "request-only mode: attested but not mounting"; echo "$MESSAGE_ID"; exit 0; }
 
 if [[ "${E2E_TEST_MODE:-}" == "1" ]]; then
   log "E2E regression path: signed injected approval (production gateway refuses this mode)"
@@ -767,7 +878,7 @@ check_with_attestation_refresh "$DIGEST" || APPROVED=$?
 # deploy the owner stopped spends a Discord round-trip on nothing and makes the log
 # read as though the pipeline were still pushing after they said stop.
 if [[ "$APPROVED" == 8 ]]; then
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+  cleanup_peer_staging
   cleanup_review_staging "$SKILL"
   cleanup_e2e_injection
   log "owner CANCELLED this deploy — NOT mounting, and not retrying (message $MESSAGE_ID)"
@@ -778,7 +889,7 @@ if [[ "$APPROVED" == 8 ]]; then
 fi
 
 if [[ "$APPROVED" != 0 ]]; then
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+  cleanup_peer_staging
   cleanup_review_staging "$SKILL"
   cleanup_e2e_injection
   log "approval ABSENT or INVALID — NOT mounting (message $MESSAGE_ID stays pending for the owner)"
@@ -787,7 +898,7 @@ fi
 log "approval GRANTED (logged to approvals.jsonl)"
 
 if [[ "$APPROVE_ONLY" == 1 ]]; then
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+  cleanup_peer_staging
   cleanup_review_staging "$SKILL"
   cleanup_e2e_injection
   log "approve-only mode: approval verified; NOT mounting"
@@ -801,21 +912,21 @@ if [[ "$PERSONAL" == 1 ]]; then
 fi
 CURRENT_DIGEST="$(skill_digest "$SRC_DIR")"
 if [[ "$CURRENT_DIGEST" != "$DIGEST" ]]; then
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+  cleanup_peer_staging
   cleanup_review_staging "$SKILL"
   die "REVIEW-BLOCK: source changed after review" 5
 fi
 REVIEW_CURRENT=0
 review check --skill "$SKILL" --hash "$CURRENT_DIGEST" >&2 || REVIEW_CURRENT=$?
 if [[ "$REVIEW_CURRENT" != 0 ]]; then
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+  cleanup_peer_staging
   cleanup_review_staging "$SKILL"
   die "REVIEW-BLOCK: PASS verdict missing for current skill hash" 5
 fi
 MOUNT_APPROVED=0
 check_with_attestation_refresh "$CURRENT_DIGEST" || MOUNT_APPROVED=$?
 if [[ "$MOUNT_APPROVED" != 0 ]]; then
-  run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+  cleanup_peer_staging
   cleanup_review_staging "$SKILL"
   cleanup_e2e_injection
   die "MOUNT-BLOCK: owner approval or peer attestation no longer valid" 1
@@ -836,11 +947,11 @@ CONSUMED=0
 gate "" consume --skill "$SKILL" --hash "$DIGEST" --message-id "$MESSAGE_ID" >&2 || CONSUMED=$?
 [[ "$CONSUMED" == 0 ]] || log "CONSUME-WARN: pending approval record NOT retired for $SKILL (rc=$CONSUMED); mount stands. Retire it with: skill_gate.py abandon --skill $SKILL --hash $DIGEST --message-id $MESSAGE_ID --reason <text>"
 hermes_lists_skill agent "$SKILL" || die "mounted but hermes skills list does not show $SKILL on agent"
-INVOKE_OUT="$(run_as "$NODE_AGENT_ACCOUNT" "REAL_HOME=\"\$HOME\"; IR=\"\$REAL_HOME/.hermes/interop_runtime\"; [ -d \"\$IR\" ] || { echo 'SANDBOX-HOME-BLOCK interop runtime missing' >&2; exit 90; }; SH=\$(mktemp -d) || exit 91; chmod 700 \"\$SH\" || { rm -rf \"\$SH\"; exit 91; }; trap 'rm -rf \"\$SH\"' EXIT; env -i HOME=\"\$SH\" PATH=/usr/bin:/bin INTEROP_RUNTIME=\"\$IR\" AUTOPHAGY_DEMO_SECRET=DUMMY-w18-agent-invoke bash \"\$REAL_HOME/.hermes/skills/$SKILL/scripts/scenario.sh\"")" \
+INVOKE_OUT="$(run_as "$NODE_AGENT_ACCOUNT" "REAL_HOME=\"\$HOME\"; IR=\"\$REAL_HOME/.hermes/interop_runtime\"; [ -d \"\$IR\" ] || { echo 'SANDBOX-HOME-BLOCK interop runtime missing' >&2; exit 90; }; SH=\$(mktemp -d) || exit 91; chmod 700 \"\$SH\" || { rm -rf \"\$SH\"; exit 91; }; trap 'rm -rf \"\$SH\"' EXIT; env -i HOME=\"\$SH\" PATH=/usr/bin:/bin INTEROP_RUNTIME=\"\$IR\" AUTOPHAGY_DEMO_SECRET=DUMMY-w18-agent-invoke bash \"$STORE_ROOT/live/$SKILL/scripts/scenario.sh\"")" \
   || die "post-mount invoke smoke failed on agent"
 log "invoke: $(head -n1 <<<"$INVOKE_OUT")"
 release_execution_lock
-run_as "$NODE_PEER_ACCOUNT" "rm -rf \"\$HOME/.hermes/skills/$SKILL\"" || true
+cleanup_peer_staging
 cleanup_review_staging "$SKILL"
 cleanup_e2e_injection
 log "DEPLOYED $SKILL (sandbox→review→approval→mount complete; sandbox copy cleaned)"

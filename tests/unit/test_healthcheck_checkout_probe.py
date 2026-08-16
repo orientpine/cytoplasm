@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 
 from automation.deploy_reconcile import DRIFT_NOTICE_SECONDS
-from automation.deploy_reconcile_state import DEFAULT_STATE_PATH
 
 _REPO = Path(__file__).resolve().parents[2]
 _HEALTHCHECK = _REPO / "automation" / "healthcheck.sh"

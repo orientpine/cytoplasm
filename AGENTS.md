@@ -8,8 +8,8 @@ cha의 개인 Hermes 에이전트 시스템. Discord로 타 연구자 에이전�
 ## STRUCTURE
 ```
 autophagy/
-├── skills/       # 17개 스킬 디렉터리 (16 기능 + hello-autophagy 데모). 각 <name>/{SKILL.md, scripts/*_cli.py, scripts/*watch.py, deploy.sh}
-├── automation/   # 오케스트레이션·게이트·워처·배치 코어 (interop, repair, rag_ingest, report_hub, skill_generation, twin_distill, twin_observe, managed_skills, managed_sync ...)
+├── skills/       # 17개 스킬 디렉터리 (16 기능 + hello-autophagy 데모). 각 <name>/{SKILL.md, scripts/*_cli.py, scripts/*watch.py, deploy.sh}. 에이전트가 스스로 만든 자가 스킬은 이 트리에 없다(각 계정의 `~/.hermes/skills`)
+├── automation/   # 오케스트레이션·게이트·워처·배치 코어 (interop, repair, rag_ingest, report_hub, skill_generation, selfskill_audit, twin_distill, twin_observe, managed_skills, managed_sync ...)
 ├── configs/      # routing-policy.md, peers.example.yaml, sensitivity-rules.yaml, external-effect-tools.yaml, rag/, litellm-staging/
 ├── prompts/      # 버전형 LLM 프롬프트 자산
 ├── docs/         # guide/(설계규약) patch/(인프라 변경) qa/(W#-# 웨이브 증적) troubleshooting/
@@ -34,6 +34,8 @@ autophagy/
 | 관리형 스킬 발행 | `automation/managed_skills/`, `docs/guide/managed-skill-channel.md` | 발행자(cha) 전용 |
 | 개인→그룹 스킬 제출 | `automation/managed_skills/submission_*.py` | personal provenance 재사용, 그룹 `#approvals` 검토, 자동 import 없음 |
 | 관리형 스킬 구독 | `automation/managed_sync/`, `~/.hermes/managed-sync/` | 구독자(연구원) 전용. 틱 배포는 `deploy.sh`(Hermes cron) 또는 설치기 **opt-in** `--with-component managed-sync`(systemd) — 둘 다 같은 래퍼를 돌린다. **배달은 자동, 마운트는 아니다**(D3) |
+| 공개 릴리스 컷 | `automation/public_export.sh`, `docs/guide/manual-maintainer.md` | private가 유일한 개발 origin, public(`orientpine/cytoplasm`)은 이 스크립트로만 갱신되는 일방향 파생본 — 손 push 금지(D8)
+| 에이전트 자가 스킬 루트·감사 원장 | `<계정 홈>/.hermes/skills`(계정 소유 0700, 1차 루트), `automation/selfskill_audit/`, `~/.hermes/selfskill-audit/{state.json,ledger.jsonl}` | 자가 저작은 **승인 없이 착륙**하고 사후 감사한다(소유자 결정 2026-08-15 옵션 B). 관리자 배포 스킬은 `/srv/autophagy-skills/live`에 남아 Hermes `skills.external_dirs`로 읽기 전용 발견된다. 회수는 `hermes curator archive/pin`. 상세: [소개](docs/기능소개/에이전트-자가-스킨.md) |
 
 ## CODE MAP
 | Symbol | Type | Location | Role |
@@ -58,6 +60,7 @@ autophagy/
 | `twin_observe` | pkg | `automation/twin_observe/` | 게이트 이력 기반 판단 근거 분석 (observed) |
 | `ManagedManifest` | class | `automation/managed_skills/manifest.py` | 관리형 스킬 릴리스 매니페스트 (v1) |
 | `resolve_signed_update` | fn | `automation/update_trust.py` | 공개 origin의 현재 head와 결합된 SSH-signed annotated tag만 업데이트 SHA로 승인 |
+| `public_export.sh` | script | `automation/public_export.sh` | 공개 배포본 단일 갱신 경로 — fresh-history 스냅샷 커밋 + **그 커밋에** update-trust 서명 태그 + `push --atomic`이 한 실행 안에서 일어난다. 카나리아 검증된 gitleaks 스캔(private 워킹트리·전이력·공개 트리·공개 이력)·내보낸 트리에서의 `pytest tests/unit`·push 전 자체 `verify-tag`·push 후 원격 read-back을 모두 통과해야 성공한다 |
 | `publish_cli` | module | `automation/managed_skills/publish_cli.py` | 관리형 스킬 발행 CLI (SSH 서명 태그) |
 | `submission_cli` | module | `automation/managed_skills/submission_cli.py` | 개인 HEAD의 sha 고정 제출 + 기존 승인 표면 검토 요청(발행·마운트 없음) |
 | `managed_sync` | pkg | `automation/managed_sync/` | 관리형 스킬 동기화 (fetch→verify→quarantine) |
@@ -69,6 +72,8 @@ autophagy/
 | `memory_routing` | pkg | `automation/memory_routing/` | ‘기억해’ 저장 분류·단일 흐름 — canonical=위키 노트(기존 wiki_gate 재사용), 짧고 안정적 사실만 MEMORY.md 병기, 임시 상태는 비영속, 모호하면 보수적 기본값 |
 | `entity_preflight` | pkg | `automation/entity_preflight/` | 외부 쓰기 전 개인 고유명사 해석 — 관계 기반 질의 재작성 + 로컬 RAG·주소록 대조, 고신뢰 단일 후보만 자동 정규화, 모호하면 `ENTITY-CLARIFY`(승인 게이트 아님) |
 | `todo` | skill | `skills/todo/scripts/todo_cli.py` | Google Tasks 쓰기의 리포측 소유자 — `gws_tasks_mutation` denylist 규칙로 게이트 경유, 등록 후 `tasks get` 재조회 검증 |
+| `provision-skill-roots.sh` | script | `automation/provision-skill-roots.sh` | 스킬 루트 토폴로지 **반전** 프로비저너(멱등, root 실행) — 레거시 read-only bind 해제와 fstab 2행 제거, agent 1차 루트를 0700 agent 소유로, `.hub` 상태를 taps.json sha256 readback과 함께 이관, config에 `external_dirs`+`guard_agent_created` 패치(기존 `skills:` 블록은 넘겨짚지 않고 `SKILLS-BLOCK-BLOCK`으로 멈춤), 끝에 `hermes skills list`로 external 발견 선검증. peer arm은 잔여 사본을 3중 조건(이름·author 마커·repo 존재)으로만 정리하고 현역 자가 스킬 2개를 pin |
+| `selfskill_audit` | pkg | `automation/selfskill_audit/` | 자가 스킬 사후 감사 — `ledger.audit()`가 계정 스킬 루트와 `.archive`를 스캔해 콘텐츠 해시(`skill_review.skill_digest`) 기준 델타(created/edited/archived/restored)를 append-only `ledger.jsonl`에 적재, `report.run_once()`가 미보고분만 마스킹 요약으로 소유자 DM한 뒤 watermark를 전진시킨다(전송 실패시 전진 없음). cron `selfskill_audit_watch.py`(agent·peer 각 09:00 no-agent) |
 
 ## CONVENTIONS (repo 고유)
 - **stdlib 전용 지향.** `from __future__ import annotations` + `@dataclass(frozen=True, slots=True)` + 엄격 타입(`TypeAlias`/`Protocol`). 외부 의존은 함수 내부 lazy import + fail-closed 가드(참조 procurement `_import()`).
@@ -81,6 +86,9 @@ autophagy/
 - **추적 config = 불변 시드.** 런타임 상태는 체크아웃 밖(~/.hermes/…, /srv/autophagy-private/…)에만 기록한다 — 추적 파일을 런타임에 mutate하면 ops 체크아웃이 dirty해져 git pull --ff-only / peer-attest sync가 막힌다. 선례: configs/mail-mode.default.json(시드) vs ~/.hermes/mail-triage/mail-mode.json(런타임). triage_mode 가드가 시드/체크아웃 경로 쓰기를 fail-closed 거부.
 - **`managed-` 접두사 예약.** 관리형 스킬은 반드시 `managed-`로 시작하며, 일반 스킬 배포는 이 접두사를 사용할 수 없다.
 - **충돌 시 우선순위 없음.** 일반 스킬과 관리형 스킬 이름 충돌 시 양방향 fail-closed 차단 — 소유자가 하나를 제거(`--remove`)해야 한다.
+- **자가 스킬 루트는 통제 공간이 아니다.** 각 계정의 `~/.hermes/skills`는 그 계정이 소유한 쓰기 가능 1차 루트이며, 에이전트가 만든 스킬은 승인 게이트를 거치지 않고 그대로 착지한다. 관리자 배포본은 그 루트에 마운트되지 않고 `/srv/autophagy-skills/live`(root 소유 read-only)에서 `skills.external_dirs`로 발견된다 — 즉 `~/.hermes/skills` 아래에 있는 것을 관리자 배포본으로 읽으면 안 된다(반전 전에는 그 경로가 live의 read-only bind였다).
+
+**자가 스킬 이름 충돌은 양방향으로 막는다.** self→governed 방향(자가 스킬이 배포 스킬 이름을 선점)은 Hermes가 막는다 — `skill_manage(create)`는 어느 루트에든 같은 이름이 있으면 거부한다(v0.18.2 실측). governed→self 방향(배포가 자가 저작물을 덮어씀)은 `deploy-skill.sh`가 막는다 — agent 루트와 peer 루트를 각각 분류해 자가 저작물이면 `SELF-SKILL-COLLISION-BLOCK`(exit 4)으로 멈추고, 읽거나 분류할 수 없어도 같은 코드로 멈춘다(fail-closed). 관리형 스킬 충돌과 같은 원칙이다 — 우선순위는 없고, 소유자가 한쪽을 치워야(`hermes curator archive <name>` 또는 해당 계정 `~/.hermes/skills`에서 디렉터리 제거) 배포가 재개된다.
 
 ## ANTI-PATTERNS (금지)
 - cron 워처가 Discord **메시지/첨부를 폴링** — 실시간 에이전트와 경쟁 소비자. 워처는 **리액션만** 폴링.
@@ -289,3 +297,15 @@ automation/worktree.sh finish <이름>                          # 세션 종료
 - **발견 시 조치**: 되돌림으로 판정되면 커밋하지 말고 `git show origin/main:<path>`로 정본을 대조해 복원한다. **이미 커밋된 정본을 되찾는 복원**(`git checkout -- <path>`)은 「미커밋 작업 보존」 원칙과 충돌하지 않는다 — 반대로 남의 **생산물**을 지우는 방향이면 지우지 말고 소유자에게 묻는다.
 - **push 전에 한 번 더**: `git diff --stat <직전 정상 커밋>..HEAD`로 삭제가 0이거나 의도한 것뿐인지 확인한다. push 전에 잡으면 복구가 쉽고, 놓치면 다른 세션이 그 상태를 기준으로 작업해 유실이 번진다.
 - **배경(사후 반영)**: 2026-07-29 한 세션에서 두 번 발생했다. (1) `docs/features.md` 편집 시 워킹트리에 이미 되돌림이 섞여 있었고 확인 없이 커밋해 **후속 과제 4건이 유실**됐다(`373a0fa` — 문서를 더하는 커밋이 `+9/-20`이었는데 그 신호를 놓쳤다). `7ea6a8c` 정본 기준 재구성으로 복구했다(`46c82de`, 삭제 0 확인). (2) 직후 검증에서 `AGENTS.md`의 「수리 반영 경로 규칙」 18줄·CODE MAP 5행 삭제, 기능소개 문서 삭제, `doctype/SKILL.md`의 **v1.3.1→v1.2.2 후퇴**(배포본과 불일치), 코드 8건 후퇴로 테스트 10건 실패가 관측됐다 — 모두 미커밋 상태여서 origin 정본으로 복원했다.
+
+## 공개 릴리스 규칙 (cha 지시, 2026-08-15)
+
+**private repo(`orientpine/autophagy-agents`)는 앞으로도 계속 유일한 개발 origin이고, 공개 repo(`orientpine/cytoplasm`)는 `automation/public_export.sh`로만 갱신되는 일방향 파생 아티팩트다 — 공개 repo에서 작업하지 않고, 공개 repo에 손으로 push하지 않는다.**
+
+- **공개 릴리스가 나갔다고 private가 불필요해지지 않는다.** 이것은 가정이 아니라 실제로 나온 질문이다 — v1.0.0 직후 소유자가 "이제 공개 repo에서 작업을 이어가야 하는가, private는 불필요해지는가"를 물었고 둘 다 **아니오**다. 커밋·PR·머지·배포 provenance·전 노드 deploy key가 전부 private에 묶여 있다.
+- **새 릴리스 = 같은 스크립트를 `--version`만 올려 다시 실행하는 것**이다. 공개 repo에 무언가를 밀어 넣는 것이 아니다. 스크립트는 공개 트리 커밋 생성 → **그 커밋에** update-trust 서명 태그 → `push --atomic`을 **한 실행 안에서** 한다. private에서 태그를 먼저 서명하는 순서가 아니다 — fresh history라 그 커밋은 공개 repo에 없고, 그러면 사용자 노드가 검증할 태그가 생기지 않아 자동 업데이트가 **연합 전체에서** 멈춘다(D8).
+- **손 push는 조용하지 않지만 늦게 발견된다.** 다음 export가 `git rm -r --ignore-unmatch .` 후 private 스냅샷을 복사하므로 그 내용은 말없이 사라지고, 그 사이 공개 `main`이 서명 태그 커밋에서 벗어나 모든 노드가 `UNSIGNED-HEAD`로 전진을 멈춘다(리컨실러는 rc 0으로 종료해 알람이 없다).
+- **서명키가 둘이다 — 혼동 금지**(D8). 업데이트 신뢰키(`update-trust@autophagy` / `/etc/autophagy/update-allowed-signers` / `update_trust.py`)는 업스트림 유지보수자가, 그룹 스킬 서명키(`publisher-<slug>@autophagy` / `/etc/autophagy/managed-skills-allowed-signers` / `managed_sync/verify.py`)는 그룹 관리자가 소유한다. **두 개인키 모두 어떤 git 저장소에도 커밋하지 않고 노드에 배포하지 않는다** — 노드에 놓이는 것은 공개키 한 줄뿐이다.
+- **나쁜 릴리스는 옆으로도 뒤로도 갈 수 없고 앞으로만 되돌린다.** `update_trust_state.py`의 롤백 방지 floor가 옛 태그 재-push를 `RELEASE-ROLLBACK`으로 거부한다(공격자 강제 다운그레이드 방어 — 비대칭은 의도된 것이다). 취소는 문제를 revert해 private에 랜딩하고 **더 높은 버전**을 컷하는 것이다.
+- 전체 절차(사전조건·매니페스트 원장·실행·릴리스 노트·신뢰키 회전·나쁜 릴리스 대응)는 [docs/guide/manual-maintainer.md](docs/guide/manual-maintainer.md)가 단독으로 소유한다. 이 절은 불변식만 들고 있고 절차를 복사하지 않는다 — 같은 절차를 두 문서가 설명하면 반드시 한쪽이 낡는다.
+- **배경(사후 반영)**: 2026-08-15 W-F5-A로 실제 공개 repo `orientpine/cytoplasm`이 생기고 `v1.0.0`이 서명·push되자마자 소유자가 "이제 공개 repo에서 작업하는가"를 물었다. 이 저장소는 2026-07-21에 이미 같은 계열의 사고를 겪었다 — 확정된 설계에 대한 오해가 세션을 넘어 전달돼 배포가 404로 실패했다. 답을 산문으로만 두면 같은 일이 반복되므로 불변식을 여기에 박아 둔다.

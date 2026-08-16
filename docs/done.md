@@ -264,3 +264,6 @@
 
 - **그룹 roster 데이터 모델·검증 (W-F2-A)** — 설치당 단일 그룹의 관리자 1명·멤버·선택적 업데이트 채널을 frozen dataclass로 파싱한다.
   중복 ID·미지 필드·잘못된 principal/OpenSSH 키·중복 YAML 키를 fail-closed로 거부하며 소비자 배선은 후속 wave로 남긴다. → [소개](기능소개/그룹-roster-검증.md)
+- **공개 릴리스 컷 (W-F5-A · W-M3 문서)** — `public_export.sh` 1회 실행이 fresh-history 스냅샷 커밋·**그 커밋에** 서명 태그·atomic push를 다 한다 — 순서를 사람이 나눠 할 수 없게 구조로 묶었다(D8).
+  실물 릴리스 `orientpine/cytoplasm` `v1.0.0` 완료(내보낸 트리에서 3902 passed, gitleaks 4개 스캔 0건). 절차·신뢰키 회전·나쁜 릴리스 대응은 `docs/guide/manual-maintainer.md`가 소유한다.
+  → [소개](기능소개/공개-릴리스-컷.md). W-M3의 나머지 검증(실제 v1.0.1 패치 릴리스 1회 수행)은 계획에서 `[~]`로 유지된다.

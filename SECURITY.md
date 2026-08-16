@@ -84,9 +84,9 @@ disclosure)를 기본으로 하며, 공개 시점은 보고자와 합의한다.
 - 릴리스 버전과 설정·roster·매니페스트 **스키마 버전**의 관계, 그리고 런타임 상태
   파일이 바뀌었을 때의 거동은 [`docs/guide/versioning-support.md`](docs/guide/versioning-support.md)가
   소유한다.
-- 업데이트 신뢰키의 **회전 절차**는 플랫폼 운영자 매뉴얼
-  (`docs/guide/manual-maintainer.md`, W-M3 예정)이 소유한다. 이 문서는 그 절차를
-  복사하지 않는다.
+- 업데이트 신뢰키의 **보관·회전 절차**와 나쁜 릴리스 대응은 플랫폼 운영자 매뉴얼
+  [`docs/guide/manual-maintainer.md`](docs/guide/manual-maintainer.md)이 소유한다. 이 문서는 그
+  절차를 복사하지 않는다.
 
 ### 지원하지 않는 것
 
@@ -118,6 +118,6 @@ disclosure)를 기본으로 하며, 공개 시점은 보고자와 합의한다.
 `automation/public_export.sh` 단일 경로로만 이루어진다. 보안 보고와 릴리스는
 **공개 저장소**를 기준으로 처리한다.
 
-⚠️ 이 문서 작성 시점에 공개 저장소는 아직 생성되지 않았다. 계획상 기본 이름은
-`orientpine/autophagy-public`이며, 실제 생성은 소유자 승인이 있는 별도 단계
-(W-F5-A)에 속한다. 위의 보고처 자리표시자와 함께 그 시점에 확정된다.
+공개 저장소는 **`orientpine/cytoplasm`**이며 2026-08-15 `v1.0.0`으로 생성됐다. 개발은
+앞으로도 private 저장소에서만 이뤄지며, 공개 저장소에는 아무도 직접 push하지
+않는다.
