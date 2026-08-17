@@ -36,6 +36,7 @@ class ApprovalKind(StrEnum):
     SKILL_SUBMIT = "skill-submit"
     MANAGED_ACTIVATE = "managed-activate"
     OBSIDIAN_WRITE = "obsidian-write"
+    TODO = "todo"
 
 
 class ApprovalSurface(StrEnum):
@@ -77,6 +78,7 @@ _TRANSITIONS: Final[TransitionLedger] = MappingProxyType({
     ApprovalKind.SKILL_SUBMIT: ((0, ApprovalSurface.SKILL_APPROVALS),),
     ApprovalKind.MANAGED_ACTIVATE: ((0, ApprovalSurface.SKILL_APPROVALS),),
     ApprovalKind.OBSIDIAN_WRITE: ((0, ApprovalSurface.OWNER_DM),),
+    ApprovalKind.TODO: ((0, ApprovalSurface.OWNER_DM),),
 })
 
 
@@ -117,6 +119,7 @@ def required_surface(kind: ApprovalKind) -> ApprovalSurface:
             | ApprovalKind.SKILL_SUBMIT
             | ApprovalKind.MANAGED_ACTIVATE
             | ApprovalKind.OBSIDIAN_WRITE
+            | ApprovalKind.TODO
         ):
             return surface_at_policy(kind, POLICY_VERSION)
         case unreachable:

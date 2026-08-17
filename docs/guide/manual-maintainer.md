@@ -46,6 +46,13 @@
 "새 릴리스를 낸다"는 곧 **`--version`을 올려 export 스크립트를 다시 실행한다**는
 뜻이지, 공개 저장소에 무언가를 밀어 넣는다는 뜻이 아니다.
 
+그리고 **세 번째 저장소가 따로 있다** — 그룹 관리자가 소유하는 관리형 스킬 채널(현재 `orientpine/ribosome`)다.
+위 표에 그것이 없는 것은 빠뜨렸기 때문이 아니라, 이 문서가 다루는 **소프트웨어 배포 경로와
+아무 관계가 없기** 때문이다. 서명키도 신뢰 파일도 검증 코드도 별개고
+(`update_trust.py` vs `managed_sync/verify.py`), 설계상 그쪽 주인은 유지보수자가 아니어도 된다.
+그쪽 절차는 [manual-group-admin.md](manual-group-admin.md)가 소유하며, 세 저장소의 구분은
+루트 `AGENTS.md`의 「세 저장소 구분 규칙」이 한 표로 들고 있다.
+
 ### 손으로 push하면 정확히 무슨 일이 일어나나
 
 세 가지가 동시에 일어난다. 셋 다 조용하지 않지만, 셋 다 늦게 발견된다.
@@ -132,7 +139,7 @@ python3 -m pytest tests/unit/test_public_export_manifest_coverage.py -q
 원장을 잊으면 공개되는 것이 아니라 릴리스가 멈춘다. 원장은 **디렉터리 단위 공개
 승인을 금지**한다 — 그것은 방금 닫은 구멍을 다시 여는 일이다.
 
-### 1.4 실행 (2026-08-15 v1.0.0에서 실제로 돌린 형태)
+### 1.4 실행 형태 예시 — `--version`만 다음 값으로 바꿉다
 
 ```bash
 bash automation/public_export.sh \
@@ -188,6 +195,12 @@ bash automation/public_export.sh \
 v1.0.0 실측값: `source_sha=f54cf28fdf541631c14c6dd03a3a13c6eac8a86d`,
 `commit=4789b2ad73f4d66c3f5f91e13311910e0a2e022c`, 내보낸 트리에서 `3902 passed`,
 gitleaks 0건(private 워킹트리·private 전체이력·공개 트리·공개 이력 전부).
+
+v1.0.1(W-M3 검증) 실측값: `source_sha=a53157c32bce36c603c317880defa045f05aad08`,
+`commit=45311d84ce807afc76d9e5f57465e2b8d4454d12`, 내보낸 트리에서 `3951 passed`,
+gitleaks 0건. 첫 실행은 export 트리 내부 `pytest` 3건이 이 머신의 실제 `~/.hermes/node.toml`
+(다른 동시 세션이 생성)을 격리하지 않은 헬스체크 테스트 2개로 fail-closed 차단되었다 —
+문서가 설계대로 동작한 증거다(**7절이 이 감지를 막는 것이 아니라**, PUBLIC-EXPORT-BLOCK이 설계대로 작동해 결함 있는 커밋이 공개되는 것을 막았다). 테스트 헬퍼에 격리 `HOME`을 추가한 후 재시도해 성공했다.
 
 실패하면 `trap`이 임시 디렉터리와 (이 실행이 만든) 대상 디렉터리를 지운다. 부분
 결과를 남기지 않는다.

@@ -25,6 +25,23 @@ _FIELD_NAMES: Final = frozenset({
 })
 
 
+# The override lives outside any HOME on purpose. Every consumer that reads it runs
+# somewhere HOME is unreliable: the reconciler unit sets ProtectHome=tmpfs, and the
+# approval-resume helper runs the pipeline under `env -i HOME=/root`. Keying the
+# config off Path.home() meant each of those silently fell back to the seed and used
+# placeholder hostnames — three separate silent failures on 2026-08-16 alone.
+# /etc/autophagy is where this system already keeps root-owned trust material.
+SYSTEM_NODE_CONFIG_PATH: Final = Path("/etc/autophagy/node.toml")
+
+
+def _override_path(path: Path | None) -> Path:
+    if path is not None:
+        return path
+    if SYSTEM_NODE_CONFIG_PATH.exists():
+        return SYSTEM_NODE_CONFIG_PATH
+    return Path.home() / ".hermes" / "node.toml"
+
+
 def _seed_path() -> Path:
     installed = Path(__file__).with_name("node.example.toml")
     return installed if installed.is_file() else Path(__file__).resolve().parents[1] / "configs" / "node.example.toml"
@@ -74,7 +91,7 @@ def default_node_config() -> NodeConfig:
 
 def load_node_config(path: Path | None = None) -> NodeConfig:
     """Load an optional runtime override, rejecting malformed or unknown input."""
-    config_path = path if path is not None else Path.home() / ".hermes" / "node.toml"
+    config_path = _override_path(path)
     if not config_path.exists():
         return default_node_config()
     raw = _read_values(config_path, "node configuration")

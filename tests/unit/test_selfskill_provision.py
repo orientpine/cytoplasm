@@ -485,3 +485,29 @@ def test_repo_when_old_bootstrap_is_retired_then_no_references_remain() -> None:
     # Then
     assert not _RETIRED.exists()
     assert offenders == []
+
+
+
+def test_provision_when_it_calls_python_then_bytecode_writing_is_disabled() -> None:
+    """root 가 불변 릴리스를 상대로 이 스크립트를 돌린다 — 그리고 root 는 read-only 모드 비트를 무시한다.
+
+    그래서 bytecode 를 쓰는 python 호출 하나가 릴리스 트리에 `__pycache__` 를 남기고,
+    `release_provenance` 는 커밋에 없는 파일을 보면 수렴을 거부한다 — 배포 파이프라인이
+    통째로 멈춘다. 2026-08-16 프로덕션 실측: 1차 마이그레이션 직후 릴리스에
+    `automation/__pycache__/{__init__,node_config,skill_review}.cpython-312.pyc` 가 생겨
+    `RELEASE-STORE-BLOCK: release has files absent from the commit` 로 배포가 전면 차단됐다.
+    """
+    # Given
+    source = _PROVISION.read_text(encoding="utf-8")
+
+    # When: 실제 호출만 골라낸다(존재 확인 루프의 `command -v python3` 는 호출이 아니다).
+    offenders = [
+        line.strip()
+        for line in source.splitlines()
+        if ("python3 \"" in line or "python3 -c" in line or "python3 - " in line)
+        and " -B" not in line
+        and "PYTHONDONTWRITEBYTECODE" not in line
+    ]
+
+    # Then
+    assert offenders == []

@@ -77,3 +77,4 @@ docs/patch/2026-08-03-confirm-gate-rate-limit.md
 docs/patch/2026-08-03-promotion-approval-legibility.md
 docs/patch/2026-08-03-supply-chain-autonomous-deploy.md
 docs/patch/2026-08-15-agent-selfskill-root-inversion.md
+docs/patch/2026-08-17-skill-gate-peer-trust-root-diagnostic.md

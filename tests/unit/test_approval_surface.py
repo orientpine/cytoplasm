@@ -76,12 +76,21 @@ def _mail_flipped_at_v2() -> TransitionLedger:
     }
 
 
-def test_approval_kind_has_exactly_fourteen_members() -> None:
+def test_approval_kind_has_exactly_fifteen_members() -> None:
     # Given / When: the closed set of approval kinds is enumerated.
     kinds = tuple(ApprovalKind)
 
     # Then: every planned flow has exactly one kind.
-    assert len(kinds) == 14
+    assert len(kinds) == 15
+
+
+def test_todo_kind_routes_to_owner_dm() -> None:
+    # Given / When: the todo kind is parsed through the closed approval enum.
+    kind = ApprovalKind("todo")
+
+    # Then: its initial and current policy both select the owner DM.
+    assert surface_at_policy(kind, 0) is ApprovalSurface.OWNER_DM
+    assert required_surface(kind) is ApprovalSurface.OWNER_DM
 
 
 @pytest.mark.parametrize(

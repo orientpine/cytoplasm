@@ -34,11 +34,23 @@ import shutil
 import subprocess  # noqa: S404 — gws CLI is the only supported Tasks transport
 import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
+
+from todo_cli_model import (
+    ApprovalRequiredError,
+    CreatedTask,
+    EntityClarificationError,
+    TaskRequest,
+    TodoError,
+    TodoReconciliationRequiredError,
+    VerificationFailedError,
+    get_argv,
+    insert_argv,
+    list_argv,
+)
 
 if TYPE_CHECKING:
     from automation.interop.external_effect_gate import ApprovalContext, ExternalEffectDecision
@@ -47,62 +59,12 @@ GWS_TIMEOUT_S = 120
 CommandRunner = Callable[[list[str]], dict[str, Any]]
 
 
-class TodoError(RuntimeError):
-    """A todo operation failed and must not be reported as success."""
-
-    def __init__(self, message: str, exit_code: int = 1) -> None:
-        super().__init__(message)
-        self.exit_code = exit_code
-
-
-class ApprovalRequiredError(TodoError):
-    """The write was refused: no owner approval record binds this exact argv."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message, 4)
-
-
-class VerificationFailedError(TodoError):
-    """The post-write re-read did not prove the task we asked for exists."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message, 6)
-
-
-class EntityClarificationError(TodoError):
-    """An owner-facing entity clarify must be emitted once on stdout."""
-
-    def __init__(self, message: str, should_render: bool) -> None:
-        super().__init__(message, 6)
-        self.should_render = should_render
-
-
-@dataclass(frozen=True, slots=True)
-class TaskRequest:
-    """One Google Tasks entry as the owner asked for it."""
-
-    tasklist: str
-    title: str
-    notes: str | None = None
-    due: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class CreatedTask:
-    """A task whose existence was re-read from the API after the write."""
-
-    task_id: str
-    title: str
-    tasklist: str
-    action_hash: str
-    verified: bool
-
-
 def repo_root() -> Path:
-    env = os.environ.get("AUTOPHAGY_REPO_ROOT")
-    if env:
-        return Path(env).expanduser()
-    return Path(__file__).resolve().parents[3]
+    adapter = import_module("todo_preflight")
+    try:
+        return adapter.repo_root()
+    except adapter.TodoPreflightError as error:
+        raise TodoError(str(error), error.exit_code) from None
 
 
 def gate_module() -> ModuleType:
@@ -152,40 +114,7 @@ def approval_context() -> ApprovalContext:
     )
 
 
-def _compact(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-
-def insert_argv(request: TaskRequest) -> tuple[str, ...]:
-    """Freeze the exact create command; argv[0] stays 'gws' so the hash is host-independent."""
-    body: dict[str, Any] = {"title": request.title}
-    if request.notes:
-        body["notes"] = request.notes
-    if request.due:
-        body["due"] = request.due
-    return (
-        "gws", "tasks", "tasks", "insert",
-        "--params", _compact({"tasklist": request.tasklist}),
-        "--json", _compact(body),
-    )
-
-
-def get_argv(tasklist: str, task_id: str) -> tuple[str, ...]:
-    return (
-        "gws", "tasks", "tasks", "get",
-        "--params", _compact({"task": task_id, "tasklist": tasklist}),
-    )
-
-
-def list_argv(tasklist: str) -> tuple[str, ...]:
-    return (
-        "gws", "tasks", "tasks", "list",
-        "--params", _compact({"maxResults": 50, "tasklist": tasklist}),
-    )
-
-
 def build_tool_call(argv: Sequence[str]) -> Any:
-    """Canonicalize argv the same way the Hermes terminal tool call is canonicalized."""
     return gate_module().ToolCall(tool_name="gws", arguments={"command": " ".join(argv)})
 
 
@@ -226,23 +155,46 @@ def run_gws(argv: Sequence[str]) -> dict[str, Any]:
 
 
 def create_task(
-    request: TaskRequest, *, runner: CommandRunner | None = None, context: ApprovalContext | None = None
+    request: TaskRequest,
+    *,
+    runner: CommandRunner | None = None,
+    context: ApprovalContext | None = None,
+    claim_store: Any | None = None,
 ) -> CreatedTask:
     """THE single Google Tasks write path — gate first, write, then prove by re-read."""
     execute = runner if runner is not None else run_gws
     ctx = context if context is not None else approval_context()
+    claims_module = import_module("todo_execution_claim")
+    claims = claim_store if claim_store is not None else claims_module.ApprovalClaimStore(
+        Path(os.environ.get("TODO_APPROVAL_ROOT", "~/.hermes/todo-approvals")).expanduser()
+    )
+    claim = None
+
+    def claimed_execute(argv: list[str]) -> dict[str, Any]:
+        nonlocal claim
+        if argv[3] == "insert":
+            decision = evaluate(argv, context=ctx)
+            claim = claims.acquire(decision, ctx)
+        return execute(argv)
+
     adapter = import_module("todo_preflight")
     try:
         result = adapter.create_task(
             adapter.TodoPreflightBindings(
                 request,
-                execute,
+                claimed_execute,
                 ctx,
                 insert_argv,
                 get_argv,
                 lambda argv, bound_context: evaluate(argv, context=bound_context),
             )
         )
+    except claims_module.ApprovalAlreadyConsumedError as error:
+        raise ApprovalRequiredError(str(error)) from None
+    except claims_module.ApprovalReconciliationRequiredError as error:
+        raise TodoReconciliationRequiredError(str(error)) from None
+    except claims_module.ApprovalClaimError as error:
+        raise ApprovalRequiredError(str(error)) from None
     except adapter.TodoPreflightError as error:
         if error.should_render:
             raise EntityClarificationError(str(error), True) from None
@@ -251,6 +203,9 @@ def create_task(
         if error.exit_code == 6:
             raise VerificationFailedError(str(error)) from None
         raise TodoError(str(error), error.exit_code) from None
+    if claim is None:
+        raise TodoReconciliationRequiredError("todo write completed without an approval claim")
+    claims.complete(claim, result.task_id, result.title)
     return CreatedTask(result.task_id, result.title, request.tasklist, result.action_hash, True)
 
 
@@ -261,6 +216,26 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         f"PLAN tasklist={request.tasklist} external_effect={decision.external_effect} "
         f"approved={decision.allowed} hash={decision.action_hash} target={decision.target_id}"
     )
+    return 0
+
+
+def _cmd_request(args: argparse.Namespace) -> int:
+    request = TaskRequest(args.tasklist, args.title, args.notes, args.due)
+    argv = insert_argv(request)
+    decision = evaluate(argv, context=approval_context())
+    adapter = import_module("todo_approval")
+    intent = adapter.TodoApprovalIntent(
+        decision.action_hash,
+        decision.target_id,
+        adapter.masked_argv_summary(argv),
+        request.title,
+        request.due,
+    )
+    try:
+        adapter.request_cli_approval(intent, owner_id())
+    except adapter.TodoApprovalError as error:
+        raise TodoError(str(error), 3) from None
+    print(f"REQUESTED hash={decision.action_hash} target={decision.target_id}")
     return 0
 
 
@@ -281,10 +256,19 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_runtime_root(_args: argparse.Namespace) -> int:
+    print(repo_root())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="todo_cli", description="승인 게이트 경유 Google Tasks")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name, handler in (("plan", _cmd_plan), ("create", _cmd_create)):
+    for name, handler in (
+        ("plan", _cmd_plan),
+        ("request", _cmd_request),
+        ("create", _cmd_create),
+    ):
         sub = subparsers.add_parser(name)
         sub.add_argument("--title", required=True)
         sub.add_argument("--tasklist", default="@default")
@@ -294,6 +278,8 @@ def build_parser() -> argparse.ArgumentParser:
     listing = subparsers.add_parser("list")
     listing.add_argument("--tasklist", default="@default")
     listing.set_defaults(handler=_cmd_list)
+    diagnostic = subparsers.add_parser("runtime-root")
+    diagnostic.set_defaults(handler=_cmd_runtime_root)
     return parser
 
 

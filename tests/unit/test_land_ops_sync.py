@@ -205,6 +205,16 @@ def _stub_bin(
     return stub
 
 
+def _signing_key(tmp_path: Path) -> Path:
+    key = tmp_path / "land-signing-key"
+    if not key.exists():
+        _ = subprocess.run(
+            ("ssh-keygen", "-t", "ed25519", "-N", "", "-C", "land-test", "-f", str(key)),
+            capture_output=True, check=True,
+        )
+    return key.with_suffix(".pub")
+
+
 def _run_land(
     tmp_path: Path, dev: Path, node: Path, *, ssh_down: bool = False, skip_pull: bool = False
 ) -> subprocess.CompletedProcess[str]:
@@ -219,6 +229,11 @@ def _run_land(
     env = dict(os.environ)
     env["PATH"] = f"{_stub_bin(tmp_path, node, ssh_down=ssh_down, skip_pull=skip_pull)}{os.pathsep}{env['PATH']}"
     env["DEPLOY_SSH_HOST"] = "example-primary-node-not-this-host"
+    # Landing signs a release tag, and the harness must exercise that for real rather
+    # than around it: the fake origin is a local repo, so a throwaway key signs and
+    # pushes exactly the way production does. Reading the operator's own key instead
+    # would make these tests pass only on the maintainer's machine.
+    env["UPDATE_TRUST_SIGNING_KEY"] = str(_signing_key(tmp_path))
     return subprocess.run(
         ("bash", str(dev / "automation" / "land.sh")),
         cwd=str(dev), capture_output=True, text=True, check=False, env=env,

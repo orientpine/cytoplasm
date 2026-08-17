@@ -4,15 +4,17 @@ import fcntl
 import json
 import os
 import stat
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from http.client import HTTPSConnection
 from pathlib import Path, PurePosixPath
-from typing import Final
+from typing import Callable, Final
 from urllib.error import HTTPError
 from urllib.parse import quote
 
 from automation.interop.approval_directory import DiscordChannelDirectory, JsonValue
+from automation.interop.discord_transport import _retry_after
 from automation.interop.approval_lease import FileKeyLease, PostingJournal
 from automation.interop.approval_lifecycle import ApprovalRequest, Probe
 from automation.interop.approval_surface import ApprovalKind, resolve_new_binding
@@ -34,6 +36,7 @@ from .watch_step import ResolveEffects
 
 _DISCORD_API: Final = "https://discord.com/api/v10"
 _USER_AGENT: Final = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
+_DISCORD_MAX_ATTEMPTS: Final = 3
 _PENDING_STATUSES: Final = frozenset({"proposed", "posted", "approved", "written", "ingested"})
 _EFFECT_ERRORS: Final = (OSError, ValueError, RuntimeError, ObsidianWriteError)
 
@@ -103,7 +106,11 @@ class RelocationStore:
         the owner's ✅ — so both fields are written in one no-overwrite commit.
         """
         state, current = self._current(record_key(record.source_kind, record.entry_sha256))
-        if current.action_hash != record.action_hash or current.message_id is not None:
+        if current.action_hash != record.action_hash:
+            raise RelocationStoreError("relocation approval message id is already bound or stale")
+        if current.message_id is not None:
+            if (current.message_id, current.channel_id) == (message_id, channel_id):
+                return
             raise RelocationStoreError("relocation approval message id is already bound or stale")
         self._persist(state, replace(current, message_id=message_id, channel_id=channel_id))
 
@@ -137,26 +144,48 @@ DiscordTransportError = ValueError
 class DiscordTransport:
     token: str
     owner_id: str
+    sleeper: Callable[[float], None]
+    max_attempts: int
 
-    def __init__(self, token: str, owner_id: str) -> None:
+    def __init__(
+        self,
+        token: str,
+        owner_id: str,
+        *,
+        sleeper: Callable[[float], None] = time.sleep,
+        max_attempts: int = _DISCORD_MAX_ATTEMPTS,
+    ) -> None:
+        if max_attempts < 1:
+            raise DiscordTransportError("Discord max attempts must be positive")
         self.token = token
         self.owner_id = owner_id
+        self.sleeper = sleeper
+        self.max_attempts = max_attempts
 
     def api(self, method: str, path: str, payload: dict[str, JsonValue] | None = None) -> JsonValue:
-        connection = HTTPSConnection("discord.com", timeout=30)
-        try:
-            connection.request(
-                method,
-                f"/api/v10{path}",
-                body=None if payload is None else json.dumps(payload).encode("utf-8"),
-                headers={"Authorization": f"Bot {self.token}", "Content-Type": "application/json", "User-Agent": _USER_AGENT},
-            )
-            response = connection.getresponse()
-            body = response.read().decode("utf-8")
-            if response.status >= 400:
-                raise HTTPError(f"{_DISCORD_API}{path}", response.status, response.reason, response.headers, None)
-        finally:
-            connection.close()
+        attempt = 0
+        while True:
+            attempt += 1
+            connection = HTTPSConnection("discord.com", timeout=30)
+            try:
+                connection.request(
+                    method,
+                    f"/api/v10{path}",
+                    body=None if payload is None else json.dumps(payload).encode("utf-8"),
+                    headers={"Authorization": f"Bot {self.token}", "Content-Type": "application/json", "User-Agent": _USER_AGENT},
+                )
+                response = connection.getresponse()
+                body = response.read().decode("utf-8")
+                if response.status >= 400:
+                    raise HTTPError(f"{_DISCORD_API}{path}", response.status, response.reason, response.headers, None)
+            except HTTPError as error:
+                if error.code != 429 or attempt >= self.max_attempts:
+                    raise
+                self.sleeper(_retry_after(error.headers))
+                continue
+            finally:
+                connection.close()
+            break
         try:
             return _JSON_LOADS(body) if body else None
         except json.JSONDecodeError as error:
@@ -250,7 +279,7 @@ def build_effects(*, memory_dir: Path, state_path: Path, rag_state_path: Path, t
     def plan_for(record: RelocationRecord) -> RelocationPlan | None:
         try:
             text = recover_entry_text(memory_dir, record)
-            return None if text is None else build_relocation_plan(text)
+            return None if text is None else build_relocation_plan(text, source_kind=record.source_kind)
         except _EFFECT_ERRORS:
             return None
 
@@ -271,7 +300,11 @@ def build_effects(*, memory_dir: Path, state_path: Path, rag_state_path: Path, t
             )
         except _EFFECT_ERRORS:
             return None
-        return None if verdict.posted is None else (verdict.posted.message_id, verdict.posted.channel_id)
+        if verdict.posted is not None:
+            return verdict.posted.message_id, verdict.posted.channel_id
+        if verdict.live is not None:
+            return verdict.live.message_id, verdict.live.channel_id
+        return None
 
     def probe(record: RelocationRecord) -> str:
         try:

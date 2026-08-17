@@ -201,6 +201,36 @@ def test_build_item_sensitive_masks_store_row_but_not_dm_row(
     assert store_item["sender_masked"] == dm_item["sender_masked"]
 
 
+def test_owner_digest_shows_real_sender_and_cc_without_persisting_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a private owner digest item with a real sender and Cc recipient.
+    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
+    monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
+    monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
+    detail = {
+        **_detail("uid-private"),
+        "sender": 'Synthetic Sender <sender@example.invalid>',
+        "body": (
+            '---\nto: "owner@example.invalid"\n'
+            'cc: "Synthetic Copy <copy@example.invalid>"\n---\n\nSynthetic body'
+        ),
+    }
+
+    # When: the private card is built and rendered.
+    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+    rendered = triage_digest.render_digest_dm([dm_item], kst_now=_KST_NOW)
+
+    # Then: the owner sees sender+Cc, while persistence retains only the sender hash.
+    assert "Synthetic Sender <sender@example.invalid>" in dm_item["sender"]
+    assert dm_item["cc"] == ("copy@example.invalid",)
+    assert "Synthetic Sender <sender@example.invalid>" in rendered
+    assert "copy@example.invalid" in rendered
+    stored = json.dumps(store_item, ensure_ascii=False)
+    assert "sender@example.invalid" not in stored
+    assert "copy@example.invalid" not in stored
+
+
 def test_build_item_summary_failure_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
@@ -312,6 +342,59 @@ def test_build_item_cc_only_mail_suppresses_reply_and_flags_cc(
     # Then: reply_needed is suppressed and the cc marker is carried on both rows
     assert dm_item["flags"] == ("cc",)
     assert store_item["flags"] == "cc"
+
+
+def test_build_item_owner_dm_keeps_real_sender_and_cc_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a private owner-DM digest item with named sender and Cc recipients.
+    monkeypatch.setenv("MAILON_ID", "owner@inst.example")
+    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
+    monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
+    monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
+    body = (
+        '---\nuid: "uid-private"\nto: "owner@inst.example"\n'
+        'cc: "참조자 <copy@inst.example>"\n---\n\nSynthetic body'
+    )
+    detail = {
+        **_detail("uid-private"),
+        "sender": "발신자 <sender@inst.example>",
+        "body": body,
+    }
+
+    # When: the item is projected for owner delivery and persistent storage.
+    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+    rendered = triage_digest.render_digest_dm([dm_item], kst_now=_KST_NOW)
+
+    # Then: only the owner projection contains real sender/Cc; storage stays redacted.
+    assert dm_item["sender"] == "발신자 <sender@inst.example>"
+    assert dm_item["cc"] == "참조자 <copy@inst.example>"
+    assert "발신자 <sender@inst.example>" in rendered
+    assert "참조자 <copy@inst.example>" in rendered
+    assert "sender" not in store_item and "cc" not in store_item
+    assert store_item["sender_masked"] == triage_core.mask_value(detail["sender"])
+
+
+def test_build_item_mass_notice_suppresses_reply_without_overriding_cc_logic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a To-recipient bulk notice that the LLM incorrectly marks reply-needed.
+    monkeypatch.setenv("MAILON_ID", "owner@inst.example")
+    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
+    monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
+    monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
+    detail = {
+        **_detail("uid-notice", subject="정기 뉴스레터 안내"),
+        "sender": "noreply@inst.example",
+        "body": _TO_BODY + "\n수신 거부와 구독 해지는 공지 페이지에서 처리하세요.",
+    }
+
+    # When: the digest item applies deterministic recipient/search signals.
+    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+
+    # Then: bulk notice suppresses reply while the independent Cc badge remains absent.
+    assert dm_item["flags"] == ()
+    assert store_item["flags"] == ""
 
 
 def test_build_item_to_recipient_keeps_reply_flag(

@@ -87,6 +87,7 @@ def test_repo_module_resolves_when_partial_automation_already_bound(
         for name in (*automation_modules, module_name):
             isolated.delitem(sys.modules, name, raising=False)
         isolated.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO_ROOT))
+        isolated.setenv("AUTOPHAGY_RUNTIME_ROOT", str(_REPO_ROOT))
         isolated.setattr(sys, "path", [entry for entry in sys.path if not _is_repo_root_path(entry)])
         isolated.syspath_prepend(str(_SKILLS_ROOT / skill_name / "scripts"))
         isolated.syspath_prepend(str(partial))
@@ -136,6 +137,9 @@ def test_repo_root_skips_candidates_without_automation(
     real_repo = tmp_path / "checkout"
     (real_repo / "automation" / "entity_preflight").mkdir(parents=True)
     (real_repo / "automation" / "interop").mkdir(parents=True)
+    (real_repo / "automation" / "runtime_root.py").write_bytes(
+        (_REPO_ROOT / "automation" / "runtime_root.py").read_bytes()
+    )
 
     automation_modules = tuple(
         name for name in sys.modules if name == "automation" or name.startswith("automation.")
@@ -144,6 +148,7 @@ def test_repo_root_skips_candidates_without_automation(
         for name in (*automation_modules, module_name):
             isolated.delitem(sys.modules, name, raising=False)
         isolated.delenv("AUTOPHAGY_REPO_ROOT", raising=False)
+        isolated.setenv("AUTOPHAGY_RUNTIME_ROOT", str(real_repo))
         isolated.setattr(sys, "path", [e for e in sys.path if not _is_repo_root_path(e)])
         isolated.syspath_prepend(str(_SKILLS_ROOT / skill_name / "scripts"))
         importlib.invalidate_caches()

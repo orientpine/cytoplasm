@@ -309,3 +309,322 @@ def test_pre_existing_duplicates_collapse_to_one(tmp_path: Path) -> None:
         gate.seed(record)
     assert _call(tmp_path, gate)[0] is Outcome.PENDING
     assert gate.outstanding(KEY) == (oldest,) and gate.calls[-6:] == ["probe:m2", "delete:m2", "drop:m2", "probe:m3", "delete:m3", "drop:m3"]
+
+
+def _journal_with_receipt(
+    base: Path,
+    request: ApprovalRequest,
+    *,
+    action_hash: str | None = None,
+    channel_id: str | None = None,
+) -> PostingJournal:
+    journal = PostingJournal(base / "journal")
+    selected_hash = request.action_hash if action_hash is None else action_hash
+    selected_channel = request.channel_id if channel_id is None else channel_id
+    journal.reserve(KEY, selected_hash, request.created_at)
+    journal.enrich(KEY, selected_hash, request.message_id, selected_channel)
+    return journal
+
+
+def _message_with_probe(gate: DiskGate, request: ApprovalRequest, probe: Probe) -> None:
+    if probe is Probe.MISSING:
+        return
+    gate._write_message(request)
+    path = gate._path("messages", request.message_id)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["decision"] = probe.value
+    path.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    (
+        "probe",
+        "expected_outcome",
+        "expected_reason",
+        "expected_live",
+        "journal_preserved",
+        "expected_posts",
+        "expected_records",
+    ),
+    [
+        (Probe.MISSING, Outcome.POSTED, None, False, False, 1, 1),
+        (Probe.BOUND_PENDING, Outcome.PENDING, None, True, False, 0, 1),
+        (Probe.APPROVED, Outcome.DEFERRED, Reason.OWNER_DECIDED, True, False, 0, 1),
+        (Probe.CANCELLED, Outcome.DEFERRED, Reason.OWNER_DECIDED, True, False, 0, 1),
+        (Probe.UNVERIFIABLE, Outcome.DEFERRED, Reason.UNVERIFIABLE, False, True, 0, 0),
+    ],
+)
+def test_enriched_journal_when_binding_matches_recovers_by_probe_state(
+    tmp_path: Path,
+    probe: Probe,
+    expected_outcome: Outcome,
+    expected_reason: Reason | None,
+    expected_live: bool,
+    journal_preserved: bool,
+    expected_posts: int,
+    expected_records: int,
+) -> None:
+    # Given: POST succeeded and persisted its exact receipt before the producer crashed.
+    request = _request("orphan", "new")
+    gate = DiskGate(tmp_path)
+    _message_with_probe(gate, request, probe)
+    journal = _journal_with_receipt(tmp_path, request)
+
+    # When: the same approval intent runs again under the key lease.
+    verdict = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: only a fully verified live receipt is adopted; unknown liveness stays preserved.
+    assert (verdict.outcome, verdict.reason) == (expected_outcome, expected_reason)
+    assert verdict.live == (request if expected_live else None)
+    assert (journal.outstanding(KEY) is not None) is journal_preserved
+    assert gate.post_count() == expected_posts
+    assert len(gate.outstanding(KEY)) == expected_records
+
+
+def test_enriched_journal_when_live_body_mismatches_preserves_and_refuses(
+    tmp_path: Path,
+) -> None:
+    # Given: journal metadata matches the intent but the live message body binds another hash.
+    request = _request("orphan", "different")
+    gate = DiskGate(tmp_path)
+    gate._write_message(request)
+    journal_request = _request("orphan", "new")
+    journal = _journal_with_receipt(tmp_path, journal_request)
+
+    # When: recovery probes the live message binding.
+    verdict = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: it neither adopts nor deletes an unverifiable binding.
+    assert (verdict.outcome, verdict.reason) == (Outcome.REFUSED, Reason.BINDING_MISMATCH)
+    assert journal.outstanding(KEY) is not None
+    assert not any(call.startswith(("delete", "drop")) for call in gate.calls)
+    assert gate.post_count() == 0
+
+
+@pytest.mark.parametrize(
+    ("probe", "expected_outcome", "expected_reason"),
+    [
+        (Probe.APPROVED, Outcome.DEFERRED, Reason.OWNER_DECIDED),
+        (Probe.CANCELLED, Outcome.DEFERRED, Reason.OWNER_DECIDED),
+        (Probe.UNVERIFIABLE, Outcome.DEFERRED, Reason.UNVERIFIABLE),
+        (Probe.BINDING_MISMATCH, Outcome.REFUSED, Reason.BINDING_MISMATCH),
+    ],
+)
+def test_enriched_journal_when_hash_differs_preserves_decided_or_unknown_message(
+    tmp_path: Path,
+    probe: Probe,
+    expected_outcome: Outcome,
+    expected_reason: Reason,
+) -> None:
+    # Given: the same channel holds a stale-hash message that is not safely pending.
+    request = _request("stale", "old")
+    gate = DiskGate(tmp_path)
+    _message_with_probe(gate, request, probe)
+    journal = _journal_with_receipt(tmp_path, request)
+
+    # When: the new-hash intent attempts recovery.
+    verdict = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: the stale message and receipt remain for owner/auditor resolution.
+    assert (verdict.outcome, verdict.reason) == (expected_outcome, expected_reason)
+    assert journal.outstanding(KEY) is not None
+    assert not any(call.startswith("delete") for call in gate.calls)
+    assert gate.post_count() == 0
+
+
+@pytest.mark.parametrize("probe", list(Probe))
+def test_enriched_journal_when_hash_and_channel_differ_never_probes_deletes_or_clears(
+    tmp_path: Path,
+    probe: Probe,
+) -> None:
+    # Given: both security bindings disagree, regardless of the probe result a caller could supply.
+    request = ApprovalRequest(KEY, "old", "stale", "other-channel", "2026-01-01T00:00:00Z")
+    gate = DiskGate(tmp_path, (probe,))
+    journal = _journal_with_receipt(tmp_path, request)
+
+    # When: the current intent names another hash and channel.
+    verdict = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: channel mismatch prevents even a destructive probe path.
+    assert (verdict.outcome, verdict.reason) == (Outcome.REFUSED, Reason.BINDING_MISMATCH)
+    assert journal.outstanding(KEY) is not None
+    assert gate.calls == []
+    assert gate.post_count() == 0
+
+
+def test_enriched_journal_when_channel_differs_with_same_hash_never_adopts(
+    tmp_path: Path,
+) -> None:
+    # Given: the receipt names the right hash but a stale Discord channel.
+    request = ApprovalRequest(KEY, "new", "stale", "other-channel", "2026-01-01T00:00:00Z")
+    gate = DiskGate(tmp_path, (Probe.BOUND_PENDING,))
+    journal = _journal_with_receipt(tmp_path, request)
+
+    # When: recovery compares it with the current channel binding.
+    verdict = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: no cross-channel adoption, deletion, or clear is possible.
+    assert (verdict.outcome, verdict.reason) == (Outcome.REFUSED, Reason.BINDING_MISMATCH)
+    assert journal.outstanding(KEY) is not None
+    assert gate.calls == []
+
+
+def test_enriched_journal_when_payload_key_differs_never_adopts(
+    tmp_path: Path,
+) -> None:
+    # Given: the file path belongs to this key but its enriched payload names another key.
+    request = _request("stale", "new")
+    journal = _journal_with_receipt(tmp_path, request)
+    path = journal._path(KEY)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["key"] = "other-key"
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    gate = DiskGate(tmp_path, (Probe.BOUND_PENDING,))
+
+    # When: recovery validates the reservation.
+    verdict = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: mismatched key metadata remains untouched and fail-closed.
+    assert (verdict.outcome, verdict.reason) == (Outcome.REFUSED, Reason.BINDING_MISMATCH)
+    assert journal.outstanding(KEY) is not None
+    assert gate.calls == []
+
+
+@pytest.mark.parametrize("probe", [Probe.MISSING, Probe.BOUND_PENDING])
+def test_enriched_journal_when_hash_differs_replaces_only_missing_or_pending(
+    tmp_path: Path,
+    probe: Probe,
+) -> None:
+    # Given: a same-channel stale-hash receipt is either gone or still owner-pending.
+    request = _request("stale", "old")
+    gate = DiskGate(tmp_path)
+    _message_with_probe(gate, request, probe)
+    journal = _journal_with_receipt(tmp_path, request)
+
+    # When: the current intent recovers the stale receipt.
+    verdict = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: only the live pending variant is deleted; both safely post one replacement.
+    assert verdict.outcome is Outcome.POSTED
+    assert ("delete:stale" in gate.calls) is (probe is Probe.BOUND_PENDING)
+    assert journal.outstanding(KEY) is None
+    assert gate.post_count() == 1
+
+
+def test_journal_enrich_when_replace_fails_preserves_legacy_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a durable legacy reservation and an interrupted atomic replace.
+    journal = PostingJournal(tmp_path / "journal")
+    journal.reserve(KEY, "new", "2026-01-01T00:00:00Z")
+    before = journal._path(KEY).read_bytes()
+
+    def fail_replace(source: Path, target: Path) -> None:
+        del source, target
+        raise OSError("replace interrupted")
+
+    monkeypatch.setattr("automation.interop.approval_lease.os.replace", fail_replace)
+
+    # When: the memory-relocate adapter attempts to enrich the reservation.
+    with pytest.raises(OSError):
+        journal.enrich(KEY, "new", "message-1", "channel")
+
+    # Then: the old fail-closed journal remains byte-for-byte intact.
+    assert journal._path(KEY).read_bytes() == before
+
+
+class _DeleteFailingDiskGate(DiskGate):
+    def delete(self, request: ApprovalRequest) -> None:
+        self.calls.append(f"delete:{request.message_id}")
+        raise OSError("delete unavailable")
+
+
+def test_enriched_stale_pending_when_delete_fails_preserves_receipt(
+    tmp_path: Path,
+) -> None:
+    # Given: a same-channel stale-hash message is pending but cannot be deleted.
+    request = _request("stale", "old")
+    gate = _DeleteFailingDiskGate(tmp_path)
+    _message_with_probe(gate, request, Probe.BOUND_PENDING)
+    journal = _journal_with_receipt(tmp_path, request)
+
+    # When: the current intent attempts the only delete-permitted recovery branch.
+    verdict = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: deletion failure preserves the journal and refuses before repost.
+    assert (verdict.outcome, verdict.reason) == (Outcome.REFUSED, Reason.SUPERSEDE_FAILED)
+    assert journal.outstanding(KEY) is not None
+    assert gate.calls[-2:] == ["probe:stale", "delete:stale"]
+    assert gate.post_count() == 0
+
+
+def test_enriched_pending_when_adopt_event_repeats_never_reposts(
+    tmp_path: Path,
+) -> None:
+    # Given: an enriched live message is pending and its first recovery adopts it.
+    request = _request("orphan", "new")
+    gate = DiskGate(tmp_path)
+    _message_with_probe(gate, request, Probe.BOUND_PENDING)
+    journal = _journal_with_receipt(tmp_path, request)
+    first = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # When: the same event is evaluated again after the journal was cleared.
+    second = request_owner_approval(
+        INTENT,
+        gate,
+        FileKeyLease(tmp_path / "leases"),
+        journal,
+    )
+
+    # Then: both evaluations converge on one bound message without another POST.
+    assert first.outcome is Outcome.PENDING
+    assert second.outcome is Outcome.PENDING
+    assert first.live == second.live == request
+    assert gate.post_count() == 0
+    assert gate.outstanding(KEY) == (request,)

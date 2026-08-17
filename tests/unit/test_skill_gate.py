@@ -346,6 +346,20 @@ def test_cmd_check_when_peer_attestation_is_missing_then_rejects_even_in_e2e_mod
     assert result == 1
 
 
+def test_cmd_check_when_discord_peer_trust_root_is_unavailable_then_reports_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: Discord carries an otherwise valid peer reply but its private identity anchor is absent.
+    _configure_check(tmp_path, monkeypatch, [_attestation_record()])
+    monkeypatch.setattr(skill_gate, "OPS_PEERS_CONFIG", tmp_path / "missing-peers.yaml")
+
+    # When: the production check tries to authenticate the peer bot.
+    result = skill_gate.cmd_check(_check_args())
+
+    # Then: configuration failure is distinct from a genuinely absent attestation.
+    assert result == 2
+
+
 @pytest.mark.parametrize(
     ("mutate", "reactions"),
     (

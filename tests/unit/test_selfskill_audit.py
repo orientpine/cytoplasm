@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import importlib.util
 import json
 import stat
@@ -221,3 +222,109 @@ def test_watch_when_resolving_repo_root_then_prefers_release_current(
 
     # Then
     assert resolved == current
+
+
+def test_ledger_when_bundled_skills_are_seeded_then_they_are_not_reported(tmp_path: Path) -> None:
+    # Given: making the primary root writable let Hermes seed its bundled catalogue into it
+    # (2026-08-16 실측: 반전 직후 재기동에서 번들 68종·43MB가 카테고리 아래로 들어왔다).
+    # Those are vendor skills, not something the agent authored — reporting them would bury
+    # the one signal this ledger exists to carry.
+    home = tmp_path / "agent"
+    root = home / ".hermes" / "skills"
+    bundled = root / "productivity" / "arxiv"
+    bundled.mkdir(parents=True)
+    _ = (bundled / "SKILL.md").write_text("---\nname: arxiv\n---\nvendor\n", encoding="utf-8")
+    _ = (root / ".bundled_manifest").write_text("arxiv:e3627375503516a02e1711aa78a27d10\n", encoding="utf-8")
+    mine = root / "software-development" / "agent-notes"
+    mine.mkdir(parents=True)
+    _ = (mine / "SKILL.md").write_text("---\nname: agent-notes\n---\nmine\n", encoding="utf-8")
+
+    # When
+    result = ledger.audit(home, now=_NOW)
+
+    # Then
+    assert [(d.action.value, d.name) for d in result.deltas] == [("created", "agent-notes")]
+
+
+def test_ledger_when_a_self_skill_shadows_a_governed_one_then_it_is_flagged(tmp_path: Path) -> None:
+    """Hermes' own collision check cannot see our governed store.
+
+    2026-08-16 실측: `_find_skill` 은 `rglob("SKILL.md")` 로 훑는데 `<skill_store>/live` 는
+    릴리스로 가는 **심링크 팜**이고 `rglob` 은 디렉터리 심링크를 따라가지 않는다 — 그래서
+    `_find_skill("recall")` 이 None 이고, 에이전트가 governed 이름으로 자가 스킬을 만들 수 있었다.
+    1차 루트가 발견에서 이기므로 그 자가 스킬은 승인 게이트를 강제하는 배포본을 **가린다**.
+    벤더 쪽을 고칠 수 없으니 최소한 소유자에게 즉시 보이게 한다.
+    """
+    # Given: a governed store holding `mail`, and a self-authored skill claiming the same name
+    governed = tmp_path / "live"
+    (governed / "mail").mkdir(parents=True)
+    home = tmp_path / "agent"
+    mine = home / ".hermes" / "skills" / "software-development" / "mail"
+    mine.mkdir(parents=True)
+    _ = (mine / "SKILL.md").write_text("---\nname: mail\n---\nshadow\n", encoding="utf-8")
+
+    # When
+    result = ledger.audit(home, now=_NOW, governed_root=governed)
+
+    # Then
+    assert result.shadowed == ("mail",)
+    assert "SHADOWS-GOVERNED" in report.render_summary(
+        result.deltas, account_label="agent", shadowed=result.shadowed
+    )
+
+
+def test_report_when_owner_id_is_absent_from_env_then_it_comes_from_the_interop_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cron 은 `~/.env.secrets` 만 자가 로드하는데 거기에 owner id 가 없다.
+
+    2026-08-16 실측: agent 의 `.env.secrets` 에는 `DISCORD_BOT_TOKEN` 만 있어
+    `owner_notice` 가 `NOTIFY-UNCONFIGURED` 로 조용히 끝났다 — 이 원장의 유일한
+    소유자 출력이 매일 사라진다는 뜻이다. 같은 계정의 skill_generation 플러그인이
+    이미 쓰는 표준 출처(`~/.hermes/interop/config.json`)에서 해석한다.
+    """
+    # Given
+    home = tmp_path / "agent"
+    interop = home / ".hermes" / "interop"
+    interop.mkdir(parents=True)
+    _ = (interop / "config.json").write_text('{"owner_id": "123456789012345678"}', encoding="utf-8")
+    monkeypatch.delenv("AUTOPHAGY_OWNER_ID", raising=False)
+
+    # When
+    resolved = report.resolve_owner_id(home)
+
+    # Then
+    assert resolved == "123456789012345678"
+
+
+def test_report_when_owner_id_is_in_env_then_the_config_is_not_consulted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: env wins, and a missing config must not turn that into a failure
+    monkeypatch.setenv("AUTOPHAGY_OWNER_ID", "987654321098765432")
+
+    # When / Then
+    assert report.resolve_owner_id(tmp_path / "nohome") == "987654321098765432"
+
+
+def test_ledger_when_a_self_skill_is_deleted_outright_then_it_is_reported(tmp_path: Path) -> None:
+    """`.archive` 로 가지 않고 통째로 사라지는 경로가 있다 — 그때도 소유자는 알아야 한다.
+
+    2026-08-16 실측: 검증용 자가 스킬을 `rm -rf` 로 지우자 원장에 아무 델타도 남지 않았다.
+    curator 는 아카이브로 옮기지만 `skill_manage(delete)` 나 손 삭제는 흔적 없이 사라진다 —
+    "무엇이 생겼나"만 말하고 "무엇이 사라졌나"를 말하지 않으면 감사가 반쪽이다.
+    """
+    # Given: a recorded self skill
+    home = tmp_path / "agent"
+    skill = home / ".hermes" / "skills" / "software-development" / "gone-note"
+    skill.mkdir(parents=True)
+    _ = (skill / "SKILL.md").write_text("---\nname: gone-note\n---\nbody\n", encoding="utf-8")
+    first = ledger.audit(home, now=_NOW)
+    ledger.mark_reported(first)
+
+    # When: it disappears without being archived
+    shutil.rmtree(skill)
+    result = ledger.audit(home, now=_NOW)
+
+    # Then
+    assert [(d.action.value, d.name) for d in result.deltas] == [("removed", "gone-note")]

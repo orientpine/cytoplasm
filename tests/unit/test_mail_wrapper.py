@@ -8,6 +8,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -166,11 +167,96 @@ def test_list_limit_applies(stub_repo: Path) -> None:
     assert [m["uid"] for m in out["mails"]] == ["u-103", "u-102"]
 
 
+def test_list_all_folders_is_explicit_and_includes_user_folder(stub_repo: Path) -> None:
+    # Given: a message collected from a user-defined folder beside the inbox rows.
+    with sqlite3.connect(stub_repo / "data" / "state.db") as connection:
+        connection.execute(
+            "INSERT INTO messages VALUES (?,?,?,?,?,?,?)",
+            (
+                "u-custom",
+                "folder:62001",
+                "사용자 폴더 검색 대상",
+                "sender@example.invalid",
+                "2026-07-16T08:40:00",
+                "data/mails/2026/07/custom.md",
+                4,
+            ),
+        )
+
+    # When: the caller explicitly requests an all-folder read.
+    rc, out = run_cli("list", "--limit", "10", "--all-folders")
+
+    # Then: the custom-folder message is visible without changing default inbox behavior.
+    assert rc == 0
+    assert out["scope"] == "all-folders"
+    assert [mail["uid"] for mail in out["mails"]][0] == "u-custom"
+    default_rc, default_out = run_cli("list", "--limit", "10")
+    assert default_rc == 0
+    assert "u-custom" not in {mail["uid"] for mail in default_out["mails"]}
+
+
+def test_list_all_folders_sync_requests_vendor_all_scope(
+    stub_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a successful read-only sync adapter.
+    calls: list[list[str]] = []
+
+    def run_mailon(_cfg: dict, argv: list[str]) -> tuple[int, str, str]:
+        calls.append(argv)
+        return 0, "OK: 0 new mail(s) (retries: 0 recovered, 0 still failing)", ""
+
+    monkeypatch.setattr(mail_wrapper, "run_mailon", run_mailon)
+    args = mail_wrapper.build_parser().parse_args(
+        ["list", "--limit", "5", "--sync", "--all-folders"]
+    )
+
+    # When: the all-folder list performs its optional live refresh.
+    rc = mail_wrapper.cmd_list(args)
+
+    # Then: the vendor sync receives an explicit all-folder scope.
+    assert rc == 0
+    assert calls == [["sync", "--limit", "5", "--folders", "all"]]
+
+
 def test_list_sync_ok_parses_new_mails(stub_repo: Path) -> None:
     set_mode(stub_repo, "ok")
     rc, out = run_cli("list", "--limit", "5", "--sync")
     assert rc == 0 and out["synced"] is True
     assert out["sync"] == {"exit_code": 0, "meaning": "ok", "new_mails": 2}
+
+
+def test_list_all_folders_opts_into_allfolder_sync_and_unfiltered_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: an explicit all-folders list request.
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(mail_wrapper, "_cfg", lambda: {"mask_salt": ""})
+    monkeypatch.setattr(
+        mail_wrapper,
+        "run_mailon",
+        lambda _cfg, argv: calls.append(("sync", argv)) or (0, "OK: 1 new mail(s)", ""),
+    )
+    monkeypatch.setattr(
+        mail_wrapper,
+        "_db_rows",
+        lambda _cfg, where, params, limit: calls.append(("query", (where, params, limit)))
+        or [{
+            "uid": "u-custom", "folder": "folder:60003", "subject": "Synthetic",
+            "sender": "sender@example.invalid", "recv_date": "2026-08-16T00:00:00",
+            "markdown_path": "data/mails/custom.md",
+        }],
+    )
+    monkeypatch.setattr(mail_wrapper, "_emit", lambda _payload, exit_code: exit_code)
+    args = Namespace(sync=True, limit=5, masked=False, all_folders=True)
+
+    # When: the wrapper performs the read-only list operation.
+    rc = mail_wrapper.cmd_list(args)
+
+    # Then: sync explicitly requests all folders and the DB read has no inbox filter.
+    assert rc == 0
+    assert ("sync", ["sync", "--limit", "5", "--folders", "all"]) in calls
+    assert ("query", ("1 = 1", (), 5)) in calls
 
 
 def test_list_sync_auth_fail_surfaces_reauth_guidance(stub_repo: Path) -> None:

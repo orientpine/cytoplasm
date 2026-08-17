@@ -172,6 +172,7 @@ def test_main_when_signed_update_is_untrusted_then_never_calls_privileged_helper
 
     monkeypatch.setattr(reconcile_cli, "candidate_update_sha", blocked_target)
     monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
+    monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
     monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(reconcile_cli, "run_release_update", unexpected_release)
 
@@ -213,6 +214,7 @@ def test_main_when_signed_update_is_trusted_then_reconciles_to_tag_commit(
 
     monkeypatch.setattr(reconcile_cli, "candidate_update_sha", candidate)
     monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
+    monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
     monkeypatch.setattr(reconcile_cli, "current_release_sha", current)
     monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(reconcile_cli, "UPDATE_CHANNEL_STATE", tmp_path / "update-channel.json")

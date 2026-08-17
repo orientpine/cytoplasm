@@ -34,7 +34,11 @@ def render_asset(source: Path, config: NodeConfig) -> str:
             )
         values[f"NODE_{name.upper()}"] = value
     rendered = Template(source.read_text(encoding="utf-8")).safe_substitute(values)
-    if "$NODE_" in rendered:
+    # Both spellings, because the braced one is what slips through: `${NODE_X:-}` is not a
+    # valid template placeholder, so it survives substitution untouched while the bare
+    # check never fires — it contains "${NODE_", not "$NODE_". On 2026-08-17 a helper
+    # shipped that way and resolved its path to "/" on every run, silently.
+    if "$NODE_" in rendered or "${NODE_" in rendered:
         raise KeyError("asset contains an unknown NODE_* placeholder")
     return rendered
 

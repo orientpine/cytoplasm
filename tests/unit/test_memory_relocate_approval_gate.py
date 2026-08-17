@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from urllib.error import HTTPError
 
 import pytest
 
@@ -255,3 +256,159 @@ def test_outstanding_and_drop_use_record_binding_and_compare_and_swap() -> None:
         (requests[0].key, record.action_hash, "message-1")
     ]
     assert store.records[0].message_id is None
+
+
+class _RecordingJournal:
+    def __init__(self, calls: list[tuple[str, ...]]) -> None:
+        self.calls = calls
+
+    def enrich(
+        self,
+        key: str,
+        action_hash: str,
+        message_id: str,
+        channel_id: str,
+    ) -> None:
+        self.calls.append(("enrich", key, action_hash, message_id, channel_id))
+
+    def clear(self, key: str) -> None:
+        self.calls.append(("clear", key))
+
+
+class _OrderedTransport(FakeTransport):
+    def __init__(self, calls: list[tuple[str, ...]]) -> None:
+        super().__init__()
+        self.calls = calls
+
+    def post_message(self, channel_id: str, content: str) -> str:
+        self.calls.append(("post", channel_id))
+        return super().post_message(channel_id, content)
+
+    def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
+        self.calls.append(("reaction", channel_id, message_id, emoji))
+        super().add_reaction(channel_id, message_id, emoji)
+
+
+def test_post_when_journal_is_injected_enriches_receipt_before_reactions() -> None:
+    # Given: the memory adapter has a reserved journal and an unbound relocation.
+    record = _record()
+    store = FakeStore((record,))
+    calls: list[tuple[str, ...]] = []
+    transport = _OrderedTransport(calls)
+    journal = _RecordingJournal(calls)
+    gate = RelocateApprovalGate(record, "원본 메모리 항목", store, transport, journal)
+    intent = ApprovalIntent(
+        record_key(record.source_kind, record.entry_sha256),
+        record.action_hash,
+        record.channel_id,
+    )
+
+    # When: Discord accepts the POST.
+    posted = gate.post(intent)
+
+    # Then: the receipt reaches durable enrichment before either reaction is attempted.
+    assert posted == PostedApproval("posted-1", record.channel_id)
+    assert calls[0] == ("post", record.channel_id)
+    assert calls[1] == (
+        "enrich",
+        intent.key,
+        intent.action_hash,
+        "posted-1",
+        record.channel_id,
+    )
+    names = [call[0] for call in calls]
+    assert names.index("enrich") < names.index("reaction")
+
+
+class _OrderedStore(FakeStore):
+    def __init__(
+        self,
+        records: tuple[RelocationRecord, ...],
+        calls: list[tuple[str, ...]],
+    ) -> None:
+        super().__init__(records)
+        self.calls = calls
+
+    def set_message_id(
+        self,
+        record: RelocationRecord,
+        message_id: str,
+        channel_id: str,
+    ) -> None:
+        super().set_message_id(record, message_id, channel_id)
+        self.calls.append(("commit", message_id, channel_id))
+
+
+class _ReactionFailingTransport(_OrderedTransport):
+    def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
+        self.calls.append(("reaction", channel_id, message_id, emoji))
+        raise OSError("reaction unavailable")
+
+
+def test_post_when_reactions_fail_commits_and_clears_before_best_effort_attach() -> None:
+    # Given: Discord accepts the message but rejects both reaction PUTs.
+    record = _record()
+    calls: list[tuple[str, ...]] = []
+    store = _OrderedStore((record,), calls)
+    journal = _RecordingJournal(calls)
+    transport = _ReactionFailingTransport(calls)
+    gate = RelocateApprovalGate(record, "원본 메모리 항목", store, transport, journal)
+    intent = ApprovalIntent(
+        record_key(record.source_kind, record.entry_sha256),
+        record.action_hash,
+        record.channel_id,
+    )
+
+    # When: the adapter performs its atomic posting sequence.
+    posted = gate.post(intent)
+
+    # Then: reaction failure is not POST failure and the binding precedes every reaction.
+    assert posted == PostedApproval("posted-1", record.channel_id)
+    assert [call[0] for call in calls] == [
+        "post",
+        "enrich",
+        "commit",
+        "clear",
+        "reaction",
+        "reaction",
+    ]
+    assert store.records[0].message_id == "posted-1"
+    assert store.records[0].channel_id == record.channel_id
+
+
+def test_probe_when_binding_is_live_idempotently_repairs_bot_reactions() -> None:
+    # Given: a correctly bound message lacks the bot's two affordance reactions.
+    record = _record(message_id="message-1")
+    gate, _, transport = _gate(record)
+    transport.messages[(record.channel_id, "message-1")] = record.action_hash
+
+    # When: the next tick probes the owner decision.
+    verdict = gate.probe(_request(record))
+
+    # Then: idempotent PUTs repair both affordances before returning pending.
+    assert verdict is Probe.BOUND_PENDING
+    assert transport.added == [
+        (record.channel_id, "message-1", APPROVE_EMOJI),
+        (record.channel_id, "message-1", CANCEL_EMOJI),
+    ]
+
+
+class _HttpMissingTransport(FakeTransport):
+    def get_message(self, channel_id: str, message_id: str) -> str | None:
+        del channel_id, message_id
+        raise HTTPError("https://discord.invalid/message", 404, "Unknown Message", {}, None)
+
+
+def test_probe_when_discord_returns_exact_404_remains_missing_fail_closed() -> None:
+    # Given: Discord reports the bound message as exactly missing.
+    record = _record(message_id="message-1")
+    store = FakeStore((record,))
+    transport = _HttpMissingTransport()
+    gate = RelocateApprovalGate(record, "원본 메모리 항목", store, transport)
+
+    # When: the adapter probes the exact stored binding.
+    verdict = gate.probe(_request(record))
+
+    # Then: the existing fail-closed MISSING transition is preserved.
+    assert verdict is Probe.MISSING
+    assert transport.added == []

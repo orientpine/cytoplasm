@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -50,25 +51,50 @@ class TodoPreflightError(RuntimeError):
 
 
 def repo_root() -> Path:
-    """The checkout that actually carries ``automation``.
+    """Resolve the runtime checkout through ``automation/runtime_root.py`` alone.
 
-    A mounted release runs from ``/srv/autophagy-skills/releases/<skill>/<hash>/scripts``,
-    so the ``parents[3]`` depth guess lands on ``.../releases`` — no automation package
-    there, and the guard would fail closed on every send. Probe the candidates and take
-    the first that really holds the package; fall back to the node's ops checkout.
+    The skill may run from an immutable mount before ``automation`` is importable, so
+    this bootstrap only locates that one module file. Root priority and fallback
+    decisions remain exclusively inside ``resolve_runtime_root``.
     """
-    override = os.environ.get("AUTOPHAGY_REPO_ROOT")
-    if override:
-        return Path(override).expanduser()
-    here = Path(__file__).resolve()
-    candidates = [*here.parents[2:6], Path("/srv/autophagy-agent-current"), Path("/srv/autophagy-agents")]
-    for candidate in candidates:
-        if (candidate / "automation" / "entity_preflight").is_dir():
-            return candidate
-    # No candidate carries the package. Return the ops checkout so the failure names a
-    # real, diagnosable location instead of the meaningless depth guess (.../releases).
-    current = Path("/srv/autophagy-agent-current")
-    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
+    module = _load_runtime_root_module()
+    resolver = getattr(module, "resolve_runtime_root", None)
+    if not callable(resolver):
+        raise TodoPreflightError("runtime_root.py에 resolve_runtime_root가 없습니다", 3)
+    resolved = resolver(os.environ)
+    if not isinstance(resolved, Path):
+        raise TodoPreflightError("resolve_runtime_root 결과가 경로가 아닙니다", 3)
+    return resolved
+
+
+def _runtime_root_module_candidates() -> tuple[Path, ...]:
+    """Return only locations capable of carrying the bootstrap module file."""
+    override = os.environ.get("AUTOPHAGY_RUNTIME_ROOT")
+    explicit = () if not override else (Path(override).expanduser() / "automation" / "runtime_root.py",)
+    local = Path(__file__).resolve().parents[3] / "automation" / "runtime_root.py"
+    return (
+        *explicit,
+        local,
+        Path("/srv/autophagy-agent-current/automation/runtime_root.py"),
+        Path("/srv/autophagy-agents/automation/runtime_root.py"),
+    )
+
+
+def _load_runtime_root_module() -> ModuleType:
+    """Load the first present bootstrap module without importing ``automation``."""
+    for candidate in _runtime_root_module_candidates():
+        if not candidate.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("_todo_runtime_root", candidate)
+        if spec is None or spec.loader is None:
+            raise TodoPreflightError(f"runtime_root.py 로더를 만들 수 없습니다: {candidate}", 3)
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except (ImportError, OSError) as error:
+            raise TodoPreflightError(f"runtime_root.py를 불러올 수 없습니다: {candidate}", 3) from error
+        return module
+    raise TodoPreflightError("automation/runtime_root.py를 찾을 수 없습니다 — 쓰기 거부", 3)
 
 
 def _repo_module(name: str) -> ModuleType:

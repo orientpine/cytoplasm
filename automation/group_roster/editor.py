@@ -61,6 +61,8 @@ def _payload(roster: Roster) -> YamlMapping:
         payload["update_channel"] = roster.update_channel
     if roster.announce_channel_id is not None:
         payload["announce_channel_id"] = roster.announce_channel_id
+    if roster.revision is not None:
+        payload["revision"] = roster.revision
     return payload
 
 

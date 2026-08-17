@@ -40,6 +40,13 @@ set -euo pipefail
 
 readonly RELEASE_CURRENT="$NODE_RELEASE_CURRENT"
 readonly PIPELINE="$RELEASE_CURRENT/automation/deploy-skill.sh"
+#: The approval the owner already granted. Resuming means CONTINUING that request, not
+#: opening a new one: `deploy-skill.sh` re-runs stage 3 unless handed the message id and
+#: nonce, and the approval-singleness facade then refuses the duplicate (rc 6). On
+#: 2026-08-17 that refusal held two approved deploys for 14 hours while the peer
+#: re-attested hourly into the approvals channel. The binding is read from the
+#: agent-owned record rather than the caller: this edge rebuilds the environment on
+#: purpose, and the gate already treats that file as the source of truth.
 #: Same shape the gate's own request binding accepts; anything else is not a skill name.
 readonly SKILL_PATTERN='^[a-z0-9][a-z0-9-]{1,40}$'
 #: `publish-` is reserved: a deploy record and a publish record would collide on one
@@ -60,8 +67,34 @@ skill="$2"
 # Exit code survives VERBATIM. The watcher's outcome table reads 8 (another execution
 # holds the lease) and 9 (the owner pressed stop) as opposite meanings, and collapsing
 # them would either retire a live approval or re-invoke a deploy the owner stopped.
+#: Resolved here, not at load time: argument refusals must survive a node asset that
+#: was never rendered, and `set -u` would abort before validation otherwise. The token
+#: stays BARE — the renderer only substitutes bare NODE_* tokens, so a braced form with
+#: a shell default ships unrendered and resolves to `/` (2026-08-17: every resume re-posted).
+record="$NODE_AGENT_HOME/.hermes/skill-gate/pending/$skill.json"
+approval_message_id=""
+deploy_nonce=""
+if [[ -f "$record" ]]; then
+  # A record that exists but cannot be parsed is not the same as no record: continuing
+  # without the binding would re-post the request the owner already approved.
+  binding="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -c '
+import json, re, sys
+raw = json.loads(open(sys.argv[1], encoding="utf-8").read())
+message_id = str(raw.get("message_id", ""))
+nonce = str(raw.get("deploy_nonce", ""))
+if not re.fullmatch(r"[0-9]{1,32}", message_id) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
+    raise SystemExit("malformed approval binding")
+print(message_id)
+print(nonce)
+' "$record")" || die "pending record for '$skill' carries no usable approval binding"
+  approval_message_id="$(printf '%s\n' "$binding" | sed -n 1p)"
+  deploy_nonce="$(printf '%s\n' "$binding" | sed -n 2p)"
+fi
+
 exec /usr/bin/env -i \
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root \
   PYTHONDONTWRITEBYTECODE=1 \
+  APPROVAL_MESSAGE_ID="$approval_message_id" \
+  DEPLOY_NONCE="$deploy_nonce" \
   bash "$PIPELINE" "$skill"

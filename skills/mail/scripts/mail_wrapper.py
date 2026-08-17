@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """W4-1 institutional-mail READ-ONLY wrapper public command surface.
 
-Thin subprocess wrapper over the mailon CLI (`~agent/emailAutomation`,
-`python -m mailon.main …`). Stage 1 is strictly READ-ONLY: `list` / `get` /
-`classify` / `status` / `resolve`. It never composes, replies, or sends.
+Thin subprocess wrapper over mailon (`python -m mailon.main …`). Stage 1 is
+strictly READ-ONLY: `list` / `get` / `classify` / `status` / `resolve`.
 
 The cached mailon interface and read/classification helpers live in cohesive
 sibling modules and are re-exported here for stable W4-2 public imports. W4-2
@@ -63,7 +62,6 @@ def _error(command: str, error_code: str, guidance: str, **extra) -> int:
 
 
 def _mailon_failure(command: str, rc: int, stderr: str, **extra) -> int:
-    """Map a non-zero mailon exit to the wrapper contract."""
     detail = {
         "mailon_exit_code": rc,
         "mailon_exit_meaning": MAILON_INTERFACE["exit_codes"].get(rc, "unknown"),
@@ -92,7 +90,10 @@ def cmd_list(args) -> int:
     cfg = _cfg()
     sync_info = None
     if args.sync:
-        rc, out, err = run_mailon(cfg, ["sync", "--limit", str(args.limit)])
+        sync_argv = ["sync", "--limit", str(args.limit)] + (
+            ["--folders", "all"] if args.all_folders else []
+        )
+        rc, out, err = run_mailon(cfg, sync_argv)
         if rc in (1, 2, 10, 11, -6, -7):
             return _mailon_failure("list", rc, err)
         sync_info = {"exit_code": rc,
@@ -106,7 +107,8 @@ def cmd_list(args) -> int:
                              stderr_lines=len(err.splitlines()),
                              stderr_bytes=len(err.encode("utf-8")),
                              note=SYNC_FALLBACK_NOTE)
-    rows = _db_rows(cfg, "folder = ?", ("inbox",), args.limit)
+    where, params = ("1 = 1", ()) if args.all_folders else ("folder = ?", ("inbox",))
+    rows = _db_rows(cfg, where, params, args.limit)
     if not rows:
         if sync_info and sync_info.get("exit_code") == 3:
             return _error("list", "read_path_error", SYNC_FALLBACK_NOTE, sync=sync_info)
@@ -119,6 +121,7 @@ def cmd_list(args) -> int:
         "count": len(rows),
         "mails": [_render_mail(r, args.masked, cfg["mask_salt"]) for r in rows],
     }
+    payload.update({"scope": "all-folders"} if args.all_folders else {})
     return _emit(payload, 0)
 
 
@@ -241,15 +244,14 @@ def cmd_resolve(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="mail_wrapper.py",
-        description=("W4-1 institutional-mail READ-ONLY wrapper "
-                     "(list/get/classify/resolve/status)."),
+        description="W4-1 institutional-mail READ-ONLY wrapper (list/get/classify/resolve/status).",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("list", help="recent inbox mails (state.db; --sync = live refresh)")
     s.add_argument("--limit", type=int, default=5)
-    s.add_argument("--sync", action="store_true", default=False)
-    s.add_argument("--masked", action="store_true", default=False)
+    for flag in ("sync", "all-folders", "masked"):
+        s.add_argument(f"--{flag}", action="store_true", default=False)
     s.set_defaults(fn=cmd_list)
 
     s = sub.add_parser("get", help="one mail by uid")

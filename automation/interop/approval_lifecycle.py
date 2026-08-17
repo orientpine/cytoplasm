@@ -148,6 +148,120 @@ def _destroy(
     return None
 
 
+def _posting_request(
+    reservation: dict[str, str],
+) -> ApprovalRequest | None:
+    message_id = reservation.get("message_id", "")
+    channel_id = reservation.get("channel_id", "")
+    key = reservation.get("key", "")
+    action_hash = reservation.get("action_hash", "")
+    if not message_id or not channel_id or not key or not action_hash:
+        return None
+    return ApprovalRequest(
+        key=key,
+        action_hash=action_hash,
+        message_id=message_id,
+        channel_id=channel_id,
+        created_at=reservation.get("at", ""),
+    )
+
+
+def _preserved_journal_verdict(
+    decision: Probe,
+    request: ApprovalRequest,
+) -> Verdict:
+    match decision:
+        case Probe.APPROVED | Probe.CANCELLED:
+            return Verdict(
+                Outcome.DEFERRED,
+                Reason.OWNER_DECIDED,
+                blocked=(request,),
+            )
+        case Probe.UNVERIFIABLE:
+            return Verdict(
+                Outcome.DEFERRED,
+                Reason.UNVERIFIABLE,
+                blocked=(request,),
+            )
+        case Probe.BINDING_MISMATCH | Probe.BOUND_PENDING | Probe.MISSING:
+            return Verdict(
+                Outcome.REFUSED,
+                Reason.BINDING_MISMATCH,
+                blocked=(request,),
+            )
+        case unreachable:
+            assert_never(unreachable)
+
+
+def _recover_posting_journal(
+    intent: ApprovalIntent,
+    gate: ApprovalGate,
+    journal: PostingJournal,
+    reservation: dict[str, str],
+) -> Verdict | None:
+    request = _posting_request(reservation)
+    if request is None:
+        return Verdict(Outcome.REFUSED, Reason.POSTING_JOURNAL_STALE)
+    if request.key != intent.key or request.channel_id != intent.channel_id:
+        return Verdict(
+            Outcome.REFUSED,
+            Reason.BINDING_MISMATCH,
+            blocked=(request,),
+        )
+
+    decision = _probe(gate, request)
+    if request.action_hash != intent.action_hash:
+        match decision:
+            case Probe.MISSING:
+                journal.clear(intent.key)
+                return None
+            case Probe.BOUND_PENDING:
+                try:
+                    gate.delete(request)
+                except (ApprovalSurfaceError, OSError):
+                    return Verdict(
+                        Outcome.REFUSED,
+                        Reason.SUPERSEDE_FAILED,
+                        blocked=(request,),
+                    )
+                journal.clear(intent.key)
+                return None
+            case Probe.APPROVED | Probe.CANCELLED | Probe.UNVERIFIABLE | Probe.BINDING_MISMATCH:
+                return _preserved_journal_verdict(decision, request)
+            case unreachable:
+                assert_never(unreachable)
+
+    match decision:
+        case Probe.MISSING:
+            journal.clear(intent.key)
+            return None
+        case Probe.BOUND_PENDING:
+            gate.commit(
+                intent,
+                PostedApproval(request.message_id, request.channel_id),
+                request.created_at,
+            )
+            journal.clear(intent.key)
+            return Verdict(Outcome.PENDING, live=request)
+        case Probe.APPROVED | Probe.CANCELLED:
+            gate.commit(
+                intent,
+                PostedApproval(request.message_id, request.channel_id),
+                request.created_at,
+            )
+            journal.clear(intent.key)
+            return Verdict(
+                Outcome.DEFERRED,
+                Reason.OWNER_DECIDED,
+                live=request,
+                blocked=(request,),
+            )
+        case Probe.UNVERIFIABLE | Probe.BINDING_MISMATCH:
+            return _preserved_journal_verdict(decision, request)
+        case unreachable:
+            assert_never(unreachable)
+
+
 def request_owner_approval(
     intent: ApprovalIntent,
     gate: ApprovalGate,
@@ -157,8 +271,11 @@ def request_owner_approval(
     with lease.hold(intent.key) as owned:
         if not owned:
             return Verdict(Outcome.DEFERRED, Reason.LEASE_HELD)
-        if journal.outstanding(intent.key) is not None:
-            return Verdict(Outcome.REFUSED, Reason.POSTING_JOURNAL_STALE)
+        reservation = journal.outstanding(intent.key)
+        if reservation is not None:
+            recovered = _recover_posting_journal(intent, gate, journal, reservation)
+            if recovered is not None:
+                return recovered
         try:
             outstanding = gate.outstanding(intent.key)
         except ApprovalRecordsError:

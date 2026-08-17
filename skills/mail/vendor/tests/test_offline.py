@@ -382,6 +382,27 @@ def test_scraper_mail_list_parse():
     assert refs[1].unread is False
 
 
+def test_scraper_all_folders_uses_shared_allfolder_page_primitive():
+    from mailon.scraper import InboxScraper
+
+    page = {"result": True, "contents": [{
+        "mailUid": 700, "folderUid": 60003, "subject": "Synthetic custom folder",
+        "adrFrom": "sender@example.invalid", "adrTo": "owner@example.invalid",
+        "timeMillis": 1776836838000, "isSeen": 1, "isFlagged": 0,
+        "msgSize": 100, "attachCount": 0,
+    }]}
+    browser = MagicMock()
+    browser.eval_js.return_value = json.dumps(json.dumps(page))
+    scraper = InboxScraper(browser, Path("/tmp"), all_folders=True)
+    scraper.folder_uid = "49527"
+
+    refs = scraper.list_inbox()
+
+    assert [ref.folder_uid for ref in refs] == ["60003"]
+    script = browser.eval_js.call_args.args[0]
+    assert "allFolder=true" in script
+
+
 def test_scraper_read_mail_parse():
     """view_async HTML response -> read_mail builds Mail correctly."""
     from datetime import datetime
@@ -1181,6 +1202,7 @@ def test_sync_folder_records_sent_mails_with_collision_guard(tmp_path):
     ]
     scraper = MagicMock()
     scraper.folder_label = "sent"
+    scraper.all_folders = False
     scraper.iter_new_mails.return_value = iter(mails)
 
     cfg = MagicMock()

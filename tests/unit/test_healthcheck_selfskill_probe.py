@@ -142,3 +142,31 @@ def test_absent_selfskill_subject_passes_without_a_ticket_or_failure(tmp_path: P
     assert result.returncode == 0, output
     assert "SELFSKILL-" not in output
     assert "REPAIR_TICKET" not in output
+
+
+def test_selfskill_probe_when_the_agent_home_is_unreadable_then_it_does_not_claim_drift(
+    tmp_path: Path,
+) -> None:
+    """The 5-minute healthcheck runs as ops; the agent's home is 0700 and its config 0600.
+
+    2026-08-16 실측: 반전 후 ops 로 프로브를 돌리면 `stat` 이 `<unavailable>` 을 돌려주고
+    프로브는 그것을 소유권 불일치로 읽어 FAIL 했다 — 미러가 뒤처져 아직 안 터졌을 뿐,
+    따라잡는 순간 5분마다 거짓 수리 티켓이 난다. 볼 수 없는 것과 잘못된 것은 다르다.
+    """
+    # Given: live root visible (as on the node), agent home behind a directory ops cannot enter
+    live_root = tmp_path / "live"
+    live_root.mkdir()
+    blocked = tmp_path / "blocked"
+    agent_home = blocked / "agent"
+    (agent_home / ".hermes" / "skills").mkdir(parents=True)
+    blocked.chmod(0o000)
+    try:
+        # When
+        result = _run_selfskill_check(tmp_path, agent_home, live_root)
+    finally:
+        blocked.chmod(0o755)
+
+    # Then: it reports that it could not look, and does not manufacture a drift verdict
+    assert "SELFSKILL-ROOT-OWNER-MODE" not in result.stdout, result.stdout
+    assert "SELFSKILL-ROOT-UNREADABLE" in result.stdout, result.stdout
+    assert result.returncode == 0, result.stdout

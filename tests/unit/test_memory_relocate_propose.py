@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import pytest
-
 from automation.memory_curator.binding import entry_digest
 from automation.memory_relocate.binding import RelocationHashFields, relocation_action_hash
 from automation.memory_relocate.model import (
-    RelocationError,
     RelocationRecord,
     RelocationState,
     parse_state,
@@ -70,18 +67,28 @@ def test_build_proposed_record_when_memory_ops_reference_binds_plan_and_roundtri
     assert parse_state(serialize_state(state)) == state
 
 
-def test_build_proposed_record_when_source_is_user_rejects_without_a_plan() -> None:
-    # Given: a USER.md entry, which is outside the v1 relocation policy.
-    # When / Then: no proposal can be built for the protected source kind.
-    with pytest.raises(RelocationError, match="USER.md"):
-        _ = build_proposed_record(
-            "차의 개인 선호",
-            source_kind="user",
-            entry_sha256=entry_digest("user", "차의 개인 선호"),
-            reclaimable_chars=8,
-            binding_kind="obsidian-write",
-            binding_surface="owner-dm",
-            binding_channel_id="123456789",
-            binding_policy_version=6,
-            now=_NOW,
-        )
+def test_build_proposed_record_when_source_is_user_accepts_a_namespaced_plan() -> None:
+    # Given: a USER.md operational reference and its source-qualified digest.
+    entry = "차의 개인 선호"
+
+    # When: the proposal is built through the production guard and planner.
+    record = build_proposed_record(
+        entry,
+        source_kind="user",
+        entry_sha256=entry_digest("user", entry),
+        reclaimable_chars=len(entry),
+        binding_kind="obsidian-write",
+        binding_surface="owner-dm",
+        binding_channel_id="123456789",
+        binding_policy_version=6,
+        now=_NOW,
+    )
+    user_plan = build_relocation_plan(entry, source_kind="user")
+    memory_plan = build_relocation_plan(entry, source_kind="memory")
+
+    # Then: USER is accepted and separated only by its deterministic note path namespace.
+    assert record.status == "proposed"
+    assert record.source_kind == "user"
+    assert record.note_relpath == user_plan.note_plan.relpath.as_posix()
+    assert record.note_relpath != memory_plan.note_plan.relpath.as_posix()
+    assert record.rag_source_key == rag_source_key(record.note_relpath)

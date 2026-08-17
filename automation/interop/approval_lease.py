@@ -79,6 +79,43 @@ class PostingJournal:
         path.chmod(0o600)
         os.sync()                    # 저널이 POST보다 먼저 디스크에 닿아야 의미가 있다
 
+    def enrich(
+        self,
+        key: str,
+        action_hash: str,
+        message_id: str,
+        channel_id: str,
+    ) -> None:
+        reservation = self.outstanding(key)
+        if reservation is None or (
+            reservation.get("key"),
+            reservation.get("action_hash"),
+        ) != (key, action_hash):
+            raise RuntimeError("posting journal reservation changed before enrichment")
+        payload = {
+            "action_hash": action_hash,
+            "at": reservation.get("at", ""),
+            "channel_id": channel_id,
+            "key": key,
+            "message_id": message_id,
+        }
+        path = self._path(key)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.chmod(0o600)
+            os.replace(temporary, path)
+            directory = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def outstanding(self, key: str) -> dict[str, str] | None:
         try:
             data = json.loads(self._path(key).read_text(encoding="utf-8"))

@@ -44,13 +44,21 @@ probe_selfskill_root_topology() {
     return 1
   fi
   root_metadata="$(stat -c '%U:%G:%a' -- "$AGENT_SKILLS_ROOT" 2>/dev/null)" || root_metadata='<unavailable>'
+  # 볼 수 없는 것과 잘못된 것은 다르다. 이 프로브는 ops 의 5분 cron 에서 도는데 agent 홈은
+  # 0700 이라 traversal 자체가 막힌다 — 그걸 소유권 불일치로 읽으면 5분마다 거짓 티켓이 난다.
+  # 미러 지연 뒤 실측(2026-08-16). 판정 불가는 이웃 프로브의 BEHIND-UNKNOWN 과 같은 등급으로 낮춘다.
+  if [[ "$root_metadata" == '<unavailable>' ]]; then
+    selfskill_root_log "SELFSKILL-ROOT-UNREADABLE path=${AGENT_SKILLS_ROOT} probe_account=$(id -un 2>/dev/null || echo unknown)"
+    return 0
+  fi
   if [[ "$root_metadata" != "$AGENT_ROOT_EXPECTED" ]]; then
     selfskill_root_log "SELFSKILL-ROOT-OWNER-MODE path=${AGENT_SKILLS_ROOT} expected=${AGENT_ROOT_EXPECTED} actual=${root_metadata}"
     return 1
   fi
   if [[ ! -r "$AGENT_SKILLS_CONFIG" ]]; then
+    # 같은 이유 — config 는 0600 이라 소유 계정 밖에서는 읽히지 않는다.
     selfskill_root_log "SELFSKILL-CONFIG-UNREADABLE path=${AGENT_SKILLS_CONFIG}"
-    return 1
+    return 0
   fi
   skills_block="$(
     awk '

@@ -136,3 +136,20 @@ def test_never_touches_prod_state() -> None:
     text = _MODULE.read_text(encoding="utf-8")
     for forbidden in ("pull --ff-only", "systemctl", "symlink", "rmtree", "unlink"):
         assert forbidden not in text, forbidden
+
+
+def test_the_unit_never_lets_python_write_bytecode_into_the_sealed_release() -> None:
+    """이 유닛은 릴리스에서 python 을 돌린다 — 캐시를 남기면 그 릴리스가 배포를 막는다.
+
+    2026-08-17 실측: 리컨실러가 `automation/__pycache__/{__init__,node_config}.cpython-312.pyc`
+    를 릴리스 트리에 떨어뜨렸고, release-provenance 가 "커밋에 없는 파일"로 판정해
+    `RELEASE-STORE-BLOCK` 을 냈다. 승인이 끝난 배포 2건이 마운트 직전에서 멈췄다.
+
+    같은 이유로 `deploy-skill.sh:50` 과 `autophagy-resume-deploy` 는 이미 이 변수를 켠다.
+    릴리스에서 python 을 실행하는 경로는 예외 없이 이것을 켜야 한다.
+    """
+    unit = (
+        Path(__file__).resolve().parents[2]
+        / "automation" / "systemd" / "autophagy-deploy-reconcile.service"
+    ).read_text(encoding="utf-8")
+    assert "Environment=PYTHONDONTWRITEBYTECODE=1" in unit

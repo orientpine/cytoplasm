@@ -3,29 +3,24 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, Protocol, TypeAlias
+from typing import Final
 
+from automation.selfskill_audit.store import (
+    AuditError,
+    JsonValue,
+    _JSON_LOADS,
+    _atomic_write,
+    _mapping,
+    _read_json,
+)
 from automation.skill_review import skill_digest
 
-JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 _SKILL_NAME: Final = re.compile(r"[a-z0-9][a-z0-9-]{1,63}")
 _STATE_VERSION: Final = 1
-
-
-class JsonLoader(Protocol):
-    def __call__(self, document: str) -> JsonValue: ...
-
-
-_JSON_LOADS: JsonLoader = json.loads
-
-
-class AuditError(RuntimeError):
-    pass
 
 
 class Action(StrEnum):
@@ -33,6 +28,7 @@ class Action(StrEnum):
     EDITED = "edited"
     ARCHIVED = "archived"
     RESTORED = "restored"
+    REMOVED = "removed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,20 +65,23 @@ class AuditResult:
     state_path: Path
     ledger_path: Path
     ledger_lines: int
+    shadowed: tuple[str, ...] = ()
 
 
-def _mapping(value: JsonValue, label: str) -> dict[str, JsonValue]:
-    if not isinstance(value, dict):
-        raise AuditError(f"{label} must be a JSON object")
-    return value
+def _governed_names(governed_root: Path | None) -> frozenset[str]:
+    """governed \ub8e8\ud2b8\uc758 \uc2a4\ud0ac \uc774\ub984 \u2014 entry \uc774\ub984\ub9cc \uc77d\uc73c\uba74 \ub41c\ub2e4(\uc2ec\ub9c1\ud06c\ub97c \ub530\ub77c\uac00\uc9c0 \uc54a\ub294\ub2e4).
 
-
-def _read_json(path: Path, label: str) -> JsonValue:
+    Hermes \uc790\uc2e0\uc758 \ucda9\ub3cc \uac80\uc0ac\ub294 `rglob("SKILL.md")` \ub77c \uc2ec\ub9c1\ud06c \ud33c\uc778 \uc774 \ub8e8\ud2b8\ub97c \ubabb \ubcf8\ub2e4
+    (2026-08-16 \uc2e4\uce21: `_find_skill("recall")` \u2192 None). \uadf8\ub798\uc11c \uc790\uac00 \uc2a4\ud0ac\uc774 \ubc30\ud3ec\ubcf8 \uc774\ub984\uc744
+    \uc120\uc810\ud574 **\uc2b9\uc778 \uac8c\uc774\ud2b8\ub97c \uac15\uc81c\ud558\ub294 \uad6c\ud604\uc744 \uac00\ub9b4 \uc218 \uc788\ub2e4** \u2014 \ubc1c\uacac\uc740 1\ucc28 \ub8e8\ud2b8\uac00 \uc774\uae30\ubbc0\ub85c.
+    \ubca4\ub354 \ucabd\uc744 \uace0\uce60 \uc218 \uc5c6\uc73c\ub2c8 \ucd5c\uc18c\ud55c \uc18c\uc720\uc790\uc5d0\uac8c \uc989\uc2dc \ubcf4\uc774\uac8c \ud55c\ub2e4.
+    """
+    if governed_root is None or not governed_root.is_dir():
+        return frozenset()
     try:
-        document = path.read_text(encoding="utf-8")
-        return _JSON_LOADS(document)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise AuditError(f"cannot read trusted {label}: {path}") from error
+        return frozenset(p.name for p in governed_root.iterdir() if not p.name.startswith("."))
+    except OSError as error:
+        raise AuditError(f"cannot read governed skill root: {governed_root}") from error
 
 
 def _usage(skills_root: Path) -> dict[str, JsonValue]:
@@ -94,6 +93,24 @@ def _usage(skills_root: Path) -> dict[str, JsonValue]:
     raw = _mapping(_read_json(usage_path, "skill usage"), "skill usage")
     nested = raw.get("skills")
     return _mapping(nested, "skill usage.skills") if nested is not None else raw
+
+
+def _bundled_names(skills_root: Path) -> frozenset[str]:
+    """Hermes 가 시드한 번들 스킬 이름 — 이 원장의 대상이 아니다.
+
+    1차 루트가 쓰기 가능해지자 Hermes 가 자기 번들 카탈로그를 그 루트에 시드했다
+    (2026-08-16 실측: 반전 직후 재기동에서 68종). 벤더 스킬을 "에이전트가 만들었다"고
+    보고하면 이 원장이 나르려는 단 하나의 신호가 묻힌다. 부재는 정상(빈 집합),
+    읽을 수 없으면 구분할 수 없으므로 멈춘다(fail-closed).
+    """
+    manifest = skills_root / ".bundled_manifest"
+    if not manifest.exists():
+        return frozenset()
+    try:
+        document = manifest.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise AuditError(f"cannot read trusted bundled manifest: {manifest}") from error
+    return frozenset(line.split(":", 1)[0].strip() for line in document.splitlines() if line.strip())
 
 
 def _snapshot(skill_dir: Path, usage: dict[str, JsonValue]) -> SkillSnapshot:
@@ -133,7 +150,7 @@ def _is_skill_dir(path: Path) -> bool:
     return path.is_dir() and not path.is_symlink() and (path / "SKILL.md").is_file()
 
 
-def _scan(root: Path, usage: dict[str, JsonValue]) -> tuple[SkillSnapshot, ...]:
+def _scan(root: Path, usage: dict[str, JsonValue], bundled: frozenset[str]) -> tuple[SkillSnapshot, ...]:
     # Hermes는 자가 저작 스킬을 카테고리 디렉터리 아래에 둔다 — peer 실측
     # `software-development/<name>/SKILL.md`. 최상위만 훑으면 원장이 영구히 0건을 보고한다.
     # 그래서 깊이 1과 2를 함께 훑되, `.archive`/`.hub` 같은 Hermes 자체 상태는 건너뛴다
@@ -143,11 +160,12 @@ def _scan(root: Path, usage: dict[str, JsonValue]) -> tuple[SkillSnapshot, ...]:
         if path.name.startswith("."):
             continue
         if _is_skill_dir(path):
-            found.append(_snapshot(path, usage))
+            if path.name not in bundled:
+                found.append(_snapshot(path, usage))
             continue
         if path.is_dir() and not path.is_symlink():
             for nested in _children(path):
-                if _is_skill_dir(nested):
+                if _is_skill_dir(nested) and nested.name not in bundled:
                     found.append(_snapshot(nested, usage))
     return tuple(found)
 
@@ -202,6 +220,11 @@ def _diff(previous: AuditState, active: tuple[SkillSnapshot, ...], archived: tup
     for name, snapshot in current_archived.items():
         if name in old_active or name not in old_archived or snapshot.sha256 != old_archived[name].sha256:
             deltas.append(_delta(Action.ARCHIVED, snapshot, timestamp))
+    vanished = (old_active.keys() | old_archived.keys()) - (
+        current_active.keys() | current_archived.keys()
+    )
+    for name in sorted(vanished):
+        deltas.append(_delta(Action.REMOVED, old_active.get(name) or old_archived[name], timestamp))
     return tuple(deltas)
 
 
@@ -222,26 +245,6 @@ def _state_payload(state: AuditState) -> dict[str, JsonValue]:
         return {item.name: {"sha256": item.sha256, "provenance": item.provenance, "pinned": item.pinned, "archived_at": item.archived_at} for item in items}
 
     return {"version": _STATE_VERSION, "active": snapshots(state.active), "archived": snapshots(state.archived), "reported_lines": state.reported_lines}
-
-
-def _atomic_write(path: Path, document: str) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.parent.chmod(0o700)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
-            temporary_path = Path(handle.name)
-            _ = handle.write(document)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary_path, 0o600)
-        os.replace(temporary_path, path)
-        temporary_path = None
-    except OSError as error:
-        raise AuditError(f"cannot atomically write private audit file: {path}") from error
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
 
 
 def _parse_ledger(path: Path) -> tuple[Delta, ...]:
@@ -271,7 +274,7 @@ def _parse_delta(value: JsonValue) -> Delta:
     return Delta(action, name, sha256, provenance, pinned, archived_at, timestamp)
 
 
-def audit(home: Path, *, now: datetime) -> AuditResult:
+def audit(home: Path, *, now: datetime, governed_root: Path | None = None) -> AuditResult:
     if now.tzinfo is None:
         raise AuditError("audit timestamp must be timezone-aware")
     skills_root = home / ".hermes" / "skills"
@@ -281,9 +284,10 @@ def audit(home: Path, *, now: datetime) -> AuditResult:
     state_path, ledger_path = audit_root / "state.json", audit_root / "ledger.jsonl"
     previous = _load_state(state_path)
     usage = _usage(skills_root)
-    active = _scan(skills_root, usage)
+    bundled = _bundled_names(skills_root)
+    active = _scan(skills_root, usage, bundled)
     archive_root = skills_root / ".archive"
-    archived = _scan(archive_root, usage) if archive_root.exists() else ()
+    archived = _scan(archive_root, usage, bundled) if archive_root.exists() else ()
     timestamp = now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     deltas = _diff(previous, active, archived, timestamp)
     ledger = (*_parse_ledger(ledger_path), *deltas)
@@ -291,7 +295,9 @@ def audit(home: Path, *, now: datetime) -> AuditResult:
         raise AuditError("audit report watermark is outside the ledger")
     _atomic_write(ledger_path, "".join(json.dumps(_delta_payload(item), ensure_ascii=False, sort_keys=True) + "\n" for item in ledger))
     _atomic_write(state_path, json.dumps(_state_payload(AuditState(active, archived, previous.reported_lines)), ensure_ascii=False, sort_keys=True) + "\n")
-    return AuditResult(deltas, ledger[previous.reported_lines:], state_path, ledger_path, len(ledger))
+    governed = _governed_names(governed_root)
+    shadowed = tuple(sorted(snapshot.name for snapshot in active if snapshot.name in governed))
+    return AuditResult(deltas, ledger[previous.reported_lines:], state_path, ledger_path, len(ledger), shadowed)
 
 
 def mark_reported(result: AuditResult) -> None:

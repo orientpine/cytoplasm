@@ -140,8 +140,23 @@ def build_item(
         )
     except Exception:  # noqa: BLE001 — fail-open listing: keep the item, mark the failure
         summary = SUMMARY_FALLBACK
-    role = triage_recipient.recipient_role(body, triage_recipient.owner_address())
+    owner = triage_recipient.owner_address()
+    role = triage_recipient.recipient_role(body, owner)
+    _to_addresses, cc_addresses = triage_recipient.parse_recipients(body)
+    cc_display = ""
+    if body.startswith("---"):
+        for line in body.split("---", 2)[1].splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.strip().lower() == "cc":
+                cc_display = value.strip().strip("'\"")
+                break
     if role == "cc" and cls.reply_needed:  # 참조 수신 — 회신 대상 아님 (owner 2026-07-19)
+        cls = replace(cls, reply_needed=False)
+    mass_notice = bool(re.search(r"(?:^|[<\s])no-?reply@", sender, re.IGNORECASE)) and any(
+        marker in f"{subject}\n{body}".lower()
+        for marker in ("newsletter", "뉴스레터", "bulk", "distribution", "수신 거부", "구독 해지")
+    )
+    if role == "to" and mass_notice and cls.reply_needed:
         cls = replace(cls, reply_needed=False)
     flags = cls.flags() + (("cc",) if role == "cc" else ())
     if classify_failed:
@@ -158,7 +173,14 @@ def build_item(
         "note": note,
         "recv_date": str(mail_detail.get("date") or ""),
     }
-    dm_item = {**shared, "subject": subject, "summary": summary, "flags": flags}
+    dm_item = {
+        **shared,
+        "subject": subject,
+        "sender": sender,
+        "cc": cc_display if role != "unknown" else cc_addresses,
+        "summary": summary,
+        "flags": flags,
+    }
     store_item = {
         **shared,
         "subject": triage_core.mask_value(subject) if gate.sensitive else subject,
@@ -177,6 +199,17 @@ def _sanitize_inline(text: str) -> str:
     """
     flat = " ".join(text.split())
     return _MARKDOWN_ESCAPE.sub(r"\\\1", flat).replace("@", "@\u200b")
+
+
+def _sanitize_contact(text: str) -> str:
+    flat = _MARKDOWN_ESCAPE.sub(r"\\\1", " ".join(text.split()))
+    flat = re.sub(
+        r"@(everyone|here)\b",
+        lambda matched: f"@\u200b{matched.group(1)}",
+        flat,
+        flags=re.IGNORECASE,
+    )
+    return flat.replace("<@", "<@\u200b")
 
 
 def _recv_kst(recv_date: str) -> str:
@@ -220,6 +253,12 @@ def render_digest_dm(dm_items: list[dict], *, kst_now: datetime) -> str:
         received = _recv_kst(str(item["recv_date"]))
         meta = f"`UID {item['uid']}` · 발신(마스킹) `{item['sender_masked']}`"
         lines.append(f"{received} · {meta}" if received else meta)
+        sender = str(item.get("sender") or "")
+        cc = str(item.get("cc") or "")
+        if sender:
+            lines.append(f"발신 · {_sanitize_contact(sender)}")
+        if cc:
+            lines.append(f"참조(CC) · {_sanitize_contact(cc)}")
         if item["note"]:
             note = str(item["note"]).replace("`", "'")
             lines.append(f"🗓️ 일정 초안 `{note}`")

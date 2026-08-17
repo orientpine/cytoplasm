@@ -34,6 +34,8 @@ readonly MAIN_ROOT
 readonly WORKTREE_ROOT="${WORKTREE_ROOT:-$(dirname "$MAIN_ROOT")/autophagy-wt}"
 readonly BASE="${WORKTREE_BASE:-main}"
 readonly REMOTE_REF="refs/remotes/origin/$BASE"
+# A bare `session` branch can block the entire `session/*` namespace; override it without changing the default.
+readonly BRANCH_PREFIX="${WORKTREE_BRANCH_PREFIX:-session}"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { printf '[worktree] %s\n' "$*"; }
@@ -69,7 +71,7 @@ cmd_start() {
     while (( $# )); do paths+=("$1"); shift; done
   fi
 
-  local dir="$WORKTREE_ROOT/$name" branch="session/$name"
+  local dir="$WORKTREE_ROOT/$name" branch="$BRANCH_PREFIX/$name"
   [[ -e "$dir" ]] && die "$name already has a worktree at $dir"
   git -C "$MAIN_ROOT" rev-parse --verify --quiet "$branch" >/dev/null \
     && die "$name already has a branch ($branch)"
@@ -110,7 +112,7 @@ cmd_start() {
 cmd_finish() {
   local name="$1"
   validate_name "$name"
-  local dir="$WORKTREE_ROOT/$name" branch="session/$name"
+  local dir="$WORKTREE_ROOT/$name" branch="$BRANCH_PREFIX/$name"
   [[ -d "$dir" ]] || die "$name has no worktree at $dir"
 
   local dirty

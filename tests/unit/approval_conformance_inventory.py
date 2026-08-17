@@ -34,6 +34,7 @@ APPROVAL_PRODUCERS: Final[Mapping[str, str]] = {
     "skills/patent-prep/scripts/patent_export.py::prepare_export": "skills/patent-prep/scripts/patent_export_approval.py",
     "automation/obsidian_write/gate_binding.py::request_approval": "automation/obsidian_write/gate_binding.py",
     "automation/memory_relocate/approval_gate.py::request_approval": "automation/memory_relocate/approval_gate.py",
+    "skills/todo/scripts/todo_cli.py::_cmd_request": "skills/todo/scripts/todo_approval.py",
 }
 
 _LIFECYCLE_HOSTS: Final[Mapping[str, str]] = {
@@ -48,6 +49,7 @@ _LIFECYCLE_HOSTS: Final[Mapping[str, str]] = {
     "skills/patent-prep/scripts/patent_export_approval.py": "skills/patent-prep/scripts/patent_export.py",
     "automation/obsidian_write/gate_binding.py": "automation/obsidian_write/gate_binding.py",
     "automation/memory_relocate/approval_gate.py": "automation/memory_relocate/approval_gate.py",
+    "skills/todo/scripts/todo_approval.py": "skills/todo/scripts/todo_approval.py",
 }
 
 _ADAPTER_POSTERS: Final[frozenset[str]] = frozenset({
@@ -61,6 +63,7 @@ _ADAPTER_POSTERS: Final[frozenset[str]] = frozenset({
     "skills/budget/scripts/budget_approval.py::BudgetApprovalGate.post",
     "skills/patent-prep/scripts/patent_export_approval.py::PatentApprovalGate.post",
     "automation/memory_relocate/approval_gate.py::RelocateApprovalGate.post",
+    "skills/todo/scripts/todo_approval.py::TodoApprovalGate.post",
 })
 
 _POSTING_PRIMITIVE_IMPLEMENTATIONS: Final[frozenset[str]] = frozenset({
@@ -110,6 +113,7 @@ APPROVAL_KINDS: Final[Mapping[str, str]] = {
     "skills/patent-prep/scripts/patent_export.py::prepare_export": "patent-export",
     "automation/obsidian_write/gate_binding.py::request_approval": "obsidian-write",
     "automation/memory_relocate/approval_gate.py::request_approval": "obsidian-write",
+    "skills/todo/scripts/todo_cli.py::_cmd_request": "todo",
 }
 
 # Commit surface (the ONLY writer of a flow's message_id) → the module that
@@ -125,6 +129,7 @@ _RECORD_WRITERS: Final[Mapping[str, str]] = {
     "skills/budget/scripts/budget_approval.py::BudgetApprovalGate.commit": "skills/budget/scripts/budget_gate.py",
     "skills/patent-prep/scripts/patent_export_approval.py::PatentApprovalGate.commit": "skills/patent-prep/scripts/patent_export_manifest.py",
     "automation/memory_relocate/approval_gate.py::RelocateApprovalGate.commit": "automation/memory_relocate/model.py",
+    "skills/todo/scripts/todo_approval.py::TodoApprovalGate.commit": "skills/todo/scripts/todo_approval_store.py",
 }
 
 # The migration ledger. Key = the `+`-joined path(s) one R1 flow owns; value =

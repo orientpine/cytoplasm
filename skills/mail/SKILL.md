@@ -27,6 +27,9 @@ python3 ~/.hermes/skills/mail/scripts/mail_wrapper.py list --limit 5 --sync --ma
 # 로컬 읽기만 (브라우저/네트워크 0)
 python3 ~/.hermes/skills/mail/scripts/mail_wrapper.py list --limit 5
 
+# 받은편지함 외 사용자 폴더까지 명시적으로 수집·조회
+python3 ~/.hermes/skills/mail/scripts/mail_wrapper.py list --limit 20 --sync --all-folders
+
 # 단건 조회 (--body는 agent 홈 안에서만; 마스킹 시 본문 대신 sha256+bytes)
 python3 ~/.hermes/skills/mail/scripts/mail_wrapper.py get <uid> --body
 
@@ -41,6 +44,9 @@ python3 ~/.hermes/skills/mail/scripts/mail_wrapper.py status
 ```
 
 stdout은 항상 **정확히 하나의 JSON 객체**다 (`"wrapper": "mail-wrapper-v1"`).
+기본 `list`는 받은편지함만 조회한다. `--all-folders`를 명시한 경우에만 vendor
+sync에 `--folders all`을 전달하고 DB의 모든 폴더를 조회하며, JSON에
+`"scope":"all-folders"`가 추가된다.
 
 ### 수신자 이름→이메일 해석 (resolve)
 
@@ -93,7 +99,7 @@ Hermes cron(`mail-triage-watch`, no_agent)이 `watch`를 돌린다. 이 루프�
 
 ### 2. 다이제스트 루프 (매일 08:00 KST)
 신규 cron `mail-daily-digest`(`0 8 * * *`, no_agent)가 `digest`를 실행한다.
-- 마지막 다이제스트 이후 수신된 메일을 Discord Markdown 카드 형식(### N. 제목, 상태 배지, 인용문 요약, KST 수신 시각, 코드 스타일 UID/발신 해시)으로 요약하여 cha에게 DM으로 전송한다. 배지는 중요도와 속성에 따라 한글·이모지(🔴 중요/🔵 일반/🗑️ 스팸, ↩️ 회신 필요, 📅 일정, 💳 예산, 🔒 민감, 👀 참조(CC))로 표시된다.
+- 마지막 다이제스트 이후 수신된 메일을 Discord Markdown 카드 형식(### N. 제목, 상태 배지, 인용문 요약, KST 수신 시각, 코드 스타일 UID/발신 해시, 실제 발신자·Cc)으로 요약하여 cha에게 DM으로 전송한다. 실제 발신자·Cc는 소유자 DM projection에만 포함되고 저장 row에는 남지 않는다. 배지는 중요도와 속성에 따라 한글·이모지(🔴 중요/🔵 일반/🗑️ 스팸, ↩️ 회신 필요, 📅 일정, 💳 예산, 🔒 민감, 👀 참조(CC))로 표시된다.
 - **DM 전송**: 공유 interop 전송기(DiscordTransport)를 통해 2,000자 이하 순서 보장 청크로 분할 발송된다(429 Retry-After 대응). 다이제스트·발송 결과 DM 등 `dm_owner`를 쓰는 모든 표면에 동일 적용.
 - **동기화 폴백**: mailon 동기화(`list --sync`) 실패 시 로컬 `state.db` 기준으로 폴백 발송하며, DM 최상단에 "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)" 경고를 부착한다. `--no-sync` 명시 실행의 실패는 폴백 없이 fail-closed.
 - **실패 처리**: 모든 digest 실패(빌드 단계 LLM 실패, DM 전송 실패)는 기록 없이 단일 행·레닥션된 구조화 마커 `DIGEST-FAIL stage=<build|deliver|runner> retry_safe=<true|false> code=<...>`로 종료하며(주소·본문·토큰 미포함), 다음 tick에 재시도한다(DM-first/record-after 불변식 유지 — cursor는 전달 성공 후에만 기록). 워처는 `retry_safe=true` 마커만 인틱 재시도한다(전달 실패는 일부 청크가 이미 나갔을 수 있어 `retry_safe=false`). cron은 `--deliver discord`로 등록되어, no-agent 스크립트의 **stdout**(성공=빈 stdout=무음, 실패=마커 1행+exit 1)이 소유자 DM으로 전달된다 — `--deliver local`(전달 대상 0개)이었던 2026-07-31에는 실패가 소유자에게 도달하지 못했다.
@@ -105,6 +111,8 @@ Hermes cron(`mail-triage-watch`, no_agent)이 `watch`를 돌린다. 이 루프�
   파이프라인은 `reply_needed`를 자동 억제하고 flags에 `cc`를 표기하며
   자동 회신 초안을 만들지 않는다(`cc-no-reply`). 판별 불가 시에는 기존 동작 유지(fail-open).
   **대화형 요약/보고에서도** `cc` 플래그 메일은 '회신 필요'가 아닌 '참조(CC)' 항목으로 묶어 제시한다.
+- **대량 공지**: To 수신 메일이라도 no-reply 계열 발신자와 뉴스레터/대량배포/수신거부 신호가 함께 있으면 `reply_needed`를 억제한다. 이 판정은 Cc-only 판정과 독립적이며 Cc 배지를 덮어쓰지 않는다.
+- `scripts/mail_search.py`는 제목·발신자·본문·스레드·첨부파일의 순수 읽기 점수와 To/Cc 역할, `mass_notice`/`direct_inquiry` 접촉 유형을 계산하며 외부효과나 저장을 수행하지 않는다.
 
 ### 3. 소유자 지시 기반 초안 생성
 cha가 다이제스트를 보고 지시를 내리면(예: "3번 메일, 참석 가능하다고 회신해줘"), 에이전트는 다음 절차를 따른다:

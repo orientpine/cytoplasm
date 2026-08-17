@@ -134,7 +134,7 @@ def cmd_probe(args) -> int:
     browser = _make_browser(cfg)
     try:
         login(browser, cfg)
-        scraper = InboxScraper(browser, cfg.attachments_dir)
+        scraper = InboxScraper(browser, cfg.attachments_dir, all_folders=False)
         scraper.resolve_inbox_folder_uid()
         out = scraper.probe_and_dump(cfg.logs_dir)
         print(f"probe saved: {out}")
@@ -148,13 +148,13 @@ def cmd_probe(args) -> int:
 
 
 
-_VALID_FOLDERS = ("inbox", "sent")
+_VALID_FOLDERS = ("inbox", "sent", "all")
 
 
 def _parse_folders(csv: str) -> list[str]:
     folders = [token.strip() for token in csv.split(",") if token.strip()]
     invalid = [token for token in folders if token not in _VALID_FOLDERS]
-    if invalid or not folders:
+    if invalid or not folders or ("all" in folders and len(folders) != 1):
         raise ValueError(
             f"invalid --folders value {csv!r} (allowed: {','.join(_VALID_FOLDERS)})")
     return folders
@@ -176,7 +176,7 @@ def _sync_folder(db: StateDB, scraper: InboxScraper, cfg, limit: int,
     the other folder's row). Real fix = (folder, uid) composite key migration.
     """
     label = scraper.folder_label
-    skip = db.existing_uids(folder=label)
+    skip = db.existing_uids() if scraper.all_folders else db.existing_uids(folder=label)
     log.info("[%s] %d already-saved uids will be skipped", label, len(skip))
     new_count = 0
     for mail in scraper.iter_new_mails(skip, limit=limit, state_db=db):
@@ -221,17 +221,25 @@ def cmd_sync(args) -> int:
     new_count = 0
     try:
         login(browser, cfg)
-        scraper = InboxScraper(browser, cfg.attachments_dir)
+        all_folders = folders == ["all"]
+        scraper = InboxScraper(
+            browser,
+            cfg.attachments_dir,
+            folder_label="all" if all_folders else "inbox",
+            all_folders=all_folders,
+        )
         # Inbox uid is resolved unconditionally: cheap, proven, and the sent
         # folder inference (allFolder histogram) needs it as the exclusion uid.
         scraper.resolve_inbox_folder_uid()
 
         limit = args.limit if args.limit is not None else cfg.max_mails_per_run
 
-        if "inbox" in folders:
+        if all_folders:
+            new_count += _sync_folder(db, scraper, cfg, limit, PROJECT_ROOT)
+        elif "inbox" in folders:
             new_count += _sync_folder(db, scraper, cfg, limit, PROJECT_ROOT)
 
-        if "sent" in folders:
+        if not all_folders and "sent" in folders:
             sent_uid = resolve_folder_uid(
                 browser, "보낸메일함",
                 inbox_uid=scraper.folder_uid or "",
@@ -239,7 +247,7 @@ def cmd_sync(args) -> int:
             )
             if sent_uid:
                 sent_scraper = InboxScraper(
-                    browser, cfg.attachments_dir, folder_label="sent")
+                    browser, cfg.attachments_dir, folder_label="sent", all_folders=False)
                 sent_scraper.folder_uid = sent_uid
                 new_count += _sync_folder(db, sent_scraper, cfg, limit, PROJECT_ROOT)
             # unresolvable -> warning already logged; sync stays fail-open
@@ -454,7 +462,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s_sync.add_argument(
         "--folders", default="inbox,sent",
-        help="comma-separated folders to sync: inbox,sent (default: both)",
+        help="comma-separated folders to sync: inbox,sent; or all (default: inbox,sent)",
     )
 
     s_send = sub.add_parser("send", help="compose a mail with an explicit dry-run mode")

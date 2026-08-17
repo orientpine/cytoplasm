@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from automation import node_config
+from automation import node_config_state
+
 from automation.node_config import NodeConfigError, default_node_config, load_node_config
 
 
@@ -115,3 +118,78 @@ def test_shell_bridge_prints_sourceable_resolved_values(tmp_path: Path) -> None:
         check=False,
     )
     assert shell.stdout == "third party host|runner"
+
+
+def test_node_config_when_the_system_path_exists_then_it_wins_over_the_home_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """설정은 HOME 이 살아 있는 환경에서만 읽혀서는 안 된다.
+
+    2026-08-16 하루에 세 번 같은 얼굴로 나타났다 — `deploy-reconcile` 은 `ProtectHome=tmpfs`
+    라 `/home/ops` 가 빈 tmpfs 로 보였고, 승인 재개는 `env -i HOME=/root` 로 돌아
+    `/root/.hermes` 를 봤으며, 둘 다 시드 플레이스홀더(`example-primary-node`)로 떨어져
+    조용히 실패했다. HOME 마다 사본을 두는 것은 두더지잡기라, 어느 환경에서도 같은
+    한 곳을 먼저 본다.
+    """
+    # Given: both a system config and a home config exist, disagreeing
+    system = tmp_path / "etc" / "node.toml"
+    system.parent.mkdir(parents=True)
+    _ = system.write_text('primary_node_name = "from-system"\n', encoding="utf-8")
+    home = tmp_path / "home"
+    (home / ".hermes").mkdir(parents=True)
+    _ = (home / ".hermes" / "node.toml").write_text(
+        'primary_node_name = "from-home"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(node_config, "SYSTEM_NODE_CONFIG_PATH", system)
+
+    # When
+    config = node_config.load_node_config()
+
+    # Then
+    assert config.primary_node_name == "from-system"
+
+
+def test_node_config_when_the_system_path_is_absent_then_the_home_path_still_works(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: no system config, only the historical per-account location
+    home = tmp_path / "home"
+    (home / ".hermes").mkdir(parents=True)
+    _ = (home / ".hermes" / "node.toml").write_text(
+        'primary_node_name = "from-home"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(node_config, "SYSTEM_NODE_CONFIG_PATH", tmp_path / "absent.toml")
+
+    # When / Then
+    assert node_config.load_node_config().primary_node_name == "from-home"
+
+
+def test_node_config_when_it_is_still_the_seed_then_it_reports_itself_unconfigured() -> None:
+    """틀린 값보다 조용한 것이 더 오래 숨는다.
+
+    2026-08-16: 시드 폴백이 `example-primary-node` 로 ssh 를 시도해 승인된 배포가
+    exit 4 로 죽었고, 리컨실러는 같은 이유로 매 틱 rc 0 으로 나가 실패로 세지도 않았다.
+    값을 고치는 것과 별개로, 설정되지 않은 상태가 스스로 드러나야 한다.
+    """
+    assert node_config_state.unconfigured_reason(node_config.default_node_config()) is not None
+
+
+def test_node_config_when_the_operator_supplied_real_names_then_it_is_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    system = tmp_path / "node.toml"
+    _ = system.write_text(
+        'primary_node_name = "real-node"\n'
+        'rag_node_name = "real-rag"\n'
+        'deploy_ssh_host = "real-node"\n'
+        'origin_url = "https://github.com/example-org/example-repo.git"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(node_config, "SYSTEM_NODE_CONFIG_PATH", system)
+    monkeypatch.setattr(node_config_state, "SYSTEM_NODE_CONFIG_PATH", system)
+
+    # When / Then
+    assert node_config_state.unconfigured_reason(node_config.load_node_config()) is None

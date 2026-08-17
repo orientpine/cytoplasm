@@ -1,3 +1,4 @@
+automation/interop/approval_lifecycle.py | Shared approval lifecycle; lease-scoped snapshot, re-probe, supersede, and enriched-journal recovery form one fail-closed request boundary, while extracting a helper would require changing frozen deploy staging.
 automation/bootstrap-accounts.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
 automation/deploy-skill.sh | Four-stage deployment pipeline; splitting requires a separate staging/approval contract cycle.
 automation/hermes_compat/patch_busy_fifo.py | Compatibility patch carrier; byte-preserving host patch structure is maintained as one deployable unit.

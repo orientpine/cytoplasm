@@ -73,7 +73,7 @@ def resolve_tick(
 
         match status:
             case "proposed":
-                if len(posted) >= max_posts or record.message_id is not None:
+                if len(posted) >= max_posts:
                     continue
                 receipt = effects.post_approval(record)
                 if receipt is None:

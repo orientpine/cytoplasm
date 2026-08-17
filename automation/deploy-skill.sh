@@ -238,7 +238,7 @@ save_review_scenario() { # save_review_scenario <output> <name> <digest>
 }
 
 cleanup_review_staging() { # cleanup_review_staging <name>
-  run_as "$NODE_AGENT_ACCOUNT" "rm -rf \"\$HOME/.hermes/skill-gate/review-staging/$1\"" || true
+  run_as "$NODE_AGENT_ACCOUNT" "chmod -R u+w \"\$HOME/.hermes/skill-gate/review-staging/$1\" 2>/dev/null; rm -rf \"\$HOME/.hermes/skill-gate/review-staging/$1\"" || true
 }
 
 skill_digest() { # deterministic content hash of the skill dir
@@ -888,6 +888,14 @@ if [[ "$APPROVED" == 8 ]]; then
   exit 9
 fi
 
+if [[ "$APPROVED" == 2 ]]; then
+  cleanup_peer_staging
+  cleanup_review_staging "$SKILL"
+  cleanup_e2e_injection
+  log "approval gate CONFIGURATION INVALID — NOT mounting (message $MESSAGE_ID stays pending)"
+  exit 4
+fi
+
 if [[ "$APPROVED" != 0 ]]; then
   cleanup_peer_staging
   cleanup_review_staging "$SKILL"
@@ -925,6 +933,12 @@ if [[ "$REVIEW_CURRENT" != 0 ]]; then
 fi
 MOUNT_APPROVED=0
 check_with_attestation_refresh "$CURRENT_DIGEST" || MOUNT_APPROVED=$?
+if [[ "$MOUNT_APPROVED" == 2 ]]; then
+  cleanup_peer_staging
+  cleanup_review_staging "$SKILL"
+  cleanup_e2e_injection
+  die "MOUNT-BLOCK: approval gate configuration became invalid" 4
+fi
 if [[ "$MOUNT_APPROVED" != 0 ]]; then
   cleanup_peer_staging
   cleanup_review_staging "$SKILL"

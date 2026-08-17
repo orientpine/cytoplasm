@@ -11,6 +11,13 @@ User=$NODE_OPS_ACCOUNT
 Group=$NODE_OPS_ACCOUNT
 WorkingDirectory=$NODE_RELEASE_CURRENT
 Environment=PYTHONPATH=$NODE_RELEASE_CURRENT
+# The release tree is sealed dr-xr-xr-x, but this runs python FROM it and root is not
+# stopped by that seal — CPython would drop __pycache__ next to every module it imports.
+# release-provenance requires the tree to match the commit exactly, so one cached .pyc
+# blocks every later deploy (2026-08-17: two approved skills stalled at RELEASE-STORE-BLOCK
+# on automation/__pycache__/node_config.cpython-312.pyc). deploy-skill.sh and
+# autophagy-resume-deploy already set this; every path that runs python from the release must.
+Environment=PYTHONDONTWRITEBYTECODE=1
 # The owner-notice credential. Deliberately the SAME file the repair watcher already
 # reads (root:ops 0640) — this unit runs as ops too, so wiring the alarm up adds no new
 # secret, no new file, no new token and no new sudoers rule. Nothing is inlined here:

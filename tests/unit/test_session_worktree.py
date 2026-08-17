@@ -162,6 +162,18 @@ def test_finish_removes_a_worktree_whose_work_all_landed(repo: Path) -> None:
     assert "session/s1" not in _git(repo, "branch", "--list", "session/s1")
 
 
+def test_custom_branch_prefix_is_used_for_start_and_finish(repo: Path) -> None:
+    environment = {"WORKTREE_BRANCH_PREFIX": "custom"}
+    start = _run(repo, "start", "s1", env=environment)
+    assert start.returncode == 0, start.stderr
+    assert "custom/s1" in _git(repo, "branch", "--list", "custom/s1")
+    assert not _git(repo, "branch", "--list", "session/s1")
+
+    finish = _run(repo, "finish", "s1", env=environment)
+    assert finish.returncode == 0, finish.stderr
+    assert not _git(repo, "branch", "--list", "custom/s1")
+
+
 def test_the_helper_never_deletes_a_remote_branch(repo: Path) -> None:
     """원격 삭제는 공유 영향이라 사람이 판단한다 — 자동화가 조용히 할 일이 아니다."""
     body = _SCRIPT.read_text(encoding="utf-8")

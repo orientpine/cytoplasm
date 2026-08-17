@@ -134,6 +134,46 @@ land_fallback() { # land_fallback <expected_sha> <verdict> <guidance>
   land_log "landed: origin/main=$expected runtime=mirror@$mirror_head (no release installed) abi=$(land_abi_probe "$MIRROR_CHECKOUT")"
 }
 
+# --- signed release tags -------------------------------------------------------
+# The reconciler only converges to a commit carrying an annotated, signed tag whose
+# peeled target IS origin/main. Cutting that tag by hand does not survive contact
+# with a busy day: 2026-08-16 saw main advance three times, and a tag cut for the
+# middle commit stopped matching HEAD within minutes — the node then stalls with
+# UPDATE-TRUST-BLOCK on every tick and reports success (rc 0), so nobody learns.
+# Landing is the one place that already knows the sha it just published.
+readonly UPDATE_TRUST_SIGNING_KEY="${UPDATE_TRUST_SIGNING_KEY:-$HOME/.ssh/autophagy_update_trust.pub}"
+
+next_release_tag() { # next_release_tag <repo_root>
+  local latest major minor patch
+  latest="$(git -C "$1" ls-remote --tags --refs origin 'refs/tags/v*' 2>/dev/null \
+    | sed 's#.*refs/tags/##' | sort -V | tail -n 1)"
+  [[ -n "$latest" ]] || { printf 'v1.0.0\n'; return 0; }
+  IFS=. read -r major minor patch <<<"${latest#v}"
+  [[ "$major$minor$patch" =~ ^[0-9]+$ ]] || return 1
+  printf 'v%s.%s.%s\n' "$major" "$minor" "$((patch + 1))"
+}
+
+released_tag_at() { # released_tag_at <repo_root> <sha> — the tag already peeling to sha
+  git -C "$1" ls-remote --tags origin 2>/dev/null \
+    | awk -v sha="$2" '$1 == sha && $2 ~ /\^\{\}$/ { sub("refs/tags/", "", $2); sub(/\^\{\}$/, "", $2); print $2 }' \
+    | head -n 1
+}
+
+ensure_signed_tag() { # ensure_signed_tag <repo_root> <sha>
+  local existing tag
+  existing="$(released_tag_at "$1" "$2")"
+  if [[ -n "$existing" ]]; then land_log "already released as $existing"; return 0; fi
+  [[ -f "$UPDATE_TRUST_SIGNING_KEY" ]] \
+    || { land_log "no update-trust signing key at $UPDATE_TRUST_SIGNING_KEY"; return 1; }
+  tag="$(next_release_tag "$1")" || { land_log "could not read the released tag series"; return 1; }
+  git -C "$1" -c gpg.format=ssh -c "user.signingkey=$UPDATE_TRUST_SIGNING_KEY" \
+      tag -s "$tag" -m "release: $tag" "$2" >/dev/null 2>&1 \
+    || { land_log "signing tag $tag failed"; return 1; }
+  git -C "$1" push origin "$tag" >/dev/null 2>&1 \
+    || { land_log "pushing tag $tag failed"; return 1; }
+  land_log "signed release tag $tag -> $2"
+}
+
 main() {
   git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || land_block "$REPO_ROOT is not a git checkout"
@@ -164,6 +204,10 @@ main() {
     || land_block "git push origin main failed (non-ff race or no network) — the node is untouched"
   [[ "$(git -C "$REPO_ROOT" rev-parse origin/main 2>/dev/null)" == "$dev_head" ]] \
     || land_block "push did not land on origin/main — the node is untouched"
+
+  # The tag is what lets the node converge at all, so cut it before touching the node.
+  ensure_signed_tag "$REPO_ROOT" "$dev_head" \
+    || land_stranded "no signed release tag at $dev_head — the reconciler will skip every tick"
 
   # From here the push is DONE; any node failure is a stranded half-landing.
   local probe mode verdict guidance tag

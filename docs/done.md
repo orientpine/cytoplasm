@@ -69,7 +69,7 @@
 - **팀 에이전트 보고 허브 (W3-4)** — #agents-log 규약 보고 수집(콜렉터+SQLite) + 웹 대시보드(에이전트별/상태별 조회). 증적 `docs/qa/W3-4/`.
 - **온보딩 킷 (W3-5)** — 타 연구원이 자기 인프라/키로 에이전트를 구축해 규약에 편입하는 패키지(리허설 검증). 증적 `docs/qa/W3-5/`.
 - **W3 통합 E2E + 뱅크 등록 (W3-6)** — `run_bank.sh --all` exit 0(w2+w3 누적 13케이스 PASS), 401 실패주입으로 보고 경로·멱등·캐스케이드 안전 증명. 증적 `docs/qa/W3-6/`.
-- **Google Tasks 승인 기반 쓰기 (W3-7)** — Tasks 등록을 외부효과 게이트에 묶고, 쓰기 후 API 재조회로 제목·ID 일치를 검증한다. 비인가 터미널 insert는 denylist로 차단. → [소개](기능소개/google-tasks-승인-쓰기.md), 증적 `docs/qa/RTS-1/ef4-todo.txt`.
+- **Google Tasks owner-DM 승인·일회 실행 (W3-7·RTS-6)** — 동결 argv 요청→owner-only ✅/⛔ 워처→불변 generation archive→경쟁 안전 claim→Tasks 재조회 receipt를 단일 경로로 강제한다. 재실행·`write_started` 복구는 외부 호출 0으로 닫히며, archive 후 pending 정리가 중단돼도 동일 terminal 전이만 멱등 재개한다. → [소개](기능소개/google-tasks-승인-쓰기.md), 증적 `docs/qa/RTS-6/04-a1-ssot.txt`~`09-review-fixes.txt`.
 
 ### 행정 자동화 (Wave 4)
 
@@ -267,3 +267,15 @@
 - **공개 릴리스 컷 (W-F5-A · W-M3 문서)** — `public_export.sh` 1회 실행이 fresh-history 스냅샷 커밋·**그 커밋에** 서명 태그·atomic push를 다 한다 — 순서를 사람이 나눠 할 수 없게 구조로 묶었다(D8).
   실물 릴리스 `orientpine/cytoplasm` `v1.0.0` 완료(내보낸 트리에서 3902 passed, gitleaks 4개 스캔 0건). 절차·신뢰키 회전·나쁜 릴리스 대응은 `docs/guide/manual-maintainer.md`가 소유한다.
   → [소개](기능소개/공개-릴리스-컷.md). W-M3의 나머지 검증(실제 v1.0.1 패치 릴리스 1회 수행)은 계획에서 `[~]`로 유지된다.
+
+### 수리 티켓 스윕-2 (2026-08-17)
+
+- **todo 소유자-DM 승인 경로** — Google Tasks 쓰기가 오너-DM ✅ 사이클을 거쳐야만 실행되고, 일회 claim + 재조회 검증으로 중복·거짓 보고를 막는다. `f128f9a8c343356457119d6ce37f3344488c3968` (배포 샌드박스 런타임 루트 보존 `2bb42a703c3946564760f6dbd7fe3960ea8e17a2`) → [소개](기능소개/todo-소유자-DM-승인-경로.md)
+- **승인 게시 복구와 강화 저널** — 429 Retry-After 재시도, posting journal에 message/channel 바인딩을 덧붙여 게시 후 크래시에서 고아 승인을 되찾고, 커밋 뒤 리액션 부착으로 순서를 원자화했다. `cdac4722b2d721218718eb4f269d0a6f09c1a575` → [소개](기능소개/승인-게시-복구와-강화-저널.md)
+- **2-store 메모리 재배치** — MEMORY.md에 더해 USER.md의 운영 사실도 재배치 대상이 됐다. MEMORY 경로·해시는 바이트 그대로, USER는 `user--` 파일명 namespace로 분리한다. `8640b2b2187174ffe0bb255e08b1671ac92910f7` → [소개](기능소개/2-store-메모리-재배치.md)
+
+### 수리 스윕 3차·개인 서버 대화 (RTS-6, 2026-08-17)
+
+- **개인 서버 자유 대화·스레드 지원** — 채널 응답과 무멘션 스레드 응답을 각각 실증했고 두 관찰 창에서 예상 밖 봇 응답은 0건이었다. `channel_ack`·`thread_unmentioned_ack`·`unexpected_bot` 세 축 모두 green. → [소개](기능소개/개인서버-대화-채널.md)
+- **기관메일 발신자·전체 폴더·검색** — owner-DM 카드의 실제 발신자·CC와 비공개 표면 레닥션을 함께 보존하고, 사용자 폴더 수집과 read-only 다중 신호 검색을 추가했다. `3f94b445d39c6d94128e53aa540f54aecf0df1cd` → [소개](기능소개/기관메일-발신자-전체폴더-검색.md)
+- **스킬 게이트 peer trust-root 진단 분리** — 신뢰근원 설정 부재를 승인 부재와 다른 오류로 드러내고 봉인 staging 정리를 복구했다. `949532a93e1615da197ce85de9c423bcdf8dbe6e` → [패치](patch/2026-08-17-skill-gate-peer-trust-root-diagnostic.md)

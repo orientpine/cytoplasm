@@ -13,6 +13,7 @@ escalate 한다(샌드박스=peer, 릴리스 수렴=ops). 그래서 승인을 �
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -124,3 +125,54 @@ def test_it_never_lets_python_write_bytecode_into_the_sealed_release() -> None:
     assert "PYTHONDONTWRITEBYTECODE=1" in body, (
         "root 로 도는 파이프라인이 봉인된 릴리스에 .pyc 를 남기면 다음 provenance 검사가 막힌다"
     )
+
+
+def test_it_carries_the_approved_binding_so_the_pipeline_does_not_repost(tmp_path: Path) -> None:
+    """재개는 이미 승인된 요청을 이어받아야지, 새 요청을 게시하려 해서는 안 된다.
+
+    2026-08-17 실측: 헬퍼가 스킬 이름만 넘겨 `deploy-skill.sh` 가 매번 stage 3 을 다시
+    돌렸고, 승인 단일성 파사드가 정당하게 거부해(rc 6) 승인된 배포가 14시간 동안
+    `attempt 11` 까지 백오프만 반복했다. 파이프라인에는 그 재게시를 건너뛰는
+    `APPROVAL_MESSAGE_ID` 경로가 이미 있었지만 넘기는 호출자가 하나도 없었다.
+
+    값은 호출자 환경이 아니라 **agent 소유 pending 레코드**에서 읽는다 — 이 헬퍼가
+    환경을 재구성하는 이유(`DEPLOY_ALLOW_UNPUSHED` 류 차단)를 그대로 지키기 위해서다.
+    """
+    # Given: a fake sealed release whose pipeline only reports the env it received
+    release = tmp_path / "release"
+    (release / "automation").mkdir(parents=True)
+    pipeline = release / "automation" / "deploy-skill.sh"
+    _ = pipeline.write_text(
+        '#!/usr/bin/env bash\n'
+        'printf "APPROVAL_MESSAGE_ID=%s\\n" "${APPROVAL_MESSAGE_ID:-<unset>}"\n'
+        'printf "DEPLOY_NONCE=%s\\n" "${DEPLOY_NONCE:-<unset>}"\n',
+        encoding="utf-8",
+    )
+    pipeline.chmod(0o755)
+
+    # and an approved-but-unmounted record exactly as the gate writes it
+    agent_home = tmp_path / "agenthome"
+    pending = agent_home / ".hermes" / "skill-gate" / "pending"
+    pending.mkdir(parents=True)
+    _ = (pending / "demo.json").write_text(
+        json.dumps(
+            {
+                "deploy_nonce": "61a5e7de02a844955827b0721690094b",
+                "message_id": "1538547247514525816",
+                "hash": "5f" * 32,
+                "kind": "skill-deploy",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # When
+    result = _run(
+        "--skill",
+        "demo",
+        env={"NODE_RELEASE_CURRENT": str(release), "NODE_AGENT_HOME": str(agent_home)},
+    )
+
+    # Then
+    assert "APPROVAL_MESSAGE_ID=1538547247514525816" in result.stdout, result.stdout + result.stderr
+    assert "DEPLOY_NONCE=61a5e7de02a844955827b0721690094b" in result.stdout

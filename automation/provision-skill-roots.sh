@@ -26,7 +26,7 @@
 set -euo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-eval "$(python3 "$REPO_ROOT/automation/node_config_sh.py" --print-env)"
+eval "$(python3 -B "$REPO_ROOT/automation/node_config_sh.py" --print-env)"
 readonly AGENT_ACCOUNT="${AGENT_ACCOUNT:-$NODE_AGENT_ACCOUNT}"
 readonly PEER_ACCOUNT="${PEER_ACCOUNT:-$NODE_PEER_ACCOUNT}"
 readonly AGENT_HOME="${AGENT_HOME:-$NODE_AGENT_HOME}"
@@ -90,7 +90,7 @@ install_store() {
   install -m 0755 -o root -g root "$REPO_ROOT/automation/skill_store.py" "$HELPER_PATH"
   # sudoers 시드는 `$NODE_*` 플레이스홀더를 담고 있다 — 렌더러를 거치지 않고
   # 그대로 설치하면 root 소유 규칙이 존재하지 않는 경로를 가리킨다.
-  python3 "$REPO_ROOT/automation/node_asset_renderer.py" \
+  python3 -B "$REPO_ROOT/automation/node_asset_renderer.py" \
     "$REPO_ROOT/automation/sudoers.d/autophagy-skill-store" "$SUDOERS_PATH.tmp"
   install -m 0440 -o root -g root "$SUDOERS_PATH.tmp" "$SUDOERS_PATH"
   rm -f "$SUDOERS_PATH.tmp"
@@ -100,7 +100,7 @@ install_store() {
   for source in "$REPO_ROOT"/skills/*; do
     [[ -f "$source/SKILL.md" ]] || continue
     skill="$(basename "$source")"
-    digest="$(PYTHONPATH="$REPO_ROOT" python3 -c 'from pathlib import Path; from automation.skill_review import skill_digest; import sys; print(skill_digest(Path(sys.argv[1])))' "$source")"
+    digest="$(PYTHONPATH="$REPO_ROOT" python3 -B -c 'from pathlib import Path; from automation.skill_review import skill_digest; import sys; print(skill_digest(Path(sys.argv[1])))' "$source")"
     tar -C "$(dirname "$source")" --exclude='__pycache__' --exclude='*.pyc' --exclude='*.pyo' -czf - "$skill" \
       | "$HELPER_PATH" install --skill "$skill" --hash "$digest"
   done

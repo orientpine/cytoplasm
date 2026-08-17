@@ -4,19 +4,117 @@
 
 > 완료·배포된 기능에서 발견됐지만 이번 사이클에 처리하지 않은 잔여 부채·개선을 모은다. 기능 단위 묶음 항목으로, 불릿마다 "문제 → 조치" + 영향 범위·심각도를 적는다. 상세 규칙: 루트 `AGENTS.md`「후속 과제 기록 규칙」.
 
+## 수리 티켓 스윕-2 종결 중 발견한 후속 과제 (2026-08-17)
+
+TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보드·증적을 정리하며 남은 것들. 기능은 [todo 소유자-DM 승인 경로](기능소개/todo-소유자-DM-승인-경로.md) · [승인 게시 복구와 강화 저널](기능소개/승인-게시-복구와-강화-저널.md) · [2-store 메모리 재배치](기능소개/2-store-메모리-재배치.md).
+
+- **승인 단일성 E2E 재평가 조건이 발동했다(OBSERVE#5)** — 원 OBSERVE 원장의 기준은 “게이트 스키마/파사드 변경 시 재검토”이고, TRACK-BC가 공유층 `automation/interop/approval_lifecycle.py`와 `approval_lease.py`에 enriched journal·probe 복구 분기를 추가해 그 조건을 충족했다. 기존 단위·인터리빙 검사는 green이지만 producer 간 E2E 교차 케이스는 부재한다 → 다음 승인 생명주기 작업에서 새 복구 분기를 포함한 교차 E2E를 복원할지 재판정하고 근거를 원장에 남긴다. **알려진 동작 결함은 없음 · 심각도: 중(공유 승인층 회귀 탐지 범위)**.
+- **`docs/guide/gate-ledger-inventory.md`가 이번 변경만큼 낡았다** — 그 문서는 스윕-2 freeze 목록에 있어 이번 사이클에서 손대지 않았다(변경 0 확인). 그 사이 `todo` 승인이 `~/.hermes/todo-approvals/` 아래 approval store·lease·posting-journal 디렉터리를 새로 쓰고, 메모리 재배치의 posting journal 레코드가 3필드에서 5필드(`message_id`·`channel_id` 추가)로 늘었다 → freeze가 풀리면 등록부에 이 경로·권한(0600/0700)과 레코드 스키마를 반영한다. **경로 계약은 코드가 정본이라 동작 영향 없음 · 심각도: 낮음(문서 지연)**.
+- **수리 systemd 유닛의 `ExecStart`에 티켓 인자가 없다(현재도 유효한 잠복 관측)** — `autophagy-repair-agent.service`는 `repair_ops_cli.py`를 인자 없이 띄우지만 CLI는 티켓 id 하나를 필수로 요구한다. 현재 유닛은 static/inactive이고 실제 승인 워처는 CLI에 티켓 id를 직접 넘기므로 라이브 장애는 아니다. freeze가 풀려 이 유닛을 활성 경로로 쓸 때 큐 래퍼 또는 `%i` 템플릿으로 인자를 공급하고 회귀 검사를 추가한다. **동결 파일은 읽기만 함 · 심각도: 중(직접 기동 시 즉시 실패)**.
+- **신규 티켓 3건은 스윕-2가 의도적으로 처리하지 않았다** — `t_029a7e08` · `t_84606103` · `t_db6a60e8`은 스윕-2 실행 도중 새로 열린 티켓으로, 상위 래퍼 계획 `.omo/plans/repair-sweep-3-and-guild-chat.md`가 소유한다. 스윕-2의 범위는 착수 시점에 확정된 17건이었고 그 17건은 전부 `done`이다 → 이 3건을 스윕-2의 누락으로 읽지 말 것. 진행 상태는 래퍼 계획에서 추적한다. **미처리가 아니라 소유권 이관 · 심각도: 낮음(추적 위치 혼동 방지용 기록)**.
+
+## 수리 스윕 3차·개인 서버 대화 채널 후속 과제 (2026-08-17)
+
+완료 기능은 [개인 서버 대화 채널](기능소개/개인서버-대화-채널.md)과 [기관메일 발신자·전체 폴더·검색](기능소개/기관메일-발신자-전체폴더-검색.md), 완료 수리는 [peer trust-root 진단 분리](patch/2026-08-17-skill-gate-peer-trust-root-diagnostic.md)다.
+
+- **RAG healthcheck의 일시 실패 원인을 귀속할 당시 관측치가 없다 (`t_029a7e08`)** — 같은 tick에서 embedding·Qdrant가 실패하고 5분 뒤 회복했지만 probe별 rc·latency·SSH/HTTP 구분과 당시 서비스 로그가 보존되지 않아 transport·서비스·자원 중 하나를 고를 수 없다 → 비공개 런타임 증적에 probe별 원인·시간을 먼저 남긴 뒤 재현된 원인에만 retry·timeout·서비스 임계값을 적용한다. **현재 서비스 정상·추측성 수정 금지 · 심각도: 중(재발 원인 미확정)**.
+- **Discord의 중간 진행·도구 출력 억제는 Hermes vendor 수정이 필요하다 (`t_db6a60e8`)** — repo의 protocol transport는 일반 agent turn 렌더링을 소유하지 않아 동결 경로를 우회해도 해결되지 않는다 → vendor freeze가 풀린 별도 계획에서 gateway/Discord adapter 또는 `hermes_compat` 패치와 회귀를 함께 설계한다. **현재 계획에서는 BLOCKED-freeze · 심각도: 중(대화 표면의 불필요한 내부 상태 노출)**.
+- **다섯 cron 래퍼가 폐기된 스킬 경로를 검사해 거짓 장애를 낸다** — budget·report·coordination·calendar·research-trends가 레거시 사용자 홈 경로를 하드코딩해 `not mounted` 또는 import 오류를 내지만 governed live 심링크는 정상이다 → mount 판정을 `automation/skill_mount_drift.py`와 같은 `/srv/autophagy-skills/live/<skill>` 정의로 통일한다. **보안 문제·실제 마운트 손상 아님 · 심각도: 중(주기 작업 실패·오진)**.
+
 ## 에이전트 자가 스킬 공존(SS-1) 작업 중 발견한 후속 과제 (2026-08-15)
 
 자가 스킬 루트 반전과 감사 원장을 만들며 발견했다. 기능은 [소개](기능소개/에이전트-자가-스킬.md).
 
 - **`automation/worktree.sh start`가 `session`이라는 평면 브랜치 하나 때문에 전부 막힌다** — 로컬에 `session` 브랜치가 있으면 git의 D/F 충돌 규칙상 `session/<이름>` 브랜치를 만들 수 없어 모든 세션 시작이 실패하는데, 오류 문구가 그 원인을 말해주지 않아 원인을 찾는 데 시간이 든다 → `start`가 브랜치 생성 전에 네임스페이스 접두사와 같은 이름의 평면 ref가 있는지 확인해 사유와 조치(그 ref 이름 변경)를 함께 내게 한다. **데이터·보안 영향 없음 · 심각도 낮음(세션 시작 마찰)**.
-- **Hermes 네이티브 충돌 거부와 curator external-write 가드가 v0.18.2 실측에만 고정돼 있다** — self→governed 방향 차단(`skill_manage(create)`가 어느 루트든 동명을 거부)과 curator가 configured-external 스킬을 건드리지 않는 성질은 우리 코드가 아니라 벤더 동작이며, 회귀로 못박을 수단이 없다 → **`hermes update`마다 S4·S5 QA 명령을 재실행**해 두 성질이 유지되는지 확인한다(S4: 배포 스킬 이름으로 생성 지시 후 디렉터리 미생성, S5: `hermes curator archive <배포 스킬>` 거부 + live readlink 불변 + 쓰기 `Permission denied`). **현재 동작 정상 · 심각도 중간(업데이트로 이름 선점 방어가 조용히 약해질 수 있음)**.
+- **Hermes 네이티브 충돌 거부는 우리 토폴로지에서 아예 동작하지 않는다(2026-08-16 정정 · 예방 미구현)** — `_find_skill`이 `rglob("SKILL.md")`로 훑는데 governed 루트가 심링크 팜이라 한 건도 못 본다(`_find_skill("mail")` → `None`). 그래서 자가 스킬이 배포본 이름을 선점해 **승인 게이트를 가릴 수 있다** → 예방은 live 루트를 심링크가 아닌 실디렉터리로 두거나 업스트림에 보고해야 하고, 지금은 `selfskill_audit`의 `SHADOWS-GOVERNED` **탐지**만 있다. **upstream 보고서 작성 완료**: [hermes-find-skill-symlink-blindness.md](troubleshooting/hermes-find-skill-symlink-blindness.md) — 재현 실측과 제안 패치(`os.walk(followlinks=True)` + 심링크 순환 가드)를 담았다. 소유자가 벤더에 전달하면 된다. **두 선택지의 비용을 실측했다(2026-08-16)**: 실디렉터리 전환은 심링크 팜을 만드는 주체가 `skill_store.py`=root NOPASSWD 3종 중 하나인 `/usr/local/libexec/autophagy-install-skill`이라 **가장 특권 있는 경로를 고치는 일**이고, 더 큰 문제는 이 저장소의 배포 판정 자체가 `readlink /srv/autophagy-skills/live/<skill>` 해시(「커밋됨 ≠ 배포됨」)라는 점이다 — 실디렉터리로 바꾸면 그 판정 기전이 사라지고 `skill_mount_drift.py`·`skill_mount_probe.sh`·`selfskill_root_probe.sh`·`deploy-skill.sh`·`land.sh`가 함께 따라온다(원자적 교체도 rename 춤으로 다시 만들어야 한다). 반면 업스트림 보고는 `rglob`→`os.walk(followlinks=True)` 한 줄이고 반영 시점만 남의 손이다 → **탐지로 버티며 업스트림 보고를 먼저 하는 쪽을 권고**하되, 선택은 소유자 판단으로 남긴다. **심각도 높음(가려지면 게이트 우회)**. curator external-write 가드와 curator가 configured-external 스킬을 건드리지 않는 성질은 우리 코드가 아니라 벤더 동작이며, 회귀로 못박을 수단이 없다 → **`hermes update`마다 S4·S5 QA 명령을 재실행**해 두 성질이 유지되는지 확인한다(S4: 배포 스킬 이름으로 생성 지시 후 디렉터리 미생성, S5: `hermes curator archive <배포 스킬>` 거부 + live readlink 불변 + 쓰기 `Permission denied`). **현재 동작 정상 · 심각도 중간(업데이트로 이름 선점 방어가 조용히 약해질 수 있음)**.
 - **curator 노브를 기본값 그대로 수용했다** — stale 30일 / archive 90일 / consolidate off는 벤더 기본값이며, 자가 스킬의 실제 사용 주기에 맞는지 근거가 아직 없다 → **첫 감사 리포트 몇 회분을 받아본 뒤** 재검토한다(자주 쓰지 않지만 필요한 스킬이 90일에 걸려 아카이브되면 원장에 `archived` 델타로 보이고 `restore`·`pin`으로 되돌릴 수 있으므로 유실은 아니다). **동작 결함 아님 · 심각도 낮음(정책 조율 미완)**.
 - **운영자 워크스테이션에 `~/.hermes/node.toml`이 없으면 배포가 DNS 오류로 죽는다** — 비식별화 이후 `DEPLOY_SSH_HOST`가 예제 플레이스홀더(`example-primary-node`)로 해석돼 `Could not resolve hostname`으로 실패하는데, 실제 원인은 "노드 설정 미구성"이다(이번 샌드박스 검증에서 실측; `DEPLOY_SSH_HOST=<host>`를 명시해 우회했다) → 배포 진입점에서 노드 설정이 예제값그대로인지 확인해 사유와 조치(`~/.hermes/node.toml` 생성)를 먼저 낸다. **브랜치 무관·트렁크 전체 영향 · 심각도 중간(첫 배포 시도가 원인 모를 오류로 막힐다)**.
-- **peer의 `~/.hermes/skills/prompt` 잔여물이 다음 `prompt` 배포를 막는다** — 그 사본의 SKILL.md에는 `author: autophagy-agents` 마커가 없어(리포 원본에도 없다) 새 분류기가 `foreign`으로 판정해 fail-closed로 차단한다 — 설계대로의 동작이지만 원인이 오래된 잔여물이다(2026-08-01 배포 잔재, 모드 775) → 소유자가 `sudo -n -u peer rm -rf ~peer/.hermes/skills/prompt` 한 번으로 정리하면 이후엔 자가 치유된다(정리 수리가 이번 PR에 포함). 다른 5종은 이번 검증에서 실제로 정리됐다(봉인된 `coordination` 잔여물 포함). **심각도 낮음(해당 스킬 1종 배포만 지연)**.
+- **peer의 `~/.hermes/skills/prompt` 잔여물은 배포를 막을 뿐 아니라 지금 배포본을 가리고 있다(2026-08-16 실측 보강)** — 루트 반전 이후 그 경로는 read-only bind가 아니라 peer가 소유한 **1차 루트**이고 1차 루트가 발견에서 이긴다. `/srv/autophagy-skills/live/prompt`가 존재하므로 이것은 위 S4 항목이 말하는 **`SHADOWS-GOVERNED` 조건이 실제로 성립한 상태**다(peer 자가 루트 3건 = 현역 2 + 이 잔여물). `prompt`는 외부효과 스킬이 아니라 프롬프트 자산이라 승인 게이트 우회는 아니고 **peer가 낡은 사본을 쓰는 문제**지만, 다음 감사 리포트에 `SHADOWS-GOVERNED`로 뜨는 것은 오탐이 아니라 설계대로의 탐지다 — 그 사본의 SKILL.md에는 `author: autophagy-agents` 마커가 없어(리포 원본에도 없다) 새 분류기가 `foreign`으로 판정해 fail-closed로 차단한다 — 설계대로의 동작이지만 원인이 오래된 잔여물이다(2026-08-01 배포 잔재, 모드 775) → 소유자가 `sudo -n -u peer rm -rf ~peer/.hermes/skills/prompt` 한 번으로 정리하면 이후엔 자가 치유된다(정리 수리가 이번 PR에 포함). 다른 5종은 이번 검증에서 실제로 정리됐다(봉인된 `coordination` 잔여물 포함). **심각도 낮음(해당 스킬 1종 배포만 지연)**.
+- **노드의 `/root/.hermes/node.toml`을 확인할 수 없다 — 자동 재개가 이것에 달려 있다** — 승인 재개 헬퍼는 `env -i HOME=/root`로 파이프라인을 돌리므로(`autophagy-resume-deploy:60`) 노드 설정을 `/root/.hermes/node.toml`에서 읽는다. 그 파일이 없으면 시드 기본값(`peer_attest_mode = signed`)으로 해석돼 `discord` 바인딩 레코드와 어긋나고, 소유자가 ✅를 눌러도 마운트가 조용히 실패한다. 이번 5종은 결국 착지했으나 **오케스트레이터는 root 읽기 권한이 없어 그 파일의 존재를 확인하지 못했다** → 다음 배포 전에 소유자가 존재·내용을 한 번 확인하고, 없으면 워크스테이션과 같은 내용으로 만든다. **현재 배포는 동작 · 심각도 중간(다음 자동 재개가 원인 모르게 멈출 수 있다)**.
+- **`tests/unit/test_healthcheck_checkout_ticket` 2건이 운영자 환경에 따라 갈린다** — 기대 체크 이름은 운영자 `~/.hermes/node.toml`에서(→ 실제 노드명), 실제 sweep 출력은 tmp HOME의 시드에서(→ `example-primary-node`) 나와 서로 어긋난다. 그래서 **워크스테이션에 노드 설정이 있으면 실패하고 CI(설정 없음)에서는 통과한다** → 테스트가 sweep과 같은 소스에서 기대값을 얻도록 고정한다(하니스가 이미 tmp HOME을 쓰므로 기대값도 거기서 뽑으면 된다). **프로덕션 영향 없음 · 심각도 중간(로컬에서 전체 suite가 빨간불이라 진짜 회귀를 가린다)**.
+- **번들 카탈로그는 제거했지만 재시딩 경로가 완전히 닫힌 것은 아니다** — agent·peer 모두 `hermes skills opt-out --remove`로 정리하고 `~/.hermes/.no-bundled-skills` 마커를 남겼다. 다만 (a) 빈 카테고리 디렉터리와 `.bundled_manifest`는 그대로 남아 있고, (b) 마커를 존중하지 않는 경로(`hermes update`·프로필 재생성 등)가 있으면 다시 시드될 수 있다 → `hermes update` 직후 `hermes skills list`로 builtin 수를 확인한다. 원장 쪽 방어는 이미 있다(`.bundled_manifest` 기준 제외, PR #113). **현재 정상 · 심각도 낮음(재발 시 감사 리포트가 아니라 프롬프트 크기 문제)**.
+- **`selfskill_audit/ledger.py`가 249 순수 LOC로 천장(250) 코앞이다** — PR #113에서 이미 `store.py`(신뢰 경계 JSON I/O)로 한 번 쪼갰는데, PR #116의 `removed` 델타 추가로 다시 한 줄 차이까지 왔다. 지금은 규약 위반이 아니지만 **다음 변경이 무엇이든 천장을 넘긴다** → 다음에 이 파일을 열 때 줄을 더하지 말고 분할한다(후보: 스냅샷 수집 `_scan`/`_snapshot` 계열을 `scan.py`로, `_diff`+`Action`을 `delta.py`로). **동작 결함 아님 · 심각도 낮음(다음 작업자가 천장에 부딪혀서야 알게 되는 것이 비용)**.
 
 인벤토리가 짚은 **governed CLI 경로 12건은 이번 PR에서 전부 수정됐다**(후속 과제 아님) — calendar·coordination·mail·meeting·patent-prep 워처와 플러그인, `migrate-cha-wiki.sh`, W3 remote E2E 둘이 모두 불변 live 스토어 기본값으로 옮겨갔고 `tests/unit/test_governed_skill_paths.py`가 그것과 override 우선순위를 고정한다. 반전 전에 그대로 둓다면 승인 워처와 회의록 플러그인이 통째로 멈추었을 곳이다.
 
 증적: `docs/qa/SS-1/reference-inventory.md`(참조 154건 분류 · 위 12개 코드 행의 원문 판정 포함).
+
+## 재개 백오프는 릴리스가 바뀔 때만 앞당겨진다 (2026-08-17 실측)
+
+`retry_due` 는 **기록된 지문의 릴리스 sha ≠ 현재 릴리스 sha** 일 때 백오프를 무시하고 즉시 재시도한다
+(`supply_chain_watch.py:88-99`). 설계대로 동작하지만, 운영 중 이것을 모르면 판단을 계속 틀리게 한다.
+
+- **수정을 배포해도 그 틱에 재시도가 돌면 새 지문으로 백오프가 다시 걸린다** — 릴리스가 바뀌면 즉시
+  재시도가 돌지만, 그 시점에 노드측 설치본(예: `/usr/local/libexec` 헬퍼)이 아직 옛 것이면 그대로 실패하고
+  **현재 릴리스 지문으로 ~58분 백오프가 재무장**된다. 그 뒤로는 릴리스가 또 바뀌기 전까지 아무리 고쳐도
+  재시도가 없다. 실측: 06:46 릴리스 수렴 → 재시도 → 구 헬퍼로 실패 → 06:50 `attempt 1, retry in 3474s`.
+  즉 **릴리스 랜딩과 노드 재프로비저닝의 순서가 어긋나면 한 사이클(약 1시간)을 통째로 잃는다** →
+  헬퍼·유닛 등 노드 설치 자산을 바꾸는 변경은 랜딩 후 **재프로비저닝을 먼저 끝내고** 나서
+  릴리스를 한 번 더 움직이거나, 백오프 만료를 기다린다. **동작 결함 아님 · 심각도 낮음(운영 지식)**.
+
+증적: `journalctl -u autophagy-supply-chain-watch`(2026-08-17 06:34 실패 → 06:46 릴리스 변경 →
+06:50 백오프 재무장), `automation/supply_chain_watch.py:88-99`.
+
+## 시나리오가 두 개의 환경 계약으로 실행된다 (2026-08-17 실측)
+
+승인이 끝난 `todo` 배포가 `PEER-ATTEST-BLOCK` 으로 마운트되지 못한 사고에서 드러났다. 스킬 쪽 원인은
+수정했으나(`skills/todo/scripts/scenario.sh`), 그 사고를 가능하게 한 구조는 그대로 남아 있다.
+
+- **stage 1 과 peer 재검토가 같은 `scenario.sh` 를 다른 환경으로 실행한다** — `deploy-skill.sh` 의 stage 1 은
+  `AUTOPHAGY_REPO_ROOT`(릴리스 루트)와 `INTEROP_RUNTIME` 을 함께 주는데, `skill_review._scenario_passes(dir, None)`
+  는 `HOME`·`PATH`·`AUTOPHAGY_DEMO_SECRET` 만 주고 같은 스크립트를 재실행한다. 그래서 **"시나리오가 통과한다"의
+  정의가 파이프라인 안에 둘** 존재하고, 런타임 루트를 필요로 하는 스킬은 stage 1 은 통과하고 peer 는 실패한다
+  (agent 리뷰는 stage 1 이 캡처한 출력을 grep 할 뿐이라 그 불일치를 못 잡는다). `mail` 이 무사했던 것은
+  그 시나리오가 루트를 안 쓰기 때문일 뿐이다 → 환경 생성·timeout·`SCENARIO-PASS` 판정을 소유하는 **단일
+  러너**를 두고 stage 1 과 peer 가 각각 그것을 독립 호출하게 한다(재실행의 독립성은 유지, 계약만 일치시킴).
+  post-mount smoke 가 세 번째 환경 정의를 갖고 있다는 지적도 함께 확인해야 한다. **심각도 중(다음 스킬에서 재발)**.
+- **peer 검토는 자격증명을 든 계정에서 untrusted 시나리오를 실행한다** — stage 3 은 peer 의 `.env.secrets` 를
+  로드한 뒤 같은 계정에서 시나리오를 돌린다. `env -i` 와 임시 `HOME` 은 파일시스템 접근을 막지 않으므로,
+  악의적 시나리오가 실제 peer home 을 역산해 봇 토큰·서명키에 접근할 여지가 있다 → 시나리오 실행을
+  credential-free 전용 UID 또는 동등한 mount namespace 로 분리한다. **현재 악용 사례 없음 · 심각도 중**.
+
+증적: PR #139, peer 계정 실측(`scenario` False→True), Oracle 판정(단일 러너 권고).
+
+## 승인된 배포 마운트가 아직 실물로 확인되지 않았다 (2026-08-17)
+
+장벽 3겹(설정 미해석 → 재개 재게시 거부 → 릴리스 `__pycache__` 오염)을 차례로 걷어냈고 전제 조건은
+모두 확인했으나, 실제 마운트는 백오프(약 45분) 만료 후에야 일어나므로 세션 안에서 보지 못했다.
+
+- **`todo`·`mail` 마운트가 미확인이다** — 재개 헬퍼의 승인 바인딩 전달(설치본 반영 확인), 리컨실러의
+  `PYTHONDONTWRITEBYTECODE`(유닛 반영 확인), 릴리스 `__pycache__` 0개까지 전부 확인했고 백오프도
+  `attempt 11 → 1`로 리셋됐다(릴리스 변경으로 실패 지문 갱신). 그러나 `readlink live/todo` 는 여전히
+  `aff99eb0…` 다 → 다음 재개 틱 뒤 `readlink /srv/autophagy-skills/live/{todo,mail}` 로 확인하고,
+  또 실패하면 `journalctl -u autophagy-supply-chain-watch` 가 다음 장벽을 가리킨다(오늘 세 번 그랬다).
+  **소유자 ✅ 2건과 pending 레코드는 보존됨 · 심각도 중**.
+- **mail 의 게시↔판독 레이스가 재현되는지 미검증이다** — 증명 게시 1초 뒤 `absent` 판정이 반복되던
+  현상은, 재개가 재게시 대신 곧장 검증·마운트로 가게 되면서 그 재증명 루프 자체가 사라졌을 수 있다.
+  그러나 실물로 확인하지 않았다 → 위 마운트 확인 시 `REJECTED: valid peer attestation absent` 가
+  다시 나오는지 함께 본다. **심각도 낮음(재발 시 별도 수정 필요)**.
+
+증적: PR #132·#133, `journalctl -u autophagy-supply-chain-watch`(2026-08-17 06:11 `RELEASE-STORE-BLOCK`).
+
+## 승인 후 배포 재실행이 그 승인을 무효화한다 (2026-08-16 실측)
+
+승인된 `todo` 배포가 자동 재개 실패로 멈췄을 때, 재개를 앞당기려고 `deploy-skill.sh todo`를 다시 돌렸다가 발견했다.
+
+- **재실행이 새 `deploy_nonce`를 만들어 소유자 승인을 쓸 수 없게 만든다** — `skill_gate._REQUEST_BINDING`은 요청 메시지에서 `skill`·`sha256`·**`deploy_nonce`** 셋을 모두 대조하고, 하나라도 현재 실행의 값과 다르면 `_peer_attestation_evidence`가 `None`을 반환한다. 그런데 `deploy-skill.sh`는 실행마다 새 nonce를 만들므로, **이미 ✅를 받은 요청 메시지의 옛 nonce와 영원히 어긋난다**. 겉으로는 `PEER-ATTEST-PASS` 직후 `REJECTED: valid peer attestation absent` → `PEER-ATTESTATION-REFRESH-REQUIRED`가 반복돼 peer 증명 문제처럼 보이지만, 실제 원인은 nonce다(실측: 승인 메시지 nonce `61a5e7de…`, 재실행은 매번 새 값). 즉 **승인을 받은 뒤에는 재개 경로(`supply-chain-watch`)만이 마운트할 수 있고**, 사람이 재실행으로 앞당기려는 시도는 반드시 실패한다 → 재실행 시 pending 레코드에 저장된 nonce를 재사용하거나, 최소한 "이 요청은 이미 승인되어 재개 대기 중이므로 재실행하지 말 것"을 사유로 적시해 즉시 정지한다. **데이터 손상 없음 · 소유자 ✅는 소비되지 않고 보존됨 · 심각도 중간(운영자가 원인을 peer 증명으로 오진하게 만든다)**.
+
+- **확인 완료(오답 정정): 증명 TTL 앵커는 문제가 아니었다** — `valid_peer_attestation` 의 `_matches_candidate` 는 `now > attested_at + PEER_ATTESTATION_TTL`(30분)로 **증명 시각** 기준이며, 요청 시각에 앵커되어 있지 않다. 오래 대기한 승인도 재증명하면 유효하다. 실제 원인은 재개가 승인된 요청을 이어받지 않고 재게시를 시도한 것이었다(PR #132에서 해결). **해소 · 기록 목적으로만 남김**.
+
+증적: 이 세션의 `deploy-skill.sh todo` 재실행 로그와 `automation/skill_gate.py:55-58,509`.
+
+## 릴리스 수렴이 조용히 멈춰 있었다 (2026-08-16 실측)
+
+자가 스킬 감사 수리를 배포하려다 발견했다. 릴리스가 `f02bfc0e`에 멈춘 채 여러 세션의 머지가 프로덕션에 도달하지 못하고 있었고, **발견은 순전히 우연이었다**.
+
+- **`ProtectHome=tmpfs`가 문서화된 설정 경로를 이 유닛에 대해 항상 무효화한다** — `autophagy-deploy-reconcile.service`는 `User=ops`로 돌며 `load_node_config()`가 `Path.home()/".hermes"/"node.toml"`을 읽는데, 유닛의 `ProtectHome=tmpfs`가 `/home`을 빈 tmpfs로 덮어 그 파일이 **런타임에만 보이지 않는다**(실측: ops 셸에서는 `False`로 읽히는데 서비스는 계속 시드 기본값 `true`로 동작). 즉 `install.md`가 안내하는 `require_signed_updates` 오버라이드는 이 유닛에 대해 **누가 무엇을 넣어도 조용히 무시된다** → 설정을 `/srv/autophagy-private/` 아래로 옮기거나(수리 유닛의 `repair_push_key` 선례) 유닛에 `BindReadOnlyPaths`를 준다. **심각도 높음(문서대로 해도 반영되지 않고, 그 사실이 표면화되지 않는다)**.
+- **수렴 불가가 실패로 집계되지 않아 알람이 없다** — `deploy_reconcile_cli.py:254`의 `UPDATE-TRUST-BLOCK`은 `return 0`이라 `consecutive_failures`가 0으로 유지되고 소유자 알림 임계값에 영원히 닿지 않는다. 구조적으로 만족 불가능한 조건(태그 없는 사설 origin + `require_signed_updates=true`)에서는 이 스킵이 **무한 반복**되는데도 상태 파일상 정상이다 → 같은 사유의 스킵이 N회 연속되면 드리프트로 승격해 기존 소유자 알림 경로를 태운다. **심각도 높음(프로덕션이 낡은 채 조용히 방치된다)**.
+- **`automation/land.sh`에 실행 권한이 없다** — `automation/land.sh`로 직접 실행하면 `Permission denied`이고 `bash automation/land.sh`로만 돈다(2026-08-16 실측). 문서와 AGENTS.md는 전자를 안내한다 → git 모드 비트(`chmod +x`) 커밋. **심각도 낮음(우회 가능하나 첫 사용자가 원인 모를 오류를 만난다)**.
+
+- **특권 릴리스 설치기는 릴리스가 바뀌어도 스스로 따라오지 않는다(2026-08-17 실측)** — `/usr/local/libexec/autophagy-install-release`는 `automation/release_store.py`의 **사본**이고, 그 사본을 갱신하는 것은 root가 손으로 돌리는 `automation/provision-release-store.sh`뿐이다. 실측: 설치본 `a9655e67`(08-04) vs 릴리스 소스 `7e61cf06` — 그 사이 두 커밋(`a5076e90 feat(release): add atomic failed-release rollback`, `d28fe503`)이 빠진 채 **원자적 실패-롤백 없는 설치기**가 2주간 모든 릴리스를 설치했다. 프로브는 정확히 탐지하지만(`release_helper_probe.sh`, healthcheck FAIL) 수렴 주체가 없고, 지금은 그 탐지가 티켓조차 되지 못한다(같은 문서의 rc=126 항목) → 랜딩 출력에 helper-drift 확인을 엮거나 릴리스 런북에 재프로비저닝 단계를 명시한다. 재프로비저닝 자체는 안전하다(소스 확인: `install -d` no-op·`install -m` 단일 경로 교체·`visudo -cf` 선검증·`systemctl` 호출 0건). **동작은 정상이나 안전장치 결손 · 심각도 중**.
+
+증적: PR #116·#119, `docs/qa/SS-1/` 및 이 문단의 실측 인용.
+
 
 ## 인증·인가 보안 감사 후속 과제 (2026-08-15)
 
@@ -125,7 +223,7 @@ cha가 보고한 "Hermes가 테스트용 코드를 만들고 커밋하면 워크
 
 기능은 DONE「배포 체크아웃 드리프트 가드 (DG-1)」 참조, 증적 `docs/qa/DG-1/summary.txt`
 
-- **수리 티켓 경로가 여전히 allowlist에 거부된다** — `report_repair`의 SSH 명령(`repair_cli.py detect`)도 sha256 allowlist에 없어 `REPAIR_TICKET_FAILED rc=126`가 난다(추정 아닌 실측). 즉 A가 드리프트를 *감지*해도 자동 *티켓*은 안 된다(FAIL 로그로만 드러남). **이번 범위 밖**: 노드 `~<operator-account>/.local/libexec/autophagy-healthcheck-probe`의 allowlist 갱신은 소유자 작업이다. **심각도 중** — A + B로 드리프트 빈도가 분단으로 줄어 방치해도 큰 사고로 번지지는 않는다. 조치: cha가 allowlist에 checkout probe와 report_repair 명령 해시를 등록(또는 checkout probe는 이제 로컬이라 불필요 — report_repair만 남음).
+- **수리 티켓 경로가 여전히 allowlist에 거부된다** — `report_repair`의 SSH 명령(`repair_cli.py detect`)도 sha256 allowlist에 없어 `REPAIR_TICKET_FAILED rc=126`가 난다(추정 아닌 실측). 즉 A가 드리프트를 *감지*해도 자동 *티켓*은 안 된다(FAIL 로그로만 드러남). **이번 범위 밖**: 노드 `~<operator-account>/.local/libexec/autophagy-healthcheck-probe`의 allowlist 갱신은 소유자 작업이다. **심각도 중** — A + B로 드리프트 빈도가 분단으로 줄어 방치해도 큰 사고로 번지지는 않는다. 조치: cha가 allowlist에 checkout probe와 report_repair 명령 해시를 등록(또는 checkout probe는 이제 로컬이라 불필요 — report_repair만 남음). **2026-08-17 재확인**: 여전히 살아 있다 — cron 틱 10:45·10:50·10:55·11:00·11:05 전부 `REPAIR_TICKET_FAILED rc=126` ×2(수동 실행만의 인공물이 아님을 cron 로그로 확정). 지금은 실제 FAIL 2건(HELPER-DRIFT·SKILL-STALE)이 티켓화되지 못하고 있다.
 - **마운트 ABI 검사는 지금 WARN 전용이다** — C(DG-1)는 deploy-skill.sh·land.sh에서 라이브 스킬 ABI 파손을 감지하면 `MOUNT-ABI-WARN`/`LAND-ABI-WARN`으로 알리고 계속 진행한다(배포 중 차단은 이미 소비된 승인을 고아로 만들어 더 나쁘 실패모드). 실제 파손은 승인 흐름의 fail-closed(게시 거부)로 나타난다. **심각도 중** — 가드는 있으나 자동 차단은 아니다. 조치: `DEPLOY_ABI_STRICT=1`/`LAND_ABI_STRICT=1` 옵인을 오탐율 관찰 후 기본값으로 승격할지 결정한다.
 - **미추적 파일 드리프트는 여전히 보이지 않는다** — 로컬 probe도 `--untracked-files=no`를 유지한다(`logs/` 오탐 방지용 의도된 계약). 주 사고 유형(로컬 커밋·추적 파일 수정)은 ahead/dirty로 덮인다. 조치: 미추적 드리프트가 실제 관측되면 화이트리스트 탐지 검토. 심각도 중.
 ## 수리 승인 내용 바인딩(RTS-4) 작업 중 발견한 후속 과제
@@ -295,3 +393,16 @@ F3 최종 검증 웨이브가 A3.1 샌드박스 E2E를 4회 신규 재실행하�
 - **공개본에서 끊기는 문서 링크가 있다** — 공개 원장에 있는 매뉴얼들이 export 제외 문서를 링크한다: `manual-group-admin.md` → `managed-skill-channel.md`(기존), `manual-maintainer.md` → `operations.md`·`incident-response.md`·`reboot-recovery.md`(신규). 공개 트리에서는 그 대상이 존재하지 않아 404가 된다. **보안·동작 무관, 문서 탐색성만 영향 · 심각도 낮음** → 세 가지 중 하나를 고른다: (a) 해당 문서를 공개 대상으로 승격 (b) 공개되는 문서에서 링크를 걷어내고 산문으로만 언급 (c) export 시 제외 대상 링크를 검출하는 conformance 테스트를 추가해 최소한 새로 늘지 않게 한다. 신규 3건은 이번에 `*(개발 저장소 전용 — 공개본에 포함되지 않는다)*` 주석을 달아 오해만 막아 두었다.
 
 증적: `.omo/notepads/public-release/learnings.md`의 「[2026-08-15] Task: W-M3 플랫폼 운영자 매뉴얼」 항목.
+
+## Google Tasks 승인 쓰기 PR 리뷰 중 발견한 후속 과제
+
+- **`todo_approval.py`와 `todo_confirm_reaction_watch.py`가 250 pure-LOC 천장을 넘는다** — store persistence는 이번 crash-recovery 수정에서 `todo_approval_store_io.py`로 분리해 해소했지만, producer/lifecycle adapter와 watcher orchestration은 각각 별도 책임 분리가 필요하다. **현재 동작·보안 영향 없음 · 심각도 낮음(리뷰 가능성/유지보수성)** → 해당 파일을 다음에 기능 변경할 때 기존 승인 회귀를 먼저 고정하고 lifecycle adapter·reaction parsing·ledger persistence 경계로 나눈다.
+
+근거: PR #125 코드 품질 리뷰, `skills/todo/scripts/todo_{approval,confirm_reaction_watch}.py` pure-LOC 측정.
+
+## 그룹 채널 실제 원격 전파 검증(GROUP-1) 중 발견한 후속 과제
+
+- **`automation/managed_sync/cli.py`를 직접 `-m`으로 실행하면 아무 일도 없이 rc 0으로 끝난다** — `if __name__ == "__main__"` 가드가 없어 `python3 -m automation.managed_sync.cli sync`가 `--help`조차 출력하지 않는다. 올바른 진입점은 `__main__.py`를 가진 `python3 -m automation.managed_sync`다. **운영 경로 영향 없음**(systemd·cron 래퍼는 올바른 쪽을 쓴다) · **심각도 낮음** → 다만 검증 중 실제로 "무출력 = 거부됨"으로 오독하는 사고가 났고 rc가 0이라 조용하다. `cli.py` 말미에 가드 한 줄을 넣으면 이 오독 경로가 사라진다.
+- **미러가 원격에서 삭제된 태그를 계속 들고 있다** — 위조 서명 태그를 원격에서 제거한 뒤에도 구독자가 캐시된 미러 때문에 그 태그를 반복해서 보고 `BAD-SIGNATURE`를 매 틱 재출력했다. 미러 디렉터리를 지우면 사라진다. **보안 문제 아님**(거부되던 대상이 계속 거부될 뿐이고 quarantine·state는 불변) · **심각도 낮음** → fetch refspec에 prune을 적용할지 검토한다. 방치하면 발행자가 실수로 올린 태그를 지워도 구독자 저널에 그 실패가 영구히 반복된다.
+
+증적: `docs/qa/GROUP-1/summary.txt`(부록 절).

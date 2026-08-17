@@ -8,14 +8,17 @@ Created/Modified dates at write time, so the owner-approval hash binds the
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
 from automation.obsidian_write.config import ObsidianWriteError
 from automation.obsidian_write.note import NotePlan, plan_note
 
+from .model import MemoryKind
+
 _TITLE_SUMMARY_LIMIT: Final = 60
 _TITLE_DIGEST_LENGTH: Final = 8
+_USER_FILENAME_PREFIX: Final = "user--"
 _ENTRY_HEADING: Final = "## 원본 기록 (verbatim)"
 _PROVENANCE_FOOTER: Final = (
     "---\n"
@@ -34,12 +37,26 @@ class RelocationPlan:
     note_plan_sha256: str
 
 
-def build_relocation_plan(entry_text: str) -> RelocationPlan:
-    """Plan the ops-reference note for one native-memory entry, byte-preserving."""
+def build_relocation_plan(
+    entry_text: str,
+    *,
+    source_kind: MemoryKind = "memory",
+) -> RelocationPlan:
+    """Plan one native-store ops reference while preserving the MEMORY v1 bytes."""
     title = _entry_title(entry_text)
     body = _entry_body(entry_text)
     note_plan = plan_note(title, body, institutional=False, bucket_hint="resource")
-    return RelocationPlan(note_plan, _note_plan_sha256(note_plan))
+    match source_kind:
+        case "memory":
+            namespaced_plan = note_plan
+        case "user":
+            namespaced_plan = replace(
+                note_plan,
+                relpath=note_plan.relpath.with_name(
+                    f"{_USER_FILENAME_PREFIX}{note_plan.relpath.name}"
+                ),
+            )
+    return RelocationPlan(namespaced_plan, _note_plan_sha256(namespaced_plan))
 
 
 def _entry_title(entry_text: str) -> str:

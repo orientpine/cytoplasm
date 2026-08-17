@@ -5,6 +5,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+import pytest
+
+from automation.memory_relocate.cron import memory_relocate_watch
 from automation.memory_relocate.apply import ApplyOutcome
 from automation.memory_relocate.effects_live import RelocationStore
 from automation.memory_relocate.model import (
@@ -327,3 +330,83 @@ def test_tick_state_save_does_not_clobber_the_stores_channel_binding(tmp_path: P
     assert stored.message_id == "msg-1"
     assert stored.channel_id == "chan-9"
     assert stored.status == "posted"
+
+
+def test_tick_when_final_save_crashes_adopts_committed_binding_without_repost(
+    tmp_path: Path,
+) -> None:
+    # Given: the adapter commits a Discord binding, but the tick's final snapshot is never saved.
+    path = tmp_path / "relocations.json"
+    record = replace(_record(), channel_id="")
+    save_state(path, _state(record))
+    store = RelocationStore(path)
+    fresh_posts = 0
+
+    def post_or_adopt(pending: RelocationRecord) -> tuple[str, str]:
+        nonlocal fresh_posts
+        if pending.message_id is None:
+            fresh_posts += 1
+            store.set_message_id(pending, "msg-1", "chan-9")
+        return ("msg-1", "chan-9")
+
+    effects = replace(FakeEffects().resolve_effects(), post_approval=post_or_adopt)
+    first = resolve_tick(load_state(path), effects=effects)
+    assert _only(first.state).status == "posted"
+    assert _only(load_state(path)).status == "proposed"
+    assert _only(load_state(path)).message_id == "msg-1"
+
+    # When: the next tick reloads the adapter-committed proposal and runs the adopt path.
+    second = resolve_tick(load_state(path), effects=effects)
+    save_state(path, second.state)
+
+    # Then: one physical message survives and the recovered snapshot advances to posted.
+    stored = _only(load_state(path))
+    assert fresh_posts == 1
+    assert second.posted == (_key(record),)
+    assert stored.status == "posted"
+    assert stored.message_id == "msg-1"
+    assert stored.channel_id == "chan-9"
+
+
+def test_run_once_when_effect_clears_binding_and_repost_fails_does_not_restore_stale_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: recovery clears a missing message binding but cannot post its replacement.
+    path = tmp_path / "relocations.json"
+    record = _record(status="proposed", message_id="missing-message")
+    save_state(path, _state(record))
+    store = RelocationStore(path)
+
+    def clear_then_fail(pending: RelocationRecord) -> None:
+        assert pending.message_id is not None
+        store.clear_message_id(_key(pending), pending.action_hash, pending.message_id)
+        return None
+
+    effects = replace(FakeEffects().resolve_effects(), post_approval=clear_then_fail)
+
+    def fake_build_effects(
+        *,
+        memory_dir: Path,
+        state_path: Path,
+        rag_state_path: Path,
+        token: str,
+        owner_id: str,
+        now: datetime,
+    ) -> ResolveEffects:
+        del memory_dir, state_path, rag_state_path, token, owner_id, now
+        return effects
+
+    monkeypatch.setattr(memory_relocate_watch, "STATE_PATH", path)
+    monkeypatch.setattr(memory_relocate_watch, "_discover_and_propose", lambda state, now: state)
+    monkeypatch.setattr(memory_relocate_watch, "_owner_id", lambda: "owner")
+    monkeypatch.setattr(memory_relocate_watch, "build_effects", fake_build_effects)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+
+    # When: the cron persists its post-effect snapshot.
+    result = memory_relocate_watch.run_once(NOW)
+
+    # Then: the adapter's clear wins over the stale pre-effect snapshot.
+    assert result.posted == ()
+    assert _only(result.state).message_id is None
+    assert _only(load_state(path)).message_id is None

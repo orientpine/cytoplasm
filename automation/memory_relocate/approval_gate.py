@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 APPROVE_EMOJI: Final = "\u2705"
 CANCEL_EMOJI: Final = "\u26d4"
-_TRANSPORT_ERRORS: Final = (OSError, ValueError, KeyError, TypeError)
+_TRANSPORT_ERRORS: Final = (OSError, ValueError, KeyError, TypeError, RuntimeError)
 _LIFECYCLE_API: Final = (
     "ApprovalIntent",
     "ApprovalRequest",
@@ -127,6 +127,7 @@ class RelocateApprovalGate:
     entry_text: str
     store: RelocationStoreLike
     transport: DiscordTransportLike
+    journal: PostingJournal | None = None
 
     def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
         request_type = lifecycle().ApprovalRequest
@@ -151,6 +152,16 @@ class RelocateApprovalGate:
         if request.action_hash not in content:
             return state.BINDING_MISMATCH
         try:
+            self.transport.add_reaction(
+                request.channel_id,
+                request.message_id,
+                APPROVE_EMOJI,
+            )
+            self.transport.add_reaction(
+                request.channel_id,
+                request.message_id,
+                CANCEL_EMOJI,
+            )
             cancelled = self.transport.get_reaction_users(
                 request.channel_id,
                 request.message_id,
@@ -200,10 +211,26 @@ class RelocateApprovalGate:
         content = render_relocation_approval(self.record, entry_text=self.entry_text)
         try:
             message_id = self.transport.post_message(intent.channel_id, content)
-            self.transport.add_reaction(intent.channel_id, message_id, APPROVE_EMOJI)
-            self.transport.add_reaction(intent.channel_id, message_id, CANCEL_EMOJI)
+            if self.journal is not None:
+                self.journal.enrich(
+                    intent.key,
+                    intent.action_hash,
+                    message_id,
+                    intent.channel_id,
+                )
+                self.store.set_message_id(
+                    self.record,
+                    message_id,
+                    intent.channel_id,
+                )
+                self.journal.clear(intent.key)
         except _TRANSPORT_ERRORS as error:
             raise lifecycle().ApprovalSurfaceError(str(error)) from error
+        for emoji in (APPROVE_EMOJI, CANCEL_EMOJI):
+            try:
+                self.transport.add_reaction(intent.channel_id, message_id, emoji)
+            except _TRANSPORT_ERRORS:
+                continue
         return lifecycle().PostedApproval(message_id, intent.channel_id)
 
     def commit(
@@ -236,7 +263,7 @@ def request_approval(
     )
     return shared.request_owner_approval(
         intent,
-        RelocateApprovalGate(record, entry_text, store, transport),
+        RelocateApprovalGate(record, entry_text, store, transport, journal),
         lease,
         journal,
     )

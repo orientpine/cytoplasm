@@ -278,6 +278,10 @@ class PeerAttestationEvidence:
     key_fingerprint: str = ""
 
 
+class _PeerTrustRootUnavailable(Exception):
+    pass
+
+
 def _peer_attest_mode(args: argparse.Namespace) -> PeerAttestMode | None:
     match getattr(args, "peer_attest_mode", ""):
         case "discord":
@@ -333,7 +337,9 @@ def _peer_attestation_evidence(
     match mode:
         case "discord":
             bot_ids = load_bot_ids(OPS_PEERS_CONFIG)
-            if bot_ids is None or author.get("id") != bot_ids.agent_bot_id or author.get("bot") is not True:
+            if bot_ids is None:
+                raise _PeerTrustRootUnavailable
+            if author.get("id") != bot_ids.agent_bot_id or author.get("bot") is not True:
                 return None
             messages = _api("GET", f"/channels/{channel_id}/messages?after={args.message_id}&limit=100")
             if not isinstance(messages, list):
@@ -504,7 +510,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     )
     execution = _approval_execution(gate, args)
     channel_id = execution.request.channel_id
-    evidence = _peer_attestation_evidence(args, channel_id, mode)
+    try:
+        evidence = _peer_attestation_evidence(args, channel_id, mode)
+    except _PeerTrustRootUnavailable:
+        print(f"FATAL: Discord peer trust root unavailable: {OPS_PEERS_CONFIG}", file=sys.stderr)
+        return 2
     if evidence is None:
         print("REJECTED: valid peer attestation absent", file=sys.stderr)
         return 1

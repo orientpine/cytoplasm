@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .binding import RelocationHashFields, relocation_action_hash
-from .model import MemoryKind, RelocationError, RelocationRecord
+from .model import MemoryKind, RelocationRecord
 from .plan import build_relocation_plan
 from .rag_verify import rag_source_key
 
@@ -20,10 +20,7 @@ def build_proposed_record(
     binding_policy_version: int,
     now: datetime,
 ) -> RelocationRecord:
-    if source_kind != "memory":
-        raise RelocationError("USER.md entries are never relocatable in v1")
-
-    plan = build_relocation_plan(entry_text)
+    plan = build_relocation_plan(entry_text, source_kind=source_kind)
     note_relpath = plan.note_plan.relpath.as_posix()
     action_hash = relocation_action_hash(
         RelocationHashFields(source_kind, entry_sha256, note_relpath, plan.note_plan_sha256)

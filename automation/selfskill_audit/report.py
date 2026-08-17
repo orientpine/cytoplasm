@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import getpass
+import json
+import os
 import re
 import sys
 from collections import Counter
@@ -17,10 +19,11 @@ _ACTION_LABELS: Final = {
     Action.EDITED: "편집",
     Action.ARCHIVED: "보관",
     Action.RESTORED: "복원",
+    Action.REMOVED: "삭제",
 }
 
 
-def render_summary(deltas: tuple[Delta, ...], *, account_label: str) -> str:
+def render_summary(deltas: tuple[Delta, ...], *, account_label: str, shadowed: tuple[str, ...] = ()) -> str:
     label = account_label if _ACCOUNT_LABEL.fullmatch(account_label) else "unknown"
     counts = Counter(delta.action for delta in deltas)
     count_text = " ".join(
@@ -33,11 +36,44 @@ def render_summary(deltas: tuple[Delta, ...], *, account_label: str) -> str:
         f"- {_ACTION_LABELS[delta.action]} {delta.name} sha256={delta.sha256[:12]} 출처={delta.provenance}"
         for delta in deltas
     )
+    if shadowed:
+        lines.append(f"SHADOWS-GOVERNED {' '.join(shadowed)} - \uc774 \uc774\ub984\uc740 \ubc30\ud3ec\ubcf8\uc744 \uac00\ub9b0\ub2e4; \ud655\uc778 \ud6c4 archive/rename")
     return "\n".join(lines)
 
 
-def send_report(deltas: tuple[Delta, ...], *, account_label: str) -> bool:
-    return notify_owner(render_summary(deltas, account_label=account_label))
+def send_report(
+    deltas: tuple[Delta, ...], *, account_label: str, shadowed: tuple[str, ...] = ()
+) -> bool:
+    return notify_owner(render_summary(deltas, account_label=account_label, shadowed=shadowed))
+
+
+def resolve_owner_id(home: Path = Path.home()) -> str:
+    """소유자 id — env 가 먼저, 없으면 이 계정의 interop config 에서 읽는다.
+
+    no-agent cron 은 `~/.env.secrets` 만 자가 로드하는데 거기에는 owner id 가 없다
+    (2026-08-16 실측: `DISCORD_BOT_TOKEN` 만 존재 → `NOTIFY-UNCONFIGURED` 로 매 틱 침묵).
+    같은 계정의 skill_generation 플러그인이 이미 쓰는 표준 출처를 그대로 따른다.
+    """
+    from_env = os.environ.get("AUTOPHAGY_OWNER_ID", "").strip()
+    if from_env:
+        return from_env
+    config = home / ".hermes" / "interop" / "config.json"
+    try:
+        document = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    owner_id = document.get("owner_id", "") if isinstance(document, dict) else ""
+    return owner_id.strip() if isinstance(owner_id, str) else ""
+
+
+def _governed_root() -> Path | None:
+    """배포본이 사는 곳 — 자가 스킬이 그 이름을 가리는지 대조하기 위해서만 읽는다."""
+    try:
+        from automation.node_config import load_node_config
+
+        return load_node_config().skill_store / "live"
+    except Exception:  # noqa: BLE001 - 설정을 못 읽으면 가림 탐지만 건너뛴다(감사 자체는 계속)
+        return None
 
 
 def run_once(
@@ -46,11 +82,18 @@ def run_once(
     account_label: str | None = None,
     now: datetime | None = None,
 ) -> int:
-    result = audit(home, now=datetime.now(UTC) if now is None else now)
-    if not result.pending_deltas:
+    result = audit(
+        home, now=datetime.now(UTC) if now is None else now, governed_root=_governed_root()
+    )
+    # 가림은 델타가 없어도 알린다 — 승인 게이트를 강제하는 배포본이 가려진 상태 자체가 사건이고,
+    # 해소될 때까지 매 틱(일 1회) 다시 말하는 편이 조용히 사는 것보다 낫다.
+    if not result.pending_deltas and not result.shadowed:
         return 0
+    owner_id = resolve_owner_id(home)
+    if owner_id and not os.environ.get("AUTOPHAGY_OWNER_ID", "").strip():
+        os.environ["AUTOPHAGY_OWNER_ID"] = owner_id
     label = getpass.getuser() if account_label is None else account_label
-    if not send_report(result.pending_deltas, account_label=label):
+    if not send_report(result.pending_deltas, account_label=label, shadowed=result.shadowed):
         return 1
     mark_reported(result)
     return 0

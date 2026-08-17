@@ -23,8 +23,10 @@ and no real ``gws`` binary is touched: the CLI's ``runner`` seam takes a fake.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType
@@ -49,6 +51,11 @@ def todo() -> ModuleType:
     return import_module("todo_cli")
 
 
+@pytest.fixture(autouse=True)
+def _runtime_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTOPHAGY_RUNTIME_ROOT", str(_REPO))
+
+
 def _rules() -> tuple[gate.ExternalEffectRule, ...]:
     return load_denylist(_DENYLIST)
 
@@ -71,7 +78,7 @@ def _shell(command: str) -> ToolCall:
     return ToolCall(tool_name="terminal", arguments={"command": command})
 
 
-def _approve(log: Path, decision: gate.ExternalEffectDecision) -> None:
+def _approve(log: Path, decision: gate.ExternalEffectDecision) -> Any:
     record = {
         "action": "external_effect.approval",
         "approval": {
@@ -86,6 +93,24 @@ def _approve(log: Path, decision: gate.ExternalEffectDecision) -> None:
         "timestamp": "2026-07-28T00:00:00Z",
     }
     log.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    store_module = import_module("todo_approval_store")
+    store = store_module.TodoApprovalStore(log.parent / "todo-approvals")
+    spec = store_module.TodoApprovalSpec(
+        f"todo:{decision.action_hash}",
+        decision.action_hash,
+        decision.target_id,
+        "gws tasks tasks insert [masked]",
+        "todo",
+        "owner-dm",
+        "owner-dm-fixture",
+        7,
+    )
+    pending = store.bind_message(
+        store.prepare(spec, datetime(2026, 8, 16, tzinfo=UTC)),
+        "fixture-message",
+    )
+    store.archive(pending, store_module.ApprovalState.ARCHIVED, "approved")
+    return import_module("todo_execution_claim").ApprovalClaimStore(store.root)
 
 
 # --- contract 1: the denylist actually covers Google Tasks writes -------------
@@ -145,6 +170,29 @@ def test_scenario_denylist_fixture_matches_repo_rule() -> None:
     )
 
 
+def test_offline_scenario_uses_the_current_worktree_without_runtime_override() -> None:
+    # Given: a normal developer shell without a production runtime-root override.
+    env = dict(os.environ)
+    env.pop("AUTOPHAGY_RUNTIME_ROOT", None)
+    env.pop("AUTOPHAGY_REPO_ROOT", None)
+    env["AUTOPHAGY_DEMO_SECRET"] = "DUMMY-todo-scenario"
+
+    # When: the documented offline scenario is executed from this worktree.
+    completed = subprocess.run(
+        ["bash", str(_SCENARIO)],
+        cwd=_REPO,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    # Then: runtime-root resolution remains local and the full scenario passes.
+    assert completed.returncode == 0, completed.stderr
+    assert "APPROVAL-CYCLE-PASS" in completed.stdout
+    assert "SCENARIO-PASS" in completed.stdout
+
+
 # --- contract 2: the writer refuses, writes, then proves the write ------------
 
 
@@ -189,11 +237,11 @@ def test_create_task_inserts_then_verifies_by_reread(todo: ModuleType, tmp_path:
     """Given an approval, When creating, Then insert is followed by a matching get."""
     log = tmp_path / "approvals.jsonl"
     request = _request(todo)
-    _approve(log, todo.evaluate(todo.insert_argv(request), context=ApprovalContext(None, OWNER, False)))
+    claims = _approve(log, todo.evaluate(todo.insert_argv(request), context=ApprovalContext(None, OWNER, False)))
 
     fake = FakeGws()
     created = todo.create_task(
-        request, runner=fake, context=ApprovalContext(log, OWNER, False)
+        request, runner=fake, context=ApprovalContext(log, OWNER, False), claim_store=claims
     )
 
     assert fake.methods == ["insert", "get"]
@@ -206,11 +254,13 @@ def test_create_task_fails_when_reread_title_mismatches(todo: ModuleType, tmp_pa
     """A re-read that returns a different title is a hard failure, not a success."""
     log = tmp_path / "approvals.jsonl"
     request = _request(todo)
-    _approve(log, todo.evaluate(todo.insert_argv(request), context=ApprovalContext(None, OWNER, False)))
+    claims = _approve(log, todo.evaluate(todo.insert_argv(request), context=ApprovalContext(None, OWNER, False)))
 
     fake = FakeGws(stored_title="김가상 오기입 제목")
     with pytest.raises(todo.VerificationFailedError):
-        todo.create_task(request, runner=fake, context=ApprovalContext(log, OWNER, False))
+        todo.create_task(
+            request, runner=fake, context=ApprovalContext(log, OWNER, False), claim_store=claims
+        )
     assert fake.methods == ["insert", "get"]
 
 
@@ -218,11 +268,13 @@ def test_create_task_fails_when_reread_returns_no_task(todo: ModuleType, tmp_pat
     """An empty re-read cannot prove the write — fail closed."""
     log = tmp_path / "approvals.jsonl"
     request = _request(todo)
-    _approve(log, todo.evaluate(todo.insert_argv(request), context=ApprovalContext(None, OWNER, False)))
+    claims = _approve(log, todo.evaluate(todo.insert_argv(request), context=ApprovalContext(None, OWNER, False)))
 
     fake = FakeGws(empty_get=True)
     with pytest.raises(todo.VerificationFailedError):
-        todo.create_task(request, runner=fake, context=ApprovalContext(log, OWNER, False))
+        todo.create_task(
+            request, runner=fake, context=ApprovalContext(log, OWNER, False), claim_store=claims
+        )
 
 
 def test_action_hash_binds_the_exact_title(todo: ModuleType, tmp_path: Path) -> None:

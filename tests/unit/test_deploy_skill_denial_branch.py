@@ -70,6 +70,28 @@ def test_the_denied_branch_cleans_up_like_the_absent_one() -> None:
     assert "cleanup_e2e_injection" in between
 
 
+def test_review_staging_cleanup_unseals_the_tree_before_removing_it() -> None:
+    function_start = _index("cleanup_review_staging() {")
+    function_end = _SOURCE.index("\n}", function_start)
+    body = _SOURCE[function_start:function_end]
+
+    chmod = body.find("chmod -R u+w")
+    remove = body.find("rm -rf")
+
+    assert chmod != -1
+    assert remove != -1
+    assert chmod < remove
+
+
+def test_gate_configuration_error_is_not_collapsed_into_approval_absence() -> None:
+    config_branch = _index('"$APPROVED" == 2')
+    absent_branch = _index('"$APPROVED" != 0')
+    between = _SOURCE[config_branch:absent_branch]
+
+    assert config_branch < absent_branch
+    assert "exit 4" in between
+
+
 def test_a_cancelled_deploy_does_not_reuse_the_lease_contention_code() -> None:
     """exit 8 already means "another execution holds this skill's lease".
 

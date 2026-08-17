@@ -31,9 +31,9 @@ autophagy/
 | QA 증적 | `docs/qa/<wave-id>/` | 마스킹된 증적 (원시는 ops 전용) |
 | Discord 2-서버·승인 채널 구조 | `docs/guide/discord-server-architecture.md`, `automation/interop/approval_surface.py` | **소유자 전용 승인=행위 봇의 오너 DM / 스킬 공급망 승인=개인 서버 `#approvals`**(배포·peer attest·발행·managed 활성화 — 2차 주체인 peer 봇이 같은 채널을 봐야 하므로). 893da68은 승인을 공유 Lab이 아닌 **개인 서버**로 옮긴 결정이며 공급망에 한정된다. 표면은 `approval_surface.py`가 단일 결정하고 conformance 테스트가 강제한다 — 산문이 아니라 코드가 진실. 이관 진행 중(AS): calendar·coordination·wiki·mail compose는 이미 DM, 나머지는 계획 `.omo/plans/approval-surface-ssot.md` 순서대로 전환 |
 | 장애 대응·운영 제약 | `docs/guide/incident-response.md`, `docs/guide/operations.md` | 원인 확인 전 재시작/설정변경/키 재발급 금지 |
-| 관리형 스킬 발행 | `automation/managed_skills/`, `docs/guide/managed-skill-channel.md` | 발행자(cha) 전용 |
+| 관리형 스킬 발행 | `automation/managed_skills/`, `docs/guide/managed-skill-channel.md`, `docs/guide/manual-group-admin.md` | 발행자(cha) 전용. 대상 repo = 그룹 스킬 채널 `orientpine/ribosome`(private) — 코드 repo도, 공개 배포본도 아니다(「세 저장소 구분 규칙」) |
 | 개인→그룹 스킬 제출 | `automation/managed_skills/submission_*.py` | personal provenance 재사용, 그룹 `#approvals` 검토, 자동 import 없음 |
-| 관리형 스킬 구독 | `automation/managed_sync/`, `~/.hermes/managed-sync/` | 구독자(연구원) 전용. 틱 배포는 `deploy.sh`(Hermes cron) 또는 설치기 **opt-in** `--with-component managed-sync`(systemd) — 둘 다 같은 래퍼를 돌린다. **배달은 자동, 마운트는 아니다**(D3) |
+| 관리형 스킬 구독 | `automation/managed_sync/`, `~/.hermes/managed-sync/` | 구독자(연구원) 전용 — `orientpine/ribosome`에서 받는다(소프트웨어 업데이트는 `cytoplasm`에서 별도로 온다). 틱 배포는 `deploy.sh`(Hermes cron) 또는 설치기 **opt-in** `--with-component managed-sync`(systemd) — 둘 다 같은 래퍼를 돌린다. **배달은 자동, 마운트는 아니다**(D3) |
 | 공개 릴리스 컷 | `automation/public_export.sh`, `docs/guide/manual-maintainer.md` | private가 유일한 개발 origin, public(`orientpine/cytoplasm`)은 이 스크립트로만 갱신되는 일방향 파생본 — 손 push 금지(D8)
 | 에이전트 자가 스킬 루트·감사 원장 | `<계정 홈>/.hermes/skills`(계정 소유 0700, 1차 루트), `automation/selfskill_audit/`, `~/.hermes/selfskill-audit/{state.json,ledger.jsonl}` | 자가 저작은 **승인 없이 착륙**하고 사후 감사한다(소유자 결정 2026-08-15 옵션 B). 관리자 배포 스킬은 `/srv/autophagy-skills/live`에 남아 Hermes `skills.external_dirs`로 읽기 전용 발견된다. 회수는 `hermes curator archive/pin`. 상세: [소개](docs/기능소개/에이전트-자가-스킨.md) |
 
@@ -71,9 +71,9 @@ autophagy/
 | `obsidian_write` | pkg | `automation/obsidian_write/` | Obsidian 승인형 쓰기 — RAG 미러와 **분리된 클론** + `-rw` 키, PARA 결정적 upsert → commit → push → 원격 read-back 해시 검증. 외부효과 게이트 바인딩(SI-5 개정) |
 | `memory_routing` | pkg | `automation/memory_routing/` | ‘기억해’ 저장 분류·단일 흐름 — canonical=위키 노트(기존 wiki_gate 재사용), 짧고 안정적 사실만 MEMORY.md 병기, 임시 상태는 비영속, 모호하면 보수적 기본값 |
 | `entity_preflight` | pkg | `automation/entity_preflight/` | 외부 쓰기 전 개인 고유명사 해석 — 관계 기반 질의 재작성 + 로컬 RAG·주소록 대조, 고신뢰 단일 후보만 자동 정규화, 모호하면 `ENTITY-CLARIFY`(승인 게이트 아님) |
-| `todo` | skill | `skills/todo/scripts/todo_cli.py` | Google Tasks 쓰기의 리포측 소유자 — `gws_tasks_mutation` denylist 규칙로 게이트 경유, 등록 후 `tasks get` 재조회 검증 |
+| `todo` | skill | `skills/todo/scripts/todo_cli.py` | Google Tasks 쓰기의 리포측 소유자 — `gws_tasks_mutation` denylist 규칙로 게이트 경유, 등록 후 `tasks get` 재조회 검증. 쓰기는 **오너-DM ✅ 사이클**을 먼저 거친다 — `todo_approval*.py`(삹인 파사드 producer, `ApprovalKind.TODO`) · `todo_confirm_reaction_watch.py`(owner-only 리액션만 폴링) · `todo_execution_claim.py`(`O_EXCL` 일회 claim; `write_started` 잔존 시 exit 7로 자동 재삽입·거짓보고 모두 거부). 상세 [소개](docs/기능소개/todo-소유자-DM-승인-경로.md) |
 | `provision-skill-roots.sh` | script | `automation/provision-skill-roots.sh` | 스킬 루트 토폴로지 **반전** 프로비저너(멱등, root 실행) — 레거시 read-only bind 해제와 fstab 2행 제거, agent 1차 루트를 0700 agent 소유로, `.hub` 상태를 taps.json sha256 readback과 함께 이관, config에 `external_dirs`+`guard_agent_created` 패치(기존 `skills:` 블록은 넘겨짚지 않고 `SKILLS-BLOCK-BLOCK`으로 멈춤), 끝에 `hermes skills list`로 external 발견 선검증. peer arm은 잔여 사본을 3중 조건(이름·author 마커·repo 존재)으로만 정리하고 현역 자가 스킬 2개를 pin |
-| `selfskill_audit` | pkg | `automation/selfskill_audit/` | 자가 스킬 사후 감사 — `ledger.audit()`가 계정 스킬 루트와 `.archive`를 스캔해 콘텐츠 해시(`skill_review.skill_digest`) 기준 델타(created/edited/archived/restored)를 append-only `ledger.jsonl`에 적재, `report.run_once()`가 미보고분만 마스킹 요약으로 소유자 DM한 뒤 watermark를 전진시킨다(전송 실패시 전진 없음). cron `selfskill_audit_watch.py`(agent·peer 각 09:00 no-agent) |
+| `selfskill_audit` | pkg | `automation/selfskill_audit/` | 자가 스킬 사후 감사 — `ledger.audit()`가 계정 스킬 루트와 `.archive`를 스캔해 콘텐츠 해시(`skill_review.skill_digest`) 기준 델타(created/edited/archived/restored/removed — 아카이브 없이 사라진 것도 보고)를 append-only `ledger.jsonl`에 적재, `report.run_once()`가 미보고분만 마스킹 요약으로 소유자 DM한 뒤 watermark를 전진시킨다(전송 실패시 전진 없음). cron `selfskill_audit_watch.py`(agent·peer 각 09:00 no-agent) |
 
 ## CONVENTIONS (repo 고유)
 - **stdlib 전용 지향.** `from __future__ import annotations` + `@dataclass(frozen=True, slots=True)` + 엄격 타입(`TypeAlias`/`Protocol`). 외부 의존은 함수 내부 lazy import + fail-closed 가드(참조 procurement `_import()`).
@@ -88,7 +88,7 @@ autophagy/
 - **충돌 시 우선순위 없음.** 일반 스킬과 관리형 스킬 이름 충돌 시 양방향 fail-closed 차단 — 소유자가 하나를 제거(`--remove`)해야 한다.
 - **자가 스킬 루트는 통제 공간이 아니다.** 각 계정의 `~/.hermes/skills`는 그 계정이 소유한 쓰기 가능 1차 루트이며, 에이전트가 만든 스킬은 승인 게이트를 거치지 않고 그대로 착지한다. 관리자 배포본은 그 루트에 마운트되지 않고 `/srv/autophagy-skills/live`(root 소유 read-only)에서 `skills.external_dirs`로 발견된다 — 즉 `~/.hermes/skills` 아래에 있는 것을 관리자 배포본으로 읽으면 안 된다(반전 전에는 그 경로가 live의 read-only bind였다).
 
-**자가 스킬 이름 충돌은 양방향으로 막는다.** self→governed 방향(자가 스킬이 배포 스킬 이름을 선점)은 Hermes가 막는다 — `skill_manage(create)`는 어느 루트에든 같은 이름이 있으면 거부한다(v0.18.2 실측). governed→self 방향(배포가 자가 저작물을 덮어씀)은 `deploy-skill.sh`가 막는다 — agent 루트와 peer 루트를 각각 분류해 자가 저작물이면 `SELF-SKILL-COLLISION-BLOCK`(exit 4)으로 멈추고, 읽거나 분류할 수 없어도 같은 코드로 멈춘다(fail-closed). 관리형 스킬 충돌과 같은 원칙이다 — 우선순위는 없고, 소유자가 한쪽을 치워야(`hermes curator archive <name>` 또는 해당 계정 `~/.hermes/skills`에서 디렉터리 제거) 배포가 재개된다.
+**자가 스킬 이름 충돌은 한쪽만 막힌다 — 반대쪽은 탐지로 메운다(2026-08-16 정정).** self→governed 방향(자가 스킬이 배포 스킬 이름을 선점)은 **Hermes가 막지 못한다**: `skill_manage(create)`의 충돌 검사 `_find_skill`은 `rglob("SKILL.md")`로 훑는데 우리 governed 루트 `/srv/autophagy-skills/live`는 릴리스로 가는 **심링크 팜**이고 파이썬 `rglob`은 디렉터리 심링크를 따라가지 않는다 — 실측으로 `_find_skill("recall")`·`_find_skill("mail")`이 모두 `None`이었고, 에이전트가 `recall` 이름의 자가 스킬을 실제로 만들었다(즉시 제거). 1차 루트가 발견에서 이기므로 그런 자가 스킬은 **승인 게이트를 강제하는 배포본을 가린다**. 벤더 쪽을 고칠 수 없으므로 `selfskill_audit`이 자기 루트와 live 이름을 대조해 `SHADOWS-GOVERNED`로 소유자에게 즉시 알린다(델타가 없어도 보고). governed→self 방향(배포가 자가 저작물을 덮어씀)은 `deploy-skill.sh`가 막는다 — agent 루트와 peer 루트를 각각 분류해 자가 저작물이면 `SELF-SKILL-COLLISION-BLOCK`(exit 4)으로 멈추고, 읽거나 분류할 수 없어도 같은 코드로 멈춘다(fail-closed). 관리형 스킬 충돌과 같은 원칙이다 — 우선순위는 없고, 소유자가 한쪽을 치워야(`hermes curator archive <name>` 또는 해당 계정 `~/.hermes/skills`에서 디렉터리 제거) 배포가 재개된다.
 
 ## ANTI-PATTERNS (금지)
 - cron 워처가 Discord **메시지/첨부를 폴링** — 실시간 에이전트와 경쟁 소비자. 워처는 **리액션만** 폴링.
@@ -309,3 +309,29 @@ automation/worktree.sh finish <이름>                          # 세션 종료
 - **나쁜 릴리스는 옆으로도 뒤로도 갈 수 없고 앞으로만 되돌린다.** `update_trust_state.py`의 롤백 방지 floor가 옛 태그 재-push를 `RELEASE-ROLLBACK`으로 거부한다(공격자 강제 다운그레이드 방어 — 비대칭은 의도된 것이다). 취소는 문제를 revert해 private에 랜딩하고 **더 높은 버전**을 컷하는 것이다.
 - 전체 절차(사전조건·매니페스트 원장·실행·릴리스 노트·신뢰키 회전·나쁜 릴리스 대응)는 [docs/guide/manual-maintainer.md](docs/guide/manual-maintainer.md)가 단독으로 소유한다. 이 절은 불변식만 들고 있고 절차를 복사하지 않는다 — 같은 절차를 두 문서가 설명하면 반드시 한쪽이 낡는다.
 - **배경(사후 반영)**: 2026-08-15 W-F5-A로 실제 공개 repo `orientpine/cytoplasm`이 생기고 `v1.0.0`이 서명·push되자마자 소유자가 "이제 공개 repo에서 작업하는가"를 물었다. 이 저장소는 2026-07-21에 이미 같은 계열의 사고를 겪었다 — 확정된 설계에 대한 오해가 세션을 넘어 전달돼 배포가 404로 실패했다. 답을 산문으로만 두면 같은 일이 반복되므로 불변식을 여기에 박아 둔다.
+- 세 저장소(private 개발 origin·공개 배포본·그룹 스킬 채널)의 구분은 아래 「세 저장소 구분 규칙」이 소유한다 — 이 절은 private↔public 방향만 다룬다.
+
+## 세 저장소 구분 규칙 (cha 지시, 2026-08-16)
+
+**이 시스템에는 서로 다른 역할의 git 저장소가 셋 있고 — `orientpine/autophagy-agents`(private, 유일한 개발 origin) · `orientpine/cytoplasm`(public, 코드 배포 파생본) · `orientpine/ribosome`(private, 그룹 관리형 스킬 채널) — 셋은 합쳐지지 않는다. 어느 것을 말하는지 먼저 확정하고 답한다.**
+
+| | `autophagy-agents` | `cytoplasm` | `ribosome` |
+|---|---|---|---|
+| 가시성 | private | **public** | private |
+| 역할 | **유일한 개발 origin**(영구) | 코드 배포 파생본 | 그룹 관리형 스킬 채널 |
+| 담기는 것 | 소스 전체 + `.omo/` + `docs/qa/` | 공개 스냅샷(fresh history) | 발행 스킬 릴리스 + 매니페스트 + `refs/heads/roster` |
+| 갱신 경로 | 사람·에이전트의 커밋·PR·머지 | `automation/public_export.sh` 단독 | `automation/managed_skills/publish_cli.py` 3단계 게이트 |
+| 서명키 | — | `update-trust@autophagy` | `publisher-<slug>@autophagy` |
+| 신뢰 파일 | — | `/etc/autophagy/update-allowed-signers` | `/etc/autophagy/managed-skills-allowed-signers` |
+| 검증 코드 | — | `automation/update_trust.py` | `automation/managed_sync/verify.py` |
+| 팀원 접근 | 없음 | 공개 clone | read-only deploy key(= 제거 메커니즘) |
+| 받는 쪽 동작 | — | 2분 리컨실러 자동 수렴 | fetch→검증→격리, **마운트는 본인 ✅**(D3) |
+| 소유 매뉴얼 | — | [manual-maintainer.md](docs/guide/manual-maintainer.md) | [manual-group-admin.md](docs/guide/manual-group-admin.md) |
+
+- **혼동의 진짜 원인: 설계상 소프트웨어 유지보수자와 그룹 관리자는 다른 사람이다**(D2, D1.1). 팀원의 소프트웨어 업데이트는 그룹 관리자를 거치지 않고 업스트림에서 직접 온다. cha가 지금 두 역할을 겸하고 있어 두 채널이 중복처럼 보일 뿐이며, 제3자가 자기 그룹을 열면 `ribosome`에 해당하는 자기 repo만 갖고 소프트웨어는 `cytoplasm`에서 받는다.
+- **합칠 수 없는 이유 ①: 접근 통제가 정반대다.** `cytoplasm`은 공개라 누구나 clone한다. 그룹 스킬 repo는 팀원마다 read-only deploy key를 발급하고 **그 키 폐기가 곧 멤버 제거**다(D1.3) — 공개 repo에서는 제거라는 개념 자체가 성립하지 않는다.
+- **합칠 수 없는 이유 ②: 검증 경로가 분리되어 있다.** 위 표의 서명키·신뢰파일·검증코드가 두 열 모두 다르고, 하나가 다른 하나를 대신하지 못한다. 산문이 아니라 코드가 진실이다 — `update_trust.py`(`UPDATE_ALLOWED_SIGNERS_PATH`)와 `managed_sync/verify.py`는 서로를 호출하지 않는 별개 경로다. D8의 「서명키가 둘이다 — 혼동 금지」가 가리키는 지점이 바로 여기다.
+- **합칠 수 없는 이유 ③: 업데이트 성격이 다르다.** 코드는 root 권한으로 자동 수렴하고, 스킬은 배달만 자동이고 live 마운트는 소유자 승인이다(D3, 영구 비목표).
+- **그룹이 언제 필요한가**(소유자가 실제로 물은 판단 기준): 팀원이 각자 자기 에이전트만 쓴다 → 그룹 **불필요**, 각자 `cytoplasm`에서 설치하면 끝. 에이전트끼리 Discord로 보고·조율한다 → **roster는 필요**(발신자 신원 대조, W-F2.5-B)하지만 repo는 선택이며 `~/.hermes/roster.yaml`을 손으로 배치해도 동작한다. 팀 공통 스킬을 배포한다 → 그룹 스킬 repo **필요**.
+- 절차는 여기에 복사하지 않는다 — 릴리스 컷은 [manual-maintainer.md](docs/guide/manual-maintainer.md), 발행·roster는 [manual-group-admin.md](docs/guide/manual-group-admin.md)·[managed-skill-channel.md](docs/guide/managed-skill-channel.md), 설치는 [install.md](docs/guide/install.md)가 단독으로 소유한다.
+- **배경(사후 반영)**: 2026-08-16 그룹 스킬 채널 repo `orientpine/ribosome`이 생기자마자 소유자가 세 저장소의 관계를 이해하지 못해 "내가 이해할 수 있게 도와줘"라고 물었다. 전날에도 같은 계열의 질문(공개 repo가 private를 대체하는가)이 나왔고, 2026-07-21에는 확정 설계에 대한 오해가 세션을 넘어 전달돼 배포가 404로 실패한 전례가 있다. 한 번 나온 혼동은 다음 사람도 겪으므로 채팅으로 한 번 답하지 않고 불변식으로 박아 둔다.

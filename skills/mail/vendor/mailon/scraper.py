@@ -59,6 +59,7 @@ from urllib.parse import urljoin, urlencode
 from bs4 import BeautifulSoup
 
 from .browser import AgentBrowser, BrowserError
+from .folders import _fetch_all_folder_page
 from .state import StateDB
 from .writer import Attachment, Mail
 
@@ -281,11 +282,12 @@ class InboxScraper:
 
     def __init__(
         self, browser: AgentBrowser, attachments_dir: Path,
-        *, folder_label: str = "inbox",
+        *, folder_label: str = "inbox", all_folders: bool = False,
     ) -> None:
         self.browser = browser
         self.attachments_dir = attachments_dir
         self.folder_label = folder_label
+        self.all_folders = all_folders
         self.folder_uid: str | None = None
 
     # ------------------------------------------------------------ setup
@@ -344,6 +346,11 @@ class InboxScraper:
         Returns the parsed JSON response.
         """
         assert self.folder_uid, "call resolve_inbox_folder_uid() first"
+        if self.all_folders:
+            return {
+                "result": True,
+                "contents": _fetch_all_folder_page(self.browser, self.folder_uid, page),
+            }
         start = (page - 1) * PAGE_SIZE
         form_params = {
             "tenant": "",
@@ -495,9 +502,12 @@ class InboxScraper:
         sender = parsed["from"] or ref.sender
         date = parsed["date"] or ref.date
 
+        folder = self.folder_label
+        if self.all_folders:
+            folder = "inbox" if ref.folder_uid == self.folder_uid else f"folder:{ref.folder_uid}"
         mail = Mail(
             uid=ref.uid,
-            folder=self.folder_label,
+            folder=folder,
             subject=subject.strip(),
             sender=sender.strip(),
             to=(parsed["to"] or ref.to).strip(),

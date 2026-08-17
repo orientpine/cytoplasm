@@ -21,6 +21,7 @@ def _write_roster(path: Path) -> None:
     valid_yaml = "\n".join(
         (
             "schema: 1",
+            "revision: 1",
             "group_id: example-lab",
             "admin:",
             "  name: Example Admin",
@@ -120,6 +121,7 @@ def test_add_member_command_when_entry_is_new_then_writes_active_member(
     assert len(roster.members) == 1
     assert roster.members[0].name == "Example Member"
     assert roster.members[0].status is MemberStatus.ACTIVE
+    assert roster.revision == 1
     assert roster.update_channel == "ssh://git@example.invalid/example/group-skills.git"
     assert "ROSTER-MEMBER-ADDED" in captured.out
     assert "DEPLOY-KEY-REGISTRATION-REQUIRED" in captured.out
@@ -185,6 +187,10 @@ def test_remove_member_command_when_active_then_records_revocation_without_remot
     roster = load_roster(path)
     assert result == 0
     assert roster.members[0].status is MemberStatus.REMOVED
+    # Removal is exactly when rollback protection matters: an unsigned feed host that
+    # can rewind the roster branch undoes this revocation unless the counter survives
+    # the rewrite that performed it (C2, security audit 2026-08-15).
+    assert roster.revision == 1
     assert "ROSTER-REVOCATION-READY" in captured.out
     assert "DEPLOY-KEY-REVOCATION-REQUIRED" in captured.out
     assert "REMOTE-RECALL-LIMIT" in captured.out

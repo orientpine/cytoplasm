@@ -30,6 +30,7 @@ from automation.deploy_update_channel import (
     with_update_channel,
 )
 from automation.node_config import load_node_config
+from automation.node_config_state import unconfigured_reason
 from automation.owner_notice import notify_owner
 from automation.release_rollback import (
     Command,
@@ -243,6 +244,13 @@ def sync_mirror(
 
 
 def main() -> int:
+    # Fail loudly rather than converge on a guess. An unconfigured node cannot reach
+    # its own origin, and the old behaviour was to skip with rc 0 forever — the state
+    # file kept saying everything was fine while production sat frozen.
+    unset = unconfigured_reason(_NODE_CONFIG)
+    if unset is not None:
+        print(f"[deploy-reconcile] NODE-CONFIG-UNSET {unset}", file=sys.stderr)
+        return 1
     update_channel = roster_update_channel()
     try:
         target_sha = (

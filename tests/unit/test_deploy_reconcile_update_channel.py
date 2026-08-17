@@ -138,6 +138,8 @@ def test_main_when_roster_channel_is_set_binds_the_same_channel_before_convergen
 
     monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: channel)
 
+    monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
+
     def candidate(selected_channel: str) -> str:
         events.append(("resolve", selected_channel))
         return target

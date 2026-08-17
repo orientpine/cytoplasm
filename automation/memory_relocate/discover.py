@@ -5,23 +5,23 @@ someone to run the CLI.  Autonomy stops here: choosing a candidate is not an
 external effect — the proposal still has to win cha's ✅ before anything is
 written or deleted.
 
-Conservative by construction: MEMORY.md only (USER.md holds identity/style and is
-never relocatable in v1), never an entry a relocation record already covers, and
-biggest-reclaim-first so each approval frees the most.
+Conservative by construction: both native stores, never an entry a relocation
+record already covers, and biggest-reclaim-first so each approval frees the most.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Final
 
 from automation.memory_curator.binding import entry_digest
 from automation.memory_curator.classify_model import EntryVerdict
 from automation.memory_curator.model import MemoryFile, MemoryKind
 from automation.memory_curator.reclaim import reclaimable_chars
 
-_RELOCATABLE_KIND: MemoryKind = "memory"
-_RELOCATABLE_ROUTE = "OPS_REFERENCE"
+_RELOCATABLE_KINDS: Final = frozenset[MemoryKind]({"memory", "user"})
+_RELOCATABLE_ROUTE: Final = "OPS_REFERENCE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,24 +38,24 @@ def select_candidate(
     known_digests: frozenset[str],
 ) -> RelocationCandidate | None:
     """Return the biggest unhandled OPS_REFERENCE candidate, or None."""
-    memory_file = files.get(_RELOCATABLE_KIND)
-    if memory_file is None:
-        return None
-
     best: RelocationCandidate | None = None
-    claimed: set[int] = set()
+    claimed: dict[MemoryKind, set[int]] = {kind: set() for kind in _RELOCATABLE_KINDS}
     for verdict in verdicts:
-        if verdict.route != _RELOCATABLE_ROUTE or verdict.source_kind != _RELOCATABLE_KIND:
+        if verdict.route != _RELOCATABLE_ROUTE or verdict.source_kind not in _RELOCATABLE_KINDS:
             continue
-        digest = entry_digest(_RELOCATABLE_KIND, verdict.entry_text)
+        memory_file = files.get(verdict.source_kind)
+        if memory_file is None:
+            continue
+        digest = entry_digest(verdict.source_kind, verdict.entry_text)
         if digest in known_digests:
             continue
-        index = _index_of(memory_file, verdict.entry_text, claimed)
+        claimed_indices = claimed[verdict.source_kind]
+        index = _index_of(memory_file, verdict.entry_text, claimed_indices)
         if index is None:
             continue
-        claimed.add(index)
+        claimed_indices.add(index)
         candidate = RelocationCandidate(
-            _RELOCATABLE_KIND,
+            verdict.source_kind,
             verdict.entry_text,
             digest,
             reclaimable_chars(memory_file, index),

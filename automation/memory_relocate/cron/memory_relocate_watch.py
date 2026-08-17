@@ -141,6 +141,33 @@ def _discover_and_propose(state: RelocationState, now: datetime) -> RelocationSt
     return replace(state, relocations={**dict(state.relocations), key: record})
 
 
+def _merge_effect_bindings(
+    before: RelocationState,
+    result: ResolveResult,
+    persisted: RelocationState,
+) -> ResolveResult:
+    relocations = dict(result.state.relocations)
+    for key, resolved in relocations.items():
+        initial = before.relocations.get(key)
+        current = persisted.relocations.get(key)
+        if initial is None or current is None:
+            continue
+        if initial.action_hash != current.action_hash or resolved.action_hash != current.action_hash:
+            continue
+        initial_binding = initial.message_id, initial.channel_id
+        current_binding = current.message_id, current.channel_id
+        if current_binding != initial_binding:
+            relocations[key] = replace(
+                resolved,
+                message_id=current.message_id,
+                channel_id=current.channel_id,
+            )
+    return replace(
+        result,
+        state=RelocationState(result.state.version, relocations),
+    )
+
+
 def run_once(now: datetime) -> ResolveResult:
     """Run one state-machine tick and persist its resulting immutable snapshot."""
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -152,6 +179,7 @@ def run_once(now: datetime) -> ResolveResult:
     # DM the record can never hold — an orphan, and a posting journal that outruns the state.
     save_state(STATE_PATH, state)
     result = resolve_tick(state, effects=build_effects(memory_dir=MEMORY_DIR, state_path=STATE_PATH, rag_state_path=RAG_STATE_PATH, token=token, owner_id=_owner_id(), now=now), max_posts=1)
+    result = _merge_effect_bindings(state, result, load_state(STATE_PATH))
     save_state(STATE_PATH, result.state)
     return result
 
