@@ -24,11 +24,14 @@ Env: TRIAGE_GATE_DIR, TRIAGE_DB, TRIAGE_APPROVAL_LOG, TRIAGE_MAIL_HOME,
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+import triage_approval
 import triage_confirm
 import triage_core
 import triage_digest
@@ -41,11 +44,22 @@ import triage_sensitivity
 import triage_store
 from triage_transport import _get_mail, _rules_path
 
+mail_evidence = importlib.import_module("mail_evidence")
+mail_knowledge = importlib.import_module("mail_knowledge")
+
 DEFAULT_REPLY_PROMPT = triage_pipeline.DEFAULT_REPLY_PROMPT
 
 
 def cmd_process(args: argparse.Namespace) -> int:
     return triage_pipeline.run_process(args)
+
+
+def _collect_private_evidence(
+    draft: dict[str, str], counterparty: str, subject: str, material: str,
+) -> object:
+    if not mail_preflight.ensure_cli_evidence_query(draft):
+        return mail_knowledge.unavailable(counterparty, subject, material)
+    return mail_knowledge.collect(counterparty, subject, material)
 
 
 def cmd_draft(args: argparse.Namespace) -> int:
@@ -58,16 +72,35 @@ def cmd_draft(args: argparse.Namespace) -> int:
             "먼저 discard 후 다시 시도", 2,
         )
     detail = _get_mail(args.uid)
+    pack = None
+    if bool(getattr(args, "with_evidence", False)):
+        to = triage_core.extract_reply_address(str(detail.get("sender") or ""))
+        if to:
+            subject = str(detail.get("subject") or "")
+            counterparty = str(detail.get("sender") or to)
+            pack = _collect_private_evidence(
+                {
+                    "id": f"evidence:{args.uid}", "to": to, "subject": subject,
+                    "body": str(detail.get("body") or ""),
+                },
+                counterparty, subject, args.instruction,
+            )
     rules = triage_sensitivity.load_rules(_rules_path())
-    gate, cls = triage_pipeline._gate_and_classify(args.uid, detail, rules)
+    evidence_text = mail_evidence.evidence_text(pack) if pack is not None else ""
+    gate, cls = triage_pipeline._gate_and_classify(
+        args.uid, detail, rules, evidence_text=evidence_text
+    )
     actions = triage_pipeline._draft_and_post(
         {**detail, "uid": args.uid}, gate, cls,
         post=not args.no_post, instruction=args.instruction,
         attachments=tuple(getattr(args, "attachment", ()) or ()),
+        evidence_pack=pack,
     )
     if "reply-no-address" in actions:
         raise triage_gate.GateError("회신 주소를 찾을 수 없음 — 초안 생성 불가", 2)
     draft_id = actions[0].removeprefix("draft:")
+    if pack is not None:
+        mail_evidence.write_sidecar(triage_gate.gate_dir(), draft_id, pack)
     triage_store.record_processed(
         triage_gate.db_path(), args.uid, category=cls.category, sensitive=gate.sensitive,
         action=f"instr-draft:{draft_id}", processed_at=triage_core.utc_now(),
@@ -80,13 +113,37 @@ def cmd_draft(args: argparse.Namespace) -> int:
 def cmd_compose(args: argparse.Namespace) -> int:
     if triage_mode.effective_mode() == "no-go":
         raise triage_gate.GateError("mail-mode=no-go — W4-2 파이프라인 비활성(W4-1N 분기)", 3)
+    cc = ", ".join(getattr(args, "cc", ()) or ())
+    pack = None
+    if bool(getattr(args, "with_evidence", False)):
+        pack = _collect_private_evidence(
+            {
+                "id": "evidence:compose", "to": args.to, "cc": cc,
+                "subject": args.subject, "body": args.body,
+            },
+            args.to, args.subject, args.body,
+        )
     draft = triage_pipeline.compose_and_post(
         args.to, args.subject, args.body, post=not args.no_post,
-        attachments=tuple(getattr(args, "attachment", ()) or ()),
-        cc=", ".join(getattr(args, "cc", ()) or ()),
+        attachments=tuple(getattr(args, "attachment", ()) or ()), cc=cc,
+        evidence_pack=pack,
     )
+    if pack is not None:
+        mail_evidence.write_sidecar(triage_gate.gate_dir(), str(draft["id"]), pack)
     posted = int(bool(draft.get("message_id")))
     print(f"COMPOSED draft={draft['id']} posted={posted}")
+    return 0
+
+
+def cmd_evidence(args: argparse.Namespace) -> int:
+    pack = _collect_private_evidence(
+        {
+            "id": "evidence:preview", "to": args.counterparty,
+            "subject": args.subject, "body": args.material,
+        },
+        args.counterparty, args.subject, args.material,
+    )
+    print(mail_evidence.preview(pack, as_json=args.json))
     return 0
 
 
@@ -113,6 +170,29 @@ def cmd_digest_items(args: argparse.Namespace) -> int:
 
 
 _DM_NOTIFIABLE_METHODS: Final = frozenset({"manual_reaction"})
+
+
+def _remind_pending(draft: dict, config: object | None) -> None:
+    if config is None:
+        return
+    lifecycle = triage_approval.lifecycle()
+    reminder = triage_approval._repo_module("approval_reminder")
+    lease_module = triage_approval._lease_module()
+    context = reminder.ReminderContext(
+        config=config,
+        journal=lease_module.ReminderJournal(triage_gate.gate_dir() / "reminder-journal"),
+        request_type=triage_approval.triage_binding.approval_kind(draft),
+        deliver=lambda channel_id, content: triage_confirm.post_approval_request(
+            content, channel_id
+        ),
+        clock=lambda: datetime.now(UTC),
+    )
+    lifecycle.remind_owner_approval(
+        triage_approval.request_of(draft),
+        triage_approval.MailApprovalGate(draft),
+        triage_approval.confirm_lease(),
+        context,
+    )
 
 
 def _notify_sent(draft: dict, method: str) -> None:
@@ -158,6 +238,7 @@ def cmd_watch(_args: argparse.Namespace) -> int:
             draft = {**draft, "message_id": triage_pipeline._post_draft_for_approval(draft)}
             print(f"REPOSTED draft={draft['id']} message={draft['message_id']}")
         try:
+            _remind_pending(draft, getattr(_args, "reminder_config", None))
             action = triage_confirm.resolve_reaction(draft)
         except triage_gate.GateError as error:
             if error.exit_code != 1:
@@ -255,6 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="첨부할 로컬 파일 경로 (여러 번 지정 가능)",
     )
     draft.add_argument("--no-post", action="store_true", help="초안만 만들고 승인 메시지 게시 생략")
+    draft.add_argument("--with-evidence", action="store_true", help="상대·주제 관련 개인 근거 사용")
     draft.set_defaults(func=cmd_draft)
 
     compose = sub.add_parser(
@@ -272,7 +354,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="첨부할 로컬 파일 경로 (여러 번 지정 가능)",
     )
     compose.add_argument("--no-post", action="store_true", help="초안만 만들고 승인 메시지 게시 생략")
+    compose.add_argument("--with-evidence", action="store_true", help="상대·주제 관련 개인 근거 사용")
     compose.set_defaults(func=cmd_compose)
+
+    evidence = sub.add_parser("evidence", help="상대·주제 관련 근거 미리보기")
+    evidence.add_argument("--counterparty", required=True)
+    evidence.add_argument("--subject", required=True)
+    evidence.add_argument("--material", default="")
+    evidence.add_argument("--json", action="store_true")
+    evidence.set_defaults(func=cmd_evidence)
 
     digest = sub.add_parser("digest", help="기관메일 다이제스트 개인 메시지 생성 (읽기 전용)")
     digest.add_argument("--limit", type=int, default=20)
@@ -315,6 +405,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
+        if args.func is cmd_watch:
+            config_module = triage_approval._repo_module("approval_reminder_config")
+            args.reminder_config = config_module.load_approval_reminder_config()
         return int(args.func(args))
     except triage_gate.GateError as error:
         print(f"GATE-REFUSED {error}", file=sys.stderr)

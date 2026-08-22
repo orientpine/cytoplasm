@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .browser import BrowserError
+from .send_trigger import open_compose_when_ready
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ def resolve_name(browser: ResolveBrowser, query: str) -> tuple[list[str], int]:
     opened; nothing is submitted.
     """
     log.debug("resolve_name: opening compose for query %r", query)
-    browser.eval_js("window._tbar.compose(); 'compose-opened';")
+    open_compose_when_ready(browser)
     browser.wait_ms(3000)
     browser.clear_network_requests()
     try:

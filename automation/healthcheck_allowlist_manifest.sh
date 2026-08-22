@@ -8,12 +8,13 @@ readonly MANIFEST_FILE="${HEALTHCHECK_ALLOWLIST_MANIFEST_FILE:-$SCRIPT_DIR/healt
 # shellcheck source=automation/healthcheck_command_builder.sh
 source "$SCRIPT_DIR/healthcheck_command_builder.sh"
 # shellcheck source=automation/healthcheck.sh
+export HEALTHCHECK_NODE_CONFIG_PATH="$SCRIPT_DIR/../configs/node.example.toml"
 source "$SCRIPT_DIR/healthcheck.sh"
+readonly SYNTHETIC_CHECK="synthetic nonexistent ops unit|user_unit_active|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|autophagy-healthcheck-synthetic-does-not-exist.service"
 
 print_manifest() {
   local definition check_name
-  local synthetic="synthetic nonexistent ops unit|user_unit_active|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|autophagy-healthcheck-synthetic-does-not-exist.service"
-  for definition in "${LIVE_CHECKS[@]}" "$synthetic"; do
+  for definition in "${LIVE_CHECKS[@]}" "$SYNTHETIC_CHECK"; do
     IFS='|' read -r check_name _ <<< "$definition"
     healthcheck_repair_command "$check_name"
     printf '\n'

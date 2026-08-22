@@ -154,7 +154,12 @@ class ComposeSender:
             except send_verify.SendVerifyError as error:
                 raise SendSafetyError(str(error)) from error
 
-        self._browser.eval_js("window._tbar.compose(); 'compose-opened';")
+        send_trigger.open_compose_when_ready(self._browser, clock=self._clock)
+        # The retry proves only that _tbar.compose() became callable (~1.9s
+        # measured). Nothing has measured when the compose form (CSRF token,
+        # #adr-to-ipt_ta, editor iframe) finishes rendering, and every downstream
+        # probe fails closed, so keep the settle wait rather than trade a measured
+        # fix for an unmeasured race.
         self._browser.wait_ms(3000)
         self._browser.clear_network_requests()
         compose_metadata = self._browser.eval_json(

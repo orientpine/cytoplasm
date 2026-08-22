@@ -44,11 +44,10 @@ def _manifest(
     )
 
 
-def _definitions(tmp_path: Path) -> list[str]:
+def _live_definitions(tmp_path: Path) -> list[str]:
     script = (
         f'source "{_HEALTHCHECK}"; '
-        'printf "%s\\n" "${LIVE_CHECKS[@]}"; '
-        f'printf "%s\\n" "{_SYNTHETIC}"'
+        'printf "%s\\n" "${LIVE_CHECKS[@]}"'
     )
     result = subprocess.run(
         ("bash", "-c", script),
@@ -59,6 +58,10 @@ def _definitions(tmp_path: Path) -> list[str]:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout.splitlines()
+
+
+def _definitions(tmp_path: Path) -> list[str]:
+    return [*_live_definitions(tmp_path), _SYNTHETIC]
 
 
 def _fake_ssh(tmp_path: Path) -> tuple[Path, Path]:
@@ -112,12 +115,16 @@ def test_healthcheck_has_a_source_execution_guard() -> None:
     assert 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi' in body
 
 
-def test_manifest_prints_all_seventeen_d1_commands(tmp_path: Path) -> None:
+def test_manifest_is_derived_from_every_live_check_plus_the_synthetic_check(
+    tmp_path: Path,
+) -> None:
+    definitions = _definitions(tmp_path)
     result = _manifest(tmp_path, "--print")
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert len(lines) == 17
+    assert [definition for definition in definitions if definition == _SYNTHETIC] == [_SYNTHETIC]
+    assert len(lines) == len(definitions)
     assert all("sudo -n -u agent -H env PATH=" in line for line in lines)
     assert all("XDG_RUNTIME_DIR=/run/user/4242" in line for line in lines)
     assert all("/usr/bin/python3 -I" in line for line in lines)
@@ -132,7 +139,20 @@ def test_committed_manifest_matches_generator_bytes(tmp_path: Path) -> None:
     assert _COMMITTED_MANIFEST.read_bytes() == result.stdout.encode()
 
 
-def test_report_repair_matches_manifest_through_seventeen_independent_calls(
+def test_direct_manifest_invocation_uses_the_tracked_seed() -> None:
+    result = subprocess.run(
+        ("bash", str(_MANIFEST_SCRIPT), "--print"),
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=_REPO,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _COMMITTED_MANIFEST.read_bytes() == result.stdout.encode()
+
+
+def test_report_repair_matches_manifest_through_independent_calls(
     tmp_path: Path,
 ) -> None:
     definitions = _definitions(tmp_path)
@@ -143,7 +163,6 @@ def test_report_repair_matches_manifest_through_seventeen_independent_calls(
         for index, definition in enumerate(definitions)
     ]
 
-    assert len(captured) == 17
     _assert_manifest_matches(captured, expected)
 
 

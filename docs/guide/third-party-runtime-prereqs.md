@@ -202,10 +202,10 @@ curl -sf -H "Authorization: Bearer $YOUR_KEY" http://127.0.0.1:4000/v1/models | 
 
 | 항목 | 값 |
 |---|---|
-| 검증된 버전 | **Hermes Agent v0.18.2 (2026.7.7.2)** — upstream `46e87b14`, install method `git` |
-| 검증 일자 | 2026-08-14 (프로덕션 노드 실측) |
+| 검증된 버전 | **Hermes Agent v0.20.3 (2026.8.16.2)** — upstream `a3995f8a`, install method `git` |
+| 검증 일자 | 2026-08-18 (프로덕션 노드 실측, agent·peer가 같은 커밋) |
 | 검증된 Python | 3.11.15 (요구: 3.11+) |
-| 지원 범위 | v0.18.x. 그 밖의 마이너 버전은 **미검증**이며 자기 책임으로 사용한다 |
+| 지원 범위 | v0.20.x. 그 밖의 마이너 버전은 **미검증**이며 자기 책임으로 사용한다 |
 
 확인:
 

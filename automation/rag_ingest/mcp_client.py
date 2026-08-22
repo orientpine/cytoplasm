@@ -173,8 +173,16 @@ class McpMemoryClient:
             raise McpFatalError("load_memory returned non-dict result")
         return cast(dict[str, JsonValue], loaded)
 
-    def search_memory(self, query: str, limit: int = 5) -> list[dict[str, JsonValue]]:
-        found = self.call_tool("search_memory", {"query": query, "limit": limit})
+    def search_memory(
+        self,
+        query: str,
+        limit: int = 5,
+        entity_anchors: tuple[str, ...] | None = None,
+    ) -> list[dict[str, JsonValue]]:
+        arguments: dict[str, JsonValue] = {"query": query, "limit": limit}
+        if entity_anchors is not None:
+            arguments["entity_anchors"] = list(entity_anchors)
+        found = self.call_tool("search_memory", arguments)
         if not isinstance(found, list):
             raise McpFatalError("search_memory returned non-list result")
         if not all(isinstance(item, dict) for item in found):

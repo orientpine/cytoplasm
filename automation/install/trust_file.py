@@ -86,6 +86,18 @@ def apply_install(plan: InstallPlan, filesystem: TrustKeyFilesystem) -> None:
     filesystem.set_ownership(plan.path, plan.uid, plan.gid)
 
 
+def read_existing(path: Path, filesystem: TrustKeyFilesystem) -> str:
+    """Return the installed allowed-signers text, or "" when there is none.
+
+    An overlap rotation merges into whatever is already trusted; a fresh host
+    has nothing, and that is not an error. Parsing stays in `allowed_signers`.
+    """
+    try:
+        return filesystem.read_text(path)
+    except OSError:
+        return ""
+
+
 def verify_installed(
     request: VerificationRequest,
     filesystem: TrustKeyFilesystem,

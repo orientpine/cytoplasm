@@ -11,6 +11,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _HC = _ROOT / "automation" / "hermes_compat"
 _MANIFEST = _HC / "manifest.json"
 _DEPLOY = _HC / "deploy-owner-dm.sh"
+_DEPLOY_POLICY = _HC / "deploy-public-message-policy.sh"
 
 _REQUIRED_PATCH_FIELDS = {"id", "target", "applier", "marker", "backup_suffix"}
 
@@ -22,8 +23,62 @@ def _patches() -> list[dict[str, str]]:
     return cast("list[dict[str, str]]", patches)
 
 
-def test_manifest_is_valid_json_with_three_patches() -> None:
-    assert len(_patches()) == 3
+def test_manifest_lists_every_carried_patch() -> None:
+    assert len(_patches()) == 5
+
+
+def test_manifest_ids_are_unique() -> None:
+    ids = [patch["id"] for patch in _patches()]
+    assert len(ids) == len(set(ids))
+
+
+def test_every_patch_documents_why_it_exists_and_when_it_goes_away() -> None:
+    for patch in _patches():
+        for field in ("reason", "removal_condition", "upstream_pr"):
+            assert patch.get(field), f"{patch.get('id')!r} is missing {field}"
+
+
+def test_public_message_policy_patch_ids_present() -> None:
+    ids = {patch["id"] for patch in _patches()}
+    assert "discord-public-message-policy" in ids
+    assert "discord-public-approval-details" in ids
+
+
+def test_public_message_policy_patches_target_the_right_files() -> None:
+    targets = {patch["id"]: patch["target"] for patch in _patches()}
+    assert targets["discord-public-message-policy"] == "gateway/run.py"
+    assert targets["discord-public-approval-details"] == "plugins/platforms/discord/adapter.py"
+
+
+def test_policy_deploy_script_passes_bash_syntax_check() -> None:
+    result = subprocess.run(
+        ["bash", "-n", str(_DEPLOY_POLICY)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_policy_deploy_script_keeps_the_owner_dm_safety_shape() -> None:
+    text = _DEPLOY_POLICY.read_text(encoding="utf-8")
+    # Provenance guard, preflight on copies, fail-closed drain guard, transaction.
+    assert "deploy_provenance_check" in text
+    assert "PREFLIGHT" in text
+    assert "DRAIN-GUARD" in text
+    assert "ALLOW_INFLIGHT_RESTART" in text
+    assert "owner-dm-txn.sh" in text
+    assert "owner-dm-restore.sh" in text
+    assert "restore_from_snapshot" in text
+    assert "ROLLBACK-RECOVERY-FAILED" in text
+    # Both appliers, and the policy module shipped as a runtime dep.
+    assert "patch_public_message_policy.py" in text
+    assert "patch_discord_public_approval.py" in text
+    assert "public_message_policy.py" in text
+    assert "hermes_compat_boot.py" in text
+    # Both gateways restart together (AGENTS.md 2026-07-22).
+    assert "restart_one agent || agent_ok=0" in text
+    assert "restart_one peer || peer_ok=0" in text
 
 
 def test_every_patch_has_required_fields() -> None:

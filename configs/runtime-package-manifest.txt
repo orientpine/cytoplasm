@@ -1,0 +1,18 @@
+# Runtime Python packages: release source -> account-home deployment.
+#
+# Why this exists: the RAG watcher imports ~/.hermes/rag_ingest_runtime, not the
+# immutable release. On 2026-08-22 that runtime was still dated 2026-07-15..22:
+# release comparison found same=13, DIFF=5, ABSENT=1, while wrapper-only drift
+# monitoring reported clean. In other words, release convergence did not deploy the
+# package and the missing deployer made a month of fixes silently unreachable.
+# memory_curator is the measured control (same=34, diff=0) and uses the same layout.
+#
+# Format: <account>|<release-subpath>|<home-relative-runtime-path>|<policy>[|<node>|<profile>]
+# Four fields remain backward-compatible: the check's primary node and recursive Python
+# snapshot are defaults. `rag|tree` selects NODE_RAG_NODE_NAME and hashes the complete
+# managed tree because Dockerfiles, Compose, pyproject/locks, service/env examples, and
+# dockerignore files can change deployment/build behavior. Node-only .env.secrets and
+# cache directories are always excluded. Only verified like-for-like layouts belong here.
+agent|automation/rag_ingest|.hermes/rag_ingest_runtime/rag_ingest|required
+agent|automation/memory_curator|.hermes/memory_curator_runtime/memory_curator|required
+ops|configs/rag|personal-rag|required|rag|tree

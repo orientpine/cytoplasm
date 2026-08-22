@@ -20,9 +20,11 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import meeting_actions
+import meeting_evidence
 import meeting_extract
 import meeting_gate
 import meeting_llm
+import meeting_knowledge
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -80,7 +82,7 @@ def _run_kanban(card: meeting_actions.PlannedCard) -> str:
         return "unknown"
 
 
-def cmd_ingest(args: argparse.Namespace) -> int:
+def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) -> int:
     started = time.monotonic()
     config = _config()
     now = datetime.now(KST)
@@ -110,7 +112,11 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             "/srv/autophagy-skills/live/meeting/configs/sensitivity-rules.yaml",
         )
     )
-    gate = meeting_gate.evaluate(extracted.text, rules)
+    pack = evidence_pack
+    if args.with_evidence and pack is None:
+        pack = meeting_knowledge.collect(label, extracted.text, extracted.text)
+    evidence_text = "\n".join(item.content for item in getattr(pack, "items", ()))
+    gate = meeting_gate.evaluate("\n".join((extracted.text, evidence_text)), rules)
     ref = hashlib.sha256(extracted.text.encode("utf-8")).hexdigest()[:8]
     record.update(
         {"kind": extracted.kind, "bytes": extracted.input_bytes, "ref": ref,
@@ -134,6 +140,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             base_url=os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:4000/v1"),
             api_key=os.environ.get("LITELLM_AGENT_KEY", ""),
             recorded_response=recorded,
+            evidence=meeting_evidence.prompt_block(pack) if pack is not None else "",
         )
     except (meeting_llm.ExtractionParseError, meeting_llm.PatentRoutingError, OSError) as error:
         notice = "회의록 추출 실패: LLM 응답을 해석하지 못했습니다. 다시 시도해 주세요."
@@ -144,6 +151,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         return 6
     record["provider"] = provider
     record["glm_called"] = provider == meeting_llm.GLM_MODEL
+    evidence_footer = ""
+    if pack is not None:
+        extraction, evidence_footer = meeting_evidence.finalize(extraction, pack)
 
     sensitive_label = "민감 회의" if gate.sensitive else label
     note_path = meeting_actions.write_note(
@@ -155,7 +165,10 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         sensitive=gate.sensitive,
         ref=ref,
         now=now,
+        evidence_footer=evidence_footer,
     )
+    if pack is not None:
+        meeting_evidence.write_sidecar(note_path, pack)
 
     cards = meeting_actions.plan_cards(
         extraction, sensitive=gate.sensitive, note_name=note_path.name, ref=ref,
@@ -207,12 +220,15 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         {"exit": 0, "todos": len(extraction.todos), "milestones": len(extraction.milestones),
          "others": len(extraction.others), "cards": len(cards), "card_ids": card_ids,
          "milestones_added": milestones_added, "note": note_path.name,
-         "team_posted": team_posted, "elapsed_s": round(time.monotonic() - started, 1)}
+         "team_posted": team_posted, "elapsed_s": round(time.monotonic() - started, 1),
+         "evidence_count": len(getattr(pack, "items", ())) if pack is not None else 0,
+         "layers": getattr(pack, "layers", {}) if pack is not None else {}}
     )
     _log(record)
     output = {key: record[key] for key in
               ("exit", "ref", "sensitive", "provider", "glm_called", "todos",
-               "milestones", "others", "cards", "milestones_added", "note", "team_posted")}
+               "milestones", "others", "cards", "milestones_added", "note", "team_posted",
+               "evidence_count", "layers")}
     print(json.dumps(output, ensure_ascii=False))
     return 0
 
@@ -242,7 +258,16 @@ def main(argv: list[str] | None = None) -> int:
     ingest.add_argument("--notify-channel", help="결과 통지 Discord 채널 ID")
     ingest.add_argument("--recorded-response", help="녹화된 LLM 응답 파일(테스트 전용)")
     ingest.add_argument("--offline", action="store_true", help="외부 부작용 없이 계획만 기록")
+    ingest.add_argument("--with-evidence", action="store_true", help="선행 회의·노트 근거 수집")
     ingest.set_defaults(func=cmd_ingest)
+
+    evidence = subparsers.add_parser("evidence", help="선행 회의·노트 근거 미리보기")
+    evidence.add_argument("--title", required=True)
+    evidence.add_argument("--attendees", default="")
+    evidence.add_argument("--topics", required=True)
+    evidence.add_argument("--limit", type=int, default=8)
+    evidence.add_argument("--json", action="store_true")
+    evidence.set_defaults(func=meeting_evidence.command)
 
     gate = subparsers.add_parser("gate", help="민감도 게이트 단독 평가")
     gate.add_argument("--file", required=True)

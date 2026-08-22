@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 import automation.deploy_reconcile_cli as reconcile_cli
+from automation.deploy_reconcile import FAILURE_NOTICE_THRESHOLD
 from automation.deploy_reconcile_cli import (
     converge_command,
     current_release_sha,
@@ -105,6 +106,39 @@ def test_protected_home_still_lets_the_tick_reach_origin() -> None:
     assert "BindPaths=/home/ops/.ssh" not in text
 
 
+def test_protected_home_still_lets_the_tick_restart_the_gateway_pair() -> None:
+    """`ProtectHome=` 는 `/run/user` 도 덮는다 — 그곳이 제어 소켓이 사는 곳이다.
+
+    `autophagy-gateway-pair` 는 각 Hermes 게이트웨이를
+    `runuser -u <account> -- env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user restart`
+    로 재시작한다. systemd.exec(5) 가 명시한다 — "the directories /home/, /root,
+    and /run/user are made inaccessible and empty"(노드의 systemd 255 man 페이지에서
+    직접 확인). 그러면 `$XDG_RUNTIME_DIR/systemd/private` 가 아예 없어 클라이언트가
+    1초도 안 돼서 죽는다.
+
+    실측 2026-08-16·2026-08-19: 두 번의 수렴이 모두 릴리스를 설치한 **뒤** 이
+    단계에서 `reason=gateway-restart` 로 롤백됐고, 그 사이 프로덕션은 3일간
+    얼어 있었다. 같은 헬퍼를 로그인 세션(=샌드박스 밖)에서 돌리면
+    `active`/`active` rc=0 이다 — 즉 변수는 헬퍼가 아니라 이 유닛의 마운트
+    네임스페이스 하나뿐이다.
+
+    되노출은 read-write 여야 한다: unix 소켓 connect 는 파일시스템 읽기가 아니다.
+    그리고 계정별 `/run/user/<uid>` 는 여전히 0700 이므로, 이것은 실제로 재시작을
+    수행하는 root 헬퍼가 이미 닿을 수 있던 것 외에 아무것도 더 열어주지 않는다."""
+    directives = [
+        line.strip()
+        for line in _service_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert "BindPaths=/run/user" in directives, (
+        "ProtectHome 이 /run/user 를 비우면 게이트웨이 재시작이 매번 실패해 "
+        "모든 수렴이 빌드 직후 롤백된다"
+    )
+    assert "BindReadOnlyPaths=/run/user" not in directives, (
+        "소켓 connect 는 read-only 되노출로는 성립하지 않는다"
+    )
+
+
 def test_service_may_write_its_state_directory_and_the_mirror_it_carries() -> None:
     """Two paths, each earned. The mirror is here because the tick fast-forwards it."""
     text = _service_text()
@@ -162,6 +196,7 @@ def test_main_when_signed_update_is_untrusted_then_never_calls_privileged_helper
 ) -> None:
     # Given: the public branch head has no trusted signed release tag.
     calls: list[str] = []
+    notices: list[str] = []
 
     def blocked_target() -> str:
         raise UpdateTrustError("UNSIGNED-HEAD", "origin/main lacks a signed release tag")
@@ -175,15 +210,64 @@ def test_main_when_signed_update_is_untrusted_then_never_calls_privileged_helper
     monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
     monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(reconcile_cli, "run_release_update", unexpected_release)
+    monkeypatch.setattr(reconcile_cli, "notify_owner", lambda notice: not notices.append(notice))
 
     # When: the reconciliation timer runs.
-    result = reconcile_cli.main()
+    results = [reconcile_cli.main() for _ in range(FAILURE_NOTICE_THRESHOLD)]
 
     # Then: the pre-convergence gate blocks before any root helper or state mutation.
-    assert result == 0
+    assert results == [0] * FAILURE_NOTICE_THRESHOLD
     assert calls == []
-    assert not (tmp_path / "state.json").exists()
+    assert len(notices) == 1
+    assert reconcile_cli.load_state(tmp_path / "state.json").consecutive_failures == (
+        FAILURE_NOTICE_THRESHOLD
+    )
     assert "UPDATE-TRUST-BLOCK UNSIGNED-HEAD" in capsys.readouterr().err
+
+
+def test_main_when_update_target_stays_unresolved_then_notifies_at_failure_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    notices: list[str] = []
+    monkeypatch.setattr(reconcile_cli, "candidate_update_sha", lambda: "")
+    monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
+    monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
+    monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(reconcile_cli, "notify_owner", lambda notice: not notices.append(notice))
+
+    results = [reconcile_cli.main() for _ in range(FAILURE_NOTICE_THRESHOLD)]
+
+    assert results == [0] * FAILURE_NOTICE_THRESHOLD
+    assert len(notices) == 1
+    assert reconcile_cli.load_state(tmp_path / "state.json").consecutive_failures == (
+        FAILURE_NOTICE_THRESHOLD
+    )
+
+
+def test_main_when_channel_binding_stays_blocked_then_notifies_at_failure_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    notices: list[str] = []
+    monkeypatch.setattr(reconcile_cli, "candidate_update_sha", lambda: "b" * 40)
+    monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
+    monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
+    monkeypatch.setattr(
+        reconcile_cli,
+        "persist_update_channel_binding",
+        lambda _channel, _path: (_ for _ in ()).throw(OSError("read-only")),
+    )
+    monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(reconcile_cli, "notify_owner", lambda notice: not notices.append(notice))
+
+    results = [reconcile_cli.main() for _ in range(FAILURE_NOTICE_THRESHOLD)]
+
+    assert results == [0] * FAILURE_NOTICE_THRESHOLD
+    assert len(notices) == 1
+    assert reconcile_cli.load_state(tmp_path / "state.json").consecutive_failures == (
+        FAILURE_NOTICE_THRESHOLD
+    )
 
 
 def test_main_when_signed_update_is_trusted_then_reconciles_to_tag_commit(

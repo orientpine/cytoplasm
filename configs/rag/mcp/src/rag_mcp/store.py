@@ -60,6 +60,26 @@ class QdrantQueryResponse(BaseModel):
     result: QdrantQueryResult
 
 
+class QdrantScrollPoint(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    id: str | int
+    payload: MemoryPayload
+
+
+class QdrantScrollResult(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    next_page_offset: str | int | None = None
+    points: list[QdrantScrollPoint]
+
+
+class QdrantScrollResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    result: QdrantScrollResult
+
+
 class MemoryLoadResult(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
@@ -154,29 +174,130 @@ class MemoryStore:
             chunk_id=chunk_id,
         )
 
-    async def search(self, query: str, limit: int) -> list[MemorySearchResult]:
+    async def search(
+        self,
+        query: str,
+        limit: int,
+        entity_anchors: list[str] | None = None,
+    ) -> list[MemorySearchResult]:
         vector = await self.embed(query)
+        if not entity_anchors:
+            async with self.client(self.settings.qdrant_url) as client:
+                response = await client.post(
+                    f"/collections/{self.settings.collection_name}/points/query",
+                    json={
+                        "limit": limit,
+                        "query": vector,
+                        "with_payload": True,
+                    },
+                )
+                _ = response.raise_for_status()
+            query_result = QdrantQueryResponse.model_validate(response.json()).result
+            return [self._search_result(point) for point in query_result.points]
+
+        anchors = tuple(dict.fromkeys(anchor.strip().casefold() for anchor in entity_anchors))
+        anchors = tuple(anchor for anchor in anchors if anchor)
+        if not anchors:
+            return await self.search(query, limit)
+        semantic_points = await self._query_points(vector, limit)
+        exact_point_ids, exact_document_ids = await self._literal_point_ids(anchors)
+        exact_points = (
+            await self._query_points(vector, limit, point_ids=exact_point_ids)
+            if exact_point_ids
+            else []
+        )
+        by_document: dict[str, MemorySearchResult] = {}
+        for point in (*semantic_points, *exact_points):
+            result = self._search_result(point)
+            previous = by_document.get(result.document_id)
+            if previous is None or result.score > previous.score:
+                by_document[result.document_id] = result
+        return sorted(
+            by_document.values(),
+            key=lambda result: self._rank_key(result, exact_document_ids),
+            reverse=True,
+        )[:limit]
+
+    async def _query_points(
+        self,
+        vector: list[float],
+        limit: int,
+        *,
+        point_ids: list[str | int] | None = None,
+    ) -> list[QdrantPoint]:
+        body: dict[str, object] = {
+            "limit": limit,
+            "query": vector,
+            "with_payload": True,
+        }
+        if point_ids is not None:
+            body["filter"] = {"must": [{"has_id": point_ids}]}
         async with self.client(self.settings.qdrant_url) as client:
             response = await client.post(
                 f"/collections/{self.settings.collection_name}/points/query",
-                json={
-                    "limit": limit,
-                    "query": vector,
-                    "with_payload": True,
-                },
+                json=body,
             )
             _ = response.raise_for_status()
-        query_result = QdrantQueryResponse.model_validate(response.json()).result
-        return [
-            MemorySearchResult(
-                content=point.payload.content,
-                document_id=point.payload.document_id,
-                metadata=point.payload.metadata,
-                score=point.score,
-                source=point.payload.source,
-            )
-            for point in query_result.points
-        ]
+        return QdrantQueryResponse.model_validate(response.json()).result.points
+
+    async def _literal_point_ids(
+        self,
+        anchors: tuple[str, ...],
+    ) -> tuple[list[str | int], set[str]]:
+        point_ids: list[str | int] = []
+        document_ids: set[str] = set()
+        offset: str | int | None = None
+        while True:
+            body: dict[str, object] = {"limit": 256, "with_payload": True}
+            if offset is not None:
+                body["offset"] = offset
+            async with self.client(self.settings.qdrant_url) as client:
+                response = await client.post(
+                    f"/collections/{self.settings.collection_name}/points/scroll",
+                    json=body,
+                )
+                _ = response.raise_for_status()
+            page = QdrantScrollResponse.model_validate(response.json()).result
+            for point in page.points:
+                payload = point.payload
+                haystack = "\n".join(
+                    (
+                        payload.content,
+                        payload.source,
+                        *(f"{key}: {value}" for key, value in payload.metadata.items()),
+                    )
+                ).casefold()
+                if any(anchor in haystack for anchor in anchors):
+                    point_ids.append(point.id)
+                    document_ids.add(payload.document_id)
+            offset = page.next_page_offset
+            if offset is None:
+                return point_ids, document_ids
+
+    @staticmethod
+    def _search_result(point: QdrantPoint) -> MemorySearchResult:
+        return MemorySearchResult(
+            content=point.payload.content,
+            document_id=point.payload.document_id,
+            metadata=point.payload.metadata,
+            score=point.score,
+            source=point.payload.source,
+        )
+
+    @staticmethod
+    def _rank_key(
+        result: MemorySearchResult,
+        exact_document_ids: set[str],
+    ) -> tuple[bool, float, bool, str]:
+        event_date = result.metadata.get("event_date", "") or result.metadata.get(
+            "document_updated", ""
+        )
+        return (
+            result.document_id in exact_document_ids,
+            result.score,
+            bool(event_date),
+            event_date,
+        )
 
     async def delete(self, document_id: str) -> MemoryDeleteResult:
         async with self.client(self.settings.qdrant_url) as client:

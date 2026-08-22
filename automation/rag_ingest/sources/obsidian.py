@@ -26,6 +26,7 @@ from ..config import ObsidianSourceConfig
 from ..documents import Chunk, LogicalDocument
 from ..sensitivity import SensitivityRules, SensitivityRulesError, classify, load_rules
 from .files import scan_directory
+from .obsidian_dates import explicit_date_metadata
 
 _GIT_TIMEOUT_SECONDS: Final = 120.0
 _GIT_CLONE_TIMEOUT_SECONDS: Final = 3600.0  # initial clone of a large vault (659MB+)
@@ -260,14 +261,18 @@ def scan_obsidian(
         relative = document.source_key.removeprefix("obsidian:")
         parts = relative.split("/")
         folder_document = _with_folder(document, parts[0]) if len(parts) > 1 else document
+        dated_document = _with_chunk_metadata(
+            folder_document,
+            explicit_date_metadata(folder_document, relative),
+        )
         if sensitivity_rules is None:
-            enriched.append(folder_document)
+            enriched.append(dated_document)
             continue
-        full_text = "\n\n".join(chunk.content for chunk in folder_document.chunks)
+        full_text = "\n\n".join(chunk.content for chunk in dated_document.chunks)
         tags = classify(full_text, sensitivity_rules)
         enriched.append(
-            _with_sensitivity(folder_document, "patent-sensitive")
+            _with_sensitivity(dated_document, "patent-sensitive")
             if "patent-sensitive" in tags
-            else folder_document
+            else dated_document
         )
     return enriched, present_keys

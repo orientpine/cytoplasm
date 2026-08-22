@@ -44,6 +44,7 @@ def test_round_trip_preserves_every_field(tmp_path: Path) -> None:
         notified_target="c" * 40,
         pending_notice="queued",
         incident_open=True,
+        skip_reason="update-target-unresolved",
     )
     save_state(path, state)
     assert load_state(path) == state

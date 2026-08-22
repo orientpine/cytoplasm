@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
-"""Idempotent, exact-preimage patch for Hermes owner-DM busy FIFO routing."""
+"""Idempotent, exact-preimage patch for Hermes owner-DM busy FIFO routing.
+
+Preimage rebase history (exact-preimage patches are version-bound by design)
+---------------------------------------------------------------------------
+* v0.18.2 (head ``46e87b14``) — original preimages.
+* v0.20.3 (head ``a3995f8a``) — three of the five seams moved upstream:
+  - MOD1: ``self._busy_input_mode`` / ``self._busy_text_mode`` reads became the
+    per-source helpers ``_effective_busy_input_mode`` / ``_effective_busy_text_mode``.
+    ``effective_mode`` is now bound far above the seam, so the preimage starts at
+    the ``busy_text_mode`` line. ``adapter`` is still bound before the seam
+    (``adapter = self._adapter_for_source(event.source)``), which the injected
+    code needs.
+  - MOD4: a faulthandler comment block was inserted between the startup log line
+    and its ``try:``. The preimage is now the log line alone (still unique), so
+    the reconcile block no longer has to track that comment.
+  - MOD5: ``_run_agent`` gained a ``message_type=next_message_type`` argument.
+The queue-mode seam still returns ``False`` into the base-adapter text merge, so
+the defect this patch fixes is still present.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +29,7 @@ MARKER: Final = "_hermes_busyfifo_done"
 BACKUP_SUFFIX: Final = ".autophagy-orig"
 
 _MOD1_PRE: Final = (
-    "        effective_mode = self._busy_input_mode\n"
-    '        busy_text_mode = getattr(self, "_busy_text_mode", "interrupt")\n'
+    "        busy_text_mode = self._effective_busy_text_mode(event.source)\n"
     "        if (\n"
     "            event.message_type == MessageType.TEXT\n"
     '            and busy_text_mode == "queue"\n'
@@ -21,8 +38,7 @@ _MOD1_PRE: Final = (
     "            return False\n"
 )
 _MOD1_POST: Final = (
-    "        effective_mode = self._busy_input_mode\n"
-    '        busy_text_mode = getattr(self, "_busy_text_mode", "interrupt")\n'
+    "        busy_text_mode = self._effective_busy_text_mode(event.source)\n"
     "        if (\n"
     "            event.message_type == MessageType.TEXT\n"
     '            and busy_text_mode == "queue"\n'
@@ -146,7 +162,6 @@ _MOD3_POST: Final = (
 
 _MOD4_PRE: Final = (
     '        logger.info("Starting Hermes Gateway...")\n'
-    "        try:\n"
 )
 _MOD4_POST: Final = (
     '        logger.info("Starting Hermes Gateway...")\n'
@@ -162,8 +177,8 @@ _MOD4_POST: Final = (
     "            _HcLedger(_hc_ledger_path()).reconcile_unresolved()\n"
     "        except Exception:\n"
     "            pass\n"
-    "        try:\n"
 )
+
 
 _MOD5_PRE: Final = (
     "                await self._refresh_agent_cache_message_count(session_key, session_id)\n"
@@ -179,6 +194,7 @@ _MOD5_PRE: Final = (
     "                    _interrupt_depth=_interrupt_depth + 1,\n"
     "                    event_message_id=next_message_id,\n"
     "                    channel_prompt=next_channel_prompt,\n"
+    "                    message_type=next_message_type,\n"
     "                )\n"
     "                return _preserve_queued_followup_history_offset(result, followup_result)\n"
 )
@@ -207,6 +223,7 @@ _MOD5_POST: Final = (
     "                        _interrupt_depth=_interrupt_depth + 1,\n"
     "                        event_message_id=next_message_id,\n"
     "                        channel_prompt=next_channel_prompt,\n"
+    "                        message_type=next_message_type,\n"
     "                    )\n"
     "                finally:\n"
     "                    try:\n"

@@ -51,8 +51,8 @@ FIXTURE = '''\
 class GatewayRunner:
     async def _handle_active_session_busy_message(self, event, session_key):
         adapter = self._adapter_for_source(event.source)
-        effective_mode = self._busy_input_mode
-        busy_text_mode = getattr(self, "_busy_text_mode", "interrupt")
+        effective_mode = self._effective_busy_input_mode(event.source)
+        busy_text_mode = self._effective_busy_text_mode(event.source)
         if (
             event.message_type == MessageType.TEXT
             and busy_text_mode == "queue"
@@ -85,6 +85,7 @@ class GatewayRunner:
                     _interrupt_depth=_interrupt_depth + 1,
                     event_message_id=next_message_id,
                     channel_prompt=next_channel_prompt,
+                    message_type=next_message_type,
                 )
                 return _preserve_queued_followup_history_offset(result, followup_result)
         finally:
@@ -99,8 +100,8 @@ class GatewayRunner:
 '''
 
 _MOD1_PREIMAGE = '''\
-        effective_mode = self._busy_input_mode
-        busy_text_mode = getattr(self, "_busy_text_mode", "interrupt")
+        effective_mode = self._effective_busy_input_mode(event.source)
+        busy_text_mode = self._effective_busy_text_mode(event.source)
         if (
             event.message_type == MessageType.TEXT
             and busy_text_mode == "queue"
@@ -135,6 +136,7 @@ _MOD5_PREIMAGE = '''\
                     _interrupt_depth=_interrupt_depth + 1,
                     event_message_id=next_message_id,
                     channel_prompt=next_channel_prompt,
+                    message_type=next_message_type,
                 )
                 return _preserve_queued_followup_history_offset(result, followup_result)
 '''

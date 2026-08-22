@@ -109,11 +109,24 @@ def test_repo_module_resolves_when_partial_automation_already_bound(
 
 
 @pytest.mark.parametrize(
-    ("module_name", "skill_name"),
+    ("module_name", "skill_name", "package_name"),
     (
-        ("mail_preflight", "mail"),
-        ("calendar_preflight", "calendar"),
-        ("todo_preflight", "todo"),
+        ("mail_preflight", "mail", "entity_preflight"),
+        ("calendar_preflight", "calendar", "entity_preflight"),
+        ("todo_preflight", "todo", "entity_preflight"),
+        # The approval adapters resolve the same root to reach automation.interop.
+        # They were missed when the preflight modules were fixed, so the mounted
+        # release kept refusing its own approval surface (2026-08-18: every compose
+        # and every mail-triage-watch tick died on GATE-REFUSED).
+        ("triage_approval", "mail", "interop"),
+        ("triage_binding", "mail", "interop"),
+        ("calendar_binding", "calendar", "interop"),
+        ("coordination_binding", "coordination", "interop"),
+        ("wiki_binding", "wiki", "interop"),
+        ("calendar_approval", "calendar", "interop"),
+        ("budget_gate", "budget", "interop"),
+        ("wiki_approval", "wiki", "interop"),
+        ("scripts.patent_export_binding", "patent-prep", "interop"),
     ),
 )
 def test_repo_root_skips_candidates_without_automation(
@@ -121,6 +134,7 @@ def test_repo_root_skips_candidates_without_automation(
     tmp_path: Path,
     module_name: str,
     skill_name: str,
+    package_name: str,
 ) -> None:
     """Regression: the mounted release path makes ``parents[3]`` a wrong guess.
 
@@ -134,7 +148,7 @@ def test_repo_root_skips_candidates_without_automation(
     # Given: a mounted-release layout whose parents[3] has no automation package.
     release = tmp_path / "releases" / skill_name / "deadbeef" / "scripts"
     release.mkdir(parents=True)
-    real_repo = tmp_path / "checkout"
+    real_repo = tmp_path
     (real_repo / "automation" / "entity_preflight").mkdir(parents=True)
     (real_repo / "automation" / "interop").mkdir(parents=True)
     (real_repo / "automation" / "runtime_root.py").write_bytes(
@@ -144,27 +158,34 @@ def test_repo_root_skips_candidates_without_automation(
     automation_modules = tuple(
         name for name in sys.modules if name == "automation" or name.startswith("automation.")
     )
+    package_modules = tuple(
+        name for name in sys.modules if name == "scripts" or name.startswith("scripts.")
+    )
     with monkeypatch.context() as isolated:
-        for name in (*automation_modules, module_name):
+        for name in (*automation_modules, *package_modules, module_name):
             isolated.delitem(sys.modules, name, raising=False)
         isolated.delenv("AUTOPHAGY_REPO_ROOT", raising=False)
         isolated.setenv("AUTOPHAGY_RUNTIME_ROOT", str(real_repo))
         isolated.setattr(sys, "path", [e for e in sys.path if not _is_repo_root_path(e)])
-        isolated.syspath_prepend(str(_SKILLS_ROOT / skill_name / "scripts"))
+        import_root = _SKILLS_ROOT / skill_name
+        if not module_name.startswith("scripts."):
+            import_root /= "scripts"
+        isolated.syspath_prepend(str(import_root))
         importlib.invalidate_caches()
         preflight = importlib.import_module(module_name)
 
         # When: the module resolves its repo root from a mounted-release location.
         # repo_root reads the module-global __file__, so rebind it in the module dict.
         isolated.setitem(
-            preflight.__dict__, "__file__", str(release / f"{module_name}.py")
+            preflight.__dict__, "__file__", str(release / f"{module_name.rsplit('.', 1)[-1]}.py")
         )
         resolved = preflight.repo_root()
 
     # Then: it never returns the meaningless depth guess (.../releases).
-    assert resolved != release.parents[1], (
+    assert resolved != release.parents[2], (
         f"repo_root() returned the mounted-release guess {resolved}"
     )
-    assert (resolved / "automation").is_dir() or resolved == Path("/srv/autophagy-agents"), (
-        f"repo_root() returned {resolved}, which is neither a real checkout nor the ops fallback"
+    assert resolved == real_repo, f"repo_root() ignored the fabricated runtime checkout: {resolved}"
+    assert (resolved / "automation" / package_name).is_dir(), (
+        f"repo_root() returned {resolved}, which cannot load automation.{package_name}"
     )

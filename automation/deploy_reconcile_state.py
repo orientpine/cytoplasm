@@ -81,6 +81,7 @@ def load_state(path: Path = DEFAULT_STATE_PATH) -> ReconcileState:
             notified_target=_optional_str(raw.get("notified_target")),
             pending_notice=_optional_str(raw.get("pending_notice")),
             incident_open=_require_bool(raw.get("incident_open", False)),
+            skip_reason=_optional_str(raw.get("skip_reason")),
         )
     except _Invalid:
         return ReconcileState()
@@ -103,6 +104,7 @@ def save_state(path: Path, state: ReconcileState) -> None:
             "notified_target": state.notified_target,
             "pending_notice": state.pending_notice,
             "incident_open": state.incident_open,
+            "skip_reason": state.skip_reason,
         },
         ensure_ascii=False,
         indent=2,

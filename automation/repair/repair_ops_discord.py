@@ -54,7 +54,15 @@ class RepairDiscordApi:
 
     def post_approval(self, content: str) -> str:
         """Post one sanitized repair request and return its immutable message identifier."""
-        payload = self._mapping(self._api("POST", f"/channels/{self.binding.channel_id}/messages", {"content": content}))
+        return self.post_message(self.binding.channel_id, content)
+
+    def post_message(self, channel_id: str, content: str) -> str:
+        """Post non-interactive text only to this validated stored surface."""
+        if channel_id != self.binding.channel_id:
+            raise RepairDiscordError("Discord target differs from the stored binding")
+        payload = self._mapping(
+            self._api("POST", f"/channels/{channel_id}/messages", {"content": content})
+        )
         return self._required(payload, "id")
 
     def add_reaction(self, message_id: str, emoji: str) -> None:

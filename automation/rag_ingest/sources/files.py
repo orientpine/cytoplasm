@@ -17,7 +17,9 @@ _FRONTMATTER_KEYS = (
     "title",
     "tags",
     "created",
+    "modified",
     "updated",
+    "date",
     "links",
     "kind",
     "authority",
@@ -25,6 +27,9 @@ _FRONTMATTER_KEYS = (
     "status",
     "review_after",
     "supersedes",
+    "entity",
+    "relations",
+    "event_date",
 )
 
 

@@ -19,9 +19,13 @@
 | | (민감도 태깅: `patent-sensitive` 자동 분류 포함) | |
 
 모든 벡터에 **내 관점 메타데이터**(`agent_id/owner/role/project/interest_tags`
-+ `source_type` + 출처 필드)가 붙는다. 팀 지식의 인별 중복 적재는 의도된
-설계(사용자 결정 2026-07-13). W2-5 recall은 `source`/`metadata`(위키 경로,
-`task_id`, `message_id`, `session_id`)로 출처를 표기할 수 있다.
++ `source_type` + 출처 필드)가 붙는다. Markdown frontmatter의 `created`, `modified`,
+`updated`, `date`도 보존한다. Obsidian은 YAML 또는 `>[!info]` callout에 명시된 날짜만
+`event_date`/`document_updated`(ISO date)로 정규화한다. 파일 mtime은 쓰지 않으며,
+`research-trends-YYYYMMDD.md` 같은 경로 날짜는 `date_basis=path`로만 표시하고
+`event_date`로 승격하지 않는다. 팀 지식의 인별 중복 적재는 의도된 설계(사용자 결정
+2026-07-13). W2-5 recall은 `source`/`metadata`(위키 경로, `task_id`, `message_id`,
+`session_id`)로 출처를 표기할 수 있다.
 
 `peer-report`는 Discord 실제 작성자 ID를 roster의 admin publisher principal 또는 active
 member node label로 해석한 값과 본문 `agent_id`가 정확히 일치할 때만 적재한다. 미등록·
@@ -51,14 +55,18 @@ WARN 로그 후 last-good 미러가 있으면 그대로 스캔(신선도 희생 
 
 ## 배포 (설정된 primary agent)
 
-- 패키지: `~/.hermes/rag_ingest_runtime/rag_ingest/` (이 디렉터리 복사)
+- 배포 경로: `automation/rag_ingest/deploy.sh`. `origin/main` provenance를 확인한 뒤
+  패키지 전체를 `~/.hermes/rag_ingest_runtime/rag_ingest/`에 tar로 전개하고 원격
+  파일 수·핵심 해시를 read-back한다. `cron/`은 패키지에서 제외한다.
 - 설정: `~/.hermes/rag-ingest/config.json` (600; `config.example.json` 참조 —
   guild id 등은 repo에 두지 않는다)
 - 시크릿: `~/.env.secrets`의 `RAG_MCP_API_KEY`(ops 핸드오프), `DISCORD_BOT_TOKEN`
-- 워처: `cron/rag_ingest_watch.py` → `~/.hermes/scripts/` 복사 후
+- 워처: 배포기가 `cron/rag_ingest_watch.py`를
+  `~/.hermes/scripts/rag_ingest_watch.py`로 별도 배포하고, 없을 때만
   `hermes cron create "every 10m" --name rag-ingest-watch --no-agent --script rag_ingest_watch.py --deliver local`
-  — flock 단일 인스턴스 가드 내장(`~/.hermes/rag-ingest/watch.lock`): 첫 obsidian
-  부트스트랩(~2240 파일)처럼 10분을 넘기는 실행 중 겹친 tick은 무음 exit 0.
+  을 실행한다. 워처와 배포기는 같은 `~/.hermes/rag-ingest/watch.lock`을 쓴다.
+  첫 Obsidian 부트스트랩처럼 긴 tick 중 배포는 최대 300초 기다리고, 락을 얻지
+  못하면 기존 패키지를 건드리지 않은 채 실패한다.
 
 ## 실행
 

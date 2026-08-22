@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import secrets
 import sys
 from dataclasses import replace
@@ -23,6 +24,8 @@ from triage_transport import (
     _rules_path,
 )
 
+mail_evidence = importlib.import_module("mail_evidence")
+
 DEFAULT_REPLY_PROMPT = SKILL_DIR / "prompts/reply-draft-v2.md"
 
 
@@ -35,12 +38,18 @@ def compose_and_post(
     to: str, subject: str, body: str, *, post: bool,
     attachments: tuple[str, ...] = (),
     cc: str = "",
+    evidence_pack: object | None = None,
 ) -> dict:
     rules = triage_sensitivity.load_rules(_rules_path())
-    gate = triage_sensitivity.evaluate("\n".join((subject, to, cc, body)), rules)
+    evidence_text = mail_evidence.evidence_text(evidence_pack) if evidence_pack is not None else ""
+    gate = triage_sensitivity.evaluate("\n".join((subject, to, cc, body, evidence_text)), rules)
+    recipient_body = (
+        mail_evidence.sanitize_draft_body(body, evidence_pack)
+        if evidence_pack is not None else body
+    )
     draft = triage_gate.create_draft(
         uid=f"compose:{secrets.token_hex(8)}", sender="", mail_subject="",
-        to=to, cc=cc, subject=subject, body=body, sensitive=gate.sensitive,
+        to=to, cc=cc, subject=subject, body=recipient_body, sensitive=gate.sensitive,
         tags=gate.tags, category="compose", flags=(),
         kind="compose",
         attachment_paths=attachments,
@@ -53,6 +62,8 @@ def compose_and_post(
         shown = ", ".join(gap[:5]) + (f" 외 {len(gap) - 5}명" if len(gap) > 5 else "")
         notice = ("\n⚠️ 직전 관련 메일 수신자 중 제외됨: "
                   f"`{shown}` — 의도한 제외인지 확인 후 ✅ 해주세요")
+    if evidence_pack is not None:
+        notice += mail_evidence.owner_notice(evidence_pack)
     if post:
         _post_draft_for_approval(draft, notice=notice)
         draft = triage_gate.load_draft(draft["id"])
@@ -69,7 +80,7 @@ def compose_and_post(
 
 def _draft_and_post(
     detail: dict, gate, cls, *, post: bool, instruction: str = "",
-    attachments: tuple[str, ...] = (),
+    attachments: tuple[str, ...] = (), evidence_pack: object | None = None,
 ) -> list[str]:
     actions: list[str] = []
     to = triage_core.extract_reply_address(detail.get("sender") or "")
@@ -81,7 +92,10 @@ def _draft_and_post(
         uid_opaque=triage_core.mask_value(detail["uid"]),
         prompt_path=_env_path("TRIAGE_REPLY_PROMPT", str(DEFAULT_REPLY_PROMPT)),
         instruction=instruction,
+        evidence=mail_evidence.prompt_block(evidence_pack) if evidence_pack is not None else "",
     )
+    if evidence_pack is not None:
+        body = mail_evidence.sanitize_draft_body(body, evidence_pack)
     draft = triage_gate.create_draft(
         uid=detail["uid"], sender=detail.get("sender") or "",
         mail_subject=detail.get("subject") or "", to=to, subject=subject, body=body,
@@ -90,7 +104,8 @@ def _draft_and_post(
     )
     actions.append(f"draft:{draft['id']}")
     if post:
-        draft = {**draft, "message_id": _post_draft_for_approval(draft)}
+        notice = mail_evidence.owner_notice(evidence_pack) if evidence_pack is not None else ""
+        draft = {**draft, "message_id": _post_draft_for_approval(draft, notice=notice)}
         actions.append(f"posted:{draft['message_id']}")
     else:
         print(
@@ -103,12 +118,15 @@ def _draft_and_post(
 
 
 def _gate_and_classify(
-    uid: str, detail: dict, rules: tuple[triage_sensitivity.TagRule, ...]
+    uid: str, detail: dict, rules: tuple[triage_sensitivity.TagRule, ...],
+    evidence_text: str = "",
 ) -> tuple[triage_sensitivity.GateResult, triage_core.Classification]:
     subject = detail.get("subject") or ""
     sender = detail.get("sender") or ""
     body = detail.get("body") or ""
-    gate = triage_sensitivity.evaluate("\n".join((subject, sender, body)), rules)  # ① FIRST
+    gate = triage_sensitivity.evaluate(
+        "\n".join((subject, sender, body, evidence_text)), rules
+    )  # ① FIRST
     cls, _provider = triage_llm.classify(  # ② routed by the step-① verdict
         subject=subject, sender=sender, body=body, sensitive=gate.sensitive,
         uid_opaque=triage_core.mask_value(uid),

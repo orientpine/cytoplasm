@@ -72,7 +72,12 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _run(sandbox: ExportSandbox, *extra: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    sandbox: ExportSandbox,
+    *extra: str,
+    version: str | None = _VERSION,
+) -> subprocess.CompletedProcess[str]:
+    version_arguments = () if version is None else ("--version", version)
     return subprocess.run(
         (
             "bash",
@@ -85,8 +90,7 @@ def _run(sandbox: ExportSandbox, *extra: str) -> subprocess.CompletedProcess[str
             str(sandbox.target),
             "--remote",
             str(sandbox.public_remote),
-            "--version",
-            _VERSION,
+            *version_arguments,
             "--signing-key",
             str(sandbox.signing_key),
             "--repository-name",
@@ -163,12 +167,15 @@ def export_sandbox(tmp_path: Path) -> ExportSandbox:
         "# Versions locked to the set validated on prod (example123, CPython 3.13)\n",
         encoding="utf-8",
     )
-    _ = (vendor_tests / "test_offline.py").write_text(
-        'ACCOUNT = "person@example-lab.re.kr"\n'
-        'me = f"\\"홍길동\\" <{ACCOUNT}>"\n'
-        'org = "예시연구원 - 예시센터"\n',
-        encoding="utf-8",
+    offline_fixture = "\n".join(
+        (
+            'ACCOUNT = "person@example-lab.re.kr"',
+            'me = f"\\"홍길동\\" <{ACCOUNT}>"',
+            'org = "예시연구원 - 예시센터"',
+            "",
+        )
     )
+    _ = (vendor_tests / "test_offline.py").write_text(offline_fixture, encoding="utf-8")
     _ = _git(source, "add", "-A")
     _ = _git(source, "commit", "-m", "seed private source")
     _ = _git(source, "push", "-u", "origin", "main")
@@ -188,13 +195,16 @@ def export_sandbox(tmp_path: Path) -> ExportSandbox:
         fake_bin / "pytest",
         "#!/bin/sh\nexit 41\n",
     )
-    _write_executable(
-        fake_bin / "python3",
-        '#!/bin/sh\nif [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then\n'
-        '  GIT_MASTER=1 git ls-files --error-unmatch README.md >/dev/null 2>&1 || exit 42\n'
-        '  printf "%s:%s\\n" "$PWD" "$*" >> "$PYTEST_LOG"\n'
-        '  exit "${PYTEST_TEST_EXIT:-0}"\nfi\nexec /usr/bin/python3 "$@"\n',
+    python_stub = "\n".join(
+        (
+            '#!/bin/sh\nif [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then',
+            '  GIT_MASTER=1 git ls-files --error-unmatch README.md >/dev/null 2>&1 || exit 42',
+            '  printf "%s:%s\\n" "$PWD" "$*" >> "$PYTEST_LOG"',
+            '  exit "${PYTEST_TEST_EXIT:-0}"\nfi\nexec /usr/bin/python3 "$@"',
+            "",
+        )
     )
+    _write_executable(fake_bin / "python3", python_stub)
     environment = dict(os.environ)
     environment.update(
         {
@@ -281,6 +291,68 @@ def test_export_refuses_dirty_source_before_creating_target(
     result = _run(export_sandbox)
     # Then it fails before creating local or remote release state.
     assert result.returncode != 0
+    assert not export_sandbox.target.exists()
+    assert not _remote_has_ref(export_sandbox.public_remote, "refs/heads/main")
+
+
+def test_export_derives_version_from_the_release_tag_on_source_commit(
+    export_sandbox: ExportSandbox,
+) -> None:
+    # Given: land already attached the private release tag to origin/main.
+    _ = _git(export_sandbox.source, "tag", "-a", _VERSION, "-m", f"release {_VERSION}")
+
+    # When: the maintainer omits the public cut version.
+    result = _run(export_sandbox, version=None)
+
+    # Then: the public release reuses the source commit's version.
+    assert result.returncode == 0, result.stderr
+    assert _remote_has_ref(export_sandbox.public_remote, f"refs/tags/{_VERSION}")
+
+
+def test_explicit_version_wins_over_the_source_commit_tag(
+    export_sandbox: ExportSandbox,
+) -> None:
+    # Given: the source commit carries a different private-channel version.
+    derived = "v9.8.7"
+    _ = _git(export_sandbox.source, "tag", "-a", derived, "-m", f"release {derived}")
+
+    # When: the maintainer explicitly chooses the public cut version.
+    result = _run(export_sandbox)
+
+    # Then: the explicit value wins and no derived tag reaches the public remote.
+    assert result.returncode == 0, result.stderr
+    assert _remote_has_ref(export_sandbox.public_remote, f"refs/tags/{_VERSION}")
+    assert not _remote_has_ref(export_sandbox.public_remote, f"refs/tags/{derived}")
+
+
+def test_export_without_version_refuses_a_source_commit_without_release_tag(
+    export_sandbox: ExportSandbox,
+) -> None:
+    # Given: origin/main has no semantic release tag.
+    # When: the maintainer also omits --version.
+    result = _run(export_sandbox, version=None)
+
+    # Then: derivation fails closed before any public state is created.
+    assert result.returncode != 0
+    assert "source commit has no semantic release tag" in result.stderr
+    assert not export_sandbox.target.exists()
+    assert not _remote_has_ref(export_sandbox.public_remote, "refs/heads/main")
+
+
+def test_export_reports_when_snapshot_redaction_helper_is_absent(
+    export_sandbox: ExportSandbox,
+) -> None:
+    # Given: the source snapshot lacks the helper it must execute from that snapshot.
+    helper = export_sandbox.source / "automation" / "public_export_redaction.py"
+    helper.unlink()
+    _commit_source(export_sandbox, "remove snapshot redaction helper")
+
+    # When: export reaches snapshot materialisation.
+    result = _run(export_sandbox)
+
+    # Then: the missing self-copy dependency is named directly.
+    assert result.returncode != 0
+    assert "snapshot redaction helper is absent" in result.stderr
     assert not export_sandbox.target.exists()
     assert not _remote_has_ref(export_sandbox.public_remote, "refs/heads/main")
 

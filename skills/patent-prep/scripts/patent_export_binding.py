@@ -27,8 +27,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
 
 
 def repo_root() -> Path:
-    default = Path(__file__).resolve().parents[3]
-    return Path(os.environ.get("AUTOPHAGY_REPO_ROOT", str(default))).expanduser()
+    """The checkout carrying ``automation.interop``, not the mounted-release depth guess."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT")
+    if override:
+        return Path(override).expanduser()
+    here = Path(__file__).resolve()
+    candidates = [*here.parents[2:6], Path("/srv/autophagy-agent-current"), Path("/srv/autophagy-agents")]
+    for candidate in candidates:
+        if (candidate / "automation" / "interop").is_dir():
+            return candidate
+    current = Path("/srv/autophagy-agent-current")
+    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
 
 
 def repo_module(name: str) -> ModuleType:

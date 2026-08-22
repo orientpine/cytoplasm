@@ -148,6 +148,24 @@ def mail_guard_request(draft: Mapping[str, JsonValue]) -> GuardRequest:
     )
 
 
+def ensure_cli_evidence_query(draft: Mapping[str, JsonValue]) -> bool:
+    """Resolve entities; only a missing module degrades read-only evidence."""
+    try:
+        gate = _gate()
+    except MailPreflightError:
+        return False
+    try:
+        decision = gate._resolve(mail_guard_request(draft))
+    except (OSError, RuntimeError, ValueError) as error:
+        message = f"ENTITY-PREFLIGHT-FAIL code={error.__class__.__name__} — 근거를 수집하지 않았습니다."
+        raise triage_gate.GateError(message, 3) from None
+    if decision.needs_confirmation:
+        text = _repo_module("clarify").render_clarify(decision)
+        print(text)
+        raise triage_gate.GateError(text, 2)
+    return True
+
+
 def guarded_execute_draft(
     draft: Mapping[str, JsonValue],
     approval: triage_gate.Approval,
@@ -179,9 +197,7 @@ def execute_cli_draft(draft: Mapping[str, JsonValue], approval: triage_gate.Appr
         raise triage_gate.GateError(str(error), error.exit_code) from None
 
 
-def _draft_with_payload(
-    draft: Mapping[str, JsonValue], payload: Mapping[str, JsonValue]
-) -> dict[str, JsonValue]:
+def _draft_with_payload(draft: Mapping[str, JsonValue], payload: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     snapshot = (
         gmail_approval_gate.snapshot_from_draft(dict(draft))
         if draft.get("provider") == "gmail"
@@ -245,9 +261,7 @@ def _refresh_gmail_snapshot(
     draft["gmail_approval_snapshot"] = normalized.record()
 
 
-def _argv_with_payload(
-    argv: tuple[str, ...], to: str, cc: str, subject: str, body: str,
-) -> tuple[str, ...]:
+def _argv_with_payload(argv: tuple[str, ...], to: str, cc: str, subject: str, body: str) -> tuple[str, ...]:
     updated = list(argv)
     for option, value in (("--to", to), ("--cc", cc), ("--subject", subject), ("--body", body)):
         if option in updated:

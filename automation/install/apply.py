@@ -13,6 +13,7 @@ from typing import Protocol
 from automation.git_remote_url import GitRemoteUrlError, validate_remote_url
 from automation.install.checks import CheckResult, Status
 from automation.install.gitleaks import expected_archive_sha256, verify_archive
+from automation.install.known_hosts import missing_known_host
 from automation.install.plan import (
     Check,
     EnableTimer,
@@ -214,6 +215,11 @@ class SystemMutator:
             # The executor renders OSError as a FAIL result; a bare ValueError
             # would escape as a traceback instead.
             raise OSError(str(error)) from error
+        prerequisite = missing_known_host(origin_url, self._config.ops_home)
+        if prerequisite is not None:
+            # Named before git runs, so the operator gets the missing step and
+            # not ssh's verdict wrapped in a CalledProcessError.
+            raise OSError(prerequisite)
         ssh_command = shlex.join(
             (
                 "ssh",

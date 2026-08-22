@@ -214,7 +214,9 @@ def run_topics(
     return tuple(outcomes)
 
 
-def assemble_report(report_day: str, outcomes: tuple[TopicOutcome, ...]) -> str:
+def assemble_report(
+    report_day: str, outcomes: tuple[TopicOutcome, ...], evidence_section: str = ""
+) -> str:
     lines = [f"📚 주간 연구 동향 — {report_day} KST"]
     for outcome in outcomes:
         lines.extend(("", f"## {outcome.topic}"))
@@ -229,4 +231,6 @@ def assemble_report(report_day: str, outcomes: tuple[TopicOutcome, ...]) -> str:
             published = f" ({paper.published[:10]})" if paper.published else ""
             tag = f" [{paper.source}]" if paper.source else ""
             lines.append(f"- [{paper.title}]({paper.url}){tag}{published}")
+    if evidence_section:
+        lines.extend(("", evidence_section))
     return "\n".join(lines)

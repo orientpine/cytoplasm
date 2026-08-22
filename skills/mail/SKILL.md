@@ -1,7 +1,7 @@
 ---
 name: mail
 description: "기관메일(mailon.kr) 스킬. 메일 작성·발송 지시에서 수신자가 이메일 주소가 아니라 사람 이름이면(예: '홍길동 박사님께 메일') 반드시 먼저 resolve로 이름→이메일 해석(기관 웹메일 자동완성 기반, READ-ONLY) — 메일함 검색만으로 포기하거나 주소를 추측·유추하는 것은 금지. 읽기: list/get/classify/status/resolve 래퍼(W4-1, READ-ONLY). 파이프라인(W4-2): 수신메일 민감도 게이트→분류(glm-main, 민감건은 비-GLM)→다이제스트(08:00 KST)→소유자 지시 기반 회신 초안(비-GLM)→행위 봇의 소유자 DM 승인 게이트→mailon 발송→approvals.jsonl. 새 메일 작성(compose)도 동일 watch·해시 바인딩의 owner DM 확정 게이트를 경유한다. 발송은 반드시 승인 게이트 경유 — 직접 send 금지. 민감 회신은 승인 DM 한 메시지에 전문과 sha256을 함께 표시한다. 승인 표면은 `approval_surface.py` 정책과 draft의 저장된 바인딩으로 결정된다."
-version: 1.5.8
+version: 1.5.9
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -51,8 +51,8 @@ sync에 `--folders all`을 전달하고 DB의 모든 폴더를 조회하며, JSO
 ### 수신자 이름→이메일 해석 (resolve)
 
 - compose/발송 지시에서 수신자가 이메일 주소가 아니라 **사람 이름**이면, 주소를 추측하지 말고 반드시 `resolve --name`으로 먼저 해석한다.
-- 출력은 wrapper JSON 1객체: `candidates[]` 항목 = `{group, name, email, org}`, group은 `organization`(조직도)/`contacts`(개인 주소록)/`history`(수발신 이력)/`unknown`.
-- 후보 판정 규칙 (fail-closed): **0건 → 주소를 지어내지 않고 cha에게 해석 실패를 보고**한다. **정확히 1건 → 그 주소를 사용**한다. **2건 이상 → organization 그룹을 먼저 제시하는 순서로 후보 목록을 cha에게 보여주고 선택을 기다린다** (자동 선택 금지).
+- 출력은 wrapper JSON 1객체: `candidates[]` 항목 = `{group, name, email, org}`, group은 `organization`(조직도)/`contacts`(개인 주소록)/`history`(수발신 이력)/`unknown`. 래퍼가 **`organization` > `contacts` > `history` > 목록에 없는 group** 순으로 정렬해 돌려주며, 서로 다른 주소의 개수를 `distinct_address_count` 와 `ambiguous` 로 함께 알려준다.
+- 후보 판정 규칙 (fail-closed): **0건 → 주소를 지어내지 않고 cha에게 해석 실패를 보고**한다. **`ambiguous=false`(주소 1종) → 그 주소를 사용**한다 — 후보가 여럿이어도 주소가 하나면 선택할 것이 없다. **`ambiguous=true` → 정렬된 순서 그대로 후보를 cha에게 보여주고 선택을 기다린다** (자동 선택 금지).
 - 최종 안전장치는 기존 compose owner-✅ 게이트다 — 승인 DM에 실제 주소가 그대로 표시되므로 소유자가 최종 확인한다.
 - resolve는 읽기 전용이다: 브라우저 자동완성 조회만 수행하며 발송 트리거를 절대 호출하지 않는다.
 
@@ -78,7 +78,9 @@ mode 머신러리 설명("2회 실패→no-go", "둘 다 없으면 no-go 폴백"
 |---:|---|---|---:|
 | 0 | 성공 | 정상 payload | 0 |
 | 1 | 설정 오류(env 누락) | `config_error` + 안내 | 1 |
-| 2 | 로그인/브라우저 오류 | `auth_error` + **재인증 안내** | 2 |
+| 2 | 로그인 오류(stderr 시그니처 `login_error`/`login_dom_ipt_id`) | `auth_error` + **재인증 안내** | 2 |
+| 2 | 브라우저·페이지 오류(`browser_error`/`timeout`/`inbox_folder_uid_selector`) | `browser_error` + 브라우저 점검 안내(재인증·비밀번호 경로 금지) | 2 |
+| 2 | 가릴 시그니처 없음 | `auth_or_browser_error` + **둘 중 하나로 단정하지 않는** 안내 | 2 |
 | 3 | sync 구조 실패 | state.db 로컬 폴백(가능 시 exit 0 + 폴백 표기, 불가 시 3) | 0/3 |
 | 10/11 | Windows 런처 사전점검(리눅스 미발생) | `environment_error` | 6 |
 | — | uid 없음/DB 비어있음 | `not_found` | 5 |
@@ -164,10 +166,10 @@ python3 ~/.hermes/skills/mail/scripts/triage_cli.py digest
 python3 ~/.hermes/skills/mail/scripts/triage_cli.py digest-items
 
 # 소유자 지시 기반 초안 생성
-python3 ~/.hermes/skills/mail/scripts/triage_cli.py draft --uid <uid> --instruction "참석 가능하다고 회신해줘"
+python3 ~/.hermes/skills/mail/scripts/triage_cli.py draft --uid <uid> --instruction "참석 가능하다고 회신해줘" [--with-evidence]
 
 # 새 메일 작성 (owner DM 확정 게이트)
-python3 ~/.hermes/skills/mail/scripts/triage_cli.py compose --to <주소> --cc <참조주소> --subject "<제목>" --body "<본문>"
+python3 ~/.hermes/skills/mail/scripts/triage_cli.py compose --to <주소> --cc <참조주소> --subject "<제목>" --body "<본문>" [--with-evidence]
 
 # 첨부 포함 새 메일 (여러 파일은 --attachment 반복)
 python3 ~/.hermes/skills/mail/scripts/triage_cli.py compose --to <주소> --subject "<제목>" --body "<본문>" --attachment /private/report.pdf
@@ -183,6 +185,21 @@ python3 ~/.hermes/skills/mail/scripts/triage_cli.py discard --draft <id>
 python3 ~/.hermes/skills/mail/scripts/triage_cli.py list-drafts
 python3 ~/.hermes/skills/mail/scripts/triage_cli.py mode
 ```
+
+## 지식 파사드 근거
+
+`draft`와 `compose`의 `--with-evidence`는 상대·주제 관련 개인 노트를 읽기 전용 지식
+파사드로 한 번 수집한다. 반드시 기존 entity preflight가 먼저 통과해야 하며
+`ENTITY-CLARIFY`이면 근거 조회를 시작하지 않는다. 근거는 Codex 프롬프트 재료와
+소유자 DM 승인 표면, `~/.hermes/mail-triage/evidence/*.evidence.json`(0600)에만 남는다.
+
+**수신자에게 전송될 제목·본문에는 `[En]` 인용이나 사적 출처를 절대 넣지 않는다.**
+생성 결과는 팩 기준 검증 뒤 모든 근거 id를 제거하고 승인 해시를 계산한다. 출처 확인은
+owner-only 표면에서만 파사드 `sources` 형식으로 한다. 근거가 없으면 `근거 없음`, 조회
+불가면 `근거 수집 불가`를 owner-only 표면에 표시하고 초안 생성은 계속한다. 근거 본문이
+patent-sensitive이면 기존 라우팅 입력에 합산해 codex-only로 처리한다. 메일 발송과 소유자
+✅ 게이트는 바뀌지 않는다. 정본은
+[`지식 계층 규약`](../../docs/guide/지식-계층-규약.md)이다.
 
 ## 절대 규칙
 

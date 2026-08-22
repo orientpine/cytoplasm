@@ -41,6 +41,20 @@ _deploy_archive_dir_entries() { # _deploy_archive_dir_entries <base-dir> <path>.
   return 0
 }
 
+#: 아카이브에서 뺀 파일 이름을 걸러낸다. 기본은 빈 값 — **지정하지 않은 호출자는 아무것도
+#: 달라지지 않는다**(이 헬퍼는 스킬 전용이 아니라 여러 배포 경로가 공유한다).
+#: 무엇을 뺀다는 판단은 호출자가 하고, 그 판단은 digest 쪽과 반드시 같아야 한다.
+_deploy_archive_filter() { # stdin/stdout: NUL-구분 경로 목록
+  local excluded="${DEPLOY_ARCHIVE_EXCLUDE_BASENAMES:-}" entry base
+  if [[ -z "$excluded" ]]; then cat; return 0; fi
+  while IFS= read -r -d '' entry; do
+    base="${entry##*/}"
+    case ",$excluded," in *",$base,"*) continue ;; esac
+    printf '%s\0' "$entry"
+  done
+  return 0
+}
+
 deploy_archive_stream() { # deploy_archive_stream <repo-root> <base-dir> <path>...
   local repo_root="$1" base_dir="$2"
   shift 2
@@ -50,6 +64,7 @@ deploy_archive_stream() { # deploy_archive_stream <repo-root> <base-dir> <path>.
   if [[ -n "$actual_root" && "$(readlink -f "$actual_root")" == "$(readlink -f "$repo_root")" ]]; then
     { _deploy_archive_dir_entries "$base_dir" "$@"
       git -C "$base_dir" ls-files -z --cached --others --exclude-standard -- "$@"; } \
+      | _deploy_archive_filter \
       | tar -C "$base_dir" --null --verbatim-files-from --no-recursion -czf - --files-from=-
     return ${PIPESTATUS[0]}
   fi
@@ -60,6 +75,7 @@ deploy_archive_stream() { # deploy_archive_stream <repo-root> <base-dir> <path>.
       -c core.excludesFile="$repo_root/.gitignore" add --all -- "$@" \
     && { _deploy_archive_dir_entries "$base_dir" "$@"
          git --git-dir="$temporary_index" --work-tree="$base_dir" ls-files -z -- "$@"; } \
+      | _deploy_archive_filter \
       | tar -C "$base_dir" --null --verbatim-files-from --no-recursion -czf - --files-from=- \
     || rc=$?
   rm -rf "$temporary_index"

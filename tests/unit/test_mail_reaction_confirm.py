@@ -328,7 +328,10 @@ def test_watch_preadds_approve_then_cancel_reactions(
     monkeypatch.setattr(
         triage_gate,
         "set_message_id",
-        lambda item, message_id, _channel_id: {**item, "message_id": message_id},
+        lambda item, message_id, _channel_id, **_metadata: {
+            **item,
+            "message_id": message_id,
+        },
     )
     monkeypatch.setattr(triage_gate, "set_approval_binding", lambda item, **_binding: item)
     monkeypatch.setattr(triage_cli, "cmd_process", lambda _args: 0)

@@ -36,6 +36,10 @@ def write_fake_sudo(bin_dir: Path) -> None:
 
         command_index = 1 if arguments and arguments[0] == "-n" else 0
         command = arguments[command_index:]
+        # The release convergence a deploy performs now goes through the argument-free
+        # privileged helper, so honour that path and let the harness copy answer.
+        if command and command[0].endswith("autophagy-converge-origin-main"):
+            raise SystemExit(subprocess.run(command).returncode)
         if not command or not command[0].endswith("autophagy-install-skill"):
             raise SystemExit(97)
         skill = command[command.index("--skill") + 1]

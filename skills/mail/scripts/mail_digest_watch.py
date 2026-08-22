@@ -27,6 +27,7 @@ delivers to cha — rather than the app re-sending a DM through the failing path
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -34,10 +35,63 @@ import time
 from pathlib import Path
 
 CLI = Path("/srv/autophagy-skills/live/mail/scripts/triage_cli.py")
+_ENV_SECRETS = Path.home() / ".env.secrets"
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _LONG_DIGITS = re.compile(r"\d{5,}")
 _MARKER = re.compile(r"^DIGEST-FAIL stage=\S+ retry_safe=(true|false) code=\S+")
 _RETRY_DELAYS_S = (20, 60, 120)
+
+# Deployed flat beside this wrapper (~/.hermes/scripts/) and sitting beside it in the
+# repo, so one path insert covers both; a half-deployed node must not kill the tick.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import watch_failure_streak
+except ImportError:  # pragma: no cover — only reachable on a half-deployed node
+    watch_failure_streak = None
+
+WATCH_NAME = "mail-daily-digest"
+#: Separate incident stream: a stale vendor runtime is not a digest failure.
+DRIFT_WATCH_NAME = "mailon-runtime-drift"
+
+
+
+def _runtime_root() -> Path:
+    """Where the ``automation`` package lives (DG-4 order).
+
+    The child resolves ``automation.interop`` for the approval façade. From the
+    mounted skill its own guess lands on ``/srv/autophagy-skills/releases``, which
+    carries no automation package, and the adapter then refuses the request
+    (``GATE-REFUSED … 승인 게시 거부``). Measured 2026-08-18: the triage watcher passed
+    this and ran clean while the digest watcher did not and died on every tick.
+    Per the no-agent cron rule (b-2) the parent states the root explicitly.
+    """
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    current = Path("/srv/autophagy-agent-current")
+    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
+
+
+def _load_env_secrets(path: Path = _ENV_SECRETS) -> None:
+    """no-agent cron hands the wrapper no secrets, so the parent loads them itself.
+
+    Measured 2026-08-18 on `budget-watch`: the value was present in ~/.env.secrets and
+    the tick still died as if it were missing, because nothing ever put it in the
+    environment — `set -a; . ~/.env.secrets` then the same wrapper exited 0. Every
+    watcher deployed to ~/.hermes/scripts/ owes the same contract (규약 (b)); the
+    inventory check is tests/unit/test_watcher_secret_propagation.py.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
 
 
 def _redact(text: str) -> str:
@@ -49,6 +103,7 @@ def _run_digest() -> subprocess.CompletedProcess[str]:
         [sys.executable, str(CLI), "digest"],
         capture_output=True, text=True, timeout=1800, check=False,
         cwd=str(Path.home()),
+        env={**os.environ, "AUTOPHAGY_REPO_ROOT": str(_runtime_root())},
     )
 
 
@@ -65,8 +120,61 @@ def _is_retry_safe(marker: str) -> bool:
     return "retry_safe=true" in marker
 
 
+def _note_outcome(*, ok: bool) -> None:
+    """Track the digest's failure streak so a recovery is announced exactly once.
+
+    The failure side stays untouched: the DIGEST-FAIL marker is this watcher's contract
+    with the cron and with tests/unit/test_mail_digest_watch_retry.py, so the escalation
+    line the streak returns on a failing tick is deliberately dropped. What was missing
+    was the other half of the pattern — nothing ever told cha the digest started working
+    again, so a fixed outage looked identical to an outage nobody had noticed.
+    """
+    if watch_failure_streak is None:
+        return
+    notice = watch_failure_streak.record(WATCH_NAME, ok=ok, threshold=1)
+    if ok and notice is not None:
+        print(notice[:300])
+
+
+def _report_runtime_drift() -> None:
+    """Say once when the node's mailon runtime is not the vendor code origin/main carries.
+
+    2026-07-29 -> 08-18: a committed vendor fix took **19 days** to reach production and
+    nothing said so — skills are judged by `readlink live/<skill>` and code converges
+    through the reconciler, but the vendor runtime is neither. The daily digest is the
+    one agent-owned job that already delivers to the owner, so the probe rides it. The
+    streak store (threshold 1) keeps a long-standing drift to one notice plus one when
+    it clears, instead of a line every morning.
+    """
+    probe = Path(__file__).resolve().parent / "mailon_runtime_drift.sh"
+    if not probe.exists() or watch_failure_streak is None:
+        return  # a half-deployed node must not turn a working digest into a failure
+    try:
+        outcome = subprocess.run(  # noqa: S603 — fixed argv, agent-owned script
+            ["/bin/bash", str(probe)],
+            capture_output=True, text=True, timeout=120, check=False,
+            cwd=str(Path.home()),
+            # The same runtime root the digest child gets: the probe reads it as the
+            # release tree whose vendor digest the deployed runtime must match (규약 b-2).
+            env={**os.environ, "AUTOPHAGY_REPO_ROOT": str(_runtime_root())},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    if outcome.returncode == 2:
+        return  # undecidable is not an incident to announce; it is a gap to fix on the node
+    detail = (outcome.stdout or "").strip().splitlines()
+    notice = watch_failure_streak.record(
+        DRIFT_WATCH_NAME, ok=outcome.returncode == 0,
+        detail=_redact(detail[-1]) if detail else "", threshold=1,
+    )
+    if notice is not None:
+        print(notice[:300])
+
+
 def main() -> int:
+    _load_env_secrets()
     if not CLI.exists():
+        _note_outcome(ok=False)
         print("DIGEST-FAIL stage=runner retry_safe=false code=not_mounted detail=mail skill is not mounted")
         return 1
     result = _run_digest()
@@ -76,8 +184,11 @@ def main() -> int:
             break
         time.sleep(delay)
         result = _run_digest()
+    _report_runtime_drift()
     if result.returncode == 0:
+        _note_outcome(ok=True)
         return 0
+    _note_outcome(ok=False)
     marker = _child_marker(result.stderr or result.stdout)
     if marker is not None:
         print(_redact(marker)[:300])

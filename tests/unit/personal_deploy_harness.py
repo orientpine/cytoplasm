@@ -145,6 +145,16 @@ def _write_node_config(home: Path, tmp_path: Path, release_current: Path) -> tup
         encoding="utf-8",
     )
     service_root.mkdir(parents=True)
+    # The deploy converges through the argument-free privileged helper the reconciler
+    # uses, so the harness stands in for the root-owned libexec copy rather than for a
+    # converger shipped inside the release tree.
+    _FAKES.write_executable(
+        service_root / "libexec" / "autophagy-converge-origin-main",
+        """
+        #!/usr/bin/env bash
+        exit 0
+        """,
+    )
     return agent_home, peer_home, ops_home, skill_store
 
 

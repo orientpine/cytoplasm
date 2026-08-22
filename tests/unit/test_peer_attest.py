@@ -166,6 +166,7 @@ def _tmp_checkout(tmp_path: Path) -> Path:
         "peer_attest_runtime.py",
         "peer_attestation.py",
         "peer_signed_attestation.py",
+        "scenario_runner.py",
         "skill_review.py",
     ):
         _ = shutil.copy(src / name, repo / "automation" / name)

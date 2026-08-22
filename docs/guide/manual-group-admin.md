@@ -337,8 +337,8 @@ interop config unreadable`로 중단한다. 비대화형 셸에서 ssh-agent를 
 ### 5.3 3단계 발행
 
 발행은 **배포 게이트 증거 → 발행 요청 게시 → 발행 확정**의 3단계이며, 각 단계가
-소유자 ✅를 요구한다. 정확한 명령과 옵션은 이 절차를 단독으로 소유하는
-[managed-skill-channel.md §4 발행자](managed-skill-channel.md)에 있다. 요약하면:
+소유자 ✅를 요구한다. 정확한 명령과 옵션은 개발 저장소 전용 런북
+`managed-skill-channel.md` §4 「발행자」에 있다. 공개본에서는 아래 요약을 따른다.
 
 ```bash
 # 1단계: 배포 게이트 증거 (<message_id>:<deploy_nonce> 확보)
@@ -368,8 +368,7 @@ python3 -m automation.managed_skills.publish_cli \
 메시지에서 tarball·매니페스트와 sha를 검토하고 ✅한 뒤, `publish_cli`의
 `--submission-tarball`·`--submission-manifest`·`--submission-evidence` 입력을 사용한다.
 이 입력도 위 3단계를 생략하지 않으며 `--skills-src`·`--changelog-file`과 함께 쓸 수 없다.
-정확한 명령은 [managed-skill-channel.md §4 발행자](managed-skill-channel.md#발행자-publisher)가
-단독 소유한다.
+정확한 명령은 개발 저장소 전용 `managed-skill-channel.md` §4 「발행자」가 단독 소유한다.
 
 3단계 끝의 **공지**는 roster의 `announce_channel_id`가 가리키는 그룹 채널로 나간다.
 그 필드를 비워 두면 공지를 하지 않는다(발행 자체는 정상이다 — 공지는 알림일 뿐
@@ -377,6 +376,17 @@ python3 -m automation.managed_skills.publish_cli \
 릴리스 내용에 바인딩된 원장이 이미 게시된 메시지를 그대로 돌려주며, 이것은 승인
 메시지에 쓰는 단일성 기법을 그대로 재사용한 것이다. 상세:
 [기능소개](../기능소개/그룹-발행-공지.md).
+
+전송 실패 뒤 `*.posting.json`이 남으면 자동 재게시하지 않는다. 소유자가 그룹 채널에서
+실제 전달 여부를 확인하고, **미전달**로 확정한 경우에만 journal의 두 값을 그대로 넣는다.
+
+```bash
+python3 -m automation.managed_skills.announcement_recovery abandon \
+  --key '<journal key>' --action-hash '<journal action_hash>'
+```
+
+이 명령은 key lease·action hash를 대조하고 감사 행을 먼저 보존한다. 값이 다르거나 전달
+레코드가 이미 있으면 fail-closed로 거부된다. 전달 여부를 모르면 실행하지 않는다.
 
 ### 5.4 취소 (revocation)
 
@@ -497,6 +507,6 @@ REMOTE-RECALL-LIMIT mounted-skills=unchanged owner-removal-required=true
 
 - 노드 설치 (관리자·팀원 공통): [install.md](install.md)
 - 팀원용 매뉴얼: [manual-member.md](manual-member.md)
-- 발행/구독 상세 런북과 안전 불변식: [managed-skill-channel.md](managed-skill-channel.md)
+- 발행/구독 상세 런북과 안전 불변식: 개발 저장소 전용 `managed-skill-channel.md`
 - roster 시드: [`configs/roster.example.yaml`](../../configs/roster.example.yaml)
 - 발행자 config 시드: [`configs/managed-publisher.default.json`](../../configs/managed-publisher.default.json)

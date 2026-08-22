@@ -14,9 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Protocol, assert_never
+from typing import TYPE_CHECKING, Protocol, assert_never
+
+if TYPE_CHECKING:
+    from automation.interop.approval_reminder import ReminderContext, ReminderVerdict
 
 from automation.interop.approval_lease import ApprovalLease, PostingJournal
+from .approval_types import ApprovalRequest, Probe
 
 
 class ApprovalRecordsError(RuntimeError):
@@ -28,28 +32,10 @@ class ApprovalSurfaceError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class ApprovalRequest:
-    key: str
-    action_hash: str
-    message_id: str
-    channel_id: str
-    created_at: str
-
-
-@dataclass(frozen=True, slots=True)
 class ApprovalIntent:
     key: str
     action_hash: str
     channel_id: str
-
-
-class Probe(StrEnum):
-    BOUND_PENDING = "bound-pending"
-    APPROVED = "approved"
-    CANCELLED = "cancelled"
-    MISSING = "missing"
-    BINDING_MISMATCH = "binding-mismatch"
-    UNVERIFIABLE = "unverifiable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +310,22 @@ class DecisionWatcher(Protocol):
     def apply(self, request: ApprovalRequest, decision: Probe) -> None: ...
 
     def drop(self, request: ApprovalRequest) -> None: ...
+
+
+def remind_owner_approval(
+    request: ApprovalRequest,
+    watcher: DecisionWatcher,
+    lease: ApprovalLease,
+    context: ReminderContext,
+) -> ReminderVerdict:
+    """Reminder entry point reused by existing approval watcher ticks.
+
+    The lazy import keeps the lifecycle façade as the public boundary without making
+    the scheduler a second approval state machine.
+    """
+    from automation.interop.approval_reminder import dispatch_owner_approval_reminder
+
+    return dispatch_owner_approval_reminder(request, watcher, lease, context)
 
 
 class WatchOutcome(StrEnum):

@@ -2,6 +2,7 @@
 name: prompt
 description: "버전형 프롬프트 자산을 canonical·overlay·legacy 계층에서 결정적으로 검색·조회·추가한다. 민감 본문은 agent 전용 private 저장소에만 두고 비-GLM 경로를 강제한다. W5-1."
 version: 1.0.0
+author: autophagy-agents
 license: MIT
 metadata:
   hermes:

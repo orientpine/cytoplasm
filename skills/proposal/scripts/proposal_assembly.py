@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
+from . import proposal_knowledge
 from .proposal_storage import ProposalError, ProposalPaths, load_proposal, set_state, write_private
 
 
@@ -18,17 +21,52 @@ class Assembly:
     reminder: str
 
 
+def _evidence_sources(proposal: Any) -> str:
+    sidecars = tuple(
+        path for section in proposal.sections
+        if (path := section.path.with_suffix(".evidence.json")).is_file()
+    )
+    if not sidecars:
+        return ""
+    testing = proposal_knowledge.module("automation.knowledge.testing")
+    facade = proposal_knowledge.module("automation.knowledge.facade")
+    rendering = proposal_knowledge.module("automation.knowledge.render")
+    packs = []
+    for sidecar in sidecars:
+        raw = json.loads(sidecar.read_text(encoding="utf-8"))
+        packs.append(testing.pack_from_dict(raw))
+    if not packs:
+        return ""
+    unique: dict[str, Any] = {}
+    for pack in packs:
+        for item in pack.items:
+            unique.setdefault(item.sha256, item)
+    items = tuple(replace(item, id=f"E{index}") for index, item in enumerate(unique.values(), start=1))
+    layers = {
+        name: next((pack.layers[name] for pack in packs if pack.layers.get(name) == "hit"), packs[-1].layers.get(name, "skipped"))
+        for name in ("rag", "wiki", "twin")
+    }
+    verdict = "hit" if items else "unavailable" if any(pack.verdict == "unavailable" for pack in packs) else "no_evidence"
+    combined = facade.EvidencePack("knowledge-v1", packs[0].query, verdict, items, layers)
+    return str(rendering.render_citations(combined, "sources"))
+
+
 def assemble(paths: ProposalPaths, slug: str) -> Assembly:
-    """Assemble all sections and mark missing drafts without a failure exit."""
+    """Assemble all sections and append one deduplicated facade-rendered source list."""
     proposal = load_proposal(paths, slug)
     missing: list[str] = []
     sections: list[str] = [f"# {proposal.title}"]
     for section in proposal.sections:
         body = section.body.strip()
+        if section.path.with_suffix(".evidence.json").is_file():
+            body = body.partition("\n\n### 근거\n\n")[0].rstrip()
         if not body:
             missing.append(section.key)
             body = f"[MISSING SECTION: {section.title}]"
         sections.append(f"## {section.title}\n\n{body}")
+    sources = _evidence_sources(proposal)
+    if sources:
+        sections.append(f"## 근거 목록\n\n{sources}")
     document = "\n\n".join(sections).rstrip() + "\n"
     path = proposal.workspace / "assembled.md"
     write_private(path, document)

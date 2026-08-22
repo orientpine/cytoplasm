@@ -23,15 +23,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/skill_mount_probe.sh"; source "$(dirname 
 # shellcheck source=automation/release_store_probe.sh
 source "$(dirname "${BASH_SOURCE[0]}")/release_store_probe.sh"
 # shellcheck source=automation/release_helper_probe.sh
-source "$(dirname "${BASH_SOURCE[0]}")/release_helper_probe.sh"
+# shellcheck source=automation/watcher_drift_probe.sh
+# shellcheck source=automation/healthcheck_wrapper_probe.sh
+# shellcheck source=automation/runtime_package_probe.sh
+source "$(dirname "${BASH_SOURCE[0]}")/release_helper_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/watcher_drift_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_wrapper_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/runtime_package_probe.sh"
 # shellcheck source=automation/healthcheck_command_builder.sh
-source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_command_builder.sh"
 # shellcheck source=automation/healthcheck_validation.sh
-source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_validation.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_command_builder.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_validation.sh"
 # shellcheck source=automation/update_trust_probe.sh
-source "$(dirname "${BASH_SOURCE[0]}")/update_trust_probe.sh"
 # shellcheck source=automation/healthcheck_roster_probe.sh
-source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_roster_probe.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/update_trust_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_roster_probe.sh"
 
 readonly LOG_DIR="${HEALTHCHECK_LOG_DIR:-$NODE_PRIVATE_ROOT/runtime-logs/healthcheck}"
 readonly PRIMARY_NODE="$NODE_PRIMARY_NODE_NAME"
@@ -74,6 +75,8 @@ readonly -a LIVE_CHECKS=(
   "$PRIMARY_NODE skill mounts match the release|skill_mounts_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
   "$PRIMARY_NODE agent selfskill root topology|agent_selfskill_root_topology|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
   "$PRIMARY_NODE release store usage|release_store_usage|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_RELEASE_STORE"
+  "$PRIMARY_NODE watcher wrappers match the release|watcher_wrappers_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_WATCHER_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/watcher-deploy-manifest.txt}"
+  "$PRIMARY_NODE runtime packages match the release|primary_runtime_packages_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}" "$RAG_NODE personal RAG source and MCP image match the release|rag_stack_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}" "$PRIMARY_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh"
 )
 
 # Probes that run HERE, not over ssh. They must stay out of the remote tally: during a
@@ -273,6 +276,8 @@ run_check() {
     skill_mounts_current) probe_skill_mounts_current "$node" "$account" "$target" ;;
     release_store_usage) probe_release_store_usage "$node" "$account" "$target" ;;
     agent_selfskill_root_topology) probe_selfskill_root_topology "$node" "$account" "$target" ;;
+watcher_wrappers_current) probe_watcher_wrappers_current "$node" "$account" "$target" ;; primary_runtime_packages_current) probe_primary_runtime_packages_current "$node" "$account" "$target" ;; rag_stack_current) probe_rag_stack_current "$node" "$account" "$target" ;;
+healthcheck_wrapper_current) probe_healthcheck_wrapper_current "$node" "$account" "$target" ;;
     *) log "ERROR: ${check_name} has unsupported probe type ${probe_type}"; return 1 ;;
   esac
 }

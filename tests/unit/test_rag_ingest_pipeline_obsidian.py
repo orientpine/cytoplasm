@@ -89,6 +89,27 @@ def test_obsidian_note_is_synced_scanned_and_ingested(
     assert any("INGESTED obsidian:10_projects/a.md" in line for line in log_lines)
 
 
+def test_forced_obsidian_reingest_with_date_metadata_keeps_document_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_obsidian_config(tmp_path)
+    _ = install_fake_sync(monkeypatch)
+    assert config.obsidian is not None
+    config.obsidian.mirror_dir.mkdir(parents=True)
+    _ = (config.obsidian.mirror_dir / "dated.md").write_text(
+        "---\ncreated: 2026-08-21\nmodified: 2026-08-21\n---\n동일 본문",
+        encoding="utf-8",
+    )
+    client = FakeMcpClient()
+    _ = run_pipeline(config, {"obsidian"}, client=client)  # type: ignore[arg-type]
+    count_before = len(client.points)
+
+    _ = run_pipeline(config, {"obsidian"}, force=True, client=client)  # type: ignore[arg-type]
+
+    assert count_before == 1
+    assert len(client.points) == count_before
+
+
 def test_sync_failure_scans_last_good_mirror_with_warn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
+from typing import Protocol, cast
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if __package__ in (None, ""):
@@ -16,11 +18,13 @@ if __package__ in (None, ""):
     report_core = import_module("report_core")
     report_llm = import_module("report_llm")
     report_sensitivity = import_module("report_sensitivity")
+    report_knowledge = import_module("report_knowledge")
     report_drive = import_module("drive_publish")
 else:
     report_core = import_module(".report_core", __package__)
     report_llm = import_module(".report_llm", __package__)
     report_sensitivity = import_module(".report_sensitivity", __package__)
+    report_knowledge = import_module(".report_knowledge", __package__)
     report_drive = import_module(".drive_publish", __package__)
 
 
@@ -40,21 +44,176 @@ def _write_private(path: Path, content: str) -> None:
     path.chmod(0o600)
 
 
-def _report(args: argparse.Namespace) -> int:
-    notes = report_core.select_notes(Path(args.notes_root).expanduser(), limit=args.limit, query=args.query)
+class _Item(Protocol):
+    id: str
+    store: str
+    source_type: str
+    ref: str
+    title: str
+    doc_date: str | None
+    date_basis: str
+    score: float | None
+    grounded: bool | None
+    authority: str | None
+    expired: bool | None
+    sensitivity: str | None
+    content: str
+    sha256: str
+
+
+class _Query(Protocol):
+    text: str
+    purpose: str
+    sources: frozenset[str]
+    tags: frozenset[str]
+    limit: int
+    caller: str
+
+
+class _Pack(Protocol):
+    version: str
+    query: _Query
+    verdict: str
+    items: tuple[_Item, ...]
+    layers: dict[str, str]
+    notes: tuple[str, ...]
+
+
+class _CitationReport(Protocol):
+    text: str
+    stripped_ids: tuple[str, ...]
+
+
+class _Renderer(Protocol):
+    def render_citations(self, pack: _Pack, style: str) -> str: ...
+    def render_verdict(self, pack: _Pack) -> str: ...
+    def validate_citations(self, text: str, pack: _Pack) -> _CitationReport: ...
+
+
+def _rendering() -> _Renderer:
+    module = report_knowledge.module("automation.knowledge.render")
+    return cast(_Renderer, cast(object, module))
+
+
+def _evidence_block(pack: _Pack) -> str:
+    if pack.verdict != "hit":
+        try:
+            return str(_rendering().render_citations(pack, "sources"))
+        except ImportError:
+            return "EVIDENCE: unavailable — 근거 수집 불가"
+    records = [
+        f"[{item.id}] store={item.store}; ref={item.ref}; "
+        f"date={item.doc_date or '날짜 미상'}; content={item.content}"
+        for item in pack.items
+    ]
+    return "EVIDENCE:\n" + "\n".join(records)
+
+
+def _finalize_evidence(draft: str, pack: _Pack) -> tuple[str, str]:
+    try:
+        rendering = _rendering()
+        report = rendering.validate_citations(draft, pack)
+        verdict = rendering.render_verdict(pack)
+        sources = rendering.render_citations(pack, "sources")
+        print(f"CITATIONS-STRIPPED count={len(report.stripped_ids)}", file=sys.stderr)
+        return "\n\n".join(part for part in (verdict, report.text) if part), str(sources)
+    except ImportError:
+        message = "근거 수집 불가 — 지식 파사드를 불러오지 못했지만 생성을 계속함"
+        return f"{message}\n\n{draft.strip()}", ""
+
+
+def _pack_dict(pack: _Pack) -> dict[str, object]:
+    query = pack.query
+    return {
+        "version": pack.version,
+        "query": {
+            "text": query.text, "purpose": query.purpose,
+            "sources": sorted(query.sources), "tags": sorted(query.tags),
+            "limit": query.limit, "caller": query.caller,
+        },
+        "verdict": pack.verdict,
+        "items": [
+            {
+                "id": item.id, "store": item.store, "source_type": item.source_type,
+                "ref": item.ref, "title": item.title, "doc_date": item.doc_date,
+                "date_basis": item.date_basis, "score": item.score,
+                "grounded": item.grounded, "authority": item.authority,
+                "expired": item.expired, "sensitivity": item.sensitivity,
+                "content": item.content, "sha256": item.sha256,
+            }
+            for item in pack.items
+        ],
+        "layers": pack.layers,
+        "notes": list(pack.notes),
+    }
+
+
+def _report(args: argparse.Namespace, evidence_pack: object | None = None) -> int:
+    notes = report_core.select_notes(
+        Path(args.notes_root).expanduser(), limit=args.limit, query=args.query
+    )
     if not notes:
         print("자료 부족: 선택 조건에 맞는 노트가 없습니다.")
         return 0
-    rules_path = Path(os.environ.get("REPORT_RULES_PATH", _SCRIPT_DIR.parent / "configs" / "sensitivity-rules.yaml"))
-    route = report_sensitivity.route_notes(notes, report_sensitivity.load_rules(rules_path))
     title = args.title or "연구 노트 보고서"
-    draft = Path(args.response_file).read_text(encoding="utf-8") if args.response_file else report_llm.generate(
-        report_core.build_prompt(notes, title), route
+    pack = cast(_Pack | None, evidence_pack)
+    if args.with_evidence and pack is None:
+        material = "\n\n".join(note.text for note in notes)
+        pack = cast(_Pack, report_knowledge.collect(title, args.query, material))
+    routed_notes = notes
+    if pack is not None:
+        evidence_text = "\n".join(item.content for item in pack.items)
+        routed_notes += (report_core.Note(Path("<knowledge-evidence>"), "Evidence", evidence_text, 0.0),)
+    rules_path = Path(os.environ.get(
+        "REPORT_RULES_PATH", _SCRIPT_DIR.parent / "configs" / "sensitivity-rules.yaml"
+    ))
+    route = report_sensitivity.route_notes(
+        routed_notes, report_sensitivity.load_rules(rules_path)
     )
-    output = _output_path(_private_directory(Path(args.outputs_root).expanduser()), "report", ".md")
-    _write_private(output, report_core.assemble_report(title, notes, draft))
+    prompt_evidence = _evidence_block(pack) if pack is not None else ""
+    draft = (
+        Path(args.response_file).read_text(encoding="utf-8")
+        if args.response_file
+        else report_llm.generate(report_core.build_prompt(notes, title, prompt_evidence), route)
+    )
+    sources = ""
+    if pack is not None:
+        draft, sources = _finalize_evidence(draft, pack)
+    output = _output_path(
+        _private_directory(Path(args.outputs_root).expanduser()), "report", ".md"
+    )
+    _write_private(output, report_core.assemble_report(title, notes, draft, sources))
+    if pack is not None:
+        _write_private(
+            output.with_suffix(".evidence.json"),
+            json.dumps(_pack_dict(pack), ensure_ascii=False, indent=2) + "\n",
+        )
     link = report_drive.publish_best_effort(output, "report")
-    print(f"REPORT-CREATED path={output} drive={link} provider={route.provider} sensitive={str(route.sensitive).lower()} notes={len(notes)}")
+    print(
+        f"REPORT-CREATED path={output} drive={link} provider={route.provider} "
+        f"sensitive={str(route.sensitive).lower()} notes={len(notes)}"
+    )
+    return 0
+
+
+def _evidence(args: argparse.Namespace) -> int:
+    notes = report_core.select_notes(
+        Path(args.notes_root).expanduser(), limit=args.limit, query=args.query
+    )
+    title = args.title or "연구 노트 보고서"
+    material = "\n\n".join(note.text for note in notes)
+    pack = cast(_Pack, report_knowledge.collect(title, args.query, material))
+    if args.json:
+        print(json.dumps(
+            {"evidence_count": len(pack.items), "layers": pack.layers},
+            ensure_ascii=False, sort_keys=True,
+        ))
+    else:
+        print(f"EVIDENCE verdict={pack.verdict} count={len(pack.items)}")
+        try:
+            print(_rendering().render_citations(pack, "sources"))
+        except ImportError:
+            print("근거 수집 불가")
     return 0
 
 
@@ -96,7 +255,15 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--limit", type=int, default=12)
     report.add_argument("--title", default="")
     report.add_argument("--response-file", default="")
+    report.add_argument("--with-evidence", action="store_true")
     report.set_defaults(func=_report)
+    evidence = commands.add_parser("evidence")
+    evidence.add_argument("--notes-root", default="~/notes")
+    evidence.add_argument("--query", default="")
+    evidence.add_argument("--limit", type=int, default=12)
+    evidence.add_argument("--title", default="")
+    evidence.add_argument("--json", action="store_true")
+    evidence.set_defaults(func=_evidence)
     slides = commands.add_parser("slides")
     slides.add_argument("--report", required=True)
     slides.add_argument("--outputs-root", default="~/outputs")

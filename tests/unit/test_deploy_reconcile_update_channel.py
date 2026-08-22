@@ -10,6 +10,7 @@ import automation.deploy_reconcile_cli as reconcile_cli
 from automation.deploy_update_channel import save_update_channel_binding
 from automation.node_asset_renderer import render_asset
 from automation.node_config import default_node_config
+from automation.update_trust import TrustedUpdate
 
 _REPO = Path(__file__).resolve().parents[2]
 _SERVICE = _REPO / "automation" / "systemd" / "autophagy-deploy-reconcile.service"
@@ -37,46 +38,36 @@ def test_ops_may_only_read_the_fixed_agent_roster_for_channel_selection() -> Non
     )
 
 
-def test_candidate_update_sha_when_channel_is_null_uses_the_existing_resolver_call(
+def test_candidate_update_sha_when_channel_is_null_uses_the_signature_only_resolver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    observed: list[tuple[Path, bool, Path]] = []
+    observed: list[tuple[Path, str | None, Path]] = []
 
-    def resolve(mirror: Path, require_signed_updates: bool, *, floor_path: Path) -> str:
-        observed.append((mirror, require_signed_updates, floor_path))
-        return "c" * 40
+    def resolve(mirror: Path, *, remote_url: str | None, floor_path: Path) -> TrustedUpdate:
+        observed.append((mirror, remote_url, floor_path))
+        return TrustedUpdate(tag="v1.0.0", commit_sha="c" * 40)
 
-    monkeypatch.setattr(reconcile_cli, "resolve_update_target", resolve)
+    monkeypatch.setattr(reconcile_cli, "resolve_signed_update", resolve)
 
     assert reconcile_cli.candidate_update_sha() == "c" * 40
-    # The anti-rollback floor (C1) travels with every resolution, so this path
-    # and the root-owned helper's independent re-verification share one anchor.
-    assert observed == [
-        (
-            reconcile_cli.MIRROR,
-            default_node_config().require_signed_updates,
-            reconcile_cli.RELEASE_FLOOR,
-        )
-    ]
+    # No policy argument travels with it: `require_signed_updates` must never be able to
+    # let this pre-gate approve a target the root helper would then refuse (2026-08-21).
+    # The anti-rollback floor (C1) does travel, so this path and the helper's independent
+    # re-verification share one anchor.
+    assert observed == [(reconcile_cli.MIRROR, None, reconcile_cli.RELEASE_FLOOR)]
 
 
 def test_candidate_update_sha_when_channel_is_set_passes_the_roster_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     channel = "https://updates.example.invalid/autophagy.git"
-    observed: list[tuple[str, Path]] = []
+    observed: list[tuple[str | None, Path]] = []
 
-    def resolve(
-        _mirror: Path,
-        _require_signed_updates: bool,
-        *,
-        remote_url: str,
-        floor_path: Path,
-    ) -> str:
+    def resolve(_mirror: Path, *, remote_url: str | None, floor_path: Path) -> TrustedUpdate:
         observed.append((remote_url, floor_path))
-        return "d" * 40
+        return TrustedUpdate(tag="v2.0.0", commit_sha="d" * 40)
 
-    monkeypatch.setattr(reconcile_cli, "resolve_update_target", resolve)
+    monkeypatch.setattr(reconcile_cli, "resolve_signed_update", resolve)
 
     assert reconcile_cli.candidate_update_sha(channel) == "d" * 40
     assert observed == [(channel, reconcile_cli.RELEASE_FLOOR)]

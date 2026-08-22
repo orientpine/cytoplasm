@@ -205,7 +205,13 @@ def test_run_checks_is_read_only_and_covers_every_required_channel() -> None:
     results = run_checks(fetch, channel_ids)
 
     assert exit_code(results) == 0
-    assert all(result.status is Status.PASS for result in results)
+    # Every *check* passes. The one WARN is the owner-DM coverage declaration,
+    # which is not a check and must never be able to turn the run red.
+    assert all(
+        result.status is Status.PASS
+        for result in results
+        if not result.name.startswith("surface[")
+    )
     assert {requirement.role for requirement in REQUIRED_CHANNELS} == {
         result.name.removeprefix("channel[").removesuffix("]")
         for result in results

@@ -15,16 +15,64 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections import Counter
 from email.headerregistry import AddressHeader
 from email.errors import HeaderParseError, MessageError
-from typing import Protocol
+from typing import Callable, Protocol
+
+from .browser import BrowserError
 
 log = logging.getLogger(__name__)
 
 
 class TriggerBrowser(Protocol):
     def eval_js(self, script: str) -> str: ...
+
+
+class ComposeOpenBrowser(Protocol):
+    def eval_js(self, script: str) -> str: ...
+    def wait_ms(self, milliseconds: int) -> None: ...
+
+
+# The mailbox is a SPA: reaching /mail does not mean it can service a compose
+# call yet, and it passes through several *distinct* broken states on the way.
+# Measured 2026-08-18 by retrying compose right after login:
+#     t+0.1s  TypeError: Cannot read properties of undefined (reading 'compose')
+#     t+0.7s  TypeError: tabPanel._getMenuById is not a function
+#     t+1.3s  TypeError: tabPanel._getMenuById is not a function
+#     t+1.9s  compose OK  (to-field present)
+# A readiness *predicate* cannot cover that. An earlier guard checked whether
+# `tabPanel` was defined; it passed while the object still could not serve
+# `_getMenuById`, so compose was let through and threw anyway. Drive the real
+# call instead and let its own success be the readiness signal. Opening compose
+# is read-only — nothing is submitted — so retrying it is safe.
+#
+# Without this the throw becomes a BrowserError, which mailon folds into exit 2
+# (auth_or_browser_error): a startup race reported as an auth failure.
+_COMPOSE_JS = "window._tbar.compose(); 'compose-opened';"
+
+
+def open_compose_when_ready(
+    browser: ComposeOpenBrowser,
+    timeout_s: float = 30.0,
+    clock: Callable[[], float] | None = None,
+) -> None:
+    """Open compose, retrying while the mailbox SPA is still building."""
+    active_clock = clock or time.monotonic
+    deadline = active_clock() + timeout_s
+    last = ""
+    while True:
+        try:
+            browser.eval_js(_COMPOSE_JS)
+            return
+        except BrowserError as error:
+            last = str(error)
+        if active_clock() >= deadline:
+            raise BrowserError(
+                f"compose did not become callable within {timeout_s:.0f}s: {last}"
+            )
+        browser.wait_ms(500)
 
 
 def _unwrap(raw: str) -> str:
@@ -195,10 +243,24 @@ def call_compose_send(browser: TriggerBrowser) -> str | None:
 
 
 # The probe reads the exact keys the send gate compares, each with its own
-# bound.  A recipient field longer than its bound emits a truncation sentinel
+# bound.  An ADDRESS field longer than its bound emits a truncation sentinel
 # instead of a silently clipped value, so a recipient hidden past the bound
 # fails closed rather than escaping the exact-set check (2026-07-29 incident:
 # a 200-char clip dropped the tail recipient and the gate still passed).
+#
+# `content` must NOT get that treatment.  It is never compared as a set — the
+# gate only asks whether our body marker (the first 30 chars of the first body
+# line) appears in the form, and the sentinel is an OBJECT, so
+# `marker in str(value)` can never match it.  Applying the address rule to
+# content therefore made every body past the bound permanently unsendable: the
+# editor refill could not help because the body was never the problem, and
+# send.py raised "compose form missing body/recipients".
+#
+# This shipped together with the method guard and stayed latent the same 19
+# days — the 07-30 release carries neither, so the sends that succeeded up to
+# 08-14 prove nothing about it.  Measured 2026-08-18: a 236-char body was
+# refused on every attempt.  Clip the head instead; the marker sits right after
+# the editor's ~62-char style wrapper, so a 600-char head always carries it.
 _FORM_PROBE_JS = r"""
 JSON.stringify((() => { /* compose form probe */
   const c = window._compose || {};
@@ -207,11 +269,14 @@ JSON.stringify((() => { /* compose form probe */
   try { p = c.getForm(); } catch (e) { return {__probe_error: String(e).slice(0, 150)}; }
   if (!p || typeof p !== 'object') return {__probe_error: 'getForm() returned ' + String(p)};
   const out = {};
-  const bounds = {to: 4000, cc: 4000, bcc: 4000, from: 400, method: 40, content: 200};
+  const bounds = {to: 4000, cc: 4000, bcc: 4000, from: 400, method: 40, content: 600};
+  const isAddress = {to: true, cc: true, bcc: true, from: true, method: true};
   for (const k of Object.keys(bounds)) {
     try {
       const raw = p[k] === undefined || p[k] === null ? '' : String(p[k]);
-      out[k] = raw.length > bounds[k] ? {__truncated: raw.length} : raw;
+      out[k] = raw.length > bounds[k]
+        ? (isAddress[k] ? {__truncated: raw.length} : raw.slice(0, bounds[k]))
+        : raw;
     } catch (e) { out[k] = 'err'; }
   }
   return out;
@@ -349,7 +414,20 @@ def verify_compose_form(
             from_addrs = _canonical_addresses(str(form.get("from", "")))
             actual_from = Counter(from_addrs) if len(from_addrs) == 1 else None
             routing_ok = actual_from is not None and actual_from == intended_to
-        elif method == "send":
+        elif method in ("", "send"):
+            # A plain (non-tome) compose. The hidden `method` input is EMPTY on
+            # this webmail and stays empty for the whole compose lifetime
+            # (measured 2026-08-18: 12s poll, always ""), and the site's own
+            # send() only special-cases 'tome' — every other value is a normal
+            # send. Demanding literal 'send' here therefore rejected every
+            # legitimate mail.
+            #
+            # This shipped as a latent defect: the check landed 2026-07-29 but
+            # the mailon runtime stayed pinned to the 07-30 release for 19 days,
+            # so production never ran it. Deploying the vendor tree on 08-18
+            # carried it in and every send began failing closed, which tripped
+            # the two-strike rule into mail-mode no-go. Logs confirm method was
+            # "" on 08-12/13/14 too — while those sends were succeeding.
             actual_to = _actual_set(form, "to")
             actual_cc = _actual_set(form, "cc")
             actual_bcc = _actual_set(form, "bcc")

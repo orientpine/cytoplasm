@@ -13,6 +13,33 @@ from typing import Final, Protocol, assert_never
 from urllib.error import HTTPError, URLError
 
 _LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/calendar/scripts"
+_ENV_SECRETS: Final = Path.home() / ".env.secrets"
+
+
+def _load_env_secrets(path: Path = _ENV_SECRETS) -> None:
+    """no-agent cron hands the wrapper no secrets, so the parent loads them itself.
+
+    This watcher reads Discord reactions in-process and spawns `calendar_cli.py`, both
+    of which need credentials. Measured 2026-08-18 on `budget-watch`: without this the
+    configuration sits on disk and never reaches the code that needs it (규약 (b)).
+    Runs at import time because the module-level `import_module` calls below already
+    touch configuration. Inventory check: tests/unit/test_watcher_secret_propagation.py.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
+
+_load_env_secrets()
+
 _SCRIPTS = Path(os.environ.get("CALENDAR_SCRIPTS", _LIVE_SCRIPTS)).expanduser()
 if _SCRIPTS.exists() and str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
@@ -117,12 +144,14 @@ def run_once(
     commands: CommandRunner,
     draft_sha256: Callable[[str], str],
     now: datetime,
+    reminder_config: object | None = None,
 ) -> None:
     """Apply only unambiguous bound owner reactions and retain uncertain entries."""
     snapshot = store.load()
     failures: list[ConfirmWatchError] = []
     _process_entries(
-        snapshot, store, owner_id, discord, commands, draft_sha256, now, failures=failures
+        snapshot, store, owner_id, discord, commands, draft_sha256, now,
+        reminder_config=reminder_config, failures=failures
     )
     fatal_failures = tuple(error for error in failures if error.fatal)
     if fatal_failures:
@@ -138,6 +167,7 @@ def _process_entries(
     draft_sha256: Callable[[str], str],
     now: datetime,
     *,
+    reminder_config: object | None = None,
     failures: list[ConfirmWatchError] | None = None,
 ) -> tuple[PendingConfirm, ...]:
     retained: list[PendingConfirm] = []
@@ -154,10 +184,26 @@ def _process_entries(
                     _notify_owner(discord, "확정 시간이 지나 취소되었습니다")
                     decision.drop(calendar_approval.request_of(entry))
             else:
+                request = calendar_approval.request_of(entry)
+                lease = calendar_approval.confirm_lease(store.path.parent)
+                if reminder_config is not None:
+                    reminder = calendar_approval._repo_module("approval_reminder")
+                    surface = calendar_approval._repo_module("approval_surface")
+                    kind = surface.ApprovalKind(entry.kind or surface.ApprovalKind.CALENDAR)
+                    context = reminder.ReminderContext(
+                        config=reminder_config,
+                        journal=calendar_approval._lease_module().ReminderJournal(
+                            store.path.parent / "reminder-journal"
+                        ),
+                        request_type=kind,
+                        deliver=lambda _channel_id, content: discord.send_owner_dm(content),
+                        clock=lambda: now,
+                    )
+                    calendar_approval.lifecycle().remind_owner_approval(
+                        request, decision, lease, context
+                    )
                 verdict = calendar_approval.lifecycle().resolve_owner_decision(
-                    calendar_approval.request_of(entry),
-                    decision,
-                    calendar_approval.confirm_lease(store.path.parent),
+                    request, decision, lease,
                 )
                 outcome = calendar_approval.lifecycle().WatchOutcome
                 match verdict.outcome:
@@ -231,10 +277,13 @@ def main() -> int:
     try:
         owner = calendar_confirm.owner_id()
         scripts = Path(os.environ.get("CALENDAR_SCRIPTS", _SCRIPTS)).expanduser()
+        config = calendar_approval._repo_module(
+            "approval_reminder_config"
+        ).load_approval_reminder_config()
         run_once(
             store=PendingConfirmStore(), owner_id=owner, discord=DiscordApi(owner),
             commands=CliCommands(scripts / "calendar_cli.py"), draft_sha256=_draft_sha256,
-            now=datetime.now(UTC),
+            now=datetime.now(UTC), reminder_config=config,
         )
     except ConfirmBatchError as error:
         return error.exit_code

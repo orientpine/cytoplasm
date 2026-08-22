@@ -7,7 +7,7 @@ from typing import Final, TypeAlias
 
 import pytest
 
-from automation.managed_sync import cli
+from automation.group_roster.parser import ROSTER_ENV
 
 JsonValue: TypeAlias = (
     str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
@@ -80,7 +80,7 @@ def install_roster(
 ) -> Path:
     roster_path = tmp_path / "roster.yaml"
     _ = roster_path.write_text(text, encoding="utf-8")
-    monkeypatch.setenv(cli.ROSTER_ENV, str(roster_path))
+    monkeypatch.setenv(ROSTER_ENV, str(roster_path))
     return roster_path
 
 

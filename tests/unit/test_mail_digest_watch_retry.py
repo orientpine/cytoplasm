@@ -51,10 +51,23 @@ def _load_watch_module() -> ModuleType:
 watch = _load_watch_module()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_failure_streak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """복구 알림 상태는 소유자 홈이 아니라 임시 디렉터리에 쓴다 — 테스트가 살아있는
+    운영 상태를 덮으면 다음 진짜 틱의 판단이 조용히 틀린다.
+    """
+    monkeypatch.setenv("WATCH_FAILURE_ROOT", str(tmp_path / "watch-failure"))
+
+
 def _stub(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcomes: list[tuple[int, str]]
 ) -> list[list[str]]:
-    """Run the watcher against a fake mounted CLI returning scripted (rc, stderr)."""
+    """Run the watcher against a fake mounted CLI returning scripted (rc, stderr).
+
+    Only the digest child is modelled. The watcher also shells out to the runtime drift
+    probe, which is a different concern with its own suite; here it answers UNDECIDABLE
+    (rc 2) so it stays silent and out of this suite's call accounting.
+    """
     cli = tmp_path / "triage_cli.py"
     _ = cli.write_text("", encoding="utf-8")
     monkeypatch.setattr(watch, "CLI", cli)
@@ -63,6 +76,8 @@ def _stub(
     queue = list(outcomes)
 
     def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if str(argv[0]) != sys.executable:
+            return subprocess.CompletedProcess(argv, 2, "", "")
         calls.append(list(argv))
         returncode, stderr = queue.pop(0) if queue else (4, _RETRY_UNSAFE)
         return subprocess.CompletedProcess(argv, returncode, "", stderr)
@@ -159,6 +174,8 @@ def test_retries_are_bounded_and_alert_exactly_once(
     monkeypatch.setattr(watch, "_RETRY_DELAYS_S", (0, 0, 0))
 
     def always_retry_safe(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if str(argv[0]) != sys.executable:  # the runtime drift probe: undecidable, silent
+            return subprocess.CompletedProcess(argv, 2, "", "")
         calls.append(list(argv))
         return subprocess.CompletedProcess(argv, 4, "", _RETRY_SAFE)
 

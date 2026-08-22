@@ -31,16 +31,19 @@ import re
 from mailon_interface import (
     CONFIG_GUIDANCE,
     MAILON_INTERFACE,
-    REAUTH_GUIDANCE,
     SYNC_FALLBACK_NOTE,
     WRAPPER_EXIT,
     WRAPPER_VERSION,
 )
 from mail_wrapper_classification import classify_metadata
+from mailon_failure import classify_exit_two
 from mail_wrapper_read import (
     _cfg,
     _db_rows,
     _render_mail,
+    distinct_addresses,
+    rank_candidates,
+    render_candidate,
     build_subprocess_env,  # noqa: F401 - stable public helper re-export
     classify_stderr,
     mask_value,
@@ -71,7 +74,8 @@ def _mailon_failure(command: str, rc: int, stderr: str, **extra) -> int:
         **extra,
     }
     if rc == 2:
-        return _error(command, "auth_error", REAUTH_GUIDANCE, **detail)
+        # exit 2 folds auth and browser failures together; the signature splits them.
+        return _error(command, *classify_exit_two(detail["failure_signature"]), **detail)
     if rc == 1:
         return _error(command, "config_error", CONFIG_GUIDANCE, **detail)
     if rc in (10, 11) or rc == -6:
@@ -204,14 +208,6 @@ def _last_json_dict(out: str) -> dict | None:
     return None
 
 
-def _render_candidate(cand: dict, masked: bool, salt: str) -> dict:
-    item = {"group": str(cand.get("group", "")), "name": str(cand.get("name", "")),
-            "email": str(cand.get("email", "")), "org": str(cand.get("org", ""))}
-    if masked:
-        item.update({k: mask_value(item[k], salt) for k in ("name", "email", "org")})
-    return item
-
-
 def cmd_resolve(args) -> int:
     cfg = _cfg()
     rc, out, err = run_mailon(cfg, ["resolve", "--name", args.name, "--json"])
@@ -228,12 +224,17 @@ def cmd_resolve(args) -> int:
                       failure_signature=classify_stderr(err))
     salt = cfg["mask_salt"]
     query = str(parsed.get("query") or args.name)
+    # Deterministic order + an explicit ambiguity signal: the caller must never have to
+    # guess which of several addresses is current (mis-sending is irreversible).
+    ranked = rank_candidates(cands)
+    addresses = distinct_addresses(ranked)
     payload = {
-        "wrapper": WRAPPER_VERSION, "command": "resolve", "status": "ok",
-        "masked": args.masked,
+        "wrapper": WRAPPER_VERSION, "command": "resolve", "status": "ok", "masked": args.masked,
         "query": mask_value(query, salt) if args.masked else query,
-        "candidate_count": len(cands),
-        "candidates": [_render_candidate(c, args.masked, salt) for c in cands],
+        "candidate_count": len(ranked),
+        "distinct_address_count": addresses,
+        "ambiguous": addresses > 1,
+        "candidates": [render_candidate(c, args.masked, salt) for c in ranked],
     }
     return _emit(payload, 0)
 

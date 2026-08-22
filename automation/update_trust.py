@@ -29,7 +29,7 @@ from automation.git_tag_signature import (
     parse_remote_release_refs,
     verify_tag_signature,
 )
-from automation.node_config import load_node_config
+from automation.node_config import NodeConfigError, load_node_config
 from automation.update_trust_state import (
     ReleaseFloorError,
     advance_release_floor,
@@ -59,15 +59,19 @@ class TrustedUpdate:
 
 
 class _Arguments(argparse.Namespace):
+    command: str
     mirror: Path
     allowed_signers: Path
     node_config: Path | None
+    floor_path: Path | None
 
     def __init__(self) -> None:
         super().__init__()
+        self.command = ""
         self.mirror = Path()
         self.allowed_signers = UPDATE_ALLOWED_SIGNERS_PATH
         self.node_config = None
+        self.floor_path = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +262,27 @@ def resolve_update_target(
     return fields[0]
 
 
+#: ``resolve`` honours ``require_signed_updates``; ``resolve-signed`` reads no
+#: configuration at all, and that difference is the whole point. The privileged helper
+#: named ``~ops/.hermes/node.toml`` as the file that answer came from, and ops holds
+#: NOPASSWD sudo for that helper — one file in its own home was enough to make root
+#: install an unsigned ``origin/main`` (2026-08-21). So the signature-only verb takes the
+#: floor and the trust root from its caller: both are root-owned paths the provisioner
+#: bakes into the helper, and neither is anything an unprivileged account can write.
+def _resolve(args: _Arguments) -> tuple[str, bool]:
+    if args.command == "resolve-signed":
+        if args.floor_path is None:
+            raise UpdateTrustError("FLOOR-PATH", "--floor-path is required")
+        signed = resolve_signed_update(args.mirror, args.allowed_signers, floor_path=args.floor_path)
+        return signed.commit_sha, False
+    config = load_node_config(args.node_config)
+    target = resolve_update_target(
+        args.mirror, config.require_signed_updates, args.allowed_signers,
+        floor_path=release_floor_path(config),
+    )
+    return target, not config.require_signed_updates
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="update-trust")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -265,18 +290,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     _ = resolve.add_argument("--mirror", type=Path, required=True)
     _ = resolve.add_argument("--allowed-signers", type=Path, default=UPDATE_ALLOWED_SIGNERS_PATH)
     _ = resolve.add_argument("--node-config", type=Path, default=None)
+    signed = subparsers.add_parser("resolve-signed")
+    _ = signed.add_argument("--mirror", type=Path, required=True)
+    _ = signed.add_argument("--allowed-signers", type=Path, default=UPDATE_ALLOWED_SIGNERS_PATH)
+    _ = signed.add_argument("--floor-path", type=Path, required=True)
     args = _Arguments()
     _ = parser.parse_args(argv, namespace=args)
     try:
-        config = load_node_config(args.node_config)
-        target = resolve_update_target(
-            args.mirror, config.require_signed_updates, args.allowed_signers,
-            floor_path=release_floor_path(config),
-        )
-    except UpdateTrustError as error:
+        target, waived = _resolve(args)
+    except (UpdateTrustError, NodeConfigError) as error:
         print(f"UPDATE-TRUST-BLOCK {error}", file=sys.stderr)
         return 1
-    if not config.require_signed_updates:
+    if waived:
         print(
             "UPDATE-TRUST-OPTOUT mutable origin/main accepted by explicit node policy",
             file=sys.stderr,

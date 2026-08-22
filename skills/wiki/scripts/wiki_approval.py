@@ -22,13 +22,7 @@ import wiki_gate
 import wiki_binding
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
-    from automation.interop.approval_lifecycle import (
-        ApprovalIntent,
-        ApprovalRequest,
-        PostedApproval,
-        Probe,
-Verdict,
-    )
+    from automation.interop.approval_lifecycle import ApprovalIntent, ApprovalRequest, PostedApproval, Probe, Verdict
     from automation.interop.approval_lease import ApprovalLease, PostingJournal
 
 LEASE_DIRNAME = "approval-leases"
@@ -37,8 +31,17 @@ _TRANSPORT_ERRORS = (OSError, json.JSONDecodeError, KeyError, TypeError, wiki_ga
 
 
 def repo_root() -> Path:
-    default = Path(__file__).resolve().parents[3]
-    return Path(os.environ.get("AUTOPHAGY_REPO_ROOT", str(default))).expanduser()
+    """The checkout carrying ``automation.interop``, not the mounted-release depth guess."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT")
+    if override:
+        return Path(override).expanduser()
+    here = Path(__file__).resolve()
+    candidates = [*here.parents[2:6], Path("/srv/autophagy-agent-current"), Path("/srv/autophagy-agents")]
+    for candidate in candidates:
+        if (candidate / "automation" / "interop").is_dir():
+            return candidate
+    current = Path("/srv/autophagy-agent-current")
+    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
 
 
 def _repo_module(name: str) -> ModuleType:
@@ -70,9 +73,7 @@ def approval_key(draft: dict) -> str:
     return f"wiki:{action}:{slug}"
 
 
-def confirm_intent(
-    draft: dict, binding: wiki_binding.ApprovalBindingLike | None = None
-) -> ApprovalIntent:
+def confirm_intent(draft: dict, binding: wiki_binding.ApprovalBindingLike | None = None) -> ApprovalIntent:
     """The intent one confirm post is bound to — key, draft digest, approval channel."""
     digest = draft.get("sha256")
     if not isinstance(digest, str) or not digest:

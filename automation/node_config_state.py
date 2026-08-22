@@ -7,12 +7,14 @@ out keeps that module under the 250-line ceiling rather than one line below it.
 
 from __future__ import annotations
 
+import sys
 from typing import Final
 
 from automation.node_config import (
     SYSTEM_NODE_CONFIG_PATH,
     NodeConfig,
     default_node_config,
+    load_node_config,
 )
 
 # Identity fields whose seed values are, by construction, never right on a real node.
@@ -35,6 +37,19 @@ def unconfigured_reason(config: NodeConfig) -> str | None:
     if not stale:
         return None
     return (
-        f"node identity is still the shipped seed ({', '.join(stale)}) — "
-        f"write the real values to {SYSTEM_NODE_CONFIG_PATH}"
+        f"node is not configured: identity is still the shipped seed ({', '.join(stale)}) — "
+        f"write the real values to {SYSTEM_NODE_CONFIG_PATH} or ~/.hermes/node.toml"
     )
+
+
+def main() -> int:
+    """Refuse deploy entry points before placeholder hostnames can reach DNS."""
+    reason = unconfigured_reason(load_node_config())
+    if reason is None:
+        return 0
+    print(f"NODE-CONFIG-BLOCK: {reason}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

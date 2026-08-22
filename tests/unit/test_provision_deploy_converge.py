@@ -141,7 +141,46 @@ def test_helper_resolves_the_signed_public_release_itself() -> None:
     text = _HELPER_SRC.read_text(encoding="utf-8")
     assert 'UPDATE_TRUST="$LIBDIR/automation/update_trust.py"' in text
     assert 'ALLOWED_SIGNERS="/etc/autophagy/update-allowed-signers"' in text
-    assert "resolve --mirror" in text
+    assert "resolve-signed --mirror" in text
+
+
+def test_privileged_path_reads_no_account_writable_trust_policy() -> None:
+    """`ops` must not be able to authorise a root install by writing a file it owns.
+
+    The helper used to derive `~ops/.hermes/node.toml` from `getent passwd` and hand it
+    to the verifier as `--node-config`. `load_node_config` honours whatever that file
+    says, and `require_signed_updates = false` makes `resolve_update_target` return the
+    raw unsigned `refs/heads/main`, which the helper then installs as root. ops holds
+    NOPASSWD sudo for this exact helper, so one file in its own home was enough to turn
+    "merge a PR" back into "root installs it" — the MD-1 escalation, reintroduced
+    through the configuration path. (`ProtectHome=tmpfs` hides that file from the timer,
+    but not from ops running the same sudo command in a login shell.)
+
+    The privileged path therefore resolves signatures unconditionally and reads no node
+    configuration at all: its topology is already baked in by the provisioner.
+    """
+    code = "\n".join(
+        line
+        for line in _HELPER_SRC.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert "getent passwd" not in code
+    assert "OPS_CONFIG" not in code
+    assert "--node-config" not in code
+    assert "node.toml" not in code
+    assert "require_signed_updates" not in code
+
+
+def test_helper_pins_the_anti_rollback_floor_it_shares_with_the_pre_gate() -> None:
+    """Dropping the config also drops where `update_trust.main` used to derive the floor.
+
+    Both verifiers must anchor to the SAME durable floor (resolve_signed_update), so the
+    helper names it explicitly instead of letting the verifier infer it from a config it
+    no longer reads.
+    """
+    text = _HELPER_SRC.read_text(encoding="utf-8")
+    assert "deploy-reconcile/release-floor.json" in text
+    assert "--floor-path" in text
 
 
 def test_helper_applies_the_bound_update_channel_to_verification_and_snapshot() -> None:

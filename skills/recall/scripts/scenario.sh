@@ -131,6 +131,40 @@ PY
 RECALL_FAKE_RESULTS="$work/lookalike.json" cli search "zephyrine-88231 원심분리기 제조사" \
   | grep -q '^RECALL-NO-MEMORY 기억 없음' || fail "text rendering lacks 기억 없음"
 
+# --- 2b) flagged entity fallback: literal gate rejects unrelated top score ---
+cat > "$work/entity-fallback.json" <<'JSON'
+{
+  "primary": [
+    {"score": 0.59, "source": "obsidian:projects/general.md#c0000",
+     "content": "일반 연구 과제 계획과 회의 기록", "document_id": "general",
+     "metadata": {"source_type": "obsidian", "path": "projects/general.md"}}
+  ],
+  "fallback": [
+    {"score": 0.91, "source": "wiki:unrelated.md#c0000",
+     "content": "무관한 고득점 문서", "document_id": "unrelated",
+     "metadata": {"source_type": "wiki", "path": "unrelated.md"}},
+    {"score": 0.52, "source": "obsidian:people/collaboration.md#c0000",
+     "content": "김민준 박사와 배양 자동화 일정을 조율했다.",
+     "document_id": "collaboration",
+     "metadata": {"source_type": "obsidian", "path": "people/collaboration.md",
+                  "created": "2026-05-02", "folder": "people"}}
+  ]
+}
+JSON
+RECALL_FAKE_RESULTS="$work/entity-fallback.json" \
+  cli search "최근 김민준 박사와 함께 진행한 업무 협업 내역" --entity-fallback --json \
+  > "$work/entity-fallback.out"
+python3 - "$work/entity-fallback.out" <<'PY' || fail "entity fallback assertions failed"
+import json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8"))
+assert r["status"] == "hit", r["status"]
+assert r["search"]["searches"] == 2
+assert r["search"]["entity_hint_count"] == 1
+assert [x["source"] for x in r["results"]] == ["obsidian:people/collaboration.md#c0000"]
+assert r["results"][0]["attribution"] == "Obsidian: people/collaboration.md"
+assert r["results"][0]["metadata"]["created"] == "2026-05-02"
+PY
+
 # --- 3) RAG down -> unavailable, exactly 1 attempt, exit 0 -------------------
 RECALL_FAKE_ERROR=unreachable cli search "아무 질문" --json > "$work/down.out" \
   || fail "unavailable path must still exit 0 (agent falls back to general answer)"
@@ -149,10 +183,10 @@ RECALL_FAKE_ERROR=unreachable cli search "아무 질문" \
 # --- 4) search log written, one masked JSON line per call, mode 600 ----------
 log_file="$(find "$RECALL_LOG_DIR" -name 'recall-*.log' -type f | head -n1)"
 [[ -n "$log_file" ]] || fail "recall log file absent"
-[[ "$(wc -l < "$log_file")" -eq 6 ]] || fail "expected 6 log lines (one per search)"
+[[ "$(wc -l < "$log_file")" -eq 7 ]] || fail "expected 7 log lines (one per CLI call)"
 [[ "$(stat -c %a "$log_file")" == "600" ]] || fail "recall log is not mode 600"
 grep -q '"status": "no_memory"' "$log_file" || fail "log lacks no_memory record"
 grep -q '"status": "unavailable"' "$log_file" || fail "log lacks unavailable record"
 
-printf 'SCENARIO-PASS legs=hit+sentinel_release+no_memory+unavailable secret_len=%s account=%s\n' \
+printf 'SCENARIO-PASS legs=hit+sentinel_release+no_memory+entity_fallback+unavailable secret_len=%s account=%s\n' \
   "${#secret}" "$(whoami)"

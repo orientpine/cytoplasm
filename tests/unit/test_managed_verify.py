@@ -22,6 +22,7 @@ _PRINCIPAL: Final = "publisher-testlab@autophagy"
 class VerifyConfig:
     allowed_signers: Path
     mirror_dir: Path
+    publisher: str
     publisher_principal: str
 
 
@@ -130,6 +131,7 @@ def verified_fixture(tmp_path: Path) -> VerifyFixture:
         config=VerifyConfig(
             allowed_signers=signers,
             mirror_dir=tmp_path / "mirror",
+            publisher=_PUBLISHER,
             publisher_principal=_PRINCIPAL,
         ),
         state=SkillState(highest_sequence=1, last_verified_digest="b" * 64),
@@ -209,6 +211,19 @@ def test_verify_release_when_configured_principal_signs_then_accepts_any_group_p
 
     # Then: the release is accepted purely because the configured principal matched.
     assert release.manifest.publisher == _PUBLISHER
+
+
+def test_verify_release_when_manifest_publisher_differs_from_config_then_fails_closed(
+    verified_fixture: VerifyFixture,
+) -> None:
+    # Given: a correctly signed manifest naming a different publisher than the runtime config.
+    mismatched = replace(
+        verified_fixture,
+        config=replace(verified_fixture.config, publisher="other-lab"),
+    )
+
+    # When/Then: verification rejects the identity mismatch before staging the release.
+    _assert_failure(mismatched, "WRONG-PUBLISHER")
 
 
 def test_verify_release_when_no_principal_is_configured_then_fails_closed(

@@ -1423,14 +1423,14 @@ def test_watch_logs_only_returned_count_on_success(tmp_path: Path) -> None:
     assert completed.stderr == ""
 
 
-def test_watch_swallows_exception_with_masked_exit_zero(tmp_path: Path) -> None:
+def test_watch_returns_nonzero_with_masked_error_when_consumer_raises(tmp_path: Path) -> None:
     home = tmp_path / "home"
     runtime = tmp_path / "runtime"
     _write_watch_runtime(runtime)
 
     completed, _observation = _run_watch(home, runtime, environment={"WATCH_RAISE": "1"})
 
-    assert completed.returncode == 0
+    assert completed.returncode != 0
     assert completed.stdout == ""
     assert completed.stderr == "repair report consume watch failed: RuntimeError\n"
     assert "sensitive failure detail" not in completed.stderr

@@ -35,7 +35,7 @@ _PEER_BOT_ID = "333333333333333333"
 _REQUEST_TIMESTAMP = "2026-07-17T00:00:00.000000+00:00"
 _ATTESTATION_TIMESTAMP = "2026-07-17T00:01:00.000000+00:00"
 _REQUEST_CONTENT = (
-    "[skill-deploy] 승인 요청\n"
+    "[skill-deploy] calendar 배포 승인 요청\n"
     "- skill: `calendar`\n"
     f"- sha256: `{_DIGEST}`\n"
     f"- deploy_nonce: `{_NONCE}`\n"
@@ -568,3 +568,37 @@ def test_new_deploy_record_persists_every_binding_field() -> None:
         "policy_version": str(POLICY_VERSION),
         "surface": "skill-approvals",
     }
+
+
+def test_the_request_line_names_the_skill_so_threads_are_distinguishable() -> None:
+    """Hermes 는 메시지 앞 80자를 스레드 제목으로 쓴다 — 그 창이 sha256 에서 끝나면
+    16건의 제목이 전부 같아 보인다(2026-08-20 소유자 실측: "승인 메시지를 구분할 수 없다")."""
+    spec = skill_gate_specs.DeploySpec(
+        skill="calendar",
+        digest=_DIGEST,
+        deploy_nonce=_NONCE,
+        review_status="- review: ✅ PASS",
+        peer_status="",
+        provenance=skill_gate_specs.Provenance("", "", ""),
+        binding=skill_gate._REQUEST_BINDING,
+        peer_attest_mode="discord",
+    )
+
+    title_window = " ".join(spec.render().split())[:80]
+
+    # 요점은 창에서 해시를 완전히 몰아내는 것이 아니라, 사람이 **먼저 읽는 부분**이
+    # 무엇에 대한 요청인지 말하는 것이다.
+    assert title_window.startswith("[skill-deploy] calendar 배포 승인 요청")
+    assert "calendar" in title_window[:40], "스킬명이 제목 앞부분에 있어야 구분된다"
+
+
+def test_the_parser_still_accepts_the_old_first_line() -> None:
+    """형식을 바꾸는 순간 이미 게시된 요청이 공중에 떠 있었다 — 그것들도 해소돼야 한다."""
+    old = _REQUEST_CONTENT.replace(
+        "[skill-deploy] calendar 배포 승인 요청", "[skill-deploy] 승인 요청"
+    )
+
+    matched = skill_gate._REQUEST_BINDING.match(old)
+
+    assert matched is not None
+    assert matched.group("skill") == "calendar"

@@ -85,7 +85,12 @@ def _form(
     *,
     cc_value: str = "",
     from_value: str = "synthetic-sender@example.test",
-    method: str = "send",
+    # The REAL value this webmail reports for a compose. The hidden `method`
+    # input is empty on a fresh compose and stays empty (measured 2026-08-18:
+    # 12s poll; production logs show "" on 08-12/13/14 while sends succeeded).
+    # This fixture used to default to "send" — a value the site never produces —
+    # so the whole suite passed green while every real send failed closed.
+    method: str = "",
     extra: dict[str, str] | None = None,
 ) -> dict[str, str]:
     form: dict[str, str] = {
@@ -280,6 +285,35 @@ def test_unknown_method_fails() -> None:
     ok, _ = _verify(DictProbeBrowser(form), to, cc=())
     assert ok is False
 
+def test_empty_method_is_a_normal_compose_and_passes() -> None:
+    """The value this webmail actually reports — fail-closing on it blocks all mail.
+
+    Regression for 2026-08-18: `method` was required to be literally "send", but a
+    fresh compose leaves the hidden input EMPTY and never fills it, and the site's
+    own send() only special-cases 'tome'. The check landed 2026-07-29 yet the mailon
+    runtime stayed on the 07-30 release for 19 days, so it never ran in production;
+    deploying the vendor tree on 08-18 shipped it and every send started failing,
+    which tripped the two-strike rule into mail-mode no-go.
+    """
+    to = ("to@example.test",)
+    ok, dump = _verify(DictProbeBrowser(_form(",".join(to), method="")), to)
+    assert ok is True
+    assert dump["method"] == ""
+
+
+def test_literal_send_method_still_passes() -> None:
+    """The other accepted value keeps working — widening must not swap one for another."""
+    to = ("to@example.test",)
+    ok, _ = _verify(DictProbeBrowser(_form(",".join(to), method="send")), to)
+    assert ok is True
+
+
+def test_empty_method_still_enforces_the_exact_recipient_set() -> None:
+    """Accepting "" must not weaken the 2026-07-29 exact-set guarantee."""
+    to = ("to@example.test",)
+    form = _form("to@example.test, sneaky@example.test", method="")
+    ok, _ = _verify(DictProbeBrowser(form), to)
+    assert ok is False
 
 # --------------------------------------------------------------------------- #
 # body marker must still be present (existing 2026-07-19 guarantee).
@@ -328,4 +362,59 @@ def test_real_probe_truncation_sentinel_on_overlong_field() -> None:
     assert len(huge) > 4000
     browser = NodeFormProbeBrowser(_form(huge))
     ok, _ = _verify(browser, ("filler-0000@example.test",))
+    assert ok is False
+
+
+# --------------------------------------------------------------------------- #
+# The probe itself: a long BODY must stay verifiable, a long ADDRESS must not.
+# --------------------------------------------------------------------------- #
+@requires_node
+def test_real_probe_keeps_a_long_body_verifiable() -> None:
+    """A body past the probe bound must stay a STRING that still carries the marker.
+
+    Regression for 2026-08-18: content was given the address fields' truncation
+    sentinel, an OBJECT, so `marker in str(value)` could never match and every
+    body past the bound became permanently unsendable. The editor refill could
+    not help — the body was never the problem — and send.py raised
+    "compose form missing body/recipients". Latent 19 days: the 07-30 release
+    carries neither this nor the method guard, so sends kept working until the
+    vendor tree was deployed on 08-18.
+    """
+    to = ("to@example.test",)
+    long_body = BODY + "\n" + ("가" * 2000)
+    wrapped = (
+        '<div style="font-family:굴림; font-size:10pt; line-height:150%">'
+        + long_body.replace("\n", "<br>")
+        + "</div>"
+    )
+    form = {
+        "method": "", "to": to[0], "cc": "", "bcc": "",
+        "from": "synthetic-sender@example.test", "content": wrapped,
+    }
+    ok, dump = send_trigger.verify_compose_form(
+        NodeFormProbeBrowser(form), to, long_body, cc=()
+    )
+    payload = json.loads(dump)
+    assert isinstance(payload["content"], str), (
+        "content must be head-clipped, never replaced by a truncation sentinel: "
+        f"got {payload['content']!r}"
+    )
+    assert ok is True
+
+
+@requires_node
+def test_real_probe_still_sentinels_an_overlong_recipient_field() -> None:
+    """The 2026-07-29 guarantee stays: an address past its bound fails closed."""
+    to = ("to@example.test",)
+    form = {
+        "method": "", "to": "padding-address@example.test, " * 200, "cc": "",
+        "bcc": "", "from": "synthetic-sender@example.test", "content": BODY,
+    }
+    ok, dump = send_trigger.verify_compose_form(
+        NodeFormProbeBrowser(form), to, BODY, cc=()
+    )
+    payload = json.loads(dump)
+    assert isinstance(payload["to"], dict) and "__truncated" in payload["to"], (
+        "an overlong recipient field must still emit the truncation sentinel"
+    )
     assert ok is False

@@ -6,15 +6,41 @@ ModuleNotFoundError traceback을 버려 진단이 불가능했던 관측성 결�
 """
 from __future__ import annotations
 
+import os
 import re
 
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
-CLI = Path.home() / ".hermes" / "skills" / "report" / "scripts" / "report_cli.py"
+_LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/report/scripts"
+_SCRIPTS = Path(os.environ.get("REPORT_SCRIPTS", _LIVE_SCRIPTS)).expanduser()
+CLI = _SCRIPTS / "report_cli.py"
+_ENV_SECRETS: Final = Path.home() / ".env.secrets"
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _LONG_DIGITS = re.compile(r"\d{5,}")
+
+
+def _load_env_secrets(path: Path = _ENV_SECRETS) -> None:
+    """no-agent cron hands the wrapper no secrets, so the parent loads them itself.
+
+    Measured 2026-08-18 on `budget-watch`: the value was already in ~/.env.secrets and
+    the tick still failed as if it were missing, because nothing put it in the
+    environment (규약 (b)). The report CLI reaches Obsidian/RAG credentials the same
+    way. Inventory check: tests/unit/test_watcher_secret_propagation.py.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
 
 
 def _redact(text: str) -> str:
@@ -22,6 +48,7 @@ def _redact(text: str) -> str:
 
 
 def main() -> int:
+    _load_env_secrets()
     if not CLI.exists():
         print("notes-organize error: report skill is not mounted")
         return 1
@@ -33,6 +60,8 @@ def main() -> int:
             text=True,
             timeout=120,
             check=False,
+            # 규약 (b-2): the child gets the environment we just self-loaded, explicitly.
+            env={**os.environ},
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"notes-organize error: {error.__class__.__name__}")

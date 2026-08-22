@@ -115,3 +115,36 @@ def test_lock_is_released_after_run_so_next_tick_proceeds(tmp_path: Path) -> Non
     assert second.returncode == 0
     calls = Path(environment["STUB_CALLS_FILE"]).read_text(encoding="utf-8")
     assert calls.count("call") == 2
+
+
+def test_watch_resolves_automation_imports_from_the_runtime_root(tmp_path: Path) -> None:
+    """The package imports `automation.*` (roster-bound sender identity, b16cdf79).
+
+    The deployed runtime dir holds ONLY `rag_ingest/`, so the wrapper must put the
+    release runtime root on sys.path BEFORE importing the package. Without it every
+    tick dies with ModuleNotFoundError: No module named 'automation' — measured in
+    production on 2026-08-22 right after the runtime was first deployed.
+    """
+    home = tmp_path / "home"
+    package_dir = home / ".hermes" / "rag_ingest_runtime" / "rag_ingest"
+    package_dir.mkdir(parents=True)
+    _ = (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    _ = (package_dir / "cli.py").write_text(
+        "from automation import group_roster\n\n\ndef main(argv=None):\n    return 0 if group_roster.MARKER else 3\n",
+        encoding="utf-8",
+    )
+    repo_root = tmp_path / "release"
+    automation_dir = repo_root / "automation"
+    automation_dir.mkdir(parents=True)
+    _ = (automation_dir / "__init__.py").write_text("", encoding="utf-8")
+    _ = (automation_dir / "group_roster.py").write_text("MARKER = True\n", encoding="utf-8")
+
+    environment = dict(os.environ)
+    environment["HOME"] = str(home)
+    environment["AUTOPHAGY_REPO_ROOT"] = str(repo_root)
+    completed = subprocess.run(
+        [sys.executable, str(_WATCH_SCRIPT)], env=environment, capture_output=True, text=True, timeout=60
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ModuleNotFoundError" not in completed.stderr

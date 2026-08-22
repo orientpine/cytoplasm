@@ -336,7 +336,7 @@ def test_abandon_when_every_field_matches_then_the_record_is_dropped_and_the_ove
     assert audited[0]["actor"] == _ACTOR
     assert audited[0]["key"] == f"skill-deploy:{_SKILL}"
     assert audited[0]["timestamp"]
-    assert fake.contents["message-1"].startswith("[skill-deploy] 승인 요청")
+    assert fake.contents["message-1"].startswith(f"[skill-deploy] {_SKILL} 배포 승인 요청")
 
 
 def test_abandon_when_it_succeeds_then_it_never_issues_a_discord_delete(

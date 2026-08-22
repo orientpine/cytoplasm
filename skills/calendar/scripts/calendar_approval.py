@@ -29,27 +29,27 @@ if TYPE_CHECKING:
 LEASE_DIRNAME = "approval-leases"
 JOURNAL_DIRNAME = "posting-journal"
 DraftRecord: TypeAlias = dict[str, str | list[str]]
-_TRANSPORT_ERRORS = (
-    calendar_gate.GateError,
-    URLError,
-    OSError,
-    json.JSONDecodeError,
-    KeyError,
-    TypeError,
-)
+_TRANSPORT_ERRORS = (calendar_gate.GateError, URLError, OSError, json.JSONDecodeError, KeyError, TypeError)
 
 
 class ApprovalPollSurface(Protocol):
     def message_content(self, entry: PendingConfirm) -> str | None: ...
 
-    def reaction_users(
-        self, entry: PendingConfirm, emoji: str
-    ) -> tuple[dict[str, str | bool], ...]: ...
+    def reaction_users(self, entry: PendingConfirm, emoji: str) -> tuple[dict[str, str | bool], ...]: ...
 
 
 def repo_root() -> Path:
-    default = Path(__file__).resolve().parents[3]
-    return Path(os.environ.get("AUTOPHAGY_REPO_ROOT", str(default))).expanduser()
+    """The checkout carrying ``automation.interop``, not the mounted-release depth guess."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT")
+    if override:
+        return Path(override).expanduser()
+    here = Path(__file__).resolve()
+    candidates = [*here.parents[2:6], Path("/srv/autophagy-agent-current"), Path("/srv/autophagy-agents")]
+    for candidate in candidates:
+        if (candidate / "automation" / "interop").is_dir():
+            return candidate
+    current = Path("/srv/autophagy-agent-current")
+    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
 
 
 def _repo_module(name: str) -> ModuleType:
@@ -206,7 +206,6 @@ class CalendarApprovalGate:
         return lifecycle().PostedApproval(message_id=message_id, channel_id=channel_id)
 
     def commit(self, intent: ApprovalIntent, posted: PostedApproval, created_at: str) -> None:
-        del created_at
         if self.draft is None:
             raise lifecycle().ApprovalRecordsError("calendar approval payload unavailable")
         binding = self._binding_for(intent)
@@ -218,7 +217,7 @@ class CalendarApprovalGate:
                 sha256=intent.action_hash,
                 dm_channel_id=binding.channel_id,
                 dm_message_id=posted.message_id,
-                created=_draft_created(str(self.draft["created"])),
+                created=_draft_created(created_at),
                 key=intent.key,
                 kind=str(binding.kind),
                 surface=str(binding.surface),

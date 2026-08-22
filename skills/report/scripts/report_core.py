@@ -51,20 +51,29 @@ def select_notes(root: Path, *, limit: int, query: str = "") -> tuple[Note, ...]
     return tuple(ranked[:limit])
 
 
-def build_prompt(notes: tuple[Note, ...], title: str) -> str:
-    sources = "\n\n".join(
+def build_prompt(notes: tuple[Note, ...], title: str, evidence: str = "") -> str:
+    material = "\n\n".join(
         f"[노트 {index}: {note.title}]\n{note.body}"
         for index, note in enumerate(notes, start=1)
     )
+    evidence_block = f"\n\n{evidence}" if evidence else ""
+    instruction = (
+        " Use only MATERIAL/EVIDENCE, cite [En], do not invent."
+        if evidence else ""
+    )
     return (
-        "다음 개인 연구 노트만 근거로 한국어 보고서 초안을 작성하세요. "
-        "사실을 만들지 말고, 핵심 내용·제약·다음 단계를 간결하게 서술하세요.\n\n"
-        f"보고서 제목: {title}\n\n{sources}"
+        "다음 개인 연구 노트를 근거로 한국어 보고서 초안을 작성하세요. "
+        "사실을 만들지 말고, 핵심 내용·제약·다음 단계를 간결하게 서술하세요."
+        f"{instruction}\n\n보고서 제목: {title}\n\nMATERIAL:\n{material}"
+        f"{evidence_block}"
     )
 
 
-def assemble_report(title: str, notes: tuple[Note, ...], draft: str) -> str:
-    sources = "\n".join(f"- {note.title}" for note in notes)
+def assemble_report(
+    title: str, notes: tuple[Note, ...], draft: str, evidence_sources: str = ""
+) -> str:
+    note_titles = "\n".join(f"- {note.title}" for note in notes)
+    evidence = f"\n\n## 근거\n\n{evidence_sources}" if evidence_sources else ""
     return (
         f"# {title}\n\n"
         "## 자료 범위\n\n"
@@ -72,7 +81,7 @@ def assemble_report(title: str, notes: tuple[Note, ...], draft: str) -> str:
         "## 핵심 내용\n\n"
         f"{draft.strip()}\n\n"
         "## 근거 노트\n\n"
-        f"{sources}\n"
+        f"{note_titles}{evidence}\n"
     )
 
 

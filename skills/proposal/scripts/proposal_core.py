@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from typing import TYPE_CHECKING
+
+from .proposal_knowledge import _UnavailablePack
+
+if TYPE_CHECKING:
+    from automation.knowledge.pack import EvidencePack
 
 from .proposal_storage import (
     Proposal,
@@ -90,12 +97,46 @@ def bind_card(paths: ProposalPaths, slug: str, key: str, card_id: str) -> Propos
     return update_section(paths, slug, key, replace(section, card_id=card_id))
 
 
-def write_draft(paths: ProposalPaths, slug: str, key: str, body: str) -> Proposal:
-    """Store a non-empty draft only in the protected proposal workspace."""
+def _pack_dict(pack: EvidencePack | _UnavailablePack) -> dict[str, object]:
+    query = pack.query
+    return {
+        "version": pack.version,
+        "query": {
+            "text": query.text,
+            "purpose": query.purpose,
+            "sources": sorted(str(source) for source in query.sources),
+            "tags": sorted(str(tag) for tag in query.tags),
+            "limit": query.limit,
+            "caller": query.caller,
+        },
+        "verdict": pack.verdict,
+        "items": [
+            {
+                "id": item.id, "store": item.store, "source_type": item.source_type,
+                "ref": item.ref, "title": item.title, "doc_date": item.doc_date,
+                "date_basis": item.date_basis, "score": item.score, "grounded": item.grounded,
+                "authority": item.authority, "expired": item.expired, "sensitivity": item.sensitivity,
+                "content": item.content, "sha256": item.sha256,
+            }
+            for item in pack.items
+        ],
+        "layers": pack.layers,
+        "notes": list(pack.notes),
+    }
+
+
+def write_draft(
+    paths: ProposalPaths, slug: str, key: str, body: str,
+    *, evidence_pack: EvidencePack | _UnavailablePack | None = None,
+) -> Proposal:
+    """Store a non-empty draft and optional evidence pack in the protected workspace."""
     section = read_section(paths, slug, key)
     if not body.strip():
         raise ProposalError("section draft is empty")
     write_private(section.path, body.strip() + "\n")
+    if evidence_pack is not None:
+        payload = json.dumps(_pack_dict(evidence_pack), ensure_ascii=False, indent=2) + "\n"
+        write_private(section.path.with_suffix(".evidence.json"), payload)
     return update_section(paths, slug, key, replace(section, state=SectionState.DRAFTED, body=body.strip()))
 
 

@@ -5,6 +5,7 @@ umask 077
 readonly UPDATE_TRUST_PRINCIPAL="update-trust@autophagy"
 readonly MANIFEST_PATH="configs/public-export-manifest.txt"
 readonly CANARY_DIR=".public-export-scanner-canary"
+readonly RELEASE_TAG_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z][0-9A-Za-z.-]*)?$'
 
 log() { printf '[public-export] %s\n' "$*" >&2; }
 block() { log "PUBLIC-EXPORT-BLOCK: $*"; exit 1; }
@@ -12,13 +13,15 @@ block() { log "PUBLIC-EXPORT-BLOCK: $*"; exit 1; }
 usage() {
   cat <<'EOF'
 Usage: automation/public_export.sh \
-  --target-dir DIR --remote URL_OR_PATH --version vX.Y.Z \
+  --target-dir DIR --remote URL_OR_PATH [--version vX.Y.Z] \
   --signing-key PATH --repository-name OWNER/REPO --visibility public \
   [--source-repo DIR] [--source-ref REF]
 
 Build a public-history snapshot, test and scan it, sign its release tag with the
 update-trust SSH key, then atomically push main and the tag. The destination
 remote must be distinct from the private source repository's origin.
+When --version is omitted, the semantic release tag already attached to the
+source commit is reused. An explicit --version always wins.
 EOF
 }
 
@@ -48,12 +51,9 @@ done
 
 [[ -n "$target_dir" ]] || block "--target-dir is required"
 [[ -n "$remote" ]] || block "--remote is required"
-[[ -n "$version" ]] || block "--version is required"
 [[ -n "$signing_key" ]] || block "--signing-key or UPDATE_TRUST_SIGNING_KEY is required"
 [[ -n "$repository_name" ]] || block "--repository-name is required"
 [[ "$visibility" == "public" ]] || block "--visibility must be exactly public"
-[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] \
-  || block "--version must be a v-prefixed semantic version"
 [[ "$repository_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
   || block "--repository-name must be OWNER/REPO"
 
@@ -100,6 +100,21 @@ status="$(git -C "$source_root" status --porcelain=v1 --untracked-files=all)" \
   || block "source is shallow; full-history secret scanning is impossible"
 source_commit="$(git -C "$source_root" rev-parse --verify "$source_ref^{commit}" 2>/dev/null)" \
   || block "source ref is not a commit: $source_ref"
+if [[ -z "$version" ]]; then
+  tag_listing="$(git -C "$source_root" tag --points-at "$source_commit" --list 'v*')" \
+    || block "cannot inspect release tags on source commit"
+  declare -a release_tags=()
+  while IFS= read -r candidate; do
+    [[ "$candidate" =~ $RELEASE_TAG_PATTERN ]] && release_tags+=("$candidate")
+  done <<<"$tag_listing"
+  ((${#release_tags[@]} > 0)) \
+    || block "source commit has no semantic release tag; pass --version explicitly"
+  ((${#release_tags[@]} == 1)) \
+    || block "source commit has multiple semantic release tags; pass --version explicitly"
+  version="${release_tags[0]}"
+fi
+[[ "$version" =~ $RELEASE_TAG_PATTERN ]] \
+  || block "--version must be a v-prefixed semantic version"
 source_date="$(git -C "$source_root" show -s --format=%cI "$source_commit")" \
   || block "cannot read source commit timestamp"
 
@@ -244,6 +259,8 @@ mkdir "$snapshot"
 git -C "$source_root" archive "$source_commit" | tar -x -C "$snapshot" \
   || block "cannot materialize source snapshot"
 for exclusion in "${exclusions[@]}"; do rm -rf -- "$snapshot/${exclusion%/}"; done
+[[ -f "$snapshot/automation/public_export_redaction.py" ]] \
+  || block "snapshot redaction helper is absent: automation/public_export_redaction.py"
 python3 "$snapshot/automation/public_export_redaction.py" "$snapshot" \
   || block "vendored public-snapshot de-identification failed"
 

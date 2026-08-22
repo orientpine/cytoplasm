@@ -16,6 +16,31 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 
 _LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/coordination/scripts"
+_ENV_SECRETS: Final = Path.home() / ".env.secrets"
+
+
+# WHY (규약 (b)): this watcher reads Discord reactions in-process and spawns
+# `coordination_cli.py`, both of which need credentials, and Hermes no-agent cron puts
+# none in os.environ. Measured 2026-08-18 on `budget-watch`: without this step the
+# configuration sits on disk and never reaches the code that needs it. Must run before
+# the mounted-skill imports below, which already read configuration.
+# Inventory check: tests/unit/test_watcher_secret_propagation.py.
+def _load_env_secrets(path: Path = _ENV_SECRETS) -> None:
+    """Load ``~/.env.secrets`` into ``os.environ`` without overriding the system env."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
+
+_load_env_secrets()
 _SCRIPTS = Path(os.environ.get("COORDINATION_SCRIPTS", _LIVE_SCRIPTS)).expanduser()
 if _SCRIPTS.exists() and str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
@@ -123,7 +148,11 @@ class CliCommands:
         try:
             result = subprocess.run(  # noqa: S603 — fixed scripts and controlled pending fields.
                 [sys.executable, str(script), *arguments], capture_output=True, text=True,
-                timeout=180, check=False, cwd=str(Path.home()), env=environment,
+                timeout=180, check=False, cwd=str(Path.home()),
+                # 규약 (b-2): state the child's environment rather than letting it inherit.
+                # `env=environment` alone read as explicit but was None on the discard
+                # path, i.e. plain inheritance — the fallback the rule exists to forbid.
+                env={**os.environ, **(environment or {})},
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise ConfirmWatchError("confirmation command failed") from error

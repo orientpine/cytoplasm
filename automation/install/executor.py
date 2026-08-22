@@ -68,7 +68,15 @@ class RealExecutor:
         try:
             return self._execute(action)
         except (OSError, subprocess.CalledProcessError, TrustKeyError) as error:
-            detail = f"{type(action).__name__} failed: {type(error).__name__}"
+            # OSError and TrustKeyError carry a named prerequisite here
+            # (KNOWN-HOSTS-MISSING, an unsafe origin_url, a trust-file refusal);
+            # dropping their text left the operator with a type name and
+            # nothing to act on. CalledProcessError stays terse because its
+            # str() is the whole argv.
+            named = type(error).__name__ if isinstance(
+                error, subprocess.CalledProcessError
+            ) else str(error)
+            detail = f"{type(action).__name__} failed: {named}"
             return (CheckResult(type(action).__name__, Status.FAIL, detail),)
 
     def _execute(self, action: InstallAction) -> tuple[CheckResult, ...]:

@@ -7,8 +7,10 @@
 | 파일 | 역할 |
 |------|------|
 | `external_effect_gate.py` | `evaluate_tool_call` — denylist(`configs/external-effect-tools.yaml`) 매칭. 미매칭=읽기 허용. 매칭(mutation)=owner 승인 레코드 필요. `action_hash=sha256(정규화 payload)`, method는 `manual_reaction` 또는 `signed_injection_e2e`만 |
+| `approval_types.py` · `approval_reminder.py` · `approval_lease.ReminderJournal` | 기존 승인 레코드의 key·원문 message id·실제 게시 시각에 고정된 리마인더 계산. 기존 key lease 안에서 lifecycle 관찰→영속 claim→최소정보 원문 링크 전송하며 catch-up은 최신 due 구간 1건만 시도한다. 별도 승인 상태머신이 아니다 |
 | `external_effect_gate_e2e.py` · `injection_adapter.py` | E2E 서명(HMAC) 승인 경로. `E2E_TEST_MODE=1`에서만 동작 |
 | `hermes_hook.py` · `hermes_plugin/` · `hook_boundary_e2e.py` | Hermes 플러그인 경계 — 게이트가 실제로 강제되는 지점. `coord-` 질의 응답은 config의 `interop_channel_id` 채널(#autophagy-agents)로 라우팅되며, 미설정 시 소스 채널로 폴백. 승인 표면은 `approval_surface.py`가 결정하고 `approval_directory.py`가 해석한다 — 설정 키(`personal_approvals_channel_id` / `deploy_approvals_channel_id`)는 그 디렉터리 내부에서만 읽힌다 |
+| `approval_reminder_config.py` | `config.yaml`의 `approval_reminders`를 검증된 enabled·initial/repeat 모델로 로드(기본 true·3h·1h, 간격 오류 fail-fast) |
 | `discord_transport.py` · `chunker.py` | `DiscordTransport` 순차 청킹 전송 + 429 `Retry-After` 백오프. `chunk_message`=2000자 분할 |
 | `coordination.py` | 에이전트간 일정 조율 **순수 상태머신**. 가용성 교집합→후보 ≤3→양측 승인→소유자 승인=캘린더 쓰기 게이트. `correlation_id`는 `coord-` 접두사 |
 | `delegation.py` · `report.py` | 위임 봉투 / `#agents-log` 보고 포맷 |
@@ -31,4 +33,6 @@
 - **`approval_lifecycle.request_owner_approval`은 보안 경계임**: 아래 5대 불변식을 약화하는 것은 소유자의 ✅가 무시되는 권한 회귀(Authorization Regression)로 간주함.
     - (1) Lease 보유 상태에서만 변이, (2) `message_id` 절대 덮어쓰기 금지, (3) 결정된 요청(APPROVED/CANCELLED) 파괴 금지, (4) 불확실 시 생존 간주(`UNVERIFIABLE` → `DEFER`), (5) 비성공 시 명시적 Reason + non-zero exit.
 - **주의**: `_probe`의 예외 처리를 임의로 좁히지 마십시오. Lease 파일을 `unlink` 하거나 delete/drop 순서를 바꾸지 마십시오.
+- **리마인더는 기존 watcher tick에서만 실행합니다.** 새 confirm surface·리액션·resolver·병렬 watcher를 만들지 않습니다. 본문은 요청 유형·경과시간·원문 링크만 포함하고 원문 채널 밖으로 전송 범위를 넓히지 않습니다.
+- **리마인더 claim은 전송 오류에도 해제하지 않습니다.** 원격 전달 후 오류인지 구분할 수 없어 해제하면 동일 구간 중복 전송이 가능해집니다. 실패한 구간은 at-most-once로 닫고 다음 wall-clock 구간부터 다시 시도합니다.
 - **I/O 제약**: `approval_lifecycle` 및 `approval_lease`는 lease/journal 파일 외의 디스크, 네트워크, 환경 변수에 직접 접근하지 않습니다. 저장소와 Discord 클라이언트는 각 게이트가 Protocol을 통해 주입해야 하며, 여기에 직접 I/O를 추가하지 마십시오.

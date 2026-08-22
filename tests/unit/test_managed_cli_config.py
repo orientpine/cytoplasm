@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from automation.managed_sync import cli
+from automation.group_roster.parser import ROSTER_ENV
 from tests.unit.managed_cli_fixtures import (
     PRINCIPAL,
     REQUIRED_KEYS,
@@ -57,7 +58,7 @@ def test_sync_when_roster_is_absent_then_exit_2_names_the_roster_path(
     # Given: a complete sync config but no roster at all (an unconfigured install).
     _ = install_config(tmp_path, monkeypatch, config_payload(tmp_path))
     missing = tmp_path / "absent-roster.yaml"
-    monkeypatch.setenv(cli.ROSTER_ENV, str(missing))
+    monkeypatch.setenv(ROSTER_ENV, str(missing))
 
     # When/Then: the CLI refuses rather than trusting any principal.
     assert cli.main(["sync"]) == 2

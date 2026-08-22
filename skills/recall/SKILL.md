@@ -35,7 +35,41 @@ python3 ~/.hermes/skills/recall/scripts/recall_cli.py search "<질문>" --json
 
 출력은 `recall-v1` JSON 한 개다(스키마는 `scripts/recall_core.py` 문서화):
 `status`가 `hit`(결과+출처) / `no_memory`(기억 없음) / `unavailable`(검색 불가)
-중 하나다. `--json`을 빼면 사람이 읽는 텍스트 렌더링이 나온다.
+중 하나다. `--json`을 빼면 사람이 읽는 텍스트 렌더링이 나온다. 이 `search` 표면은
+기존 호출자의 byte-level 계약을 위한 호환 경로다.
+
+## 세 저장소 근거 명령
+
+대화 답변에 Obsidian 원천 노트, 승인 wiki 판단, 기타 RAG 기록을 함께 쓰려면 단일
+지식 파사드 전면을 호출한다.
+
+```bash
+python3 ~/.hermes/skills/recall/scripts/recall_cli.py evidence "<질문>" \
+  --purpose cite --json
+```
+
+`--purpose`는 `cite|synthesize|entity|judgment`다. JSON은 `knowledge-v1` verdict,
+`evidence_count`, 계층 상태, 건수·사유 notes, 그리고
+`render_citations`가 만든 출처 블록만 내보내며 근거 원문은 내보내지 않는다.
+텍스트 모드는 같은 출처 블록과 결정론적 `근거 없음`/`근거 수집 불가` 문구를 쓴다.
+팩 밖 `[En]`은 `validate_citations`로 제거해야 한다. 직접 wiki/RAG를 추가 검색하거나
+출처 형식을 재구현하지 않는다. 정본은
+[`docs/guide/지식-계층-규약.md`](../../docs/guide/지식-계층-규약.md)다.
+
+### 엔터티 보조 검색 (기본 off)
+
+`--entity-fallback`을 주면 사람/기관 후보와 최근성·관계 표현이 함께 있는
+질의가 1차 검색에서 `no_memory`일 때만, 엔터티 앵커로 보조 검색을 정확히 한
+번 수행한다. 두 후보군은 문서 식별자로 중복 제거하며, 엔터티 원문이 content
+또는 metadata에 실제 있는 행만 기존 score/grounding 임계값으로 판정한다.
+검색 limit과 임계값은 바꾸지 않는다. `search.searches`는 실제 검색 수(1 또는
+2), `search.entity_hint_count`는 힌트 수만 제공하며 엔터티 원문은 추가로
+출력하지 않는다. flag가 없으면 기존 단일 검색 동작 그대로다.
+
+```bash
+python3 ~/.hermes/skills/recall/scripts/recall_cli.py search "<관계 질문>" \
+  --entity-fallback --json
+```
 
 ## 특허 민감 분류 경계 (v2, model-aware — 2026-07-22)
 
@@ -77,7 +111,8 @@ python3 ~/.hermes/skills/recall/scripts/recall_cli.py search "<질문>" --json
    정리해 두면 다음에 기억할 수 있어요." 처럼 한 문장만 덧붙인다.
 3. **status=unavailable** → "지금 기억 검색이 불가합니다(RAG 노드 응답
    없음)"라고 먼저 알린 뒤, 일반 지식으로만 답한다. **재시도 루프 금지** —
-   CLI 자체가 1회만 시도하며, 같은 턴에서 다시 호출하지 않는다.
+   각 검색은 1회만 시도하며, 같은 턴에서 CLI를 다시 호출하지 않는다. 위 flag의
+   조건부 보조 검색은 장애 재시도가 아니라 별도 엔터티 검색이다.
 4. 검색 결과의 민감한 원문(위키 노트 전문 등)은 cha의 DM 밖(공개 채널,
    repo, git)으로 내보내지 않는다.
 

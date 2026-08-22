@@ -40,7 +40,7 @@ from automation.peer_attestation import AttestationExpectation, SshSignedAttesta
 from automation.skill_gate_e2e import GateBindings, check_injected, sign  # noqa: E402
 from automation.skill_gate_review import review_status_line  # noqa: E402
 from automation import skill_gate_approval, skill_gate_request, skill_gate_retire, skill_gate_specs, skill_gate_surface  # noqa: E402
-from automation.interop.approval_lifecycle import ApprovalRequest  # noqa: E402
+from automation.interop.approval_lifecycle import ApprovalRecordsError, ApprovalRequest, ApprovalSurfaceError as LifecycleSurfaceError, Probe  # noqa: E402
 from automation.interop.approval_surface import ApprovalKind, ApprovalSurfaceError  # noqa: E402
 
 API = "https://discord.com/api/v10"
@@ -52,8 +52,12 @@ INTEROP_CONFIG = Path("~/.hermes/interop/config.json").expanduser()
 APPROVAL_LOG = Path(os.environ.get("APPROVAL_LOG_PATH", "/srv/autophagy-agents/logs/approvals.jsonl"))
 OPS_PEERS_CONFIG = Path("/etc/autophagy/peers.yaml")
 WEEKLY_AUTO_LIMIT = 3
+# 첫 줄은 두 모양을 모두 받는다. 신형(`[skill-deploy] wiki 배포 승인 요청`)은 스레드 제목이
+# 읽히게 하고, 구형(`[skill-deploy] 승인 요청`)은 **이미 게시된 펌딩 요청**이 그대로
+# 해소되게 한다 — 바꾸는 순간 16건이 공중에 떠 있었다.
 _REQUEST_BINDING = re.compile(
-    r"\A\[skill-deploy\] 승인 요청\n- skill: `(?P<skill>[a-z0-9][a-z0-9-]{1,40})`\n"
+    r"\A\[skill-deploy\] (?:[a-z0-9][a-z0-9-]{1,40} 배포 )?승인 요청\n"
+    r"- skill: `(?P<skill>[a-z0-9][a-z0-9-]{1,40})`\n"
     r"- sha256: `(?P<digest>[0-9a-f]{64})`\n- deploy_nonce: `(?P<nonce>[0-9a-f]{32})`\n"
 )
 PeerAttestMode: TypeAlias = Literal["discord", "signed"]
@@ -199,12 +203,13 @@ def _deploy_gate(
     *,
     peer_status: str = "",
     peer_mode: PeerAttestMode = "discord",
+    deploy_nonce: str = "",
 ) -> skill_gate_approval.SkillApprovalGate:
     """This run's deploy gate: a fresh nonce, plus one action hash over what ✅ authorizes."""
     spec = skill_gate_specs.DeploySpec(
         skill=args.skill,
         digest=args.hash,
-        deploy_nonce=str(getattr(args, "deploy_nonce", "")) or secrets.token_hex(16),
+        deploy_nonce=deploy_nonce or str(getattr(args, "deploy_nonce", "")) or secrets.token_hex(16),
         review_status=review_status_line(GATE_DIR / "review-verdicts.jsonl", args.skill, args.hash),
         provenance=skill_gate_specs.provenance_of(str(getattr(args, "provenance_file", ""))),
         binding=_REQUEST_BINDING,
@@ -215,6 +220,26 @@ def _deploy_gate(
         _api, GATE_DIR, _owner_id, lambda: _deploy_bindings(args.skill)
     )
     return skill_gate_approval.SkillApprovalGate(surface, spec)
+
+
+def _stored_deploy_nonce(args: argparse.Namespace) -> str:
+    path = GATE_DIR / "pending" / f"{args.skill}.json"
+    try:
+        decoded = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(decoded, dict):
+        return ""
+    nonce = decoded.get("deploy_nonce")
+    return nonce if isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{32}", nonce) else ""
+
+
+def _approved_resume_waiting(gate: skill_gate_approval.SkillApprovalGate) -> bool:
+    try:
+        outstanding = gate.outstanding(gate.spec.key())
+        return len(outstanding) == 1 and gate.probe(outstanding[0]) is Probe.APPROVED
+    except (ApprovalRecordsError, LifecycleSurfaceError):
+        return False
 
 
 def _approval_execution(
@@ -250,6 +275,23 @@ def cmd_request(args: argparse.Namespace) -> int:
     """One live request per skill: reuse it, supersede it with --fresh, or refuse."""
     json_output = bool(getattr(args, "json", False))
     mode = _peer_attest_mode(args) or "discord"
+    supplied_nonce = str(getattr(args, "deploy_nonce", ""))
+    checks_resume = hasattr(args, "peer_attest_mode") and not supplied_nonce
+    stored_nonce = _stored_deploy_nonce(args) if checks_resume else ""
+    if stored_nonce and _approved_resume_waiting(
+        _deploy_gate(
+            args,
+            peer_status=SIGNED_PEER_PENDING if mode == "signed" else "",
+            peer_mode=mode,
+            deploy_nonce=stored_nonce,
+        )
+    ):
+        refused = skill_gate_request.Requested(
+            None,
+            skill_gate_request.LIFECYCLE_REFUSAL_EXIT,
+            "REFUSED: approved request is awaiting the resume watcher reason=approved-awaiting-resume",
+        )
+        return skill_gate_request.emit(refused, json_output=json_output)
     gate = _deploy_gate(
         args,
         peer_status=SIGNED_PEER_PENDING if mode == "signed" else "",

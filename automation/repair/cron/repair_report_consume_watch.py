@@ -36,6 +36,7 @@ def main() -> int:
         print(f"repair report consume watch: {consume_once()}")
     except Exception as error:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK
         print(f"repair report consume watch failed: {error.__class__.__name__}", file=sys.stderr)
+        return 1
     return 0
 
 

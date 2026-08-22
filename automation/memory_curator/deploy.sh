@@ -20,10 +20,10 @@ run_agent() {
   ssh "$host" "sudo -n -u agent -H bash -lc $(printf '%q' "$script")"
 }
 
-push_file() {
-  local source="$1" destination="$2"
-  run_agent "umask 077; mkdir -p \"\$HOME/$(dirname "$destination")\"; cat > \"\$HOME/$destination\"; chmod 600 \"\$HOME/$destination\"" < "$source"
-}
+# push_file 은 원격 read-back 으로 착지를 확인한다 — 확인 없는 push 가 rc=0 으로
+# 끝나면서 파일은 그대로였던 실측(2026-08-20)이 이 공유 구현의 이유다.
+# shellcheck source=automation/deploy_push.sh
+source "$repo_root/automation/deploy_push.sh"
 
 # Deploy guard: refuse to push code that origin/main does not have.
 source "$repo_root/automation/deploy_provenance.sh"

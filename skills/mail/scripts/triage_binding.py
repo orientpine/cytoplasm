@@ -12,8 +12,20 @@ import triage_gate
 
 
 def repo_root() -> Path:
-    default = Path(__file__).resolve().parents[3]
-    return Path(os.environ.get("AUTOPHAGY_REPO_ROOT", str(default))).expanduser()
+    """The checkout that actually carries ``automation.interop``.
+
+    See `triage_approval.repo_root` — identical mounted-release depth-guess trap.
+    """
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT")
+    if override:
+        return Path(override).expanduser()
+    here = Path(__file__).resolve()
+    candidates = [*here.parents[2:6], Path("/srv/autophagy-agent-current"), Path("/srv/autophagy-agents")]
+    for candidate in candidates:
+        if (candidate / "automation" / "interop").is_dir():
+            return candidate
+    current = Path("/srv/autophagy-agent-current")
+    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
 
 
 def _repo_module(name: str) -> ModuleType:

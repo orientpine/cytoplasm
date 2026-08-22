@@ -559,3 +559,48 @@ def test_approval_validity_when_persisted_record_predates_binding_schema_then_fa
 
     # When/Then: compatibility is conservative; missing fields never gain authorization.
     assert not gate.valid_approval(execution, skill_gate.APPROVAL_LOG)
+
+
+_LEGACY_HEADER = "[skill-deploy] 승인 요청\n"
+
+
+def _relabel_with_legacy_header(fake: FakeDiscord, gate: skill_gate_approval.SkillApprovalGate) -> None:
+    """Rewrite the live message into the pre-#199 form: same body, old first line."""
+    content = fake.contents["message-1"]
+    assert content.startswith(gate.spec.header())
+    fake.contents["message-1"] = _LEGACY_HEADER + content.removeprefix(gate.spec.header())
+
+
+def test_legacy_header_request_when_owner_approved_then_approval_is_still_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: a request posted BEFORE #199 (legacy first line) that the owner has ✅'d.
+    fake = _aged_decided_request(tmp_path, monkeypatch, timedelta(minutes=5))
+    gate, execution = _execution(tmp_path)
+    _relabel_with_legacy_header(fake, gate)
+
+    # Then: the ✅ consumes — the header form is not the binding (2026-08-21: 13 such requests).
+    assert gate.valid_approval(execution, skill_gate.APPROVAL_LOG)
+
+
+def test_legacy_header_request_when_skill_changed_then_is_superseded_not_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Given: a pending (undecided) request posted BEFORE #199.
+    fake = _aged_request(tmp_path, monkeypatch, timedelta(minutes=5))
+    gate, _ = _execution(tmp_path)
+    _relabel_with_legacy_header(fake, gate)
+    first = _record(tmp_path)
+    _ = capsys.readouterr()
+
+    # When: the skill changed and is requested under a new digest.
+    args = _request_args()
+    args.hash = "c" * 64
+    result = skill_gate.cmd_request(args)
+
+    # Then: DELETE precedes POST and the record moved on — no orphan, no refusal.
+    assert result == 0, capsys.readouterr().err
+    methods = fake.methods()
+    assert methods.index("DELETE") < methods.index("POST", 1)
+    assert first["message_id"] not in fake.contents
+    assert _record(tmp_path)["hash"] == "c" * 64

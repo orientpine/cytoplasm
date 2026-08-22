@@ -72,6 +72,35 @@ class World:
         _ = world.git(world.checkout, "config", "user.email", "publisher-cha@autophagy")
         _ = world.source.mkdir(parents=True)
         _ = world.home.mkdir(mode=0o700)
+        publisher_dir = world.home / ".hermes" / "managed-skills"
+        _ = publisher_dir.mkdir(mode=0o700, parents=True)
+        _ = (publisher_dir / "publisher.json").write_text(
+            json.dumps(
+                {
+                    "publisher": "cha",
+                    "publisher_principal": "publisher-cha@autophagy",
+                }
+            ),
+            encoding="utf-8",
+        )
+        publisher_key = world.key("publisher").with_suffix(".pub").read_text(encoding="utf-8").strip()
+        roster = "\n".join(
+            (
+                "schema: 1",
+                "group_id: e2e",
+                "admin:",
+                "  name: E2E Publisher",
+                '  discord_user_id: "900000000000000002"',
+                "  publisher_principal: publisher-cha@autophagy",
+                f"  signing_public_key: {publisher_key}",
+                "members: []",
+                "",
+            )
+        )
+        _ = (world.home / ".hermes" / "roster.yaml").write_text(
+            roster,
+            encoding="utf-8",
+        )
         _ = world.allowed.write_text(
             f"publisher-cha@autophagy {world.key('publisher').with_suffix('.pub').read_text(encoding='utf-8')}",
             encoding="utf-8",

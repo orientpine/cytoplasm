@@ -15,8 +15,25 @@ from automation.node_config import NodeConfigError, default_node_config, load_no
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_missing_runtime_file_uses_public_safe_defaults(tmp_path: Path) -> None:
-    config = load_node_config(tmp_path / "missing.toml")
+def test_an_explicitly_named_missing_file_fails_closed(tmp_path: Path) -> None:
+    """"Read THIS file" and "read whatever, fall back to the seed" are different contracts.
+
+    Silently answering the first with the second is how the reconciler's two verification
+    paths came to enforce different policies on 2026-08-21: the root helper named
+    `~ops/.hermes/node.toml`, that file did not exist, and the seed answered in its place.
+    A caller that names a path has already decided which file is authoritative, so a
+    missing one is an error — not an invitation to guess.
+    """
+    with pytest.raises(NodeConfigError):
+        _ = load_node_config(tmp_path / "missing.toml")
+
+
+def test_unnamed_lookup_still_falls_back_to_the_public_safe_seed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The no-argument lookup keeps its search: system path, then home, then the seed."""
+    monkeypatch.setattr(node_config, "SYSTEM_NODE_CONFIG_PATH", tmp_path / "absent.toml")
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+
+    config = load_node_config()
 
     assert config == default_node_config()
     assert config.primary_node_name == "example-primary-node"
@@ -193,3 +210,26 @@ def test_node_config_when_the_operator_supplied_real_names_then_it_is_configured
 
     # When / Then
     assert node_config_state.unconfigured_reason(node_config.load_node_config()) is None
+
+
+def test_node_config_state_cli_rejects_the_seed_before_a_deploy_can_reach_dns(
+    tmp_path: Path,
+) -> None:
+    # Given: an operator HOME with no node override, so only the shipped seed exists.
+    home = tmp_path / "home"
+    home.mkdir()
+
+    # When: a deploy entry point runs the configuration preflight.
+    result = subprocess.run(
+        (sys.executable, "-m", "automation.node_config_state"),
+        cwd=ROOT,
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Then: it fails with the actual omission and a concrete configuration remedy.
+    assert result.returncode != 0
+    assert "node is not configured" in result.stderr
+    assert "node.toml" in result.stderr

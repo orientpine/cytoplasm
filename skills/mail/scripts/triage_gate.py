@@ -220,7 +220,12 @@ def set_approval_binding(
     return updated
 
 
-def set_message_id(draft: dict, message_id: str, channel_id: str = "") -> dict:
+def set_message_id(
+    draft: dict,
+    message_id: str,
+    channel_id: str = "",
+    approval_created_at: str = "",
+) -> dict:
     path = _draft_path(draft["id"])
     if path is None:
         raise GateError(f"드래프트 없음: {draft['id']}", 3)
@@ -232,6 +237,8 @@ def set_message_id(draft: dict, message_id: str, channel_id: str = "") -> dict:
     if isinstance(current_channel, str) and current_channel and current_channel != channel_id:
         raise GateError("기존 승인 메시지의 채널 바인딩 변경 거부", 3)
     updated = {**current, "message_id": message_id, "channel_id": channel_id}
+    if approval_created_at:
+        updated["approval_created_at"] = approval_created_at
     write_json(path, updated)
     return updated
 

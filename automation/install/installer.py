@@ -6,7 +6,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from automation.install.apply import apply_plan
 from automation.install.assets import InstallAssetError, build_inputs, render_plan
@@ -25,6 +25,29 @@ from automation.node_config import NodeConfigError, load_node_config
 
 if TYPE_CHECKING:  # PyYAML lives behind this import; a plain install never needs it.
     from automation.group_roster.schema import Roster
+
+
+# WHY a real run refuses to guess. `--config` stays optional so `--dry-run`
+# works on a host where nothing is configured yet, but the same default sends a
+# real install to the tracked seed — another installation's accounts, paths and
+# hostnames, substituted verbatim into root-owned sudoers and systemd assets.
+# docs/guide/install.md already requires --config in every invocation; this is
+# that requirement moved from prose into the entrypoint.
+_CONFIG_REQUIRED: Final = (
+    "INSTALL-BLOCK: NODE-CONFIG-REQUIRED: 실제 설치에는 --config가 필요하다. "
+    "생략하면 추적된 시드(configs/node.example.toml)가 쓰여 다른 설치의 계정·경로·"
+    "호스트명이 root 소유 자산에 그대로 박힌다. 이미 구성된 노드라면 "
+    "`--config /etc/autophagy/node.toml`을 명시한다. "
+    "계획만 보려면 --dry-run을 붙인다(그때는 --config가 없어도 된다)."
+)
+
+# quickstart.sh가 계획 요약에서 같은 문장을 같은 이유로 낸다 — 두 표면이 어긋나면
+# 래퍼를 거치지 않은 사람만 rc 0을 「전제 충족」으로 읽게 된다.
+_DRY_RUN_NOTICE: Final = (
+    "NOTE: check 항목은 쓰기가 아니라 판정이며 --dry-run에서는 실행되지 않는다 "
+    "(checks are not executed in dry-run) — rc 0은 「계획이 만들어졌다」이지 "
+    "「전제가 충족됐다」가 아니다."
+)
 
 
 class _Arguments(argparse.Namespace):
@@ -121,6 +144,9 @@ def _load_roster(path: Path) -> Roster:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _Arguments()
     _ = _parser().parse_args(argv, namespace=args)
+    if args.config is None and not args.dry_run:
+        print(_CONFIG_REQUIRED, file=sys.stderr)
+        return 1
     repo_root = Path(__file__).resolve().parents[2]
     try:
         config = load_node_config(args.config)
@@ -177,6 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("INSTALL PLAN")
     print(render_plan(plan))
     if args.dry_run:
+        print(_DRY_RUN_NOTICE)
         return 0
     if os.geteuid() != 0:
         result = CheckResult("root", Status.FAIL, "run the installer as root; dry-run needs no privilege")

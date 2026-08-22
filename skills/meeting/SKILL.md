@@ -1,6 +1,7 @@
 ---
 name: meeting
 description: "명시적 !meeting 신호가 붙은 회의록(md/txt/pdf 업로드 또는 본문)에서 결정사항/액션아이템/마일스톤을 추출해 내 Kanban 카드와 milestones.yaml을 갱신하고 타인 항목은 #team에 규약 게시하는 W2-3 스킬. 민감도 게이트(constraint 6) 내장."
+author: autophagy-agents
 ---
 
 # meeting — 회의록 인제스트 (W2-3)
@@ -24,7 +25,7 @@ description: "명시적 !meeting 신호가 붙은 회의록(md/txt/pdf 업로드
 
    ```bash
    python3 ~/.hermes/skills/meeting/scripts/meeting_cli.py ingest \
-     --file <경로> --label "<회의 라벨>"
+     --file <경로> --label "<회의 라벨>" [--with-evidence]
    ```
 
 3. **금지**: 회의록 원문을 내 컨텍스트/응답에 붙여넣기. 민감도 게이트
@@ -40,6 +41,19 @@ description: "명시적 !meeting 신호가 붙은 회의록(md/txt/pdf 업로드
    내용을 추측해 채우지 마라.
 5. 처리 결과 질문에는 CLI가 출력한 JSON 요약(건수/노트 파일명)만 사용하라.
 
+## 지식 파사드 근거
+
+`--with-evidence`는 회의 제목·참석자·주제로 읽기 전용 지식 파사드를 한 번 호출해
+관련 선행 회의와 노트를 추출 프롬프트 재료로 넣는다. 근거 본문도 기존 민감도 게이트에
+합산하며 patent-sensitive 또는 센티널 근거는 비-GLM으로만 처리한다. 생성 인용은 팩의
+`[En]`만 허용하고 출처는 파사드 `sources` 형식 그대로 로컬 회의 노트 말미와 mode 0600
+`*.evidence.json`에 남긴다. 민감 회의 원문과 본문은 기존처럼 카드·공개 표면에 싣지 않는다.
+
+근거가 없으면 `근거 없음`, 조회 불가면 `근거 수집 불가`를 기록하고 회의록 생성은 계속한다.
+재시도·임계값 하향·자체 검색은 하지 않는다. `meeting evidence --title ... --topics ... --json`은
+원문 대신 `evidence_count`와 계층 상태만 미리 보여준다. 정본은
+[`지식 계층 규약`](../../docs/guide/지식-계층-규약.md)이다.
+
 ## 구성 파일
 
 - 민감도 규칙: `~/.hermes/skills/meeting/configs/sensitivity-rules.yaml`
@@ -52,4 +66,4 @@ description: "명시적 !meeting 신호가 붙은 회의록(md/txt/pdf 업로드
 ## 검증
 
 - 샌드박스: `scripts/scenario.sh` (오프라인, 녹화 응답, SCENARIO-PASS)
-- 단위테스트: repo `tests/unit/test_meeting_skill.py`
+- 단위테스트: repo `tests/unit/test_meeting_skill.py`, `tests/unit/test_meeting_knowledge.py`

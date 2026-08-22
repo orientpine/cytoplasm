@@ -24,6 +24,8 @@ _REPO = Path(__file__).resolve().parents[2]
 _HEALTHCHECK = _REPO / "automation" / "healthcheck.sh"
 _CHECK_NAME = "example-primary-node ops checkout mirrors origin/main"
 _TICKET_ID = "t_testticket"
+#: 래퍼 프로브를 조용히 통과시키기 위한 고정 다이제스트 — 생성기 스털과 가짜 ssh 가 같은 값을 낸다.
+_FAKE_WRAPPER_DIGEST = "ab" * 32
 
 _FAKE_SSH = r"""#!/usr/bin/env bash
 set -uo pipefail
@@ -41,6 +43,9 @@ case "$cmd" in
   *:8765/health*) echo '{"status":"ok","collection":"personal_cha"}' ;;
   *synthetic-does-not-exist*) echo inactive; exit 3 ;;
   *systemctl*is-active*) echo active ;;
+  *sha256sum*.hermes/scripts/*) exec bash -c "$cmd" ;;
+  *SNAPSHOT-V1*) exec bash -c "$cmd" ;;
+  *wrapper-inputs*) echo "$FAKE_WRAPPER_DIGEST" ;;
   *merge-base*--is-ancestor*) exec bash -c "$cmd" ;;
   *) printf 'unexpected remote command: %s\n' "$cmd" >&2; exit 97 ;;
 esac
@@ -165,6 +170,53 @@ def _quiet_release_probes(tmp_path: Path, checkout: Path) -> tuple[Path, Path, P
         payload = (_REPO / "automation" / source_name).read_bytes()
         _ = (source / source_name).write_bytes(payload)
         _ = (installed / installed_name).write_bytes(payload)
+    # The probe now also compares the reconcile unit and the gateway helper — both are
+    # installed outside the release by a root provisioner, and the unit going unwatched
+    # is what let a three-day production freeze pass as healthy (2026-08-19).
+    _ = (source / "node_asset_renderer.py").write_text(
+        "import shutil, sys\nshutil.copyfile(sys.argv[1], sys.argv[2])\n", encoding="utf-8"
+    )
+    # 래퍼 생성기도 렌더러처럼 스털이다 — 이 테스트의 주제는 체크아웃 드리프트
+    # 티켓팅이지 allowlist 생성이 아니다(그쪽은 자기 테스트가 따로 있다).
+    _ = (source / "healthcheck_probe_wrapper.sh").write_text(
+        f"#!/usr/bin/env bash\necho {_FAKE_WRAPPER_DIGEST}\n", encoding="utf-8"
+    )
+    units = tmp_path / "units"
+    units.mkdir()
+    (source / "systemd").mkdir(parents=True, exist_ok=True)
+    converge = installed / "autophagy-converge.d"
+    converge.mkdir()
+    (source / "libexec").mkdir(parents=True, exist_ok=True)
+    for installed_path, source_path, payload in (
+        (installed / "autophagy-gateway-pair", source / "gateway_pair.py", "pair\n"),
+        (
+            units / "autophagy-deploy-reconcile.service",
+            source / "systemd" / "autophagy-deploy-reconcile.service",
+            "service\n",
+        ),
+        (
+            units / "autophagy-deploy-reconcile.timer",
+            source / "systemd" / "autophagy-deploy-reconcile.timer",
+            "timer\n",
+        ),
+        (installed / "autophagy-install-skill", source / "skill_store.py", "skill\n"),
+        (
+            installed / "autophagy-converge-origin-main",
+            source / "converge_origin_main.sh",
+            "converge\n",
+        ),
+        (
+            installed / "autophagy-resume-deploy",
+            source / "libexec" / "autophagy-resume-deploy",
+            "resume\n",
+        ),
+        (converge / "origin_snapshot.sh", source / "origin_snapshot.sh", "snapshot\n"),
+    ):
+        _ = installed_path.write_text(payload, encoding="utf-8")
+        _ = source_path.write_text(payload, encoding="utf-8")
+    # 리컨실러가 실제로 실행하는 converge.d 사본 — libexec 루트와 같은 소스를 공유한다.
+    for name in ("release_store.py", "release_provenance.py"):
+        _ = (converge / name).write_bytes((source / name).read_bytes())
     current = tmp_path / "current-release"
     current.symlink_to(generation, target_is_directory=True)
     return current, installed / "autophagy-install-release", installed / "release_provenance.py"
@@ -179,6 +231,7 @@ def _sweep(tmp_path: Path, checkout: Path, *args: str, ssh_down: bool = False) -
     env["HEALTHCHECK_SSH_USER"] = ""
     env["HEALTHCHECK_SSH_IDENTITY"] = ""
     env["FAKE_CHECKOUT"] = str(checkout)
+    env["FAKE_WRAPPER_DIGEST"] = _FAKE_WRAPPER_DIGEST
     # Once the checkout probe runs locally (no ssh) the FAKE_CHECKOUT rewrite no
     # longer reaches it; the local probe reads its target from this env instead.
     env["HEALTHCHECK_OPS_CHECKOUT"] = str(checkout)
@@ -187,6 +240,38 @@ def _sweep(tmp_path: Path, checkout: Path, *args: str, ssh_down: bool = False) -
     env["HEALTHCHECK_RELEASE_SOURCE_ROOT"] = str(current)
     env["HEALTHCHECK_RELEASE_HELPER"] = str(helper)
     env["HEALTHCHECK_RELEASE_PROVENANCE"] = str(provenance)
+    env["HEALTHCHECK_LIBEXEC_DIR"] = str(helper.parent)
+    env["HEALTHCHECK_UNIT_DIR"] = str(tmp_path / "units")
+    # 워처 래퍼 프로브에는 **실제로 맞는 행 하나**를 물린다. 빈 매니페스트로 조용히
+    # 통과시키면 SSH 전면 장애에서도 이 프로브만 PASS 가 되어, 아래 INFRA_FAILURE 붕괴
+    # 가드(원격 전건 실패일 때만 티켓 1건)를 깨뜨린다.
+    home = Path(env["HOME"])
+    (home / ".hermes" / "scripts").mkdir(parents=True, exist_ok=True)
+    wrapper_source = current.resolve() / "automation" / "release_provenance.py"
+    _ = (home / ".hermes" / "scripts" / "w.py").write_bytes(wrapper_source.read_bytes())
+    watcher_manifest = tmp_path / "watcher-manifest.txt"
+    _ = watcher_manifest.write_text(
+        "agent|automation/release_provenance.py|.hermes/scripts/w.py|required\n", encoding="utf-8"
+    )
+    env["HEALTHCHECK_WATCHER_MANIFEST"] = str(watcher_manifest)
+    # 런타임 패키지 프로브도 원격 명령을 실제로 한 번 내게 해 SSH 장애 tally를
+    # 보존한다. 릴리스와 계정 홈에 같은 한 파일을 두어 평상시에는 clean이다.
+    package_source = current.resolve() / "automation" / "runtime_fixture"
+    package_runtime = home / ".hermes" / "runtime_fixture"
+    package_source.mkdir(parents=True)
+    package_runtime.mkdir(parents=True)
+    _ = (package_source / "item.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _ = (package_runtime / "item.py").write_text("VALUE = 1\n", encoding="utf-8")
+    runtime_manifest = tmp_path / "runtime-package-manifest.txt"
+    _ = runtime_manifest.write_text(
+        "\n".join((
+            "agent|automation/runtime_fixture|.hermes/runtime_fixture|required",
+            "agent|automation/runtime_fixture|.hermes/runtime_fixture|required|rag|python",
+            "",
+        )),
+        encoding="utf-8",
+    )
+    env["HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST"] = str(runtime_manifest)
     update_trust = tmp_path / "update_trust_probe.py"
     update_trust.write_text("raise SystemExit(0)\n", encoding="utf-8")
     env["UPDATE_TRUST_SCRIPT"] = str(update_trust)

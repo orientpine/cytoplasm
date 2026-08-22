@@ -198,6 +198,21 @@ sudo python3 -m automation.install \
     --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
 
+**`sudo`는 환경변수를 지운다.** §5에서 `DISCORD_BOT_TOKEN`을 올려두었더라도 위 명령에는
+전달되지 않으므로, 설치기의 `discord-readiness` 체크가 `discord_check.py rc=2`로 실패한다
+— 토큰이 틀린 것이 아니라 아예 도달하지 않은 것이다. 토큰을 넘기려면 `--preserve-env`를
+쓴다(`quickstart.sh`가 하는 것과 같다):
+
+```bash
+sudo --preserve-env=DISCORD_BOT_TOKEN python3 -m automation.install \
+    --config /tmp/node.toml \
+    --update-trust-key <bundle>/update-trust.pub \
+    --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
+```
+
+`sudo`가 `--preserve-env`를 거부하는 배포판이면 §5를 미리 통과시켜 두고 이 체크의
+실패를 감수해도 된다 — Discord 전제는 설치 자체의 전제가 아니다.
+
 root가 아니면 계획만 출력하고 거부한다:
 
 ```
@@ -238,6 +253,11 @@ root가 아니면 계획만 출력하고 거부한다:
 ```bash
 sudo runuser -u ops -- ssh-keyscan github.com >> /home/ops/.ssh/known_hosts   # 지문을 반드시 대조할 것
 ```
+
+이 단계를 빼면 설치기가 clone 전에 멈추며 `KNOWN-HOSTS-MISSING`으로 호스트명과 위
+명령을 그대로 알려준다 — 예전처럼 ssh 내부에서 이유 없이 죽지 않는다. **설치기가
+호스트키를 대신 넣어주지는 않는다** — 어떤 호스트키가 진짜인지는 지문을 대역외로
+대조한 사람만 정할 수 있고, 그 판단을 설치기가 가로채면 이 설정 자체가 무의미해진다.
 
 > 그룹에 가입하는 경우 이 공개키가 3단계 핸드셰이크의 ①단계 제출물이다. 가입 절차
 > 자체는 이 문서가 아니라 그룹 관리자/팀원 매뉴얼이 소유한다.
@@ -311,6 +331,22 @@ systemctl list-timers | grep autophagy
 `autophagy-deploy-reconcile.timer`가 보이면 리컨실러가 살아 있다. 그 뒤로는 업스트림에
 **서명된 릴리스 태그**가 올라올 때마다 노드가 스스로 수렴하고, 실패하면 스스로
 되돌린다. 서명이 없는 head는 적용되지 않으며 그 사유가 healthcheck에 나타난다.
+
+### 관리형 스킬 격리와 소유자 알림이 준비됐는지
+
+`managed-sync`를 opt-in으로 설치했다면 설치 직후 다음 두 읽기 전용 검사를 추가로 한다.
+
+```bash
+sudo runuser -u agent -- bash -lc 'cd /srv/autophagy-agent-current && PYTHONPATH=. python3 -m automation.managed_sync status'
+sudo runuser -u agent -- bash -lc 'set -a; source "$HOME/.env.secrets"; set +a; python3 -c '\''import os; required=("DISCORD_BOT_TOKEN","AUTOPHAGY_OWNER_ID"); missing=[name for name in required if not os.environ.get(name)]; print("OWNER-NOTICE-CONFIGURED" if not missing else "OWNER-NOTICE-MISSING:"+",".join(missing)); raise SystemExit(bool(missing))'\'''
+```
+
+첫 명령은 검증된 릴리스가 quarantine에 몇 건 남았는지 `pending=<N>`으로 보여준다. 둘째
+명령은 값 자체를 출력하지 않고 소유자 DM 통지에 필요한 두 이름의 설정 여부만 판정한다.
+실제 통지 경로는 `automation/managed_sync/notify.py`가 아니라
+`automation/owner_notice.py`이며, `managed_sync_watch.py`가 격리 성공 뒤 이 공용 경로를
+best-effort로 호출한다. `pending`이 1 이상인데 둘째 명령이 실패하면 격리는 정상이어도
+소유자가 새 릴리스를 모를 수 있으므로 설치 완료로 판정하지 않고 자격증명을 보완한다.
 
 ---
 

@@ -20,7 +20,7 @@ from automation.interop.external_effect_gate import ApprovalContext, DenylistCon
 from automation.interop.injection_adapter import InboundEvent, accept_test_event
 from automation.interop.killswitch import PauseStore
 from automation.interop.loop_guard import LoopGuard
-from automation.interop.report import ReportStatus, TaskReport, format_report
+from automation.interop.report import ReportStatus, TaskReport, format_report, parse_report
 
 
 KST: Final = ZoneInfo("Asia/Seoul")
@@ -137,6 +137,19 @@ def pre_gateway_dispatch(event, gateway, session_store, **kwargs):
     if text.startswith(TEAM_NOTICE_PREFIX):
         LOGGER.warning("interop coordination notice skipped (cascade safety)")
         return {"action": "skip", "reason": "interop_coordination_notice"}
+
+    # 봇끼리는 **프로토콜로만** 말한다. 봉투도 보고도 아닌 자유 산문에 답하는 것을
+    # 요구하는 흐름은 하나도 없다 — peer 증명은 `peer_attest.py` 가 직접 게시하고,
+    # 보고는 report_hub 가 수집하며, 승인은 소유자 리액션을 cron 워처가 폴링한다.
+    # 그런데도 두 봇이 서로의 인사말에 답하며 2026-08-20 에 12번을 오갔고,
+    # 그 사이에 정작 소유자가 눌러야 할 승인 요청은 화면 밖으로 밀려났다.
+    #
+    # 아래 LOOP_GUARD 는 분당 5회를 허용하고 저정보 판정도 휴리스틱이라 그 반복을
+    # 임계 안으로 보았다. 임계값을 느슨하게 조이는 대신 **첫 홉에서** 끊는다 —
+    # 위의 TEAM_NOTICE cascade safety 와 같은 방식이고, 가드는 2차 방어로 남는다.
+    if parse_envelope(text) is None and parse_report(text) is None:
+        LOGGER.warning("interop bot prose skipped (no protocol payload)")
+        return {"action": "skip", "reason": "interop_bot_prose"}
 
     LOGGER.warning("interop bot predispatch received")
     thread_id = source.thread_id or source.chat_id

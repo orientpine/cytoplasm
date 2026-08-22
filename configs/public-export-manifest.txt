@@ -4,9 +4,33 @@
 .omo/
 docs/qa/
 
+# FS3 sweep-internal orchestration assets whose only inputs are private trees.
+automation/fs3_accounting.py
+automation/fs3_normalization.py
+automation/fs3_replay.py
+automation/fs3_replay_checkout.py
+automation/fs3_replay_environment.py
+automation/fs3_replay_workspace.py
+automation/fs3_settlement.py
+automation/fs3_targets.py
+automation/freeze_inventory.py
+automation/fs3_evidence.sh
+
 # Conformance tests whose only inputs are the intentionally private trees above.
 tests/unit/test_features_board_conformance.py
+tests/unit/test_freeze_inventory.py
+tests/unit/test_fs3_adjudication_ledger.py
+tests/unit/test_fs3_accounting.py
+tests/unit/test_fs3_evidence_integrity.py
+tests/unit/test_fs3_final_gate.py
+tests/unit/test_fs3_owner_ledger_format.py
+tests/unit/test_fs3_replay_file_write.py
+tests/unit/test_fs3_replay_gate.py
+tests/unit/test_fs3_stdout_normalization.py
+tests/unit/test_fs3_task10_accounting.py
+tests/unit/test_fs3_task11_accounting.py
 tests/unit/test_owner_ledger_format.py
+tests/unit/test_public_export_refreshed_baseline.py
 
 # Internal export-coverage control. The ledger records publish decisions for
 # governed directories and the conformance test asserts every governed file is
@@ -14,6 +38,8 @@ tests/unit/test_owner_ledger_format.py
 # longer resolve once this manifest has been applied, so they are meaningless -
 # and would fail - inside the exported tree.
 configs/public-export-review.txt
+configs/public-export-baseline-additions.txt
+configs/freeze-inventory.txt
 tests/unit/test_public_export_manifest_coverage.py
 
 # Installation-specific and personal operations runbooks.
@@ -44,6 +70,7 @@ docs/guide/과제비-운영.md
 docs/guide/기관메일-인터페이스.md
 docs/guide/기관메일-전송분석.md
 docs/guide/미러-로컬-브랜치-정리.md
+docs/guide/스킬-시나리오-단일러너-조율안.md
 
 # Private infrastructure change logs. Public-safe design records stay included.
 docs/patch/2026-07-14-legacy-teardown.md
@@ -78,3 +105,18 @@ docs/patch/2026-08-03-promotion-approval-legibility.md
 docs/patch/2026-08-03-supply-chain-autonomous-deploy.md
 docs/patch/2026-08-15-agent-selfskill-root-inversion.md
 docs/patch/2026-08-17-skill-gate-peer-trust-root-diagnostic.md
+docs/patch/2026-08-18-hermes-compat-v0203-rebase.md
+docs/patch/2026-08-19-release-reconcile-unblock.md
+docs/patch/2026-08-21-hermes-compat-public-message-policy.md
+
+docs/기능소개/공개-릴리스-정책.md
+docs/기능소개/fs3-owner-observe-원장.md
+docs/기능소개/관리형-채널-신원-검증.md
+docs/기능소개/fs3-재판정-원장.md
+docs/기능소개/후속과제-총계-가드.md
+docs/기능소개/착지-영수증과-공개집합-게이트.md
+docs/기능소개/서명-전용-특권-수렴-경계.md
+docs/기능소개/discord-공개-메시지-필터링.md
+docs/기능소개/게이트웨이-커맨드-동기화-bulk.md
+docs/기능소개/위키-큐레이션과-스키마-v2.md
+configs/public-export-grandfathered.txt

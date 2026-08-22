@@ -520,7 +520,7 @@ def test_cmd_request_appends_provenance_after_binding(tmp_path: Path, monkeypatc
     args = argparse.Namespace(skill=_SKILL, hash=_DIGEST, fresh=False, json=False, provenance_file=str(provenance))
     assert skill_gate.cmd_request(args) == 0
     content = posted[0]
-    assert content.startswith("[skill-deploy] \uc2b9\uc778 \uc694\uccad\n")
+    assert content.startswith("[skill-deploy] managed-x 배포 승인 요청\n")
     assert "\n- provenance:" in content
     assert content.index("- provenance:") > content.index("- deploy_nonce:")
 

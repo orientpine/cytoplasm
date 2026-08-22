@@ -13,8 +13,18 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, assert_never
 
-from automation.interop.approval_lease import FileKeyLease
-from automation.interop.approval_lifecycle import ApprovalRequest, Probe, resolve_owner_decision
+from automation.interop.approval_lease import FileKeyLease, ReminderJournal
+from automation.interop.approval_lifecycle import (
+    ApprovalRequest,
+    Probe,
+    remind_owner_approval,
+    resolve_owner_decision,
+)
+from automation.interop.approval_reminder import ReminderContext
+from automation.interop.approval_reminder_config import (
+    ApprovalReminderConfig,
+    load_approval_reminder_config,
+)
 from automation.interop.approval_surface import ApprovalKind, reaction_instruction, required_surface
 from automation.repair.repair_ops_approval_gate import (
     lease_root,
@@ -106,6 +116,7 @@ class RepairApprovalWatcher:
     owner_id: str
     approval_log: Path
     now: Callable[[], datetime]
+    reminder_config: ApprovalReminderConfig | None = None
 
     def run_once(self) -> None:
         """Process every active request without accepting unbound or ambiguous reactions."""
@@ -118,11 +129,24 @@ class RepairApprovalWatcher:
             return
         discord = self._discord_for(pending)
         binding = discord.binding if isinstance(discord, RepairDiscordApi) else None
-        _ = resolve_owner_decision(
-            request_of(pending, binding),
-            _OwnerDecision(self, pending, discord),
-            self._lease(),
-        )
+        request = request_of(pending, binding)
+        decision = _OwnerDecision(self, pending, discord)
+        lease = self._lease()
+        if self.reminder_config is not None:
+            if not isinstance(discord, RepairDiscordApi):
+                raise RuntimeError("repair reminder transport lacks a validated binding")
+            def deliver(channel_id: str, content: str) -> None:
+                _ = discord.post_message(channel_id, content)
+
+            context = ReminderContext(
+                config=self.reminder_config,
+                journal=ReminderJournal(self.store.root / "reminder-journal"),
+                request_type=pending.kind or ApprovalKind.REPAIR,
+                deliver=deliver,
+                clock=self.now,
+            )
+            _ = remind_owner_approval(request, decision, lease, context)
+        _ = resolve_owner_decision(request, decision, lease)
 
     def _discord_for(self, pending: PendingRepairApproval) -> ApprovalPollTransport:
         """Use the record's stored binding when the transport can validate it."""
@@ -225,6 +249,7 @@ def main() -> int:
         discord.owner_id,
         approval_log,
         lambda: datetime.now(UTC),
+        load_approval_reminder_config(),
     ).run_once()
     return 0
 

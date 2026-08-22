@@ -25,7 +25,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from automation.peer_attestation import PEER_ATTESTATION_TTL, format_attestation, format_signed_attestation, parse_attestation, parse_timestamp  # noqa: E402
 from automation.peer_signed_attestation import SignedAttestationPayload, sign_signed_attestation  # noqa: E402
-from automation.skill_review import _frontmatter_passes, _scenario_passes, _secret_scan_passes, skill_digest  # noqa: E402
+from automation.scenario_runner import scenario_passes  # noqa: E402
+from automation.skill_review import _frontmatter_passes, _secret_scan_passes, skill_digest  # noqa: E402
 
 _runtime = importlib.import_module("automation.peer_attest_runtime")
 AttestationMode = _runtime.AttestationMode
@@ -46,6 +47,7 @@ _VERIFIER_FILES = (
     "automation/peer_attest_runtime.py",
     "automation/peer_attestation.py",
     "automation/peer_signed_attestation.py",
+    "automation/scenario_runner.py",
     "automation/skill_review.py",
 )
 Verdict: TypeAlias = Literal["PASS", "FAIL"]
@@ -149,7 +151,7 @@ def _review_attempt(request: AttestRequest, now: datetime | None) -> Attestation
         return None
     checks = (
         _frontmatter_passes(request.staged_dir, request.skill),
-        _scenario_passes(request.staged_dir, None),
+        scenario_passes(request.staged_dir, None),
         _secret_scan_passes(request.staged_dir),
         digest == request.expected_digest,
     )

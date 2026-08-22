@@ -11,6 +11,7 @@ ops 체크아웃이 dirty해져 pull/peer-attest가 막힌다.
 | `sensitivity-rules.yaml` | meeting·mail·topics·prompt·proposal·report·doctype·recall·rag_ingest | 결정적 pre-LLM 민감도 분류 |
 | `external-effect-tools.yaml` | `automation/interop/external_effect_gate.py` | denylist. 불량/빈/파싱불가 설정=mutation 전면 차단(fail-closed) |
 | `entity-preflight.json` | `automation/entity_preflight/policy.py` | 개인 고유명사 자동선택·충돌 임계값과 출처 weight의 불변 시드. 누락/불량=fail-closed |
+| `~/.hermes/config.yaml`의 `approval_reminders` | `automation/interop/approval_reminder_config.py` → 공용 승인 watcher | 비밀이 아닌 런타임 정책. 생략 시 enabled=true·3h·1h, 불량 간격=시작 실패 |
 | `mail-mode.default.json` | mail triage_mode | **시드 전용** — 런타임은 `~/.hermes/mail-triage/mail-mode.json`. 시드 경로 쓰기는 코드 가드가 거부 |
 | `routing-policy.md` | (코드 미파싱) | LiteLLM 라우팅·예산·태그 정책의 문서 source of truth — 런북/배포 절차가 참조 |
 | `budget-sheet.md` · `inventory.md` · `templates/` | budget 스킬 / 문서 | — |

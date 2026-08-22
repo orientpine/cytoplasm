@@ -11,8 +11,8 @@
 
 | 주제 | 소유 문서 |
 |---|---|
-| 내 노드 운영(게이트웨이 재시동·운영 제약) | [operations.md](operations.md) |
-| 장애 대응 절차 | [incident-response.md](incident-response.md) · [reboot-recovery.md](reboot-recovery.md) |
+| 내 노드 운영(게이트웨이 재시동·운영 제약) | 개발 저장소 전용 `operations.md` |
+| 장애 대응 절차 | 개발 저장소 전용 `incident-response.md` · `reboot-recovery.md` |
 | 취약점 보고 접수 경로·응답 약속 | [`SECURITY.md`](../../SECURITY.md) |
 | 버저닝 규칙·스키마 상승 기준·상태 마이그레이션 | [versioning-support.md](versioning-support.md) |
 | 노드 설치 절차 | [install.md](install.md) |
@@ -43,8 +43,11 @@
 | 배포 provenance 기준 | `origin/main` (「배포 provenance 규칙」) | 해당 없음 |
 | 노드의 `origin` | 아님 | **맞음** — 사용자 노드는 여기를 본다 |
 
-"새 릴리스를 낸다"는 곧 **`--version`을 올려 export 스크립트를 다시 실행한다**는
-뜻이지, 공개 저장소에 무언가를 밀어 넣는다는 뜻이 아니다.
+"새 릴리스를 낸다"는 곧 private 커밋에 이미 붙은 릴리스 태그를 재사용해 export
+스크립트를 다시 실행한다는 뜻이지, 공개 저장소에 무언가를 밀어 넣는다는 뜻이 아니다.
+스크립트는 기본적으로 `--source-ref` 커밋을 가리키는 유일한 `vX.Y.Z` 태그를 버전으로
+유도한다. 태그가 없거나 둘 이상이면 추측하지 않고 멈춘다. `--version`을 명시하면 그
+값이 항상 이 유도값보다 우선한다.
 
 그리고 **세 번째 저장소가 따로 있다** — 그룹 관리자가 소유하는 관리형 스킬 채널(현재 `orientpine/ribosome`)다.
 위 표에 그것이 없는 것은 빠뜨렸기 때문이 아니라, 이 문서가 다루는 **소프트웨어 배포 경로와
@@ -112,7 +115,7 @@ gh repo create orientpine/cytoplasm --public
 | 대상 디렉터리가 아직 없어야 한다 | `target already exists: <dir>` |
 | 대상 디렉터리의 부모는 있어야 한다 | `target parent does not exist` |
 | 대상은 private 워킹트리 **밖** | `target must be outside the private source working tree` |
-| `--version`이 `vX.Y.Z`(선택적 접미사) | `--version must be a v-prefixed semantic version` |
+| 유도되거나 명시된 버전이 `vX.Y.Z`(선택적 접미사) | `source commit has no semantic release tag` / `source commit has multiple semantic release tags` / `--version must be a v-prefixed semantic version` |
 | `--visibility`가 정확히 `public` | `--visibility must be exactly public` |
 | `--repository-name`이 `OWNER/REPO` | `--repository-name must be OWNER/REPO` |
 | 서명키가 심링크 아닌 정규 파일이고 읽을 수 있어야 한다 | `update-trust signing key must be a regular non-symlink file` / `... is unreadable or unusable` |
@@ -125,9 +128,12 @@ gh repo create orientpine/cytoplasm --public
 
 ### 1.3 새 파일을 추가했다면 — 공개 결정 원장
 
-`configs/`, `docs/guide/`, `docs/patch/` 아래의 모든 추적 파일은
+`configs/`, `docs/` 아래의 모든 추적 파일은
 **`configs/public-export-manifest.txt`(제외) 또는 `configs/public-export-review.txt`(공개)
-둘 중 정확히 하나**에 기록되어야 한다. 매니페스트가 제외 목록이라 기록이 없으면
+둘 중 정확히 하나**에 기록되어야 한다. 단, 거버넌스 확대 전에 이미 공개됐음이
+`.omo/evidence/fs3/public-baseline.txt` 또는 동결된
+`configs/public-export-grandfathered.txt`로 증명된 경로는 기존 공개 결정으로 간주한다.
+매니페스트가 제외 목록이라 그 밖의 경로에 기록이 없으면
 **기본값이 "공개"** 였고, 그 구멍을 닫은 것이 이 짝 원장이다(감사 C1).
 
 ```bash
@@ -139,19 +145,21 @@ python3 -m pytest tests/unit/test_public_export_manifest_coverage.py -q
 원장을 잊으면 공개되는 것이 아니라 릴리스가 멈춘다. 원장은 **디렉터리 단위 공개
 승인을 금지**한다 — 그것은 방금 닫은 구멍을 다시 여는 일이다.
 
-### 1.4 실행 형태 예시 — `--version`만 다음 값으로 바꿉다
+### 1.4 실행 형태 예시 — 기본은 source commit의 태그를 재사용한다
 
 ```bash
 bash automation/public_export.sh \
   --source-repo <private 체크아웃 경로> --source-ref origin/main \
   --target-dir <체크아웃 밖 임시 디렉터리> \
   --remote https://github.com/orientpine/cytoplasm.git \
-  --version v1.0.1 \
   --signing-key ~/.ssh/autophagy_update_trust \
   --repository-name orientpine/cytoplasm --visibility public
 ```
 
 `--signing-key` 대신 `UPDATE_TRUST_SIGNING_KEY` 환경변수를 써도 된다(같은 검사를 받는다).
+독립적인 공개 버전이 꼭 필요할 때만 `--version vX.Y.Z`를 추가한다. 이 명시값은 커밋
+태그 유도보다 우선하지만, 이미 노드가 검증한 floor보다 낮은 번호를 고르면 아래 §5.1의
+영구 거부를 피할 수 없다.
 
 ### 1.5 한 번의 실행 안에서 벌어지는 일
 
@@ -375,10 +383,12 @@ ssh-keygen -lf ~/.ssh/autophagy_update_trust.pub
 같은 principal의 서로 다른 키 두 줄도 정상이다 — 엔트리는 `(principal, namespaces, key)`
 이고 principal은 `update-trust@autophagy`로 고정이기 때문이다.
 
-⚠️ **다만 `trust_key_bootstrap install`은 병기 수단이 아니다.** `plan_signer_install`이
-**단일 엔트리**로 파일 전체를 렌더해 교체하므로, 그것으로 새 키를 넣으면 구 키가
-사라진다 — 정확히 §3.1이 금지하는 상태다. 전환기 파일은 손으로 조립한다
-(`docs/follow-ups.md`에 `--add` 서브커맨드를 후속으로 등록해 두었다).
+`trust_key_bootstrap install`은 기본적으로 **단일 엔트리**로 파일 전체를 렌더해
+교체하므로, 아무 옵션 없이 새 키를 넣으면 구 키가 사라진다 — 정확히 §3.1이 금지하는
+상태다. 전환기에는 **`--add`를 붙인다**: 설치본을 읽어 기존 엔트리를 보존한 채 새 키를
+덧붙이고, 같은 키를 다시 넣으면 줄이 늘지 않는다(멱등). 설치본이 파싱되지 않으면
+`SIGNERS-EMPTY`로 멈춘다 — 어떤 릴리스를 진짜로 인정할지 정하는 파일을 추측으로
+다시 쓰지 않는다. 손으로 파일을 조립할 필요는 없어졌다.
 
 전환기 파일의 정확한 형태(헤더는 `UPDATE_TRUST_TARGET.header` 그대로):
 
@@ -402,7 +412,13 @@ update-trust@autophagy namespaces="git" ssh-ed25519 AAAA...<신키> update-trust
    ssh-keygen -t ed25519 -N "" -f ~/.ssh/autophagy_update_trust_2 -C "update-trust@autophagy"
    ssh-keygen -lf ~/.ssh/autophagy_update_trust_2.pub     # 새 지문 확보
    ```
-2. **병기 파일을 만든다** (§3.3 형식). 구키 줄을 **지우지 않는다.**
+2. **병기 파일을 만든다.** 노드마다 아래를 root로 실행한다 — 구키 줄은 보존된다.
+   ```bash
+   sudo python3 automation/install/trust_key_bootstrap.py install --add \
+       --key <bundle>/update-trust-2.pub \
+       --expect-fingerprint 'SHA256:<신키>'
+   ```
+   먼저 `--dry-run`을 붙여 렌더될 파일에 **두 줄이 다 들어있는지** 눈으로 확인한다.
 3. **모든 배포된 노드에 병기 파일을 배포**하고, 노드마다 **두 지문 각각**으로 확인한다.
    ```bash
    python3 automation/install/trust_key_bootstrap.py verify --expect-fingerprint 'SHA256:<구키>'
@@ -475,8 +491,8 @@ update-trust@autophagy namespaces="git" ssh-ed25519 AAAA...<신키> update-trust
      검증 직후 mutable `main`이 바뀌는 TOCTOU가 남는다).
    - `current`가 목표 SHA로 실제 전환됐는지 확인.
    - **agent + peer 게이트웨이를 함께 재시작**한다(`autophagy-gateway-pair restart`,
-     상한 120초). 한쪽만 재시동하지 않는다 —
-     [operations.md](operations.md)의 게이트웨이 재시동 규칙.
+     상한 120초). 한쪽만 재시동하지 않는다 — 개발 저장소 전용 `operations.md`의
+     게이트웨이 재시동 규칙.
    - `automation/deploy-smoke.sh` 실행(상한 900초).
    - 성공 → 실패 지문 파일 삭제, rc 0.
 5. 재시작 또는 스모크가 실패하면 **롤백 트랜잭션**:
@@ -520,6 +536,13 @@ update-trust@autophagy namespaces="git" ssh-ed25519 AAAA...<신키> update-trust
 즉 **v1.0.5가 나빴다고 v1.0.4를 다시 공개 `main`에 올려도, 이미 v1.0.5를 검증한 노드는
 거부한다.** 태그를 지우고 같은 번호를 다른 커밋에 다시 붙여도 두 번째 규칙에 걸린다.
 
+이 floor는 채널별이 아니라 **설치 전체**에 하나다. private 채널에서 v2.0.0을 검증한
+노드를 v1.0.0까지만 있는 공개 채널로 바꾸면, 두 채널의 서명이 모두 진짜여도
+`RELEASE-ROLLBACK`으로 계속 거부한다. 런타임이 스모크 실패로 이전 커밋에 의도적으로
+롤백돼도 floor 파일은 내려가지 않는다. 따라서 채널 전환 전에 대상 채널 버전이 현재
+floor 이상인지 확인해야 하며, 잘못 전환한 뒤 태그 삭제나 런타임 롤백으로는 복구할 수
+없다. 더 높은 버전을 컷해 앞으로 전진하는 것만이 복구 경로다.
+
 **이 비대칭은 의도된 것이다.** floor는 서명 능력이 없는 공격자가 origin의 `main`을
 과거의 (진짜로 서명됐던) 커밋으로 force-push해 알려진 취약 버전으로 "업그레이드"시키는
 공격을 막는 장치다(감사 C1, TUF rollback / CWE-345). 유지보수자의 취소 편의를 위한
@@ -551,9 +574,8 @@ update-trust@autophagy namespaces="git" ssh-ed25519 AAAA...<신키> update-trust
 
 - 공지를 수정보다 **먼저 하지 않는다.** 조율된 공개(coordinated disclosure)가 기본이며
   보고자가 있으면 공개 시점을 합의한다([`SECURITY.md`](../../SECURITY.md)).
-- 원인 확정 전에 재시작·설정변경·키 재발급을 하지 않는다
-  ([incident-response.md](incident-response.md) — 내 노드에 대한 규율이며 이 문서가
-  다시 쓰지 않는다).
+- 원인 확정 전에 재시작·설정변경·키 재발급을 하지 않는다(개발 저장소 전용
+  `incident-response.md`가 소유하는 내 노드 규율이며 이 문서가 다시 쓰지 않는다).
 
 ### 5.4 공개 저장소에서 태그를 지우는 것
 
@@ -600,11 +622,12 @@ update-trust@autophagy namespaces="git" ssh-ed25519 AAAA...<신키> update-trust
 한 번의 릴리스를 한 화면으로:
 
 - [ ] 변경이 private `origin/main`에 랜딩됐다 (커밋 → 푸시)
-- [ ] `configs/` · `docs/guide/` · `docs/patch/`에 새 파일이 있으면 매니페스트 또는
-      공개 원장에 기록했다 → `pytest tests/unit/test_public_export_manifest_coverage.py`
+- [ ] `configs/` · `docs/`에 새 파일이 있으면 매니페스트 또는 공개 원장에 기록했다
+      (기존 공개 baseline 경로는 grandfathered) → `pytest tests/unit/test_public_export_manifest_coverage.py`
 - [ ] `pytest tests/unit` 전체 GREEN (export가 내보낸 트리에서 다시 돌린다)
 - [ ] 대상 저장소가 존재한다 (최초 1회만 `gh repo create ... --public`)
 - [ ] 워킹트리 clean, 대상 디렉터리는 체크아웃 **밖**의 새 경로
+- [ ] source commit에 유일한 semantic release tag가 있다(독립 버전이면 `--version` 명시)
 - [ ] `automation/public_export.sh` 1회 실행 → `PUBLIC-EXPORT-OK`
 - [ ] GitHub Release 노트 게시 (**지문 재게시** + MAJOR면 조치 안내)
 - [ ] 공개 저장소에서 `git verify-tag <version>` 통과
@@ -620,9 +643,8 @@ update-trust@autophagy namespaces="git" ssh-ed25519 AAAA...<신키> update-trust
 - [install.md](install.md) — 설치 절차의 단일 진실 (지문 대조 포함)
 - [third-party-runtime-prereqs.md](third-party-runtime-prereqs.md) — 제3자 설치 전제
 - [manual-group-admin.md](manual-group-admin.md) · [manual-member.md](manual-member.md)
-- [operations.md](operations.md) · [incident-response.md](incident-response.md) ·
-  [reboot-recovery.md](reboot-recovery.md) — 내 노드 운영 *(개발 저장소 전용 — 공개본에
-  포함되지 않는다)*
+- `operations.md` · `incident-response.md` · `reboot-recovery.md` — 내 노드 운영
+  *(개발 저장소 전용 — 공개본에 포함되지 않는다)*
 - 핵심 코드: `automation/public_export.sh` · `automation/update_trust.py` ·
   `automation/update_trust_state.py` · `automation/deploy_reconcile_cli.py` ·
   `automation/release_rollback.py` · `automation/install/trust_key_bootstrap.py` ·

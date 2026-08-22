@@ -11,6 +11,7 @@ from pathlib import Path
 from mailon_interface import (
     MAILON_ENV_ALLOWLIST,
     MAILON_INTERFACE,
+    RESOLVE_GROUP_PRIORITY,
     SYSTEM_ENV_KEEP,
 )
 
@@ -128,3 +129,34 @@ def _render_mail(row: dict, masked: bool, salt: str) -> dict:
         out["sender"] = mask_value(out["sender"], salt)
         out["markdown_path"] = mask_value(out["markdown_path"] or "", salt)
     return out
+
+
+
+def rank_candidates(candidates: list[dict]) -> list[dict]:
+    """Order `resolve` candidates deterministically: organization > contacts > history.
+
+    Measured: one person returned three candidates carrying two distinct addresses, with
+    nothing in the response saying which was current. A caller that picks arbitrarily
+    sends to the wrong recipient, and that is an irreversible external effect — the
+    owner approval gate catches it with human eyes, but a gate is a last line of
+    defence, not a decision procedure. Unknown groups sort last rather than raise.
+    """
+    order = {group: index for index, group in enumerate(RESOLVE_GROUP_PRIORITY)}
+    return sorted(
+        candidates, key=lambda item: order.get(str(item.get("group", "")), len(order))
+    )
+
+
+def distinct_addresses(candidates: list[dict]) -> int:
+    """How many different addresses the candidate set actually carries."""
+    return len({str(item.get("email", "")).strip().lower() for item in candidates if item.get("email")})
+
+
+def render_candidate(candidate: dict, masked: bool, salt: str) -> dict:
+    item = {
+        "group": str(candidate.get("group", "")), "name": str(candidate.get("name", "")),
+        "email": str(candidate.get("email", "")), "org": str(candidate.get("org", "")),
+    }
+    if masked:
+        item.update({key: mask_value(item[key], salt) for key in ("name", "email", "org")})
+    return item

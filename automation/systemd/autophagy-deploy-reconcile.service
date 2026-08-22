@@ -49,6 +49,21 @@ ProtectHome=tmpfs
 BindReadOnlyPaths=$NODE_OPS_HOME/.ssh
 BindReadOnlyPaths=-$NODE_OPS_HOME/.hermes/node.toml
 BindReadOnlyPaths=-$NODE_AGENT_HOME/.hermes/roster.yaml
+# ProtectHome= covers /run/user as well as /home and /root (systemd.exec(5)), and that
+# is exactly where the per-account `systemctl --user` control socket lives. With it
+# emptied, the gateway helper's
+#   runuser -u agent|peer -- env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user restart
+# finds no $XDG_RUNTIME_DIR/systemd/private and fails in well under a second. Every
+# convergence therefore installed its release and was IMMEDIATELY rolled back with
+# reason=gateway-restart (measured 2026-08-16 and 2026-08-19; production sat frozen for
+# three days and only manual land.sh runs moved it, because land.sh converges through
+# converge-release-runtime.sh and never restarts the pair).
+#
+# Read-WRITE on purpose: connecting to a unix socket is not a filesystem read, so
+# BindReadOnlyPaths= would not make the restart work. This grants nothing new either —
+# each /run/user/<uid> stays 0700, and the process that actually restarts the pair is
+# the root helper, which could already reach them.
+BindPaths=/run/user
 # DELIBERATE, and pinned by tests/unit/test_deploy_reconcile_cli.py:
 #
 # PrivateTmp=no — kept, but the original reason no longer holds and saying so matters.

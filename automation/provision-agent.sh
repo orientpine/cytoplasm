@@ -97,6 +97,7 @@ validate_account_and_prerequisites() {
   CONFIG_FILE="$HERMES_HOME/config.yaml"
   DROPIN_DIR="$ACCOUNT_HOME/.config/systemd/user/${SERVICE_NAME}.d"
   DROPIN_FILE="$DROPIN_DIR/10-env-secrets.conf"
+  DROPIN_SYNC_FILE="$DROPIN_DIR/30-command-sync.conf"
 }
 
 ensure_linger() {
@@ -154,12 +155,35 @@ fallback_providers:
     model: ${FALLBACK_MODEL}
 EOF
   fi
+
+  cat <<'EOF'
+
+# Non-secret approval-reminder policy. Omit this section on older deployments
+# to retain the same defaults.
+approval_reminders:
+  enabled: true
+  initial_delay: 3h
+  repeat_interval: 1h
+EOF
 }
 
 render_dropin() {
   cat <<EOF
 [Service]
 EnvironmentFile=${SECRETS_FILE}
+EOF
+}
+
+# WHY bulk (2026-08-22): Hermes 0.20.3의 기본(safe) sync는 커맨드 diff를 건당
+# mutation으로 보낸다. 업스트림 업데이트로 커맨드 전부가 한꺼번에 달라지면 Discord의
+# 작은 command 버킷 안에서 한 번에 끝나지 못해 429로 끊기고, 성공 기록이 남지 않아
+# 매 부팅 재시도한다 — 배포 재시동이 잦은 날은 그 루프가 앱 전체를 429 패널티 창에
+# 가둬 승인 요청의 auto-thread 생성까지 함께 죽었다(01:32 KST 사건). bulk는 diff
+# 크기와 무관하게 부팅당 PUT 1회라 그 실패 계열 전체에 면역이다.
+render_command_sync_dropin() {
+  cat <<'EOF'
+[Service]
+Environment=DISCORD_COMMAND_SYNC_POLICY=bulk
 EOF
 }
 
@@ -188,13 +212,16 @@ ensure_file_if_absent() {
 ensure_initial_config_and_dropin() {
   local desired_config="$WORK_DIR/config.yaml"
   local desired_dropin="$WORK_DIR/autophagy-env.conf"
+  local desired_sync_dropin="$WORK_DIR/autophagy-command-sync.conf"
 
   render_config > "$desired_config"
   render_dropin > "$desired_dropin"
-  chmod 644 "$desired_config" "$desired_dropin"
+  render_command_sync_dropin > "$desired_sync_dropin"
+  chmod 644 "$desired_config" "$desired_dropin" "$desired_sync_dropin"
 
   ensure_file_if_absent "$desired_config" "$CONFIG_FILE" "$HERMES_HOME" "Hermes config"
   ensure_file_if_absent "$desired_dropin" "$DROPIN_FILE" "$DROPIN_DIR" "systemd EnvironmentFile drop-in"
+  ensure_file_if_absent "$desired_sync_dropin" "$DROPIN_SYNC_FILE" "$DROPIN_DIR" "systemd command-sync drop-in"
 }
 
 ensure_gateway_service() {
@@ -243,6 +270,31 @@ verify_gateway_service() {
   log "verification: $SERVICE_NAME is active for '$ACCOUNT'"
 }
 
+# 소유자의 자격증명 조회 alias는 `~<operator>/.bash_aliases`에만 있어 노드를
+# 재구축하면 **조용히** 사라졌다 — 자격증명 자체는 mode-600 파일에 남아 있으므로
+# 아무것도 실패하지 않고 그저 꺼내 볼 수만 없게 된다. alias에는 비밀이 없다 —
+# `sudo -n -u <account> cat <path>` 조회 명령일 뿐이다. 소유자가 자기 dotfile을
+# 고쳐둔 경우를 위해 마커가 없을 때만 덧붙인다(only-if-absent).
+ensure_operator_credential_aliases() {
+  local target="$(getent passwd "$NODE_OPERATOR_ACCOUNT" | cut -d: -f6)/.bash_aliases"
+
+  if [[ -z "$NODE_OPERATOR_ACCOUNT" ]] || ! getent passwd "$NODE_OPERATOR_ACCOUNT" >/dev/null; then
+    log "operator aliases: '$NODE_OPERATOR_ACCOUNT' 계정이 없다 — 건너뜀"
+    return
+  fi
+  if sudo -n -u "$NODE_OPERATOR_ACCOUNT" grep -qs 'autophagy-cred-alias' "$target"; then
+    log "operator aliases: already defined — skipping"
+    return
+  fi
+  sudo -n -u "$NODE_OPERATOR_ACCOUNT" tee -a "$target" >/dev/null <<EOF
+# autophagy-cred-alias — 대시보드 Basic auth 조회 (owner 전용, 값은 mode-600 파일에만 있다)
+alias kanban-cred="sudo -n -u $NODE_AGENT_ACCOUNT cat $NODE_AGENT_HOME/.hermes/dashboard-cha-credentials.txt"
+alias reporthub-cred="sudo -n -u $NODE_OPS_ACCOUNT cat $NODE_OPS_HOME/report-hub/dashboard-cha-credentials.txt"
+alias autophagy-cred="kanban-cred; echo; reporthub-cred"
+EOF
+  log "operator aliases: restored in $target"
+}
+
 [[ "$#" -eq 1 ]] || usage
 ACCOUNT="$1"
 [[ -n "$ACCOUNT" ]] || usage
@@ -262,10 +314,11 @@ HERMES_SOURCE_DIR=""
 CONFIG_FILE=""
 DROPIN_DIR=""
 DROPIN_FILE=""
+DROPIN_SYNC_FILE=""
 FILE_CHANGED=0
 SERVICE_CHANGED=0
 
-require_commands bash chmod cmp curl cut getent grep id install loginctl mktemp mv rm stat sudo systemctl tr
+require_commands bash chmod cmp curl cut getent grep id install loginctl mktemp mv rm stat sudo systemctl tee tr
 validate_account_and_prerequisites
 ensure_linger
 
@@ -278,4 +331,5 @@ ensure_initial_config_and_dropin
 install_hermes_if_needed
 ensure_gateway_service
 verify_gateway_service
+ensure_operator_credential_aliases
 log "DONE: '$ACCOUNT' is provisioned; no OAuth or user DM test was attempted"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "recall" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
+import recall_cli  # noqa: E402
 import recall_core  # noqa: E402
 
 
@@ -147,3 +149,148 @@ def test_cli_fake_unreachable_is_single_attempt_exit_zero(tmp_path: Path) -> Non
     assert payload["search"]["attempts"] == 1
     log_lines = list(tmp_path.glob("recall-*.log"))[0].read_text().splitlines()
     assert len(log_lines) == 1
+
+
+# --- phase-0 entity fallback --------------------------------------------------
+
+def _entity_args(query: str) -> argparse.Namespace:
+    return argparse.Namespace(
+        command="search", query=query, limit=5,
+        threshold=recall_core.DEFAULT_THRESHOLD,
+        strong_threshold=recall_core.DEFAULT_STRONG_THRESHOLD,
+        json=True, entity_fallback=True,
+    )
+
+
+def test_relationship_intent_extracts_only_entity_anchor() -> None:
+    intent = recall_cli.analyze_entity_intent("최근 김민준 박사와 함께 진행한 업무 협업 내역")
+    assert intent.matches is True
+    assert intent.entity_hints == ("김민준",)
+    assert recall_cli.analyze_entity_intent("최근 진행한 업무 내역").matches is False
+    assert recall_cli.analyze_entity_intent("최근 동료 박사와 한 업무").matches is False
+    assert recall_core.tokenize("최근 김민준 박사와 함께 진행한 업무 협업 내역") == ["김민준"]
+
+
+def test_flagged_fallback_unions_rows_but_only_entity_literal_can_hit(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    unrelated = _row(0.59, "일반 연구 과제 계획과 회의 기록", "obsidian:projects/general.md#c0000", path="projects/general.md")
+    anchored = _row(0.52, "김민준 박사와 배양 자동화 일정을 조율했다.", "obsidian:people/collaboration.md#c0000", path="people/collaboration.md")
+    calls: list[str] = []
+
+    def fake_search(query: str, limit: int):
+        calls.append(query)
+        rows = [unrelated] if len(calls) == 1 else [unrelated, anchored]
+        return rows[:limit], None, ["fake://entity"], "fake://entity"
+
+    monkeypatch.setattr(recall_cli, "_mcp_search", fake_search)
+    monkeypatch.setenv("RECALL_LOG_DIR", str(tmp_path))
+    assert recall_cli.run_search(_entity_args("최근 김민준 박사와 함께 진행한 업무 협업 내역")) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert calls == ["최근 김민준 박사와 함께 진행한 업무 협업 내역", "김민준"]
+    assert payload["status"] == "hit"
+    assert [item["source"] for item in payload["results"]] == ["obsidian:people/collaboration.md#c0000"]
+    assert payload["search"]["searches"] == 2
+    assert payload["search"]["entity_hint_count"] == 1
+
+
+def test_flagged_fallback_rejects_strong_unrelated_auxiliary_row(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    unrelated = _row(0.91, "무관한 고득점 문서", "wiki:unrelated.md#c0000", path="unrelated.md")
+    calls = 0
+
+    def fake_search(query: str, limit: int):
+        nonlocal calls
+        del query, limit
+        calls += 1
+        return ([] if calls == 1 else [unrelated]), None, ["fake://entity"], "fake://entity"
+
+    monkeypatch.setattr(recall_cli, "_mcp_search", fake_search)
+    monkeypatch.setenv("RECALL_LOG_DIR", str(tmp_path))
+    assert recall_cli.run_search(_entity_args("요즘 김민준 박사와 같이 한 협업")) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert calls == 2
+    assert payload["status"] == "no_memory"
+    assert payload["results"] == []
+    assert payload["search"]["searches"] == 2
+
+
+def test_flag_off_preserves_single_search_behavior(monkeypatch, capsys, tmp_path: Path) -> None:
+    calls = 0
+
+    def fake_search(query: str, limit: int):
+        nonlocal calls
+        del query, limit
+        calls += 1
+        return [], None, ["fake://entity"], "fake://entity"
+
+    monkeypatch.setattr(recall_cli, "_mcp_search", fake_search)
+    monkeypatch.setenv("RECALL_LOG_DIR", str(tmp_path))
+    args = _entity_args("최근 김민준 박사와 함께 한 협업")
+    args.entity_fallback = False
+    assert recall_cli.run_search(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert calls == 1
+    assert payload["status"] == "no_memory"
+    assert payload["search"]["searches"] == 1
+    assert payload["search"]["entity_hint_count"] == 0
+
+
+def test_result_forwards_date_folder_and_sensitivity_metadata() -> None:
+    row = _row(
+        0.61, "김민준 협업 기록", "obsidian:people/collaboration.md#c0000",
+        created="2026-05-02", updated="2026-08-20", day="2026-08-20",
+        folder="people", sensitivity="internal",
+    )
+    result = recall_core.classify("김민준 협업", [row])[0]
+    assert result["metadata"] == {
+        "source_type": "obsidian", "created": "2026-05-02",
+        "updated": "2026-08-20", "day": "2026-08-20",
+        "folder": "people", "sensitivity": "internal",
+    }
+
+
+def test_obsidian_attribution_uses_path() -> None:
+    assert recall_core.attribution(
+        "obsidian:opaque-id#c0000",
+        {"source_type": "obsidian", "path": "projects/collaboration.md"},
+    ) == "Obsidian: projects/collaboration.md"
+
+
+def test_recall_runtime_root_prefers_the_release_over_the_stale_mirror(tmp_path: Path) -> None:
+    """The skill must resolve `automation.*` from the immutable release, not the mirror.
+
+    `/srv/autophagy-agents` is a one-way observation checkout that STOPS advancing the
+    moment it is dirty, and whatever it holds shadows the release's `automation`
+    package because this insert lands first in sys.path. Measured 2026-08-22: the
+    mirror sat at b6b3574 with a dirty tracked file and therefore carried no
+    `automation/knowledge`, so the deployed recall died at import with
+    `ModuleNotFoundError: No module named 'automation.knowledge'` even though the
+    running release carried the package. The mirror is only the last-resort fallback.
+    """
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[2]
+    scripts = root / "skills/recall/scripts"
+    assert '"/srv/autophagy-agents"' not in (scripts / "recall_cli.py").read_text(
+        encoding="utf-8"
+    ), "recall_cli must not name the ops mirror; the resolver owns that fallback"
+
+    spec = importlib.util.spec_from_file_location(
+        "recall_runtime_under_test", scripts / "recall_runtime.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    current = tmp_path / "release"
+    mirror = tmp_path / "mirror"
+    current.mkdir()
+    mirror.mkdir()
+
+    assert module.runtime_root({}, current=current, mirror=mirror) == current
+    assert module.runtime_root({}, current=tmp_path / "absent", mirror=mirror) == mirror
+    assert module.runtime_root(
+        {"AUTOPHAGY_REPO_ROOT": str(tmp_path / "override")}, current=current, mirror=mirror
+    ) == tmp_path / "override"

@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
-from automation.deploy_reconcile import reconcile_tick
+from automation.deploy_reconcile import reconcile_skip, reconcile_tick
 from automation.deploy_reconcile_state import DEFAULT_STATE_PATH, load_state, save_state
 from automation.deploy_update_channel import (
     UpdateChannelSource,
@@ -39,7 +39,7 @@ from automation.release_rollback import (
     ReleaseTransition,
     apply_release_update,
 )
-from automation.update_trust import UpdateTrustError, resolve_update_target
+from automation.update_trust import UpdateTrustError, resolve_signed_update
 from automation.update_trust_state import release_floor_path
 
 #: The ONLY privileged command this tick may run. No arguments: the helper resolves
@@ -65,7 +65,7 @@ _RELEASE_RUNTIME: Final = ReleaseRuntime(
     failed_state=_NODE_CONFIG.private_root / "deploy-reconcile" / "failed-release.json",
     release_helper=_NODE_CONFIG.libexec_dir / "autophagy-install-release",
     gateway_helper=_NODE_CONFIG.libexec_dir / "autophagy-gateway-pair",
-    smoke_script=RELEASE_POINTER / "automation" / "deploy-smoke.sh",
+    smoke_script=RELEASE_POINTER / "automation" / "release-smoke.sh",
 )
 
 _LS_REMOTE_TIMEOUT: Final = 30.0
@@ -103,35 +103,20 @@ def current_release_sha(pointer: Path = RELEASE_POINTER) -> str:
         return ""
 
 
-def origin_main_sha(mirror: Path = MIRROR) -> str:
-    """Ask origin directly. The mirror's own refs may be behind and are not the target."""
-    try:
-        completed = subprocess.run(
-            ("git", "-C", str(mirror), "ls-remote", "origin", "refs/heads/main"),
-            capture_output=True, text=True, check=False, timeout=_LS_REMOTE_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    if completed.returncode != 0:
-        return ""
-    head = completed.stdout.split(maxsplit=1)
-    return head[0] if head else ""
-
-
 def candidate_update_sha(update_channel: str | None = None) -> str:
-    """Resolve the same policy-bound target the root-owned helper independently verifies."""
-    if update_channel is not None:
-        return resolve_update_target(
-            MIRROR,
-            _NODE_CONFIG.require_signed_updates,
-            remote_url=update_channel,
-            floor_path=RELEASE_FLOOR,
-        )
-    return resolve_update_target(
+    """Resolve the SAME signature-bound target the root-owned helper re-verifies.
+
+    Never policy-bound. `require_signed_updates` used to gate this call while the helper
+    independently demanded a signature, so on 2026-08-21 the pre-gate happily handed an
+    unsigned head to a helper that then refused it every tick — a convergence that could
+    not succeed, counted as a hard failure. Both halves exist to close a TOCTOU window by
+    verifying the same thing; they can only do that if they ask the same question.
+    """
+    return resolve_signed_update(
         MIRROR,
-        _NODE_CONFIG.require_signed_updates,
+        remote_url=update_channel,
         floor_path=RELEASE_FLOOR,
-    )
+    ).commit_sha
 
 
 def run_converge(command: Sequence[str] | None = None) -> int:
@@ -163,7 +148,18 @@ def persist_update_channel_binding(update_channel: str | None, path: Path) -> No
 
 
 def _run_release_command(command: Command, timeout: float) -> int:
+    # Capturing is required (nothing here reads the helper's stdout) but DROPPING what was
+    # captured cost three days: `gateway-pair restart` failed on every convergence
+    # (2026-08-16, 2026-08-19) and the only trace was `reason=gateway-restart` in a state
+    # file, with no line anywhere saying why. Re-emit rather than capture less. Only the
+    # helper name and its verb are echoed — the rollback argv carries shas already in the
+    # journal — and stderr is clipped to 400 chars so one chatty failure cannot flood a
+    # timer that fires every two minutes.
     completed = _run(command, timeout)
+    if completed is None or completed.returncode != 0:
+        why = "could not be run" if completed is None else " ".join(completed.stderr.split())
+        print(f"[deploy-reconcile] HELPER-FAILED {' '.join(command[-2:])}: {why[:400]}",
+              file=sys.stderr)
     return 1 if completed is None else completed.returncode
 
 
@@ -243,6 +239,17 @@ def sync_mirror(
     return MIRROR_PULLED
 
 
+def _record_skip(reason: str) -> None:
+    state = load_state(DEFAULT_STATE_PATH)
+    updated = reconcile_skip(
+        state,
+        reason=reason,
+        now=time.time(),
+        deliver=notify_owner,
+    )
+    save_state(DEFAULT_STATE_PATH, updated)
+
+
 def main() -> int:
     # Fail loudly rather than converge on a guess. An unconfigured node cannot reach
     # its own origin, and the old behaviour was to skip with rc 0 forever — the state
@@ -260,12 +267,13 @@ def main() -> int:
         )
     except UpdateTrustError as error:
         print(f"[deploy-reconcile] UPDATE-TRUST-BLOCK {error} — skipping tick", file=sys.stderr)
+        _record_skip("update-trust-block")
         return 0
     if not target_sha:
-        # Transport trouble is not drift. Converging on an unknown target, or reporting
-        # an incident because github was briefly unreachable, are both worse than
-        # waiting two minutes for the next tick.
+        # One transport miss is not drift. Repeated identical misses are structurally
+        # indistinguishable from a permanently unreachable update channel and are counted.
         print("[deploy-reconcile] update target unresolved — skipping tick", file=sys.stderr)
+        _record_skip("update-target-unresolved")
         return 0
     try:
         persist_update_channel_binding(update_channel, UPDATE_CHANNEL_STATE)
@@ -274,6 +282,7 @@ def main() -> int:
             f"[deploy-reconcile] UPDATE-CHANNEL-BINDING-BLOCK {error} — skipping tick",
             file=sys.stderr,
         )
+        _record_skip("update-channel-binding-block")
         return 0
     state = load_state(DEFAULT_STATE_PATH)
     current_sha = current_release_sha()

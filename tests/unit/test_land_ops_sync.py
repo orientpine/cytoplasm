@@ -221,12 +221,26 @@ def _run_land(
     shutil.copy(_LAND, dev / "automation" / "land.sh")
     (dev / "automation" / "land.sh").chmod(0o755)
     shutil.copy(_PROBE, dev / "automation")
+    shutil.copy(_REPO / "automation" / "release_helper_probe.sh", dev / "automation")
+    shutil.copy(_REPO / "automation" / "release_tag_lib.sh", dev / "automation")
     shutil.copy(_REPO / "automation" / "runtime_root.sh", dev / "automation")
     shutil.copy(_REPO / "automation" / "node_config.py", dev / "automation")
     shutil.copy(_REPO / "automation" / "node_config_sh.py", dev / "automation")
+    shutil.copy(_REPO / "automation" / "node_config_state.py", dev / "automation")
     (dev / "configs").mkdir(exist_ok=True)
     shutil.copy(_REPO / "configs" / "node.example.toml", dev / "configs")
     env = dict(os.environ)
+    home = tmp_path / "home"
+    config_dir = home / ".hermes"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "node.toml").write_text(
+        'origin_url = "file:///configured-origin"\n'
+        'primary_node_name = "configured-primary"\n'
+        'rag_node_name = "configured-rag"\n'
+        'deploy_ssh_host = "configured-primary"\n',
+        encoding="utf-8",
+    )
+    env["HOME"] = str(home)
     env["PATH"] = f"{_stub_bin(tmp_path, node, ssh_down=ssh_down, skip_pull=skip_pull)}{os.pathsep}{env['PATH']}"
     env["DEPLOY_SSH_HOST"] = "example-primary-node-not-this-host"
     # Landing signs a release tag, and the harness must exercise that for real rather
@@ -518,6 +532,32 @@ def test_land_shares_the_mirror_verdict_with_healthcheck() -> None:
     # and sourcing the node's own copy would execute the very mirror we no
     # longer trust.
     assert "declare -f" in script
+
+
+def test_land_checks_node_configuration_after_local_refusals_before_network() -> None:
+    script = _LAND.read_text(encoding="utf-8")
+    main = script.index("main()")
+    local_dirty_check = script.index("status --porcelain", main)
+    preflight = script.index("automation.node_config_state", main)
+    first_network = script.index("fetch --quiet origin", main)
+    assert local_dirty_check < preflight < first_network
+
+
+def test_land_reuses_the_release_helper_probe_in_its_landing_output() -> None:
+    script = _LAND.read_text(encoding="utf-8")
+    assert "release_helper_probe.sh" in script
+    assert "release_helper_probe_script" in script
+
+
+def test_land_is_tracked_as_an_executable() -> None:
+    result = subprocess.run(
+        ("git", "ls-files", "-s", "automation/land.sh"),
+        cwd=_REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.startswith("100755 ")
 
 
 def test_runtime_root_is_resolved_node_side_not_on_the_workstation() -> None:

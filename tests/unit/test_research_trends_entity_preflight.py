@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
+os.environ.setdefault("TOPICS_SCRIPTS", str(_ROOT / "skills" / "topics" / "scripts"))
 sys.path.insert(0, str(_ROOT / "automation" / "research_trends"))
 
 from automation.entity_preflight.contracts import VerificationOutcome  # noqa: E402

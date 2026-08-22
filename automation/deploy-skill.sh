@@ -90,14 +90,29 @@ run_as() { # run_as <account> <script>  (stdin passes through for file pushes)
 # entries removed, even by their owner. Re-deploying then died on "Permission denied"
 # in both the peer sandbox and the agent review staging (measured 2026-08-04).
 # `2>/dev/null` keeps a missing path (the common first-deploy case) silent.
+#: 마운트에서 빼는 파일 이름을 **`skill_review` 에서 읽는다** — 여기 베껴 적으면 digest 와
+#: 아카이브가 갈라져, 승인 해시가 덤지 않는 파일이 노드에 올라간다(공급망 구멍).
+skill_mount_excludes() { # 쉼표 목록, 읽지 못하면 배포를 멈춘다
+  PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
+    'from automation.skill_review import MOUNT_EXCLUDED_BASENAMES as e; print(",".join(sorted(e)))' \
+    || die "DEPLOY-BLOCK: could not read the mount exclusion set"
+}
+
 skill_archive_stream() { # skill_archive_stream <src_dir> <name>
   local src="$1" name="$2"
+  local excluded
+  excluded="$(skill_mount_excludes)" || return 1
   if [[ "${PERSONAL:-0}" == 1 ]]; then
     [[ -n "${PERSONAL_HEAD_SHA:-}" ]] || die "PERSONAL-BLOCK: committed HEAD is unavailable"
-    git -C "$src" archive --format=tar --prefix="$name/" "$PERSONAL_HEAD_SHA" | gzip -c
+    # 개인 저작은 스킬 디렉터리가 그 리포의 루트라 제외 pathspec 이 바로 먹는다.
+    local -a pathspec=(".")
+    local name_only
+    for name_only in ${excluded//,/ }; do pathspec+=(":(exclude)$name_only"); done
+    git -C "$src" archive --format=tar --prefix="$name/" "$PERSONAL_HEAD_SHA" -- "${pathspec[@]}" | gzip -c
     return $?
   fi
-  deploy_archive_stream "$REPO_ROOT" "$(dirname "$src")" "$name"
+  DEPLOY_ARCHIVE_EXCLUDE_BASENAMES="$excluded" \
+    deploy_archive_stream "$REPO_ROOT" "$(dirname "$src")" "$name"
 }
 
 push_skill() { # push_skill <account> <src_dir> <name>
@@ -171,7 +186,12 @@ import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 name = sys.argv[2]
 staged = root / name
-nested = [path for path in sorted(root.glob(\"*/\" + name)) if path.is_dir()]
+# 아카이브된 스킬은 활성이 아니다. pathlib 의 glob 은 숨김 디렉터리도 매칭하므로
+# .archive/<name> 이 중첩 충돌로 잡혔고, 그래서 이 가드가 안내하는 해법
+# (hermes curator archive <name>)이 디렉터리를 .archive 로 옮길 뿐이라 판정이
+# foreign 에서 바뀌지 않아 안내대로 해도 영영 풀리지 않았다(2026-08-20 실측).
+# 이 블록은 셸 이중따옴표 안에 산다 — 백틱은 명령 치환이고 한 줄 형태를 유지한다.
+nested = [path for path in sorted(root.glob(\"*/\" + name)) if path.is_dir() and not path.parent.name.startswith(\".\")]
 if not nested and not staged.is_dir():
     print(\"absent\")
     raise SystemExit(0)
@@ -388,20 +408,29 @@ check_with_attestation_refresh() {
 }
 
 sync_ops_checkout_for_peer_attest() { # fail-closed ops-checkout refresh so peer_attest runs current code
-  # DG-4: when the immutable release runtime exists, converge it to origin/main by
-  # installing a pinned snapshot and flipping `current`. The mutable mirror's
-  # dirty/ahead state can no longer block this deploy. Until the DG-5 node flip
+  # DG-4: when the immutable release runtime exists, converge it so the peer verifier
+  # and the execution lease run from a sealed tree instead of the mutable mirror, whose
+  # dirty/ahead state can then no longer block this deploy. Until the DG-5 node flip
   # creates `current`, fall through to the historical ff-pull path unchanged.
   local release_state
   release_state="$(run_as "$NODE_OPS_ACCOUNT" "if [ -e $RELEASE_CURRENT ]; then printf present; elif [ -L $RELEASE_CURRENT ]; then printf inaccessible; elif [ -x $NODE_SERVICE_ROOT ]; then printf absent; else exit 13; fi")" \
     || die "SYNC-BLOCK: release runtime probe failed (ops sudo/permission denied)"
   case "$release_state" in
     "present")
-      log "converging release runtime $RELEASE_CURRENT (snapshot install + flip)"
-      # Run the converger FROM the sealed release, never from the mirror whose
-      # dirt we just declined to be blocked by (DG-6).
-      run_as "$NODE_OPS_ACCOUNT" "bash $RELEASE_CURRENT/automation/converge-release-runtime.sh" \
-        || die "SYNC-BLOCK: release snapshot install/flip failed"
+      log "converging release runtime $RELEASE_CURRENT (signed release install + flip)"
+      # Through the SAME argument-free privileged helper the reconciler uses, never the
+      # by-value converger: that one defaults to whatever `origin/main` is right now, with
+      # no signature and no release floor. Measured 2026-08-21 — production was running
+      # 2c065bdf, a commit no release tag ever pointed at, installed by this very call
+      # during a `meeting` skill deploy while the floor still read v1.0.24. Approving one
+      # skill must not promote the whole code runtime onto an unsigned head.
+      #
+      # ops already holds NOPASSWD sudo for this helper, and it takes the same lock, so
+      # the only thing that changes is that production can no longer move to code the
+      # maintainer never signed. No signed release at origin/main HEAD => deploy stops
+      # here, and the fix is to cut the release tag the merge was supposed to cut.
+      run_as "$NODE_OPS_ACCOUNT" "sudo -n $NODE_LIBEXEC_DIR/autophagy-converge-origin-main" \
+        || die "SYNC-BLOCK: release convergence failed (no signed release at origin/main HEAD? run automation/release-tag.sh)"
       log "release runtime converged; verifier files are the sealed read-only release"
       scan_live_skill_abi
       return 0
@@ -662,8 +691,9 @@ GATE_HELPERS=(skill_gate.py skill_gate_refresh.py skill_gate_review.py
               skill_gate_specs.py skill_gate_approval.py skill_gate_request.py
               skill_gate_retire.py skill_gate_surface.py)
 GATE_INTEROP_HELPERS=(interop/approval_lease.py interop/approval_lifecycle.py
-                      interop/approval_surface.py interop/approval_directory.py
-                      interop/injection_adapter.py)
+                      interop/approval_reminder.py interop/approval_reminder_config.py
+                      interop/approval_types.py interop/approval_surface.py
+                      interop/approval_directory.py interop/injection_adapter.py)
 
 validate_gate_staging_imports() {
   if ! python3 - "$REPO_ROOT" "automation/skill_gate_publish.py" \

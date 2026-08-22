@@ -1,0 +1,8 @@
+version: 1
+tags:
+  patent-sensitive:
+    keywords:
+      - "비밀배양"
+      - "민감 특허"
+    patterns:
+      - "PAT-[0-9]{4}"

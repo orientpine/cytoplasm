@@ -42,6 +42,10 @@ python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py draft \
 BODY
 ```
 
+대화 근거 추적이 필요하면 `draft ... --with-evidence`를 사용한다. 초안 본문 말미의
+`## Sources`는 지식 파사드가 렌더하며, 초안 자체는 아래의 기존 ✅ 게이트를 그대로
+거친다.
+
 트윈 노트(결정/원칙/선호)는 twin 플래그를 함께 준다(스키마는 아래
 "의사결정 트윈" 절, kind별 본문 템플릿 권장 — 누락 헤딩은 `TEMPLATE-WARN`으로
 안내되며 차단하지 않는다):
@@ -197,68 +201,41 @@ cha가 DM에서 **지속적 판단을 선언**하면(예: “앞으로 …는 �
 초안의 **판단 근거일 뿐**, 메일·예산·일정·배포의 소유자 승인 게이트를 우회하는
 실행 권한이 아니다. 특정인을 위해 게이트를 건너뛰는 자동 실행은 없다.
 
-### 컨설트 — 충돌 해소 규칙 (에이전트 컨설트 프롬프트용)
+## 지식 파사드 컨설트 — "<owner-name>이라면?" (decide-as-cha)
 
-여러 twin 규칙이 같은 범위에서 겹칠 때 승자는 다음 규칙으로 정한다:
-
-> winner by (1) status active>superseded, (2) provenance stated>observed>inferred,
-> (3) authority strict>default>advisory, (4) updated desc; if `review_after`
-> passed → demote authority one level BEFORE ranking.
-
-이 순서는 `scripts/twin_consult.py` 구현과 정확히 일치한다(`_rank_key`:
-status → provenance → authority → updated 내림차순, 동률은 slug 오름차순;
-`review_after` 경과 시 `_demote`가 **랭킹 전에** strict→default→advisory로
-한 단계 강등하고 출력에 `expired: true`를 표시). 읽기 전용 CLI:
+수동 `twin_consult → recall` 순차 조회는 사용하지 않는다. 질의 토큰과 위키의 실제
+태그 어휘가 정확히 겹치는 태그만 결정론적으로 선택한 뒤, `purpose="judgment"`인
+읽기 전용 지식 파사드를 **한 번만** 호출한다.
 
 ```bash
-python3 ~/.hermes/skills/wiki/scripts/twin_consult.py \
-  --tags <a,b> [--kinds decision,principle] --json
+python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py consult \
+  "budget 범위에서 cha라면 어떻게 판단할까?"
 ```
 
-출력 `verdict`가 `conflict`면 상위 두 규칙을 cha에게 보여주고 판단을 묻는다.
-`expired: true` 규칙은 강등된 effective authority로만 인용한다 — 만료된
-판단으로 자율 행동하지 않는다 (SI-2).
+출처 문자열은 전부 파사드 `render_citations(pack, "consult")` 결과이며 다음 라벨만
+팩 메타데이터로 붙인다.
 
-## 컨설트 라우팅 — "<owner-name>이라면?" (decide-as-cha)
+- `[위키 규칙]`: `store=wiki`, 비만료, authority가 `strict/default`인 규칙.
+- `[RAG 선례]`: 그 밖의 Obsidian/RAG 선례.
+- `[불확실·충돌]`: `expired`, `advisory`, authority 부재 또는 팩 계층 `conflict`.
 
-cha가 "<owner-name>이라면?", "내 스타일로 정해줘", "네가 cha처럼 판단해봐"처럼 **cha의
-판단을 시뮬레이션해 달라고 요청**하면 아래 7단계를 따른다. 1–6단계는 전부
-**읽기 전용**이며, 이 컨설트 흐름 자체는 어떤 외부효과도 직접 실행하지 않는다.
+`--json`은 원문 없이 `evidence_count`와 `layers`만 표시한다. 근거가 없으면
+"근거 없음", 계층 조회 불가면 "근거 수집 불가"를 표시하며, 재시도·임계값 하향·
+직접 `twin_consult`/recall 우회를 하지 않는다. `none/conflict`, 만료·advisory만 존재,
+민감 요청 또는 외부효과가 포함되면 cha에게 묻는다. 실제 결정은 통상의 decision-record
+초안 → ✅ 게이트로만 축적한다.
 
-1. **분류** — 요청을 도메인 태그(budget/mail/calendar/deploy/…)로 분류하고,
-   민감도(patent-sensitive 등)와 **외부효과 포함 여부**(메일 발송·일정 등록·
-   지출·배포·위키 저장 같은 mutation)를 판정한다.
-2. **위키 권위 규칙 조회** (읽기 전용 CLI):
-   ```bash
-   python3 ~/.hermes/skills/wiki/scripts/twin_consult.py \
-     --tags <domain-tags> [--kinds decision,principle,preference] --json
-   ```
-3. **RAG 선례 조회** — recall 스킬로 과거 유사 결정·대화 선례를 찾는다. recall이
-   patent-sensitive 자료를 이미 하드 제외하므로(DT-A6) 추가 필터는 불필요하다.
-4. **3계층 라벨 답변** — 반드시 세 계층을 구분 라벨로 답한다:
-   - `[위키 규칙]` — twin 규칙 인용 (slug/kind/effective authority/`expired` 명시)
-   - `[RAG 선례]` — 선례 요약과 출처
-   - `[불확실·충돌]` — verdict `conflict`, 규칙-선례 불일치, 커버리지 공백,
-     `expired` 규칙 의존 등 불확실 요소
-5. **규칙 우선 적용** — 활성(`active`)·비만료 `strict`/`default` 규칙이 적용되면
-   그 규칙을 기본 판단으로 삼는다. 겹칠 때의 승자는 위 "컨설트 — 충돌 해소
-   규칙"의 랭킹 그대로다.
-6. **fail-closed — cha에게 묻는다.** 다음 중 하나라도 해당하면 자율 판단하지
-   않는다: verdict가 `none`(적용 규칙 없음) 또는 `conflict`(상위 두 규칙 충돌) /
-   적용 가능한 규칙이 전부 `expired: true`거나 `advisory`뿐 / 요청이
-   민감(특허 등) / **외부효과 포함**.
-7. **결정 기록 루프(DT-D3)** — 실제 결정이 내려지면 decision-record 초안을 만들어
-   통상의 초안 → ✅ 게이트로 축적할 것을 제안한다(DT-D3 흐름 참조).
+**SI-1 (판단 ≠ 권한)**: `authority: strict`라도 메일·캘린더·예산·배포·위키 저장의
+소유자 승인 게이트를 우회하지 않는다. **SI-2**: 만료 규칙만으로 자율 행동하지 않는다.
 
-안전 불변식 재확인:
+## 지식 근거 규칙
 
-- **SI-1 (판단 ≠ 권한)**: twin 규칙은 판단 근거일 뿐 실행 권한이 아니다.
-  `authority: strict` 규칙이 실행을 지지하더라도 메일·캘린더·예산·배포·위키
-  저장의 소유자 승인 게이트는 **그대로 적용**된다 — 이 컨설트 흐름은 어떤
-  외부효과 게이트도 우회하지 않는다(절대 규칙 1과 동일).
-- **SI-2 (만료 ⇒ 자동 준수 금지)**: `expired: true` 규칙(= `review_after` 경과,
-  effective authority 한 단계 강등)은 인용만 하고 그 규칙만으로 자율 행동하지
-  않는다 — cha에게 재확인을 요청한다.
+wiki의 자기 저장소 `query`/backlinks/cleanup과 컨설트 태그 어휘 읽기만 R3 예외다.
+새 컨설트의 근거 수집·랭킹·출처는 반드시
+[`지식 계층 규약`](../../docs/guide/지식-계층-규약.md)의 파사드를 경유한다. 팩 밖
+`[En]`은 제거하고 `draft --with-evidence`의 `## Sources`와 0600 게이트 사이드카에
+추적성을 남긴다. 위키 쓰기는 여전히 초안 → 확인 메시지 → 소유자 ✅ → `wiki_gate`
+한 경로뿐이다.
 
 ## 스키마 위반 시
 
@@ -281,5 +258,6 @@ fail-closed confirm, 스키마 거부, (어댑터 가용 시) 서명 주입 확�
 twin bad-enum `SCHEMA-REJECTED`, 만료 `review_after` 픽스처의
 `REVIEW-EXPIRED`, query/backlinks/cleanup, 그리고 twin_consult **읽기 전용
 증명**(conflict/expired-강등/none verdict 검증 + 컨설트 전후 볼트 전 파일
-sha256·디렉터리 목록 불변 비교)을 검증하고 `SCENARIO-PASS`를 출력한다.
-네트워크 호출·실시크릿 없음.
+sha256·디렉터리 목록 불변 비교), `KNOWLEDGE_FAKE_PACK` 기반 단일 파사드 컨설트와
+`## Sources` 초안·0600 사이드카를 검증하고 `SCENARIO-PASS`를 출력한다. 네트워크
+호출·실시크릿 없음.

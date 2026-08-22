@@ -32,6 +32,8 @@ PUBLISH_ACTION: Final = "skill.publish"
 APPROVE_EMOJI: Final = "\u2705"  # ✅ WHITE HEAVY CHECK MARK
 CANCEL_EMOJI: Final = "\u26d4"  # ⛔ NO ENTRY
 _PERSONAL_HEAD: Final = re.compile(r"[0-9a-f]{40,64}\Z")
+#: First line of deploy requests posted before #199 — still live, still must resolve.
+_LEGACY_DEPLOY_HEADER: Final = "[skill-deploy] 승인 요청\n"
 _APPROVAL_LINE: Final = (
     f"- 승인 방법: 이 메시지에 cha가 {APPROVE_EMOJI} 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
 )
@@ -157,10 +159,15 @@ class DeploySpec:
             return None
         return StoredBinding(action_hash, message_id, nonce)
 
+    def header(self) -> str:
+        # 첫 줄에 스킬명을 넣는다 — Hermes 가 이 메시지의 **앞 80자**를 스레드 제목으로
+        # 쓰는데(`_derive_auto_thread_name`), 예전 첫 줄은 `[skill-deploy] 승인 요청` 이라
+        # 그 창이 sha256 한복판에서 끝나 16개 요청의 제목이 전부 같아 보였다.
+        return f"[skill-deploy] {self.skill} 배포 승인 요청\n"
+
     def render(self) -> str:
         peer_status = f"{self.peer_status}\n" if self.peer_status else ""
-        return (
-            "[skill-deploy] 승인 요청\n"
+        return self.header() + (
             f"- skill: `{self.skill}`\n"
             f"- sha256: `{self.digest}`\n"
             f"- deploy_nonce: `{self.deploy_nonce}`\n"
@@ -171,10 +178,14 @@ class DeploySpec:
         ) + self.provenance.lines
 
     def new_record(self, message_id: str, binding: ApprovalBinding) -> dict[str, str]:
+        # What a later run must REPLAY to recognise this message as ours: the personal
+        # HEAD (already the binding) or, for a release, the rendered provenance suffix —
+        # the next release renders a different tag/sequence, and re-rendering with THAT
+        # would never equal the message the owner is looking at.
         provenance_fields = (
             {"personal_head_sha": self.provenance.personal_head_sha}
             if self.provenance.personal_head_sha
-            else {}
+            else {"provenance_lines": self.provenance.lines} if self.provenance.lines else {}
         )
         return {
             "deploy_nonce": self.deploy_nonce,
@@ -193,12 +204,21 @@ class DeploySpec:
     def bound(self, content: str, record: Mapping[str, str]) -> bool:
         if record.get("personal_head_sha", "") != self.provenance.personal_head_sha:
             return False
+        # Replay what THIS record posted, not what this run would post: the record's
+        # digest + nonce, its own provenance suffix (a release that moved on renders a
+        # different one), and either header form — requests posted before #199 open with
+        # the legacy first line, and the regex already admits both; holding them to the
+        # new header made every pre-#199 request impossible to supersede OR consume
+        # (2026-08-21: 13 live requests, 0 of them resolvable).
+        lines = record.get("provenance_lines", self.provenance.lines)
         expected = replace(
             self,
             digest=record.get("hash", ""),
             deploy_nonce=record.get("deploy_nonce", ""),
+            provenance=replace(self.provenance, lines=lines),
         ).render()
-        if content != expected:
+        legacy = _LEGACY_DEPLOY_HEADER + expected.removeprefix(self.header())
+        if content not in (expected, legacy):
             return False
         matched = self.binding.match(content)
         if matched is None:

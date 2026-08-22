@@ -222,6 +222,33 @@ def _resume_or_block(failed: FailedRelease, runtime: ReleaseRuntime, effects: Re
     return FAILED_RELEASE_RC
 
 
+def _stranded(failed: FailedRelease, active: str) -> bool:
+    """True when the live pointer is neither generation this fingerprint knows about.
+
+    Events have overtaken the rollback — a human landing, an out-of-band converge — so
+    `_rollback` can neither undo `failed_sha` nor return to `prior_sha`. Left alone it
+    rewrites ROLLBACK_PENDING every tick and refuses every later sha forever (measured
+    2026-08-16: three days of frozen convergence behind a fingerprint naming two shas
+    production had long since moved past).
+    """
+    return active not in (failed.failed_sha, failed.prior_sha)
+
+
+def _settle_stranded(
+    failed: FailedRelease,
+    transition: ReleaseTransition,
+    runtime: ReleaseRuntime,
+) -> FailedRelease | None:
+    """Retire a stranded fingerprint, keeping only its duty to suppress a known-bad sha."""
+    if failed.failed_sha != transition.target_sha:
+        runtime.failed_state.unlink(missing_ok=True)
+        return None
+    settled = replace(failed, phase=FailedReleasePhase.FAILED)
+    if settled != failed:
+        _save_failed_release(runtime.failed_state, settled)
+    return settled
+
+
 def apply_release_update(
     transition: ReleaseTransition,
     runtime: ReleaseRuntime,
@@ -229,6 +256,8 @@ def apply_release_update(
 ) -> int:
     """Converge once, validate the new runtime, or durably roll it back."""
     prior_failed = load_failed_release(runtime.failed_state)
+    if prior_failed is not None and _stranded(prior_failed, _current_sha(runtime.current)):
+        prior_failed = _settle_stranded(prior_failed, transition, runtime)
     if prior_failed is not None and prior_failed.phase is FailedReleasePhase.ROLLBACK_PENDING:
         return _rollback(prior_failed, runtime, effects)
     if prior_failed is not None and prior_failed.failed_sha == transition.target_sha:

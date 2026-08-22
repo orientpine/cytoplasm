@@ -50,6 +50,8 @@ class TodoWatchError(RuntimeError):
 
 
 class ReactionTransport(Protocol):
+    def post_message(self, channel_id: str, content: str) -> str: ...
+
     def get_message(self, channel_id: str, message_id: str) -> str | None: ...
 
     def get_reaction_users(
@@ -150,6 +152,7 @@ def run_once(
     lease: ApprovalLease,
     now: datetime,
     record_approval: RecordApproval = append_manual_approval,
+    reminder_config: object | None = None,
 ) -> None:
     moment = now.astimezone(UTC)
     try:
@@ -160,15 +163,31 @@ def run_once(
                 continue
             request = _request(record)
             runtime = _runtime(store, transport, directory, owner_id, lease, record, moment)
+            gate = TodoApprovalGate(_intent(record), runtime)
             decision = TodoOwnerDecision(
                 record,
-                TodoApprovalGate(_intent(record), runtime),
+                gate,
                 store,
                 approval_log,
                 owner_id,
                 moment,
                 record_approval,
             )
+            if reminder_config is not None:
+                reminder = _repo_module("approval_reminder")
+                surface = surface_module()
+                context = reminder.ReminderContext(
+                    config=reminder_config,
+                    journal=_repo_module("approval_lease").ReminderJournal(
+                        store.root / "reminder-journal"
+                    ),
+                    request_type=surface.ApprovalKind(record.kind),
+                    deliver=lambda channel_id, content: transport.post_message(
+                        channel_id, content
+                    ),
+                    clock=lambda: moment,
+                )
+                lifecycle().remind_owner_approval(request, decision, lease, context)
             lifecycle().resolve_owner_decision(request, decision, lease)
     except (OSError, RuntimeError, ValueError) as error:
         raise TodoWatchError("todo approval watcher failed closed") from error
@@ -255,6 +274,9 @@ def main() -> int:
         directory_type = _repo_module("approval_directory").DiscordChannelDirectory
         directory = directory_type(token, owner_id, transport.api, root / "approval-directory.json")
         lease = _repo_module("approval_lease").FileKeyLease(root / "approval-leases")
+        config = _repo_module(
+            "approval_reminder_config"
+        ).load_approval_reminder_config()
         run_once(
             store=TodoApprovalStore(root),
             owner_id=owner_id,
@@ -263,6 +285,7 @@ def main() -> int:
             approval_log=todo.approval_log(),
             lease=lease,
             now=datetime.now(UTC),
+            reminder_config=config,
         )
     except Exception as error:  # noqa: BLE001 - final no-agent cron boundary
         print(f"todo-confirm-watch error: {type(error).__name__}", file=sys.stderr)

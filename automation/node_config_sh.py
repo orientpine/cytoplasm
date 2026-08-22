@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -15,7 +16,8 @@ from automation.node_config import load_node_config, node_config_values
 
 def print_env() -> None:
     """Print shell-sourceable assignments for every resolved field."""
-    config = load_node_config()
+    configured = os.environ.get("HEALTHCHECK_NODE_CONFIG_PATH")
+    config = load_node_config(Path(configured) if configured else None)
     for name, value in node_config_values(config).items():
         print(f"NODE_{name.upper()}={shlex.quote(value)}")
 

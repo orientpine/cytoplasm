@@ -17,7 +17,7 @@ import subprocess
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Callable, Final
 
 GLM_MODEL: Final = "glm-main"
 CODEX_MODEL: Final = "gpt-5.4"
@@ -67,12 +67,36 @@ def load_prompt_template(path: Path) -> str:
     raise ValueError(f"prompt file missing {_PROMPT_MARKER} line: {path}")
 
 
-def build_prompt(template: str, *, meeting_text: str, my_names: str) -> str:
-    """Substitute the two placeholders; refuse if either is missing."""
+def build_prompt(
+    template: str, *, meeting_text: str, my_names: str, evidence: str = ""
+) -> str:
+    """Substitute source material and append the optional bounded evidence block."""
     if "{{MEETING_TEXT}}" not in template or "{{MY_NAMES}}" not in template:
         raise ValueError("prompt template missing required placeholders")
-    return template.replace("{{MY_NAMES}}", my_names).replace(
+    prompt = template.replace("{{MY_NAMES}}", my_names).replace(
         "{{MEETING_TEXT}}", meeting_text
+    )
+    if not evidence:
+        return prompt
+    return (
+        f"{prompt}\n\n{evidence}\n\n"
+        "Use only MATERIAL/EVIDENCE, cite [En], do not invent."
+    )
+
+
+def map_extraction(extraction: Extraction, clean: Callable[[str], str]) -> Extraction:
+    """Apply one citation-integrity transform to every generated text field."""
+    def item(value: ActionItem) -> ActionItem:
+        return ActionItem(
+            clean(value.title), value.deadline, clean(value.basis),
+            clean(value.owner) if value.owner else None,
+        )
+
+    return Extraction(
+        tuple(clean(value) for value in extraction.decisions),
+        tuple(item(value) for value in extraction.todos),
+        tuple(item(value) for value in extraction.milestones),
+        tuple(item(value) for value in extraction.others),
     )
 
 
@@ -234,10 +258,12 @@ def extract(
     base_url: str,
     api_key: str,
     recorded_response: str | None = None,
+    evidence: str = "",
 ) -> tuple[Extraction, str]:
     """Route by sensitivity, parse, and return (extraction, provider_used)."""
     prompt = build_prompt(
-        load_prompt_template(prompt_path), meeting_text=meeting_text, my_names=my_names
+        load_prompt_template(prompt_path), meeting_text=meeting_text, my_names=my_names,
+        evidence=evidence,
     )
     if recorded_response is not None:
         return parse_extraction(recorded_response), "recorded"

@@ -44,6 +44,9 @@ class VerifyConfig(Protocol):
     @property
     def publisher_principal(self) -> str: ...
 
+    @property
+    def publisher(self) -> str: ...
+
 
 class VerifyState(Protocol):
     """Read-only per-skill state required for replay and revocation checks."""
@@ -158,6 +161,13 @@ def _verify_manifest_binding(message: str, manifest: ManagedManifest) -> None:
         raise ManagedVerifyError("MANIFEST-BINDING", "tag manifest_sha256 does not bind the tagged manifest")
 
 
+def _verify_publisher(manifest: ManagedManifest, config: VerifyConfig) -> None:
+    if manifest.publisher != config.publisher:
+        raise ManagedVerifyError(
+            "WRONG-PUBLISHER", "manifest publisher differs from managed-sync config"
+        )
+
+
 def _verify_metadata(
     manifest: ManagedManifest,
     tag_skill: str,
@@ -238,6 +248,7 @@ def verify_release(
     message, text = _manifest_from_tag(git, mirror, tag, tag_skill)
     manifest = _parse_manifest(text)
     _verify_manifest_binding(message, manifest)
+    _verify_publisher(manifest, config)
     _verify_metadata(manifest, tag_skill, tag_sequence, state, allow_rollback)
     tree_path = _extract_tree(git, mirror, tag, manifest.skill)
     try:

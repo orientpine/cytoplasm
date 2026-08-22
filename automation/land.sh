@@ -37,6 +37,8 @@ SKILL_LIVE="$NODE_SKILL_STORE/live"
 # dirt we just agreed to tolerate.
 # shellcheck source=automation/checkout_mirror_probe.sh
 source "$REPO_ROOT/automation/checkout_mirror_probe.sh"
+# shellcheck source=automation/release_helper_probe.sh
+source "$REPO_ROOT/automation/release_helper_probe.sh"
 SSH_HOST="${DEPLOY_SSH_HOST-$NODE_DEPLOY_SSH_HOST}"
 [[ "$(hostname -s 2>/dev/null)" == "$SSH_HOST" ]] && SSH_HOST=""
 
@@ -81,6 +83,12 @@ land_abi_probe() { # land_abi_probe <runtime_root>
   land_log "LAND-ABI-WARN: a live skill can no longer call the shared library (the deploy still landed)"
   [[ "${LAND_ABI_STRICT:-}" == "1" ]] && land_block "LAND_ABI_STRICT=1 and a live skill has an ABI break"
   printf 'warn'
+}
+
+land_helper_drift_probe() {
+  local script
+  script="$(release_helper_probe_script)"
+  run_as "$NODE_OPS_ACCOUNT" "$script"
 }
 
 land_release() { # land_release <expected_sha> <verdict> <guidance>
@@ -141,38 +149,15 @@ land_fallback() { # land_fallback <expected_sha> <verdict> <guidance>
 # middle commit stopped matching HEAD within minutes — the node then stalls with
 # UPDATE-TRUST-BLOCK on every tick and reports success (rc 0), so nobody learns.
 # Landing is the one place that already knows the sha it just published.
-readonly UPDATE_TRUST_SIGNING_KEY="${UPDATE_TRUST_SIGNING_KEY:-$HOME/.ssh/autophagy_update_trust.pub}"
-
-next_release_tag() { # next_release_tag <repo_root>
-  local latest major minor patch
-  latest="$(git -C "$1" ls-remote --tags --refs origin 'refs/tags/v*' 2>/dev/null \
-    | sed 's#.*refs/tags/##' | sort -V | tail -n 1)"
-  [[ -n "$latest" ]] || { printf 'v1.0.0\n'; return 0; }
-  IFS=. read -r major minor patch <<<"${latest#v}"
-  [[ "$major$minor$patch" =~ ^[0-9]+$ ]] || return 1
-  printf 'v%s.%s.%s\n' "$major" "$minor" "$((patch + 1))"
-}
-
-released_tag_at() { # released_tag_at <repo_root> <sha> — the tag already peeling to sha
-  git -C "$1" ls-remote --tags origin 2>/dev/null \
-    | awk -v sha="$2" '$1 == sha && $2 ~ /\^\{\}$/ { sub("refs/tags/", "", $2); sub(/\^\{\}$/, "", $2); print $2 }' \
-    | head -n 1
-}
-
-ensure_signed_tag() { # ensure_signed_tag <repo_root> <sha>
-  local existing tag
-  existing="$(released_tag_at "$1" "$2")"
-  if [[ -n "$existing" ]]; then land_log "already released as $existing"; return 0; fi
-  [[ -f "$UPDATE_TRUST_SIGNING_KEY" ]] \
-    || { land_log "no update-trust signing key at $UPDATE_TRUST_SIGNING_KEY"; return 1; }
-  tag="$(next_release_tag "$1")" || { land_log "could not read the released tag series"; return 1; }
-  git -C "$1" -c gpg.format=ssh -c "user.signingkey=$UPDATE_TRUST_SIGNING_KEY" \
-      tag -s "$tag" -m "release: $tag" "$2" >/dev/null 2>&1 \
-    || { land_log "signing tag $tag failed"; return 1; }
-  git -C "$1" push origin "$tag" >/dev/null 2>&1 \
-    || { land_log "pushing tag $tag failed"; return 1; }
-  land_log "signed release tag $tag -> $2"
-}
+#
+# The implementation moved to release_tag_lib.sh because landing is NOT the only
+# place that publishes to main: branch work arrives by PR merge, which never runs
+# this script. Six PRs landed that way on 2026-08-20, none carried a tag, and the
+# reconciler failed 132 times in a row while production sat two commits behind.
+# automation/release-tag.sh is the same code for that path.
+# shellcheck source=automation/release_tag_lib.sh
+source "$REPO_ROOT/automation/release_tag_lib.sh"
+release_tag_log() { land_log "$@"; }  # keep landing's own prefix on these lines
 
 main() {
   git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -192,6 +177,7 @@ main() {
   [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]] \
     || land_block "dev checkout has uncommitted tracked changes — commit or stash first"
 
+  python3 -m automation.node_config_state || exit $?
   git -C "$REPO_ROOT" fetch --quiet origin 2>/dev/null || true
   if [[ -n "$(git -C "$REPO_ROOT" rev-list HEAD..origin/main 2>/dev/null)" ]]; then
     land_block "dev checkout is behind origin/main — integrate first (never auto-rebased)"
@@ -222,6 +208,8 @@ main() {
     fallback) land_fallback "$dev_head" "$verdict" "$guidance" ;;
     *) land_stranded "$RELEASE_CURRENT is corrupt ($verdict) — neither a live release nor a clean rollback; repair the node first" ;;
   esac
+  land_helper_drift_probe \
+    || land_mirror_warn "privileged release helpers drift from the landed release; follow the HELPER-DRIFT guidance above"
 }
 
 main "$@"

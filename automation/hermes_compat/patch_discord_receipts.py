@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
-"""Idempotent, exact-preimage patch for Hermes Discord DM receipts."""
+"""Idempotent, exact-preimage patch for Hermes Discord DM receipts.
+
+Preimage rebase history (exact-preimage patches are version-bound by design)
+---------------------------------------------------------------------------
+* v0.18.2 (head ``46e87b14``) — original preimages.
+* v0.20.3 (head ``a3995f8a``) — two seams moved upstream:
+  - MOD2 **relocated**. The ingress authorization block was extracted into
+    ``_discord_message_admission()``, which is *synchronous* — the receipt
+    awaits, so it can no longer live there. It now rides the first async point
+    after admission, ``_dispatch_discord_message()``, which still runs exactly
+    once per physical live DM. ``is_dm`` is recomputed locally with the same
+    expression upstream uses, and ``adapter_self`` becomes ``self``.
+    Known gap: the recovery path ``_dispatch_recovered_message()`` (claim=False)
+    gets no 👀/ledger row. Resolution still works there because it reads the
+    metadata MOD1 writes; only the received-side breadcrumb is missing.
+  - MOD3 gained upstream's ``_record_discord_processing_complete`` durable-state
+    call, which the postimage now **preserves verbatim** — only the per-turn
+    reaction swap is replaced by the per-physical-DM resolve boundary.
+"""
 
 from __future__ import annotations
 
@@ -72,57 +90,83 @@ _MOD1_POST: Final = (
 )
 
 _MOD2_PRE: Final = (
-    '                    _role_authorized = bool(getattr(self, "_allowed_role_ids", set()))\n'
-    "                \n"
-    "                # Multi-agent filtering: if the message mentions specific bots\n"
+    "        admitted, role_authorized = self._discord_message_admission(\n"
+    "            message, claim=True,\n"
+    "        )\n"
+    "        if not admitted:\n"
+    "            return False\n"
 )
 _MOD2_POST: Final = (
-    '                    _role_authorized = bool(getattr(self, "_allowed_role_ids", set()))\n'
-    "                    # autophagy hermes_compat (_hermes_receipts_done: owner DM receipt)\n"
-    "                    if _is_dm:\n"
-    "                        try:\n"
-    "                            if adapter_self._reactions_enabled():\n"
-    "                                await adapter_self._add_reaction(message, \"👀\")\n"
-    "                        except Exception:\n"
-    "                            pass\n"
-    "                        try:\n"
-    "                            import sys as _receipt_sys\n"
-    "                            _receipt_compat_dir = os.path.expanduser(\"~/.hermes/hermes-compat\")\n"
-    "                            if _receipt_compat_dir not in _receipt_sys.path:\n"
-    "                                _receipt_sys.path.insert(0, _receipt_compat_dir)\n"
-    "                            import hermes_compat_boot\n"
-    "                            from automation.hermes_compat.receipt_ledger import ReceiptLedger as _ReceiptLedger\n"
-    "                            from automation.hermes_compat.receipt_ledger import default_ledger_path as _default_ledger_path\n"
-    "                            _receipt_ledger = _ReceiptLedger(_default_ledger_path())\n"
-    "                            _receipt_ledger.record_received(\n"
-    "                                str(getattr(message.channel, \"id\", \"\")), str(getattr(message, \"id\", \"\"))\n"
-    "                            )\n"
-    "                        except Exception:\n"
-    "                            pass\n"
-    "                \n"
-    "                # Multi-agent filtering: if the message mentions specific bots\n"
+    "        admitted, role_authorized = self._discord_message_admission(\n"
+    "            message, claim=True,\n"
+    "        )\n"
+    "        if not admitted:\n"
+    "            return False\n"
+    "        # autophagy hermes_compat (_hermes_receipts_done: owner DM receipt).\n"
+    "        # v0.20.3 extracted the admission gate into the *synchronous*\n"
+    "        # _discord_message_admission(), so the receipt cannot live there any\n"
+    "        # more (it awaits).  This is the first async point after a live\n"
+    "        # message is admitted, so it still runs exactly once per physical DM.\n"
+    "        try:\n"
+    "            _is_dm = isinstance(message.channel, discord.DMChannel) or (\n"
+    '                getattr(message, "guild", None) is None\n'
+    "            )\n"
+    "        except Exception:\n"
+    "            _is_dm = False\n"
+    "        if _is_dm:\n"
+    "            try:\n"
+    "                if self._reactions_enabled():\n"
+    '                    await self._add_reaction(message, "\N{EYES}")\n'
+    "            except Exception:\n"
+    "                pass\n"
+    "            try:\n"
+    "                import sys as _receipt_sys\n"
+    '                _receipt_compat_dir = os.path.expanduser("~/.hermes/hermes-compat")\n'
+    "                if _receipt_compat_dir not in _receipt_sys.path:\n"
+    "                    _receipt_sys.path.insert(0, _receipt_compat_dir)\n"
+    "                import hermes_compat_boot\n"
+    "                from automation.hermes_compat.receipt_ledger import ReceiptLedger as _ReceiptLedger\n"
+    "                from automation.hermes_compat.receipt_ledger import default_ledger_path as _default_ledger_path\n"
+    "                _receipt_ledger = _ReceiptLedger(_default_ledger_path())\n"
+    "                _receipt_ledger.record_received(\n"
+    '                    str(getattr(message.channel, "id", "")), str(getattr(message, "id", ""))\n'
+    "                )\n"
+    "            except Exception:\n"
+    "                pass\n"
 )
 
 _MOD3_PRE: Final = (
     "    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:\n"
-    '        """Swap the in-progress reaction for a final success/failure reaction."""\n'
+    '        """Swap the in-progress reaction for final reaction and durable state."""\n'
+    "        await asyncio.to_thread(\n"
+    "            self._record_discord_processing_complete,\n"
+    "            event,\n"
+    "            outcome,\n"
+    "        )\n"
     "        if not self._reactions_enabled():\n"
     "            return\n"
     "        message = event.raw_message\n"
-    "        if hasattr(message, \"add_reaction\"):\n"
-    "            await self._remove_reaction(message, \"👀\")\n"
+    '        if hasattr(message, "add_reaction"):\n'
+    '            await self._remove_reaction(message, "\N{EYES}")\n'
     "            if outcome == ProcessingOutcome.SUCCESS:\n"
-    "                await self._add_reaction(message, \"✅\")\n"
+    '                await self._add_reaction(message, "\N{WHITE HEAVY CHECK MARK}")\n'
     "            elif outcome == ProcessingOutcome.FAILURE:\n"
-    "                await self._add_reaction(message, \"❌\")\n"
+    '                await self._add_reaction(message, "\N{CROSS MARK}")\n'
 )
 _MOD3_POST: Final = (
     "    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:\n"
-    '        """Finalize every physical owner DM of the completing turn (autophagy: per-DM \u2705/\u274c + ledger)."""\n'
+    '        """Finalize every physical owner DM of the completing turn (autophagy: per-DM \N{WHITE HEAVY CHECK MARK}/\N{CROSS MARK} + ledger)."""\n'
+    "        # Upstream durable-state recording is preserved verbatim; only the\n"
+    "        # per-turn reaction swap is replaced by the per-physical-DM boundary.\n"
+    "        await asyncio.to_thread(\n"
+    "            self._record_discord_processing_complete,\n"
+    "            event,\n"
+    "            outcome,\n"
+    "        )\n"
     "        # autophagy hermes_compat (_hermes_receipts_done): shared idempotent resolve boundary.\n"
     "        try:\n"
     "            import sys as _receipt_sys\n"
-    "            _receipt_compat_dir = os.path.expanduser(\"~/.hermes/hermes-compat\")\n"
+    '            _receipt_compat_dir = os.path.expanduser("~/.hermes/hermes-compat")\n'
     "            if _receipt_compat_dir not in _receipt_sys.path:\n"
     "                _receipt_sys.path.insert(0, _receipt_compat_dir)\n"
     "            import hermes_compat_boot\n"

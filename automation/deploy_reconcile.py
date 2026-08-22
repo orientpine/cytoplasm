@@ -60,6 +60,7 @@ class ReconcileState:
     notified_target: str | None = None
     pending_notice: str | None = None
     incident_open: bool = False
+    skip_reason: str | None = None
 
 
 def _drift_notice(*, origin_sha: str, current_sha: str, failures: int, elapsed: float) -> str:
@@ -75,6 +76,47 @@ def _drift_notice(*, origin_sha: str, current_sha: str, failures: int, elapsed: 
 
 def _recovery_notice(*, current_sha: str) -> str:
     return f"prod가 origin/main에 다시 도달했습니다: {current_sha}"
+
+
+def reconcile_skip(
+    state: ReconcileState,
+    *,
+    reason: str,
+    now: float,
+    deliver: Deliver,
+) -> ReconcileState:
+    """Count one structurally blocked tick and reuse the drift-notice lifecycle."""
+    if state.pending_notice is not None and deliver(state.pending_notice):
+        state = replace(state, pending_notice=None)
+
+    same_reason = state.skip_reason == reason
+    failures = state.consecutive_failures + 1 if same_reason else 1
+    drift_since = (
+        state.drift_since if same_reason and state.drift_since is not None else now
+    )
+    incident_key = f"skip:{reason}"
+    state = replace(
+        state,
+        consecutive_failures=failures,
+        drift_since=drift_since,
+        skip_reason=reason,
+    )
+    if failures < FAILURE_NOTICE_THRESHOLD or state.notified_target == incident_key:
+        return state
+
+    notice = _drift_notice(
+        origin_sha="unresolved",
+        current_sha=f"blocked: {reason}",
+        failures=failures,
+        elapsed=now - drift_since,
+    )
+    delivered = deliver(notice)
+    return replace(
+        state,
+        notified_target=incident_key,
+        incident_open=True,
+        pending_notice=None if delivered else notice,
+    )
 
 
 def reconcile_tick(
@@ -108,14 +150,43 @@ def reconcile_tick(
     rc = converge()
 
     if rc == FAILED_RELEASE_RC:
+        reason = "rollback-pending"
+        same_reason = state.skip_reason == reason
+        failures = state.consecutive_failures + 1 if same_reason else 1
+        rollback_since = (
+            state.drift_since if same_reason and state.drift_since is not None else now
+        )
+        incident_key = f"rollback:{origin_sha}"
+        state = replace(
+            state,
+            consecutive_failures=failures,
+            drift_since=rollback_since,
+            incident_open=True,
+            skip_reason=reason,
+        )
+        if failures < FAILURE_NOTICE_THRESHOLD or state.notified_target == incident_key:
+            return state
+        notice = _drift_notice(
+            origin_sha=origin_sha,
+            current_sha=current_sha,
+            failures=failures,
+            elapsed=now - rollback_since,
+        )
+        delivered = deliver(notice)
         return replace(
             state,
-            consecutive_failures=0,
-            drift_since=drift_since,
-            notified_target=origin_sha,
-            pending_notice=None,
-            incident_open=True,
+            notified_target=incident_key,
+            pending_notice=None if delivered else notice,
         )
+
+    if state.skip_reason is not None:
+        state = replace(
+            state,
+            consecutive_failures=0,
+            drift_since=None,
+            skip_reason=None,
+        )
+        drift_since = now
 
     if rc == 0 or rc == LOCK_CONTENTION_RC:
         failures = state.consecutive_failures

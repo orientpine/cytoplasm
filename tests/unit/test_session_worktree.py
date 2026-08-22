@@ -131,6 +131,21 @@ def test_start_refuses_a_name_already_in_use(repo: Path) -> None:
     assert "s1" in again.stderr
 
 
+def test_start_reports_flat_ref_namespace_conflict_with_rename_remedy(repo: Path) -> None:
+    # Given: a flat branch occupies the namespace needed for session/<name>.
+    _git(repo, "branch", "session")
+
+    # When: start tries to create a namespaced session branch.
+    result = _run(repo, "start", "s1")
+
+    # Then: it diagnoses Git's D/F conflict before branch creation and gives the remedy.
+    assert result.returncode != 0
+    assert "D/F conflict" in result.stderr
+    assert "refs/heads/session" in result.stderr
+    assert "git branch -m" in result.stderr
+    assert not (repo.parent / "wt" / "s1").exists()
+
+
 def test_finish_refuses_to_drop_work_that_never_landed(repo: Path) -> None:
     """오늘 65줄짜리 QA 증적이 이 검사 하나로 살아남았다."""
     assert _run(repo, "start", "s1").returncode == 0
@@ -160,6 +175,55 @@ def test_finish_removes_a_worktree_whose_work_all_landed(repo: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert not wt.exists()
     assert "session/s1" not in _git(repo, "branch", "--list", "session/s1")
+
+
+def _squash_onto_origin(repo: Path, name: str, path: str, body: str) -> None:
+    """origin/main 이 같은 내용을 **다른 커밋 하나**로 받는다 = squash 머지."""
+    other = repo.parent / name
+    _git(repo.parent, "clone", "--quiet", str(repo.parent / "origin"), str(other))
+    _git(other, "config", "user.email", "o@e.i")
+    _git(other, "config", "user.name", "o")
+    target = other / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _ = target.write_text(body, encoding="utf-8")
+    _git(other, "add", "-A")
+    _git(other, "commit", "--quiet", "-m", f"{name} (#1)")
+    _git(other, "push", "--quiet", "origin", "main")
+
+
+def test_finish_accepts_a_branch_whose_content_landed_by_squash(repo: Path) -> None:
+    """squash 머지는 **내용만** 착지시킨다 — 커밋 identity 로만 보면 전부 미착지다.
+
+    이 리포의 현재 머지 관례가 squash 라, identity 만 보는 가드는 **모든** 브랜치에서
+    울렸다(2026-08-19 실측: PR #172). 매번 울리는 가드는 사람이 무시하는 법을 배우게 하고,
+    그것이 바로 이 검사가 막으려던 2026-08-03 유실의 전조다."""
+    assert _run(repo, "start", "s1").returncode == 0
+    wt = repo.parent / "wt" / "s1"
+    _ = (wt / "evidence.txt").write_text("증적\n", encoding="utf-8")
+    _git(wt, "add", "-A")
+    _git(wt, "commit", "--quiet", "-m", "work")
+
+    _squash_onto_origin(repo, "squashed", "evidence.txt", "증적\n")
+
+    result = _run(repo, "finish", "s1")
+    assert result.returncode == 0, result.stderr
+    assert not wt.exists()
+    assert "session/s1" not in _git(repo, "branch", "--list", "session/s1")
+
+
+def test_finish_still_refuses_when_the_landed_content_differs(repo: Path) -> None:
+    """완화는 내용 대조에 한한다 — 손댐 경로가 하나라도 다르면 그대로 거부한다."""
+    assert _run(repo, "start", "s1").returncode == 0
+    wt = repo.parent / "wt" / "s1"
+    _ = (wt / "evidence.txt").write_text("증적 v2\n", encoding="utf-8")
+    _git(wt, "add", "-A")
+    _git(wt, "commit", "--quiet", "-m", "work")
+
+    _squash_onto_origin(repo, "partial", "evidence.txt", "증적 v1\n")
+
+    result = _run(repo, "finish", "s1")
+    assert result.returncode != 0
+    assert wt.exists(), "내용이 다른데 워크트리를 지웠다"
 
 
 def test_custom_branch_prefix_is_used_for_start_and_finish(repo: Path) -> None:

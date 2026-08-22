@@ -20,6 +20,7 @@ from automation.update_trust import (
     resolve_signed_update,
     resolve_update_target,
 )
+from automation import update_trust as update_trust_module
 from automation.update_trust import main as update_trust_main
 from automation.update_trust_state import (
     ReleaseFloorError,
@@ -230,6 +231,72 @@ def test_resolve_update_target_when_node_explicitly_opts_out_then_returns_mutabl
 
     # Then: only this explicit branch keeps the former mutable-main behavior.
     assert target == expected
+
+def test_resolve_signed_cli_reads_no_node_policy_and_blocks_an_unsigned_head(
+    update_repository: UpdateRepository,
+    floor: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The verb an automated ROOT install may run must take no policy input at all.
+
+    `resolve` above still honours `require_signed_updates`, which is exactly why the
+    privileged helper must not call it: the file that answer came from was named under
+    the ops account's own home, and ops holds NOPASSWD sudo for that helper. This verb
+    reads no configuration, so nothing an unprivileged account can write reaches the
+    authorisation decision.
+    """
+
+    def _refuse(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the signature-only verb must not read a node configuration")
+
+    monkeypatch.setattr(update_trust_module, "load_node_config", _refuse)
+
+    status = update_trust_main(
+        [
+            "resolve-signed",
+            "--mirror",
+            str(update_repository.mirror),
+            "--allowed-signers",
+            str(update_repository.allowed_signers),
+            "--floor-path",
+            str(floor),
+        ]
+    )
+
+    assert status == 1
+    assert "UPDATE-TRUST-BLOCK" in capsys.readouterr().err
+
+
+def test_resolve_signed_cli_returns_the_commit_of_a_trusted_release_tag(
+    update_repository: UpdateRepository,
+    floor: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: the public head is the peel target of a tag signed by the trusted principal.
+    expected = _run("git", "rev-parse", "HEAD", cwd=update_repository.publisher)
+    _sign_tag(update_repository, "v1.0.0", update_repository.old_key)
+    _ = _run(
+        "git", "push", "origin", "main", "refs/tags/v1.0.0", cwd=update_repository.publisher
+    )
+
+    # When: the signature-only verb resolves the target.
+    status = update_trust_main(
+        [
+            "resolve-signed",
+            "--mirror",
+            str(update_repository.mirror),
+            "--allowed-signers",
+            str(update_repository.allowed_signers),
+            "--floor-path",
+            str(floor),
+        ]
+    )
+
+    # Then: it prints that commit and advances the floor both verifiers share.
+    assert status == 0
+    assert capsys.readouterr().out.strip() == expected
+    assert load_release_floor(floor) == release_floor("v1.0.0", expected)
 
 
 def test_resolve_update_target_when_channel_is_set_then_uses_it_without_changing_origin(

@@ -122,6 +122,28 @@ REQUIRED_CHANNELS: Final = (
     ),
 )
 
+# The owner-DM approval surface is NOT in REQUIRED_CHANNELS and cannot be: a DM
+# channel has no id in the interop config, Discord creates it on first contact,
+# and looking one up (`POST /users/@me/channels`) is a write. The owner id is
+# not known at install time either. Rather than let a green report imply the
+# approval path was verified — it carries mail, calendar, coordination, todo and
+# repair confirmations — the gap is declared as a WARN, which cannot change the
+# exit code. Routing lives in automation/interop/approval_surface.py.
+OWNER_DM_SURFACE: Final = "owner-dm"
+
+
+def owner_dm_coverage() -> CheckResult:
+    """Declare the approval surface this read-only check cannot reach."""
+    return CheckResult(
+        f"surface[{OWNER_DM_SURFACE}]",
+        Status.WARN,
+        "UNVERIFIED-SURFACE: 소유자 DM 승인 표면은 이 검사가 확인하지 못한다 — "
+        "DM 채널은 config에 id가 없고 조회 자체가 쓰기 호출이라 읽기 전용 계약을 깨뜨린다. "
+        "위 채널 검사가 전부 PASS여도 메일·캘린더·조율·할일·수리 승인이 도달한다는 "
+        "뜻은 아니다. 설치 후 소유자가 봇과의 DM을 열어 첫 승인 카드가 도착하는지로 "
+        "확인한다.",
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class ApiResponse:
@@ -314,6 +336,7 @@ def run_checks(fetch: Fetch, channel_ids: Mapping[str, str]) -> tuple[CheckResul
         channel = fetch(f"/channels/{channel_id}")
         history = fetch(f"/channels/{channel_id}/messages?limit=1") if channel.status == 200 else None
         results.append(evaluate_channel(requirement, channel_id, channel, history))
+    results.append(owner_dm_coverage())
     return tuple(results)
 
 

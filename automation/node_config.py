@@ -89,8 +89,15 @@ def default_node_config() -> NodeConfig:
     return _load_complete(_seed_path())
 
 
+#: A caller that NAMES a path has already decided which file is authoritative, so a
+#: missing one is an error. Answering "read this file" with "here is the seed instead" is
+#: how the reconciler's two verification paths came to enforce different policies: the
+#: root helper named `~ops/.hermes/node.toml`, that file did not exist, and the seed
+#: answered in its place (2026-08-21). Only the unnamed lookup may fall back.
 def load_node_config(path: Path | None = None) -> NodeConfig:
     """Load an optional runtime override, rejecting malformed or unknown input."""
+    if path is not None and not path.exists():
+        raise NodeConfigError(f"node configuration is absent: {path}")
     config_path = _override_path(path)
     if not config_path.exists():
         return default_node_config()

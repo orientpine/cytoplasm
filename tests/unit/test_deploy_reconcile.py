@@ -85,12 +85,12 @@ def test_rc5_is_transient() -> None:
     assert state.consecutive_failures == 0
 
 
-def test_a_rolled_back_release_is_not_reported_again_by_the_drift_notifier() -> None:
+def test_a_rollback_that_never_finishes_notifies_once_at_threshold() -> None:
     converge, deliver = _Converge(FAILED_RELEASE_RC), _Deliver()
-    state = _run(origin=_B, current=_A, converge=converge, deliver=deliver, ticks=3)
-    assert converge.calls == 3
-    assert deliver.sent == []
-    assert state.notified_target == _B
+    state = _run(origin=_B, current=_A, converge=converge, deliver=deliver, ticks=6)
+    assert converge.calls == 6
+    assert len(deliver.sent) == 1
+    assert state.notified_target == f"rollback:{_B}"
     assert state.incident_open is True
 
 

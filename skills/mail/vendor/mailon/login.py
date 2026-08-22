@@ -118,6 +118,19 @@ def json_text_blob(node) -> str:
     return str(node)
 
 
+_LOGIN_PATH = "/integrated/login"
+
+
+def _on_login_page(url: str) -> bool:
+    """Return True while the browser is still sitting on the login form.
+
+    Matches on the *path*, never the host: the host itself contains "mail"
+    (mailon.kr), which is exactly what made the old ``wait_url("**/mail**")``
+    match instantly and report a rejected login as a success.
+    """
+    return _LOGIN_PATH in url
+
+
 def login(browser: AgentBrowser, cfg: Config) -> None:
     """Perform a fresh login. Raises LoginError on failure.
 
@@ -170,28 +183,36 @@ def login(browser: AgentBrowser, cfg: Config) -> None:
     log.info("submitting login form")
     browser.eval_js("typeof login === 'function' ? (login(), 'ok') : 'no-login-fn'")
 
-    # Wait for navigation away from login page (up to 25s)
-    try:
-        browser.wait_url("**/mail**", timeout_s=25)
-    except BrowserError:
-        # Check whether we're still on login page -> credential / OTP failure
+    # Wait for navigation away from the login page (up to 25s).
+    #
+    # This used to wait on the glob ``**/mail**`` and validate the URL only
+    # inside the ``except`` branch.  That glob matches the *host* — mailon.kr
+    # itself contains "mail" — so the wait returned immediately (32ms measured)
+    # and the except branch never ran.  A rejected login was therefore logged as
+    # "login succeeded", and the real failure surfaced much later as a
+    # BrowserError from the next page interaction, which exit code 2 folds into
+    # "auth_or_browser_error".  Poll the *path* instead and validate on every
+    # way out of the wait, so a rejected credential fails here as LoginError.
+    deadline = time.monotonic() + 25.0
+    url = browser.current_url()
+    while _on_login_page(url) and time.monotonic() < deadline:
+        browser.wait_ms(500)
         url = browser.current_url()
-        if "login" in url:
-            # Try to read any error banner
-            try:
-                body = browser.eval_json(
-                    "document.body.innerText.substring(0, 500)"
-                )
-            except Exception:
-                body = ""
-            raise LoginError(
-                f"login did not leave /integrated/login. url={url} "
-                f"snippet={str(body)[:200]!r}"
-            )
-        # Otherwise we navigated somewhere unexpected but at least off login
-        log.info("landed on %s (not /mail, but off login)", url)
 
-    log.info("login succeeded; url=%s", browser.current_url())
+    if _on_login_page(url):
+        # Still sitting on the login form -> credential / OTP rejection.
+        try:
+            body = browser.eval_json(
+                "document.body.innerText.substring(0, 500)"
+            )
+        except Exception:
+            body = ""
+        raise LoginError(
+            f"login did not leave {_LOGIN_PATH}. url={url} "
+            f"snippet={str(body)[:200]!r}"
+        )
+
+    log.info("login succeeded; url=%s", url)
 
 
 def _dismiss_popups(browser: AgentBrowser) -> None:

@@ -1,6 +1,6 @@
 # PR 검증 게이트 — 머지 전에 lint + 단위 테스트를 GitHub에서 돌린다.
 #
-# 이 워크플로는 GitHub-hosted 러너에서만 돌고 `contents: read` 밖의 권한이 없다.
+# 이 워크플로는 GitHub-hosted 러너에서만 돌고 코드·PR 메타데이터 읽기 권한만 갖는다.
 # 프로덕션(`<primary-node>`)에는 접근하지 않는다 — 배포는 여전히 노드 쪽 경로가 소유한다.
 name: CI
 
@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 # 같은 브랜치에 새 푸시가 오면 이전 실행을 취소한다(무료 플랜의 Actions 분 절약).
 concurrency:
@@ -38,3 +39,39 @@ jobs:
 
       - name: Unit tests
         run: python -m pytest tests/unit -q
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # 설치기 진입점은 제3자가 **아무것도 설치하기 전에** 처음 실행하는 명령이라,
+  # 모듈 스코프에서 import하는 것이 그대로 미문서화 전제가 된다. 실제로 한 번
+  # 깨졌다 — dcddaa21 이후 roster import가 모듈 스코프로 올라가 순수 dry-run이
+  # ModuleNotFoundError traceback으로 죽었다. 러너 이미지는 갓 설치한 노드보다
+  # 훨씬 많은 것을 갖고 있어 그 회귀를 가리므로, 빈 컨테이너에서 따로 돌린다.
+  # **여기서는 의존성을 설치하지 않는다** — 설치하는 순간 이 잡의 존재 이유가 사라진다.
+  clean-host-install:
+    runs-on: ubuntu-latest
+    container: python:3.12-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer dry-run on a bare interpreter
+        run: |
+          set -euo pipefail
+          key="$(mktemp -d)/update-trust.pub"
+          python3 - "$key" <<'PY'
+          import base64, sys
+          algorithm = b"ssh-ed25519"
+          blob = len(algorithm).to_bytes(4, "big") + algorithm
+          blob += (32).to_bytes(4, "big") + bytes(range(32))
+          material = base64.b64encode(blob).decode()
+          with open(sys.argv[1], "w", encoding="utf-8") as stream:
+              stream.write(f"ssh-ed25519 {material} ci-clean-host\n")
+          PY
+          python3 -m automation.install --update-trust-key "$key" --dry-run
+
+      - name: Third-party boundary tests on a bare interpreter
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet pytest
+          python3 -m pytest tests/unit/test_install_third_party_boundary.py -q

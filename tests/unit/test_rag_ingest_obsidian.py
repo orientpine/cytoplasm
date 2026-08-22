@@ -132,6 +132,44 @@ def test_scan_obsidian_two_scans_are_identical(tmp_path: Path) -> None:
     assert snapshot(first_documents) == snapshot(second_documents)
 
 
+def test_scan_obsidian_normalizes_only_explicit_frontmatter_and_callout_dates(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "000_PARA/frontmatter.md",
+        "---\ncreated: 2026-08-19T10:00:00Z\nmodified: 2026/08/20\n---\n본문",
+    )
+    _write(
+        tmp_path,
+        "000_PARA/callout.md",
+        "# 노트\n\n>[!info]\n> Created: 2026-08-17\n> Updated: 2026-08-18 09:30\n",
+    )
+
+    documents, _present = _scan(tmp_path)
+    by_key = {document.source_key: document.chunks[0].metadata for document in documents}
+
+    assert by_key["obsidian:000_PARA/frontmatter.md"]["event_date"] == "2026-08-19"
+    assert by_key["obsidian:000_PARA/frontmatter.md"]["document_updated"] == "2026-08-20"
+    assert by_key["obsidian:000_PARA/callout.md"]["event_date"] == "2026-08-17"
+    assert by_key["obsidian:000_PARA/callout.md"]["document_updated"] == "2026-08-18"
+
+
+def test_scan_obsidian_never_promotes_path_or_file_mtime_to_event_date(
+    tmp_path: Path,
+) -> None:
+    note = tmp_path / "000_PARA" / "research-trends-20260816.md"
+    _write(tmp_path, "000_PARA/research-trends-20260816.md", "날짜 없는 본문")
+    note.touch()
+
+    documents, _present = _scan(tmp_path)
+    metadata = documents[0].chunks[0].metadata
+
+    assert metadata["date_basis"] == "path"
+    assert "event_date" not in metadata
+    assert "document_updated" not in metadata
+
+
 def test_scan_obsidian_ingests_obsidian_syntax_as_plain_text(tmp_path: Path) -> None:
     # Given — callout / comment / inline-expression syntax under alien frontmatter
     text = (

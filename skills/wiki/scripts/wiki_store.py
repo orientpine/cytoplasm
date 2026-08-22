@@ -2,7 +2,10 @@
 
 The vault is ``~agent/wiki`` (mode 700, OUTSIDE git). Every note's frontmatter
 carries the 5 required keys (title, tags, created, updated, links) plus, since
-decision-twin schema v1, an optional whitelist of typed twin keys (TWIN_KEYS).
+decision-twin schema v2, an optional whitelist of typed twin keys (TWIN_KEYS):
+v1 typed the *trust* of a judgment, v2 adds its *subject* — who it is about
+(``entity``), how it connects (``relations``), and when the event happened
+(``event_date``, distinct from the authoring timestamp).
 Anything else is a schema violation and is rejected with guidance.
 """
 from __future__ import annotations
@@ -19,7 +22,19 @@ KIND_VALUES = ("decision", "principle", "preference", "note")
 AUTHORITY_VALUES = ("strict", "default", "advisory")
 PROVENANCE_VALUES = ("stated", "observed", "inferred")
 STATUS_VALUES = ("active", "superseded", "archived")
-TWIN_KEYS = ("kind", "authority", "provenance", "status", "review_after", "supersedes")
+TWIN_KEYS = (
+    "kind",
+    "authority",
+    "provenance",
+    "status",
+    "review_after",
+    "supersedes",
+    "entity",
+    "relations",
+    "event_date",
+)
+LIST_TWIN_KEYS = ("entity", "relations")
+_PREDICATE_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 STALE_DAYS = 90
 _TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -196,9 +211,42 @@ def _validate_twin_keys(meta: dict) -> list[str]:
                 datetime.strptime(review_after, "%Y-%m-%d")
             except ValueError:
                 errors.append(f"review_after: 존재하지 않는 날짜입니다: {review_after}")
+    errors.extend(_validate_subject_keys(meta))
     supersedes = meta.get("supersedes")
     if "supersedes" in meta and (not isinstance(supersedes, str) or not _SLUG_RE.match(supersedes)):
         errors.append(f"supersedes: 슬러그 형식이 아닙니다: {supersedes!r}")
+    return errors
+
+
+def _validate_subject_keys(meta: dict) -> list[str]:
+    """v2 subject keys: entity (anchors), relations (typed pairs), event_date (day)."""
+    errors: list[str] = []
+    for key in LIST_TWIN_KEYS:
+        if key not in meta:
+            continue
+        value = meta[key]
+        if not isinstance(value, list):
+            errors.append(f"{key}: 리스트여야 합니다 (예: [a, b])")
+            continue
+        for item in value:
+            if not isinstance(item, str) or not item.strip() or item != item.strip():
+                errors.append(f"{key}: 빈 항목이나 앞뒤 공백은 허용되지 않습니다: {item!r}")
+            elif key == "relations":
+                predicate, separator, target = item.partition(":")
+                if not separator or not _PREDICATE_RE.match(predicate) or not target or target != target.strip():
+                    errors.append(
+                        "relations: '<술어>:<대상>' 형식이어야 합니다"
+                        f" (술어는 소문자로 시작하는 [a-z0-9_-]): {item!r}"
+                    )
+    if "event_date" in meta:
+        event_date = meta["event_date"]
+        if not isinstance(event_date, str) or not _DATE_RE.match(event_date):
+            errors.append("event_date: YYYY-MM-DD 형식이어야 합니다 (작성 시각이 아니라 사건 당일)")
+        else:
+            try:
+                datetime.strptime(event_date, "%Y-%m-%d")
+            except ValueError:
+                errors.append(f"event_date: 존재하지 않는 날짜입니다: {event_date}")
     return errors
 
 
@@ -220,8 +268,13 @@ def compose_note(meta: dict, body: str) -> str:
         "links: [" + ", ".join(_dump_scalar(link) for link in meta["links"]) + "]",
     ]
     for key in TWIN_KEYS:
-        if key in meta:
-            lines.append(f"{key}: {_dump_scalar(meta[key])}")
+        if key not in meta:
+            continue
+        value = meta[key]
+        if isinstance(value, list):
+            lines.append(f"{key}: [" + ", ".join(_dump_scalar(item) for item in value) + "]")
+        else:
+            lines.append(f"{key}: {_dump_scalar(value)}")
     lines.append("---")
     body = body.rstrip("\n")
     return "\n".join(lines) + "\n" + (body + "\n" if body else "")

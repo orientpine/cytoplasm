@@ -2,6 +2,7 @@
 name: todo
 description: Google Tasks 할 일 등록·조회 스킬. 등록(mutate)은 외부효과 승인 게이트를 반드시 경유하고, 쓰기 성공 뒤 tasks.tasks.get 재조회로 저장된 제목·식별자를 검증한다. 조회(list)는 READ이므로 게이트 대상이 아니다. 터미널에서 raw `gws tasks tasks insert`를 직접 실행하지 말 것 — 같은 명령이 denylist 규칙 gws_tasks_mutation에 매칭되어 승인 없이는 차단된다.
 version: 1.2.0
+author: autophagy-agents
 license: proprietary
 metadata:
   hermes:
@@ -71,19 +72,20 @@ python3 ~/.hermes/skills/todo/scripts/todo_cli.py create --title "실험 노트 
   (`docs/guide/personal-entity-preflight.md`). `create_task`가 유일한 쓰기 진입점이므로
   가드는 이 함수 하나만 감싸면 된다.
 
-## 배포 경로 및 승인 표면 주의
+## 배포 경로 및 승인 실행 계약
 
-- 배포된 스킬이 심볼릭 링크인 환경에서는 `Path(__file__).resolve().parents[3]`가
-  `/srv/autophagy-skills/releases`를 가리킬 수 있으며, 그 위치에는
-  `configs/external-effect-tools.yaml`이 없다. `plan`/`create`가
-  `external-effect denylist is unreadable`로 실패하면 먼저
-  `/srv/autophagy-agents/configs/external-effect-tools.yaml`의 실제 존재를 확인한 뒤
-  `TODO_DENYLIST`로 명시한다. 경로를 추측하거나 fail-open으로 우회하지 않는다.
-- 현재 todo CLI에는 승인 메시지 게시·리액션 감시 서브커맨드가 없다. 운영 등록 시
-  raw `gws tasks tasks insert`나 수동 승인 레코드 위조로 우회하지 않는다. 동결된
-  제목·notes·due의 action hash를 포함한 소유자 DM에 ✅/⛔를 게시하고, 실제 소유자
-  리액션과 메시지 해시를 검증한 뒤에만 `external_effect.approval` 레코드를 원자적으로
-  기록하고 동일 argv로 `todo_cli.py create`를 실행한다. ⛔가 항상 우선한다.
+- `plan`과 실행 경로는 공용 runtime-root 정책(`AUTOPHAGY_RUNTIME_ROOT` → 불변 릴리스
+  `/srv/autophagy-agent-current` → 상주 미러 `/srv/autophagy-agents`)으로 현재 SSOT를
+  해석한다. denylist 또는 runtime root를 읽을 수 없으면 fail-closed하며, 경로를
+  추측하거나 게이트를 우회하지 않는다. 진단에는 `todo_cli.py runtime-root`를 쓴다.
+- `request`가 동결된 제목·notes·due의 action hash와 owner DM 확인 카드를 만들고,
+  owner 본인의 ✅/⛔만 `todo_confirm_reaction_watch.py`가 판정한다. 워처는 결정과 메시지
+  바인딩을 `manual_reaction` 원장 및 불변 archive generation에 함께 기록하며 ⛔를 항상
+  우선한다. raw `gws tasks tasks insert` 또는 수동 승인 레코드 작성은 금지한다.
+- `create`는 유효한 미소비 approved generation을 경쟁 안전하게 단 한 번 claim한 뒤
+  동결된 argv로만 insert한다. 성공 후에는 `tasks.tasks.get` 재조회로 저장된 id와 제목을
+  검증하고 receipt를 남긴다. 승인 없음·재사용·불확실한 `write_started` 상태에서는
+  외부 호출 없이 거부하거나 명시적 조정을 요구한다.
 
 ## 환경 변수
 
@@ -95,7 +97,7 @@ python3 ~/.hermes/skills/todo/scripts/todo_cli.py create --title "실험 노트 
 | `TODO_DENYLIST` | `<repo>/configs/external-effect-tools.yaml` | 외부효과 denylist |
 | `TODO_OWNER_ID` | interop config의 `owner_id` | 승인자 판정 |
 | `TODO_GWS_BIN` | `which gws` → `~/.local/bin/gws` | gws CLI 경로 |
-| `DISCORD_BOT_TOKEN` | 없음 | 확인 카드 게시용 봇 자격증명 |
+| `DISCORD_BOT_TOKEN` | 없음 | 확인 카드 게시용 봇 자격증명. 대화형 CLI 환경에 상속되지 않아 `todo approval identity is unavailable`가 나오면 토큰 값을 출력하지 않고 `~/.env.secrets`를 환경에 로드한 뒤 같은 `request`를 재시도한다. |
 | `AUTOPHAGY_RUNTIME_ROOT` | 공용 runtime-root 정책 | 게이트 모듈 import 루트(진단: `todo_cli.py runtime-root`) |
 
 ## 관련

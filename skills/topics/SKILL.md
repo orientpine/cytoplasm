@@ -21,7 +21,7 @@ prerequisites:
 
 ```bash
 python3 ~/.hermes/skills/topics/scripts/topics_cli.py add "<일반 연구 분야>"
-python3 ~/.hermes/skills/topics/scripts/topics_cli.py list
+python3 ~/.hermes/skills/topics/scripts/topics_cli.py list [--with-evidence]
 python3 ~/.hermes/skills/topics/scripts/topics_cli.py remove "<등록 주제>"
 ```
 
@@ -49,8 +49,19 @@ python3 ~/.hermes/skills/topics/scripts/topics_cli.py suggest "<후보>"
 `TOPIC-SUGGEST`일 때만 cha에게 “등록할까요?”라고 묻고, cha가 동의하면 `add`를
 실행한다. 제안 후보의 원문을 외부 도구·arXiv·LLM에 전달하지 않는다.
 
+## 지식 파사드 근거
+
+`list --with-evidence`와 `evidence [--json]`은 등록 주제를 읽기 전용 지식 파사드에
+한 번 질의해 `## 내 관련 노트`를 보여준다. 출처는 파사드 `sources` 형식만 사용하고
+팩은 레지스트리 옆 mode 0600 `*.evidence.json`에 남긴다. 근거가 없으면 `근거 없음`,
+조회 불가면 `근거 수집 불가`를 표시하며 자체 검색·재시도·임계값 하향은 하지 않는다.
+정본은 [`지식 계층 규약`](../../docs/guide/지식-계층-규약.md)이다.
+
 ## 주간 리포트
 
-`research-trends` Hermes cron이 등록 항목별 arXiv 링크와 한국어 동향 정리를
-하나의 DM으로 보내고, 같은 리포트를 W2-4 개인 RAG 경로로 적재한다. arXiv
-장애 항목은 실패 안내가 포함된 부분 리포트로 끝나며 자동 재시도 루프가 없다.
+`research-trends` Hermes cron이 등록 항목별 논문 링크와 한국어 동향 정리, 파사드가
+렌더한 `내 관련 노트` 절을 하나의 DM으로 보내고 같은 리포트를 개인 RAG 경로로 적재한다.
+재인제스트된 `note:research-trends/` 보고서는 다음 주 근거에서 제외해 자기인용 루프를
+막는다. 근거 수집 불가도 보고서 생성을 막지 않으며, patent-sensitive 근거는 GLM을
+건너뛰고 Codex-only로 처리한다. 주 1회 발송 워터마크와 dry-run 비소진 계약은 그대로다.
+외부 논문 출처 장애 항목은 실패 안내가 포함된 부분 리포트로 끝난다.

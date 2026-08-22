@@ -400,5 +400,25 @@ after_state="$(vault_snapshot "$consult_vault")" || fail "consult vault post-sna
   || fail "twin_consult mutated the fixture vault (read-only violation)"
 consult_leg="read-only-verdicts"
 
-printf 'SCENARIO-PASS leg=%s twin=%s consult=%s secret_len=%s account=%s\n' \
-  "$confirm_leg" "$twin_leg" "$consult_leg" "${#secret}" "$(whoami)"
+# --- 9) adopted consult: one offline facade pack, labeled output + draft traceability
+if [[ -d "${INTEROP_RUNTIME:-}/automation/knowledge" ]]; then
+  export AUTOPHAGY_REPO_ROOT="$INTEROP_RUNTIME"
+fi
+cat > "$work/knowledge-pack.json" <<'JSON'
+{"version":"knowledge-v1","query":{"text":"consult-budget 판단","purpose":"judgment","sources":["rag","wiki","twin"],"tags":["consult-budget"],"limit":8,"caller":"wiki"},"verdict":"hit","items":[{"id":"E1","store":"wiki","source_type":"twin","ref":"consult-stated-default","title":"Consult stated default","doc_date":"2026-02-01","date_basis":"updated","score":null,"grounded":null,"authority":"default","expired":false,"sensitivity":null,"content":"승인된 예산 원칙","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"id":"E2","store":"rag","source_type":"conversation","ref":"conversation/42","title":"Budget precedent","doc_date":"2026-01-20","date_basis":"day","score":0.8,"grounded":true,"authority":null,"expired":null,"sensitivity":null,"content":"과거 예산 선례","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],"layers":{"rag":"hit","wiki":"hit","twin":"ok"},"notes":[]}
+JSON
+export KNOWLEDGE_FAKE_PACK="$work/knowledge-pack.json"
+facade_out="$(cli consult 'consult-budget 판단')" || fail "facade consult exited non-zero"
+printf '%s' "$facade_out" | grep -Fq '[위키 규칙] [E1] wiki:' || fail "facade wiki label"
+printf '%s' "$facade_out" | grep -Fq '[RAG 선례] [E2] RAG/대화:' || fail "facade RAG label"
+facade_draft="$(cli draft --title '근거 대화 요약' --slug evidence-summary --tags consult-budget \
+  --body '대화 판단 [E1].' --with-evidence)" || fail "evidence draft exited non-zero"
+facade_id="$(printf '%s\n' "$facade_draft" | sed -n 's/^DRAFT-CREATED id=\([0-9a-f]*\) .*/\1/p')"
+[[ -f "$WIKI_GATE_DIR/evidence/$facade_id.evidence.json" ]] || fail "evidence sidecar absent"
+[[ "$(stat -c '%a' "$WIKI_GATE_DIR/evidence/$facade_id.evidence.json")" = 600 ]] \
+  || fail "evidence sidecar mode"
+[[ ! -f "$WIKI_ROOT/evidence-summary.md" ]] || fail "evidence draft bypassed write gate"
+facade_leg="single-call+sources"
+
+printf 'SCENARIO-PASS leg=%s twin=%s consult=%s facade=%s secret_len=%s account=%s\n' \
+  "$confirm_leg" "$twin_leg" "$consult_leg" "$facade_leg" "${#secret}" "$(whoami)"

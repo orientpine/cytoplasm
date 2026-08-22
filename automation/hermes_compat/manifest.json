@@ -3,8 +3,8 @@
   "description": "Local compatibility patch carrier for the vendored Hermes gateway. Tracked in the autophagy repo, applied idempotently on deploy, reversible via backup.",
   "upstream": {
     "product": "Hermes Agent",
-    "version": "v0.18.2",
-    "head": "46e87b14",
+    "version": "v0.20.3",
+    "head": "a3995f8a",
     "install_method": "git",
     "install_dir": "~/.hermes/hermes-agent"
   },
@@ -40,11 +40,34 @@
       "runtime_deps": "~/.hermes/hermes-compat/hermes_compat_boot.py + automation/hermes_compat/{receipt_ledger,receipt_tracker,receipt_apply}.py; content-free ledger at ~/.hermes/owner-dm-receipts/receipts.sqlite3",
       "removal_condition": "Remove once upstream Hermes gives a per-message receipt lifecycle for merged/queued messages.",
       "upstream_pr": "TODO: submit upstream — receipt reaction is per-turn, not per-message"
+    },
+    {
+      "id": "discord-public-message-policy",
+      "target": "gateway/run.py",
+      "applier": "patch_public_message_policy.py",
+      "marker": "_hermes_pubpolicy_done",
+      "backup_suffix": ".autophagy-orig",
+      "reason": "The gateway renders its own turn telemetry onto whatever surface the turn arrived on. In an owner DM that is a private operational view; in a Discord guild channel or thread it puts the agent's internal work process on a user-facing surface — token-streaming drafts, tool-progress lines carrying tool names and raw arguments, thinking/reasoning relay, context-pressure status callbacks, 'still working' heartbeats, and raw background-process output. This patch injects an event-typed, fail-closed allowlist: Discord DM stays private/unchanged, every other Discord chat_type (guild channel, auto-created thread, existing thread, unknown/new type) is public, and only final result / approval request / user question / failure summary / completion notification may be delivered there. Decisions are made by kind, never by scrubbing rendered strings. The single display-surface resolver (_display_surface_mode) is patched rather than its three call sites, so a visibility surface upstream adds later is denied on public Discord without a new patch. Deliberate deviation from the original workspace implementation: the agent-notify background branch is NOT blanked — it wakes the agent via an internal MessageEvent rather than delivering to chat, so blanking it would blind the agent while adding no privacy. Fail-CLOSED: when the carrier module is unreachable the injected helpers still recognise a public Discord surface and suppress.",
+      "runtime_deps": "~/.hermes/hermes-compat/hermes_compat_boot.py (flat) + ~/.hermes/hermes-compat/automation/hermes_compat/public_message_policy.py; injected code imports via bootstrap (__path__ merge) + absolute automation.hermes_compat.public_message_policy, and falls back to an inline fail-closed surface check if that import fails",
+      "removal_condition": "Remove once an upstream Hermes release makes turn telemetry (streaming drafts, tool progress, reasoning relay, status callbacks, long-running heartbeats, background-process output) opt-in per surface class rather than per platform, with non-DM Discord defaulting to off.",
+      "upstream_pr": "TODO: submit upstream — display.platforms.discord settings cannot distinguish a 1:1 DM from a guild channel or thread"
+    },
+    {
+      "id": "discord-public-approval-details",
+      "target": "plugins/platforms/discord/adapter.py",
+      "applier": "patch_discord_public_approval.py",
+      "marker": "_hermes_pubapproval_done",
+      "backup_suffix": ".autophagy-orig",
+      "reason": "send_exec_approval is a public adapter method: plugins and recovery paths call it directly with whatever metadata they hold, so the gateway-side seam in discord-public-message-policy cannot be the only enforcement point. This re-checks at the adapter, where the resolved channel object is stronger evidence than any chat_type string — a Discord DM channel has guild None, while a guild channel and a thread inside one both have a guild, so anything not provably a DM is treated as public. The approval prompt and its buttons stay public (the owner must be able to act on it); only the requested command and the reason are replaced with an opaque protected-operation description. No import of the carrier module here on purpose: this path must keep working while the carrier is half-deployed.",
+      "runtime_deps": "none (self-contained; deliberately independent of the carrier import path)",
+      "removal_condition": "Remove together with discord-public-message-policy, or once upstream send_exec_approval takes a surface-visibility argument and withholds command/reason itself on non-DM surfaces.",
+      "upstream_pr": "TODO: submit upstream — send_exec_approval prints the raw command into guild channels"
     }
   ],
   "notes": [
     "hermes update overwrites the vendored install; re-run automation/hermes_compat/deploy.sh after any update.",
-    "healthcheck should surface a missing patch (see automation/healthcheck.sh).",
+    "Rebased v0.18.2 -> v0.20.3 on 2026-08-18 after an unrestored hermes-update autostash left all three patches off production since 2026-08-16. Each applier docstring records which seams moved.",
+    "patch state is machine-checkable: `python3 -m automation.hermes_compat.patch_state --install-root ~/.hermes/hermes-agent` exits 0 all-applied / 1 one or more missing / 2 undecidable. The note that used to sit here claimed automation/healthcheck.sh surfaced a missing patch; that file never mentioned this carrier at all, and all three patches ran off production for two days (2026-08-16~18) with nothing saying so. Wiring this probe into healthcheck is NOT done yet — do not read this note as if it were.",
     "This carrier does NOT hard-block gateway startup; a fail-closed ExecStartPre gate is a deliberate opt-in next step (brick risk)."
   ]
 }

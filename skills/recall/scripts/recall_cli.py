@@ -4,12 +4,10 @@ Usage:
     python3 recall_cli.py search "<query>" [--limit N] [--threshold F]
                                            [--strong-threshold F] [--json]
 
-Behavior contract (W2-5):
-  * retrieval is LOCAL MCP ONLY (W2-1 memory server, ``personal_cha``) —
-    exactly ONE attempt, NO retry. RAG node down => status ``unavailable``
-    and the agent falls back to a general answer.
-  * empty/below-threshold results => status ``no_memory`` => the agent must
-    answer exactly "기억 없음" and must not fabricate.
+Behavior contract (W2-5): retrieval is local MCP only and one attempt per
+search with no retry. The default is one search; ``--entity-fallback`` permits
+one entity-anchor fallback after ``no_memory``. RAG down means ``unavailable``.
+  * empty/below-threshold => ``no_memory``; answer "기억 없음", never fabricate.
   * every search appends one masked line to a mode-600 log under
     ``~/.hermes/recall/logs/`` (override: RECALL_LOG_DIR).
 
@@ -39,62 +37,28 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+import recall_runtime  # noqa: E402 - resolved from the script dir inserted above.
+
+sys.path.insert(0, str(recall_runtime.runtime_root()))
 
 import recall_core  # noqa: E402
+from automation.knowledge import core as knowledge_core  # noqa: E402
 
 _RUNTIME_DEFAULT = "~/.hermes/rag_ingest_runtime"
 _CONFIG_DEFAULT = "~/.hermes/rag-ingest/config.json"
 _LOG_DIR_DEFAULT = "~/.hermes/recall/logs"
 _HERMES_CONFIG_DEFAULT = "~/.hermes/config.yaml"
 
-# Must stay byte-identical to PATENT_SENTINEL in
-# configs/litellm-staging/custom_callbacks.py (cross-checked by unit test).
-SENSITIVE_MARKER = "[[PATENT-SENSITIVE-RECALL]]"
-
-
-def _parse_primary_model(text: str) -> tuple[str, str]:
-    """Minimal parse of the top-level ``model:`` block — (default, provider)."""
-    model = provider = ""
-    in_model = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent == 0:
-            in_model = stripped == "model:"
-            continue
-        if not in_model:
-            continue
-        key, _, value = stripped.partition(":")
-        value = value.strip().strip("'\"")
-        if key == "default":
-            model = value
-        elif key == "provider":
-            provider = value
-    return model, provider
+# Shared with the facade and byte-identical to the gateway PATENT_SENTINEL.
+SENSITIVE_MARKER = knowledge_core.SENSITIVE_MARKER
+analyze_entity_intent = recall_core.analyze_entity_intent
+_parse_primary_model = knowledge_core.parse_primary_model
 
 
 def _primary_route_is_glm_free() -> bool:
-    """True only when the agent's PRIMARY model route is positively non-GLM.
-
-    Fail-closed: unreadable/missing config, empty keys, or any GLM/LiteLLM
-    marker in the route => False (exclude, the v1 behavior). The fallback
-    chain may still contain GLM — that window is closed at the LiteLLM
-    gateway by the ``SENSITIVE_MARKER`` payload guard, not here.
-    """
-    path = Path(
-        os.environ.get("RECALL_HERMES_CONFIG", _HERMES_CONFIG_DEFAULT)
-    ).expanduser()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return False
-    model, provider = _parse_primary_model(text)
-    if not model or not provider:
-        return False
-    route = f"{model} {provider}".lower()
-    return "glm" not in route and "litellm" not in route
+    return knowledge_core.primary_route_is_glm_free(os.environ, _HERMES_CONFIG_DEFAULT)
 
 
 def _log_line(response: dict[str, Any], network_log: list[str]) -> None:
@@ -112,6 +76,8 @@ def _log_line(response: dict[str, Any], network_log: list[str]) -> None:
             "top_source": top["source"] if top else None,
             "duration_ms": response["search"]["duration_ms"],
             "attempts": response["search"]["attempts"],
+            "searches": response["search"]["searches"],
+            "entity_hint_count": response["search"]["entity_hint_count"],
             "error": response["search"]["error"],
             "targets": sorted(set(network_log)),
         }
@@ -122,13 +88,23 @@ def _log_line(response: dict[str, Any], network_log: list[str]) -> None:
         pass  # logging must never break recall itself
 
 
-def _fake_search(query: str, limit: int) -> tuple[list[dict[str, Any]] | None, str | None, list[str]]:
+def _fake_search(
+    query: str,
+    limit: int,
+    *,
+    fallback: bool = False,
+) -> tuple[list[dict[str, Any]] | None, str | None, list[str]]:
     del query
     fake_error = os.environ.get("RECALL_FAKE_ERROR")
     if fake_error:
         return None, f"MCP unreachable (simulated: {fake_error})", []
     rows_path = Path(os.environ["RECALL_FAKE_RESULTS"])
-    rows = json.loads(rows_path.read_text(encoding="utf-8"))
+    payload: object = json.loads(rows_path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        payload = payload.get("fallback" if fallback else "primary", [])
+    if not isinstance(payload, list) or not all(isinstance(row, dict) for row in payload):
+        return None, "fake recall fixture is malformed", []
+    rows = [dict(row) for row in payload]
     return rows[:limit], None, ["fake://recall-test"]
 
 
@@ -157,37 +133,71 @@ def _mcp_search(query: str, limit: int) -> tuple[list[dict[str, Any]] | None, st
     return rows, None, client.network_log, config.mcp_base_url
 
 
+
 def run_search(args: argparse.Namespace) -> int:
     started = time.monotonic()
     base_url: str | None = None
-    if os.environ.get("RECALL_FAKE_RESULTS") or os.environ.get("RECALL_FAKE_ERROR"):
+    use_fake = bool(
+        os.environ.get("RECALL_FAKE_RESULTS") or os.environ.get("RECALL_FAKE_ERROR")
+    )
+    if use_fake:
         rows, error, network_log = _fake_search(args.query, args.limit)
         base_url = "fake://recall-test"
     else:
         rows, error, network_log, base_url = _mcp_search(args.query, args.limit)
-    duration_ms = int((time.monotonic() - started) * 1000)
 
-    excluded_count = 0
-    released_count = 0
+    excluded_count = released_count = 0
+    sensitive_allowed = _primary_route_is_glm_free()
     if rows is not None:
-        sensitive_allowed = _primary_route_is_glm_free()
-        visible_rows: list[dict[str, Any]] = []
-        for row in rows:
-            metadata = row.get("metadata")
-            is_sensitive = (
-                isinstance(metadata, dict)
-                and metadata.get("sensitivity") == "patent-sensitive"
-            )
-            if is_sensitive and not sensitive_allowed:
-                excluded_count += 1
-                continue
-            if is_sensitive:
-                row = dict(row)
-                row["content"] = f"{SENSITIVE_MARKER} {row.get('content', '')}"
-                released_count += 1
-            visible_rows.append(row)
-        rows = visible_rows
+        rows, excluded_count, released_count = recall_core.visible_rows(
+            rows, sensitive_allowed, SENSITIVE_MARKER
+        )
 
+    searches = 1
+    entity_hint_count = 0
+    classification_query: str | None = None
+    primary_has_hits = bool(
+        rows is not None
+        and error is None
+        and recall_core.classify(
+            args.query, rows, args.threshold, args.strong_threshold
+        )
+    )
+    if (
+        args.entity_fallback
+        and error is None
+        and rows is not None
+        and not primary_has_hits
+    ):
+        intent = analyze_entity_intent(args.query)
+        if intent.matches:
+            searches = 2
+            entity_hint_count = len(intent.entity_hints)
+            fallback_query = " ".join(intent.entity_hints)
+            if use_fake:
+                auxiliary, auxiliary_error, auxiliary_log = _fake_search(
+                    fallback_query, args.limit, fallback=True
+                )
+                auxiliary_base_url = "fake://recall-test"
+            else:
+                auxiliary, auxiliary_error, auxiliary_log, auxiliary_base_url = (
+                    _mcp_search(fallback_query, args.limit)
+                )
+            network_log.extend(auxiliary_log)
+            base_url = base_url or auxiliary_base_url
+            error = auxiliary_error
+            if auxiliary is None:
+                rows = None
+            else:
+                auxiliary, excluded, released = recall_core.visible_rows(
+                    auxiliary, sensitive_allowed, SENSITIVE_MARKER
+                )
+                excluded_count += excluded
+                released_count += released
+                rows = recall_core.merge_entity_rows(rows, auxiliary, intent.entity_hints)
+                classification_query = fallback_query
+
+    duration_ms = int((time.monotonic() - started) * 1000)
     response = recall_core.build_response(
         args.query,
         rows,
@@ -197,6 +207,9 @@ def run_search(args: argparse.Namespace) -> int:
         duration_ms=duration_ms,
         threshold=args.threshold,
         strong_threshold=args.strong_threshold,
+        classification_query=classification_query,
+        searches=searches,
+        entity_hint_count=entity_hint_count,
     )
     _log_line(response, network_log)
     if excluded_count:
@@ -215,6 +228,38 @@ def run_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_evidence(args: argparse.Namespace) -> int:
+    from automation.knowledge.facade import collect_evidence
+    from automation.knowledge.pack import KnowledgeQuery
+    from automation.knowledge.render import render_citations, render_verdict
+
+    env = dict(os.environ)
+    if args.entity_fallback:
+        env["KNOWLEDGE_ENTITY_FALLBACK"] = "1"
+    pack = collect_evidence(
+        KnowledgeQuery(args.query, purpose=args.purpose, limit=args.limit, caller="recall"),
+        env=env,
+    )
+    sources = render_citations(pack, "sources")
+    if args.json:
+        payload = {
+            "version": pack.version,
+            "query": pack.query.text,
+            "verdict": pack.verdict,
+            "evidence_count": len(pack.items),
+            "layers": pack.layers,
+            "notes": pack.notes,
+            "sources": sources,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        verdict = render_verdict(pack)
+        if verdict:
+            print(verdict)
+        print(sources)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="recall_cli", description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -222,14 +267,19 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=5)
     search.add_argument("--threshold", type=float, default=recall_core.DEFAULT_THRESHOLD)
-    search.add_argument(
-        "--strong-threshold", type=float, default=recall_core.DEFAULT_STRONG_THRESHOLD
-    )
+    search.add_argument("--strong-threshold", type=float, default=recall_core.DEFAULT_STRONG_THRESHOLD)
     search.add_argument("--json", action="store_true", help="print raw recall-v1 JSON")
+    search.add_argument("--entity-fallback", action="store_true", help="one entity-anchor fallback after no_memory")
+    evidence = subparsers.add_parser("evidence", help="collect a knowledge-v1 evidence pack")
+    evidence.add_argument("query")
+    evidence.add_argument("--purpose", choices=("cite", "synthesize", "entity", "judgment"), default="cite")
+    evidence.add_argument("--limit", type=int, default=8)
+    evidence.add_argument("--json", action="store_true", help="print pack summary and rendered sources")
+    evidence.add_argument("--entity-fallback", action="store_true", help="permit one entity-anchor fallback")
     args = parser.parse_args(argv)
     if not args.query.strip():
         parser.error("query must not be empty")
-    return run_search(args)
+    return run_search(args) if args.command == "search" else run_evidence(args)
 
 
 if __name__ == "__main__":

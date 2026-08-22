@@ -214,6 +214,7 @@ def write_note(
     sensitive: bool,
     ref: str,
     now: datetime,
+    evidence_footer: str = "",
 ) -> Path:
     """Write the full-detail meeting note (W2-4 frontmatter-compatible)."""
     note_name = f"{now.strftime('%Y-%m-%d')}-meeting-{ref}.md"
@@ -239,6 +240,8 @@ def write_note(
     lines += _items_block("마일스톤", extraction.milestones)
     lines += _items_block("타인 액션아이템", extraction.others)
     lines += ["## 원문", "", "```", original_text.rstrip(), "```", ""]
+    if evidence_footer:
+        lines += ["## 선행 근거", "", evidence_footer, ""]
     notes_dir.mkdir(parents=True, exist_ok=True)
     note_path = notes_dir / note_name
     note_path.write_text("\n".join(lines), encoding="utf-8")

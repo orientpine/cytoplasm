@@ -127,6 +127,16 @@ def _request_args(*, digest: str = _DIGEST, fresh: bool = False) -> argparse.Nam
     return argparse.Namespace(skill=_SKILL, hash=digest, fresh=fresh, json=False)
 
 
+def _pipeline_request_args() -> argparse.Namespace:
+    return argparse.Namespace(
+        skill=_SKILL,
+        hash=_DIGEST,
+        fresh=False,
+        json=False,
+        peer_attest_mode="discord",
+    )
+
+
 def _publish_args() -> argparse.Namespace:
     return argparse.Namespace(
         skill=_PUBLISH_SKILL, hash=_DIGEST, manifest_hash=_MANIFEST_DIGEST, tag=_TAG, json=False
@@ -217,6 +227,33 @@ def test_owner_already_approved_when_content_changed_then_defers_without_deletin
     assert _record(tmp_path, _SKILL) == first
 
 
+def test_owner_approved_pending_when_request_retried_without_nonce_then_stops_before_nonce_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Given: the owner approved the live request, which the resume watcher now owns.
+    fake = _install(tmp_path, monkeypatch)
+    assert skill_gate.cmd_request(_request_args()) == 0
+    first = _record(tmp_path, _SKILL)
+    fake.reactions[("message-1", skill_gate_specs.APPROVE_EMOJI)] = [_OWNER_ID]
+    _ = capsys.readouterr()
+
+    def unexpected_nonce(_size: int) -> str:
+        raise AssertionError("an approved pending request must not generate a new nonce")
+
+    monkeypatch.setattr(skill_gate.secrets, "token_hex", unexpected_nonce)
+
+    # When: an operator retries without supplying the approved request's nonce.
+    result = skill_gate.cmd_request(_pipeline_request_args())
+
+    # Then: the gate names the resume path and preserves the approved request byte-for-byte.
+    captured = capsys.readouterr()
+    assert result == skill_gate_request.LIFECYCLE_REFUSAL_EXIT
+    assert "reason=approved-awaiting-resume" in captured.err
+    assert captured.out == ""
+    assert _record(tmp_path, _SKILL) == first
+    assert fake.posted == 1
+
+
 def test_corrupt_pending_record_when_requested_then_refuses_without_touching_discord(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -299,3 +336,67 @@ def test_legacy_record_without_execution_binding_when_fresh_requested_then_is_su
         "policy_version",
         "surface",
     }
+
+
+def _release_provenance(tmp_path: Path, name: str, tag: str, sequence: int) -> str:
+    path = tmp_path / f"provenance-{name}.json"
+    _ = path.write_text(
+        json.dumps(
+            {
+                "publisher": "publisher-0000",
+                "tag": tag,
+                "release_sequence": sequence,
+                "manifest_sha256": _MANIFEST_DIGEST,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_release_advanced_when_different_hash_requested_then_live_request_is_superseded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: a live deploy request posted under release v1.0.33 (its provenance line is in the body).
+    fake = _install(tmp_path, monkeypatch)
+    first_args = _request_args()
+    first_args.provenance_file = _release_provenance(tmp_path, "old", "v1.0.33", 33)
+    assert skill_gate.cmd_request(first_args) == 0
+    first = _record(tmp_path, _SKILL)
+
+    # When: the skill changed AND the release advanced — the request arrives under v1.0.37.
+    second_args = _request_args(digest=_OTHER_DIGEST)
+    second_args.provenance_file = _release_provenance(tmp_path, "new", "v1.0.37", 37)
+    result = skill_gate.cmd_request(second_args)
+
+    # Then: the live request is superseded (DELETE before POST), not refused as binding-mismatch —
+    # the binding is skill+digest+nonce, never the per-release provenance tail.
+    assert result == 0
+    methods = fake.methods()
+    assert methods.index("DELETE") < methods.index("POST", 1)
+    assert first["message_id"] not in fake.contents
+    second = _record(tmp_path, _SKILL)
+    assert second["hash"] == _OTHER_DIGEST
+    assert second["message_id"] != first["message_id"]
+    assert sorted(path.name for path in _pending_dir(tmp_path).glob("*.json")) == [f"{_SKILL}.json"]
+
+
+def test_live_message_with_foreign_binding_block_when_different_hash_requested_then_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: the live message's binding block no longer names the stored digest.
+    fake = _install(tmp_path, monkeypatch)
+    assert skill_gate.cmd_request(_request_args()) == 0
+    first = _record(tmp_path, _SKILL)
+    fake.contents[first["message_id"]] = fake.contents[first["message_id"]].replace(
+        _DIGEST, "d" * 64, 1
+    )
+
+    # When: a different digest is requested.
+    result = skill_gate.cmd_request(_request_args(digest=_OTHER_DIGEST))
+
+    # Then: binding-mismatch — nothing is deleted or posted, the foreign message is preserved.
+    assert result == skill_gate_request.LIFECYCLE_REFUSAL_EXIT
+    assert "DELETE" not in fake.methods()
+    assert fake.posted == 1
+    assert _record(tmp_path, _SKILL) == first

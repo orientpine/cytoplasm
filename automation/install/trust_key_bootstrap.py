@@ -46,6 +46,7 @@ from automation.install.trust_file import (  # noqa: E402
     TrustKeyFilesystem as TrustKeyFilesystem,
     VerificationRequest,
     apply_install as apply_install,
+    read_existing as read_existing,
     verify_installed as _verify_installed,
 )
 
@@ -62,10 +63,11 @@ def plan_install(
     principal: str = DEFAULT_UPDATE_TRUST_PRINCIPAL,
     path: Path = UPDATE_ALLOWED_SIGNERS_PATH,
     namespaces: str = GIT_SIGNATURE_NAMESPACE,
+    existing: str = "",
 ) -> InstallPlan:
     target = replace(UPDATE_TRUST_TARGET, path=path)
     return plan_signer_install(
-        SignerInstallRequest(key_text, principal, target, namespaces)
+        SignerInstallRequest(key_text, principal, target, namespaces, existing)
     )
 
 
@@ -134,6 +136,7 @@ class _Arguments(argparse.Namespace):
     path: Path
     principal: str
     dry_run: bool
+    add: bool
     expect_fingerprint: str | None
 
     def __init__(self) -> None:
@@ -143,6 +146,7 @@ class _Arguments(argparse.Namespace):
         self.path = UPDATE_ALLOWED_SIGNERS_PATH
         self.principal = DEFAULT_UPDATE_TRUST_PRINCIPAL
         self.dry_run = False
+        self.add = False
         self.expect_fingerprint = None
 
 
@@ -192,6 +196,9 @@ def _parser() -> argparse.ArgumentParser:
         help="계획만 출력하고 쓰지 않는다",
     )
     _ = install_parser.add_argument(
+        "--add", action="store_true", help="기존 엔트리 보존 병합 — 신뢰키 회전 중첩 구간용"
+    )
+    _ = install_parser.add_argument(
         "--expect-fingerprint",
         default=None,
         help="공지된 지문(대역외 값)",
@@ -219,6 +226,7 @@ def _install(args: _Arguments, filesystem: TrustKeyFilesystem) -> int:
         _read_key_text(args.key),
         principal=args.principal,
         path=args.path,
+        existing=read_existing(args.path, filesystem) if args.add else "",
     )
     expected = args.expect_fingerprint
     if expected is not None and not fingerprints_match(plan.fingerprint, expected):

@@ -84,7 +84,11 @@ printf 'module-loc: exit=%d\n' "$loc_failed" >>"$summary"
 
 secret_report="$EVIDENCE_DIR/secret-patterns.txt"
 : >"$secret_report"
-secret_pattern='(ghp_[[:alnum:]]{36,}|github_pat_[[:alnum:]_]{82,}|sk-[[:alnum:]_-]{20,}|AIza[[:alnum:]_-]{35}|AKIA[[:alnum:]]{16}|Bearer[[:space:]]+[[:alnum:]_.-]{20,})'
+# `sk-` 는 토큰 경계에서만 센다 — 앵커가 없으면 `task-<20자 이상>` 의 부분문자열
+# (`ta`+`sk-`+`10-green-unresolved-target-result`) 에 걸려 이 스윕의 증적 파일명
+# 108건이 통째로 오탐이 됐다. 상시 red 인 시크릿 스캐너는 없는 것보다 나쁘다 —
+# 진짜 유출이 섞여도 구분되지 않는다. 앞이 영숫자가 아닐 때만 매칭한다.
+secret_pattern='(ghp_[[:alnum:]]{36,}|github_pat_[[:alnum:]_]{82,}|(^|[^[:alnum:]])sk-[[:alnum:]_-]{20,}|AIza[[:alnum:]_-]{35}|AKIA[[:alnum:]]{16}|Bearer[[:space:]]+[[:alnum:]_.-]{20,})'
 GIT_MASTER=1 git grep -nEI "$secret_pattern" -- \
   ':!docs/qa/**' ':!*.md' ':!tests/**' >"$secret_report" 2>&1
 secret_status=$?

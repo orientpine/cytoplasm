@@ -44,8 +44,27 @@ _TRANSPORT_ERRORS = (triage_gate.GateError, OSError, json.JSONDecodeError, KeyEr
 
 
 def repo_root() -> Path:
-    default = Path(__file__).resolve().parents[3]
-    return Path(os.environ.get("AUTOPHAGY_REPO_ROOT", str(default))).expanduser()
+    """The checkout that actually carries ``automation.interop``.
+
+    Same depth-guess trap `mail_preflight.repo_root` already documents: a mounted
+    release runs from ``/srv/autophagy-skills/releases/<skill>/<hash>/scripts``, so
+    ``parents[3]`` lands on ``.../releases``, which holds no automation package.
+    Measured 2026-08-18 — every compose and every watcher tick died with
+    ``GATE-REFUSED … AUTOPHAGY_REPO_ROOT=/srv/autophagy-skills/releases``, i.e. the
+    approval surface refused itself. Probe the candidates and take the first that
+    really holds the package.
+    """
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT")
+    if override:
+        return Path(override).expanduser()
+    here = Path(__file__).resolve()
+    candidates = [*here.parents[2:6], Path("/srv/autophagy-agent-current"), Path("/srv/autophagy-agents")]
+    for candidate in candidates:
+        if (candidate / "automation" / "interop").is_dir():
+            return candidate
+    # Name a real, diagnosable location rather than the meaningless depth guess.
+    current = Path("/srv/autophagy-agent-current")
+    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
 
 
 def _repo_module(name: str) -> ModuleType:
@@ -153,6 +172,20 @@ def _request_channel_id(record: dict) -> str:
     return str(stored_binding(record).channel_id)
 
 
+def request_of(record: dict) -> ApprovalRequest:
+    """Project one persisted mail draft onto the shared lifecycle identity."""
+    message_id = _bound_message_id(record)
+    if not message_id:
+        raise triage_gate.GateError("승인 메시지 바인딩 누락", 3)
+    return lifecycle().ApprovalRequest(
+        key=approval_key(record),
+        action_hash=_approval_action_hash(record),
+        message_id=message_id,
+        channel_id=_request_channel_id(record),
+        created_at=str(record.get("approval_created_at", record["created"])),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class MailApprovalGate:
     """``approval_lifecycle.ApprovalGate`` over the triage draft store + Discord REST."""
@@ -168,7 +201,7 @@ class MailApprovalGate:
                 action_hash=_approval_action_hash(record),
                 message_id=_bound_message_id(record),
                 channel_id=_request_channel_id(record),
-                created_at=str(record["created"]),
+                created_at=str(record.get("approval_created_at", record["created"])),
             )
             for _, record, record_key in _pending_drafts()
             if record_key == key and _bound_message_id(record)
@@ -248,9 +281,13 @@ class MailApprovalGate:
         return lifecycle().PostedApproval(message_id=message_id, channel_id=intent.channel_id)
 
     def commit(self, intent: ApprovalIntent, posted: PostedApproval, created_at: str) -> None:
-        """The ONLY writer of the Discord ``message_id`` in the mail skill."""
-        del created_at
-        triage_gate.set_message_id(self.draft, posted.message_id, intent.channel_id)
+        """The ONLY writer of the Discord ``message_id`` and its timer anchor."""
+        triage_gate.set_message_id(
+            self.draft,
+            posted.message_id,
+            intent.channel_id,
+            approval_created_at=created_at,
+        )
 
 
 def request_approval(draft: dict, *, notice: str = "") -> Verdict:

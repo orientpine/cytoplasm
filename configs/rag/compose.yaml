@@ -1,4 +1,4 @@
-name: personal-rag
+name: personal_rag
 
 services:
   embedding:

@@ -20,12 +20,16 @@ export MEETING_CONFIG="$work/no-config.json"
 
 cli="$skill_dir/scripts/meeting_cli.py"
 fx="$skill_dir/fixtures"
+cat > "$work/evidence-pack.json" <<'JSON'
+{"version":"knowledge-v1","query":{"text":"실증 회의 연구팀","purpose":"cite","sources":["rag","wiki","twin"],"tags":[],"limit":8,"caller":"meeting"},"verdict":"hit","items":[{"id":"E1","store":"rag","source_type":"meeting","ref":"meetings/previous.md","title":"선행 회의","doc_date":"2026-08-14","date_basis":"path","score":0.9,"grounded":true,"authority":null,"expired":null,"sensitivity":null,"content":"지난 회의 결정","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"layers":{"rag":"hit","wiki":"none","twin":"none"},"notes":[]}
+JSON
+export KNOWLEDGE_FAKE_PACK="$work/evidence-pack.json"
 
 echo "[1] compile"
 python3 -m py_compile "$skill_dir"/scripts/*.py "$skill_dir"/plugin/__init__.py
 
 echo "[2] clean md ingest (recorded LLM) -> cards>=3, milestones>=2, team post"
-python3 "$cli" ingest --file "$fx/meeting-clean.md" \
+python3 "$cli" ingest --file "$fx/meeting-clean.md" --with-evidence \
   --recorded-response "$fx/recorded-clean.json" --offline --notify-channel SANDBOX
 card_lines=$(wc -l < "$work/plan/kanban-plan.jsonl")
 [ "$card_lines" -ge 3 ] || { echo "FAIL cards=$card_lines"; exit 1; }
@@ -33,6 +37,7 @@ milestone_count=$(grep -c '^  - title: ' "$work/state/milestones.yaml")
 [ "$milestone_count" -ge 2 ] || { echo "FAIL milestones=$milestone_count"; exit 1; }
 head -1 "$work/plan/team-post.txt" | grep -q '```json' || { echo "FAIL team post"; exit 1; }
 grep -q '회의록 처리 완료' "$work/plan/notify.txt" || { echo "FAIL notify"; exit 1; }
+grep -q '"verdict": "hit"' "$work/notes/"*.evidence.json || { echo "FAIL evidence sidecar"; exit 1; }
 
 echo "[3] patent md ingest -> sensitive, sanitized card/state, NO team post"
 rm -rf "$work/plan" && mkdir -p "$work/plan"

@@ -30,6 +30,16 @@ Design invariants
 Upstream note: Hermes documents ``pre_gateway_dispatch`` as "Fired once per
 incoming MessageEvent", so this is an upstream bug; carry this patch until an
 upstream release restores that contract for the busy path.
+
+Preimage rebase history (exact-preimage patches are version-bound by design)
+---------------------------------------------------------------------------
+* v0.18.2 (head ``46e87b14``) — original preimages.
+* v0.20.3 (head ``a3995f8a``) — upstream moved ``invoke_hook`` from
+  ``hermes_cli.plugins`` (now a *method* on the plugin manager) to the
+  module-level ``hermes_cli.lifecycle.invoke_hook``. Only the import line
+  changed; the injected logic, the anchor, and the marker are unchanged, and
+  the hook is still invoked from exactly one place (``_handle_message``), so
+  the defect this patch fixes is still present.
 """
 
 from __future__ import annotations
@@ -46,14 +56,14 @@ BACKUP_SUFFIX: Final = ".autophagy-orig"
 _MOD1_PRE: Final = (
     "        if not is_internal:\n"
     "            try:\n"
-    "                from hermes_cli.plugins import invoke_hook as _invoke_hook\n"
+    "                from hermes_cli.lifecycle import invoke_hook as _invoke_hook\n"
     "                _hook_results = _invoke_hook(\n"
 )
 _MOD1_POST: Final = (
     '        if not is_internal and not event.metadata.get("_hermes_pgd_done"):\n'
     '            event.metadata["_hermes_pgd_done"] = True\n'
     "            try:\n"
-    "                from hermes_cli.plugins import invoke_hook as _invoke_hook\n"
+    "                from hermes_cli.lifecycle import invoke_hook as _invoke_hook\n"
     "                _hook_results = _invoke_hook(\n"
 )
 
@@ -73,7 +83,7 @@ _MOD2_INSERT: Final = (
     '        if not getattr(event, "internal", False) and not event.metadata.get("_hermes_pgd_done"):\n'
     '            event.metadata["_hermes_pgd_done"] = True\n'
     "            try:\n"
-    "                from hermes_cli.plugins import invoke_hook as _pgd_invoke_hook\n"
+    "                from hermes_cli.lifecycle import invoke_hook as _pgd_invoke_hook\n"
     "                _pgd_results = _pgd_invoke_hook(\n"
     '                    "pre_gateway_dispatch",\n'
     "                    event=event,\n"

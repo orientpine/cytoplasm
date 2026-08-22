@@ -57,6 +57,7 @@ topics · prompt · meeting · recall · wiki · todo · doctype · procurement 
 - repair: repo-local CLI 아님 — `~/.hermes/repair/automation/repair/repair_cli.py` 외부 런타임 호출.
 - wiki: 본문·제목은 owner DM 밖 유출 금지. 트윈 판단은 `review_after` 만료 시 자율 행동에 사용 금지(`docs/guide/decision-twin-스키마.md`).
 - automation 공유 코드: calendar/coordination/mail/budget/wiki/meeting/todo는 `automation.interop.*`(external_effect_gate · injection_adapter · discord_transport · coordination)에 의존 — interop 시그니처 변경 시 동반 갱신.
+- **지식 읽기 경계(R3)**: 스킬은 Obsidian/wiki/RAG를 직접 검색하지 않고 `automation.knowledge` 파사드만 호출한다. wiki 자체 CLI, rag_ingest, twin_* 쓰기 측만 예외다. `search_memory()`/`query_notes()`/`consult()` 직접 호출과 스킬별 `[En]` 출처 렌더 구현은 금지하며 `tests/unit/test_knowledge_adoption_conformance.py`가 강제한다. 정본은 [지식 계층 규약](../docs/guide/지식-계층-규약.md)이다.
 
 ## 이 디렉터리의 필수 규칙
 - **mutating 경로는 반드시 승인 게이트 경유** (draft/pending → render → resolve_reaction

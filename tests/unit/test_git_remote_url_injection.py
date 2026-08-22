@@ -17,7 +17,7 @@ command-executing transport helper. Each site now validates through the shared
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -157,7 +157,13 @@ def test_installer_repository_separates_options_from_the_url(
 ) -> None:
     url = "ssh://git@git.example.invalid/team/project.git"
     runner = RecordingRunner()
-    mutator = SystemMutator(default_node_config())
+    # The clone runs with StrictHostKeyChecking=yes, so the host key is a real
+    # precondition (KNOWN-HOSTS-MISSING); seed it to reach the argv this asserts on.
+    config = replace(default_node_config(), ops_home=tmp_path / "ops")
+    known_hosts = config.ops_home / ".ssh" / "known_hosts"
+    known_hosts.parent.mkdir(parents=True)
+    _ = known_hosts.write_text("git.example.invalid ssh-ed25519 AAAAC3Nz\n", encoding="utf-8")
+    mutator = SystemMutator(config)
 
     def fake_run(
         command: tuple[str, ...],

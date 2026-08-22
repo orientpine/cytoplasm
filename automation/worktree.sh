@@ -48,6 +48,19 @@ validate_name() {
   [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ ]] || die "not a session name: $1"
 }
 
+flat_ref_conflict() {
+  local prefix="" segment
+  IFS='/' read -r -a segments <<<"$BRANCH_PREFIX"
+  for segment in "${segments[@]}"; do
+    prefix="${prefix:+$prefix/}$segment"
+    if git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/heads/$prefix"; then
+      printf '%s\n' "$prefix"
+      return 0
+    fi
+  done
+  return 1
+}
+
 install_session_push_guard() {
   # All linked worktrees share this common hooks directory. install(1) replaces the
   # single target path, so every start refreshes exactly one guard without backups.
@@ -73,6 +86,10 @@ cmd_start() {
 
   local dir="$WORKTREE_ROOT/$name" branch="$BRANCH_PREFIX/$name"
   [[ -e "$dir" ]] && die "$name already has a worktree at $dir"
+  local conflict=""
+  if conflict="$(flat_ref_conflict)"; then
+    die "branch namespace D/F conflict: refs/heads/$conflict is a flat ref and blocks $branch; rename it first with: git branch -m '$conflict' '<new-name>'"
+  fi
   git -C "$MAIN_ROOT" rev-parse --verify --quiet "$branch" >/dev/null \
     && die "$name already has a branch ($branch)"
 
@@ -109,6 +126,22 @@ cmd_start() {
   fi
 }
 
+# squash 머지는 내용만 착지시키고 커밋 identity 는 남긴다 — `log REMOTE_REF..branch` 는
+# 그때도 브랜치 커밋을 전부 열거하므로, 그것만 보고 거부하면 가드가 **모든** squash 머지
+# 브랜치에서 울린다(이 리포의 현재 머지 관례가 squash 다). 매번 울리는 가드는 사람이
+# 무시하는 법을 배우게 만들고, 그게 바로 이 검사가 막으려던 유실의 전조다.
+#
+# 그래서 진짜 질문을 던진다: 이 브랜치가 **손댄 경로**가 origin/BASE 와 바이트 동일한가.
+# 나중 커밋이 그 경로를 하나라도 바꿨으면 답은 '아니오'이고 그대로 거부한다.
+branch_content_landed() { # branch_content_landed <branch>
+  local branch="$1" base
+  base="$(git -C "$MAIN_ROOT" merge-base "$REMOTE_REF" "$branch")" || return 1
+  local -a touched=()
+  mapfile -t touched < <(git -C "$MAIN_ROOT" diff --name-only "$base" "$branch")
+  (( ${#touched[@]} )) || return 1
+  git -C "$MAIN_ROOT" diff --quiet "$REMOTE_REF" "$branch" -- "${touched[@]}"
+}
+
 cmd_finish() {
   local name="$1"
   validate_name "$name"
@@ -126,19 +159,30 @@ cmd_finish() {
   # 착지 여부는 방금 가져온 기준으로만 말이 된다.
   git -C "$MAIN_ROOT" fetch --quiet origin "$BASE" 2>/dev/null \
     || die "could not fetch origin/$BASE — cannot tell whether this work landed"
-  local unlanded
+  local unlanded squashed=0
   unlanded="$(git -C "$MAIN_ROOT" log --oneline --no-decorate "$REMOTE_REF..$branch")"
   if [[ -n "$unlanded" ]]; then
-    printf '[worktree] ERROR: %s has commits that never landed on origin/%s — refusing to remove\n' \
-      "$name" "$BASE" >&2
-    printf '%s\n' "$unlanded" | sed 's/^/    /' >&2
-    printf '[worktree]   PR 로 착지시키거나, 정말 버릴 것이면 수동으로 지운다.\n' >&2
-    exit 1
+    if branch_content_landed "$branch"; then
+      squashed=1
+      log "squash/rebase 머지 감지 — 커밋 identity 는 남아 있지만 손댄 경로가 origin/$BASE 와 바이트 동일하다"
+    else
+      printf '[worktree] ERROR: %s has commits that never landed on origin/%s — refusing to remove\n' \
+        "$name" "$BASE" >&2
+      printf '%s\n' "$unlanded" | sed 's/^/    /' >&2
+      printf '[worktree]   PR 로 착지시키거나, 정말 버릴 것이면 수동으로 지운다.\n' >&2
+      exit 1
+    fi
   fi
 
   git -C "$MAIN_ROOT" worktree remove "$dir" || die "could not remove the worktree at $dir"
-  git -C "$MAIN_ROOT" branch -d "$branch" >/dev/null \
-    || die "could not delete $branch (it should be fully merged by now)"
+  if (( squashed )); then
+    # `-d` 는 squash 머지된 브랜치를 미병합으로 보고 거부한다 — 내용 착지는 위에서 이미 증명했다.
+    git -C "$MAIN_ROOT" branch -D "$branch" >/dev/null \
+      || die "could not delete $branch"
+  else
+    git -C "$MAIN_ROOT" branch -d "$branch" >/dev/null \
+      || die "could not delete $branch (it should be fully merged by now)"
+  fi
   log "DONE $name 정리 완료 (원격 브랜치는 건드리지 않았다 — 공유 영향이라 사람이 판단한다)"
 }
 

@@ -53,8 +53,6 @@ from .state import StateError, load_state, record_activated, save_state
 
 CONFIG_ENV: Final = "MANAGED_SYNC_CONFIG"
 DEFAULT_CONFIG_PATH: Final = Path("~/.hermes/managed-sync/config.json")
-ROSTER_ENV: Final = "AUTOPHAGY_ROSTER"
-DEFAULT_ROSTER_PATH: Final = Path("~/.hermes/roster.yaml")
 
 _STRING_KEYS: Final = ("remote_url", "publisher")
 _PATH_KEYS: Final = ("allowed_signers", "mirror_dir", "ssh_key_path", "quarantine_dir", "state_path")
@@ -81,20 +79,15 @@ def config_path() -> Path:
     return path.expanduser()
 
 
-def roster_path() -> Path:
-    """Resolve the group roster path from the environment or the runtime default."""
-    raw = os.environ.get(ROSTER_ENV, "").strip()
-    return Path(raw).expanduser() if raw else DEFAULT_ROSTER_PATH.expanduser()
-
-
-def _publisher_principal(path: Path) -> str:
+def _publisher_principal() -> str:
     """Read the trusted publisher principal from the group roster, fail-closed."""
     try:
         # Lazy: the roster parser needs PyYAML, which must not break config-free surfaces.
-        from automation.group_roster.parser import load_roster
+        from automation.group_roster.parser import load_roster, roster_path
         from automation.group_roster.validator import RosterError
     except ImportError as error:  # pragma: no cover - install defect, not a config defect
-        raise ConfigError(f"cannot read group roster {path}: {error}") from error
+        raise ConfigError(f"cannot import group roster parser: {error}") from error
+    path = roster_path()
     try:
         roster = load_roster(path)
     except RosterError as error:
@@ -147,7 +140,7 @@ def load_config(path: Path) -> SyncConfig:
     return SyncConfig(
         remote_url=payload["remote_url"],
         publisher=payload["publisher"],
-        publisher_principal=_publisher_principal(roster_path()),
+        publisher_principal=_publisher_principal(),
         allowed_signers=paths["allowed_signers"],
         mirror_dir=paths["mirror_dir"],
         ssh_key_path=paths["ssh_key_path"],

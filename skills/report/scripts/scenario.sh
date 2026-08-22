@@ -46,4 +46,15 @@ printf '# Sensitive\n\npatent planning\n' > notes/sensitive.md
 sensitive_out="$(cli report --notes-root "$work/notes" --query patent --outputs-root "$work/outputs" --response-file "$work/response.md")"
 grep -q 'provider=openai-codex' <<<"$sensitive_out" || fail "sensitive route"
 
-printf 'SCENARIO-PASS report=true slides=4 script=true sensitive=codex empty=true account=%s\n' "$(whoami)"
+cat > "$work/knowledge-pack.json" <<'JSON'
+{"version":"knowledge-v1","query":{"text":"Alpha report","purpose":"synthesize","sources":["rag","wiki","twin"],"tags":[],"limit":8,"caller":"report"},"verdict":"hit","items":[{"id":"E1","store":"rag","source_type":"note","ref":"reports/alpha.md","title":"Alpha evidence","doc_date":"2026-08-18","date_basis":"path","score":0.8,"grounded":true,"authority":null,"expired":null,"sensitivity":null,"content":"offline alpha evidence","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"layers":{"rag":"hit","wiki":"none","twin":"none"},"notes":[]}
+JSON
+printf 'Evidence-backed draft [E1].\n' > "$work/evidence-response.md"
+export KNOWLEDGE_FAKE_PACK="$work/knowledge-pack.json"
+evidence_out="$(cli report --notes-root "$work/notes" --query Alpha --outputs-root "$work/outputs" --response-file "$work/evidence-response.md" --with-evidence)"
+evidence_path="$(printf '%s\n' "$evidence_out" | sed -n 's/^REPORT-CREATED path=\([^ ]*\).*/\1/p')"
+grep -Fq '[E1] RAG/note: reports/alpha.md (2026-08-18, path)' "$evidence_path" \
+  || fail "offline evidence source"
+[[ "$(stat -c '%a' "${evidence_path%.md}.evidence.json")" = 600 ]] || fail "evidence sidecar mode"
+
+printf 'SCENARIO-PASS report=true slides=4 script=true sensitive=codex empty=true evidence=offline account=%s\n' "$(whoami)"

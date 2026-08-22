@@ -279,3 +279,15 @@
 - **개인 서버 자유 대화·스레드 지원** — 채널 응답과 무멘션 스레드 응답을 각각 실증했고 두 관찰 창에서 예상 밖 봇 응답은 0건이었다. `channel_ack`·`thread_unmentioned_ack`·`unexpected_bot` 세 축 모두 green. → [소개](기능소개/개인서버-대화-채널.md)
 - **기관메일 발신자·전체 폴더·검색** — owner-DM 카드의 실제 발신자·CC와 비공개 표면 레닥션을 함께 보존하고, 사용자 폴더 수집과 read-only 다중 신호 검색을 추가했다. `3f94b445d39c6d94128e53aa540f54aecf0df1cd` → [소개](기능소개/기관메일-발신자-전체폴더-검색.md)
 - **스킬 게이트 peer trust-root 진단 분리** — 신뢰근원 설정 부재를 승인 부재와 다른 오류로 드러내고 봉인 staging 정리를 복구했다. `949532a93e1615da197ce85de9c423bcdf8dbe6e` → [패치](patch/2026-08-17-skill-gate-peer-trust-root-diagnostic.md)
+
+### 병렬 후속 스윕 3차 (FS3, 2026-08-20)
+
+- **스킬 시나리오 단일 러너 조율안 (K2-B)** — `deploy-skill.sh`의 stage 1·post-mount 두 지점이 공용 러너와 어떻게 어긋나 있는지를 실측하고, 편집·실행 두 금지를 함께 풀어야 하는 이유와 풀린 뒤의 검증 설계·자격증명 격리안을 4절 조율안으로 냈다. 코드 변경 0. → [소개](기능소개/스킬-시나리오-단일러너-조율안.md)
+- **공개 릴리스 정책 (K5)** — `docs/` 전체를 공개 결정 아래에 두되 기존 공개 경로는 grandfather하고 새 경로만 exclude하며, 공개 컷 버전을 source commit 태그에서 유도한다. rollback floor는 런타임 롤백과 채널 전환에도 유지된다. → [소개](기능소개/공개-릴리스-정책.md)
+- **FS3 보드 replay 정합화 (K1)** — 최종 replay가 `ALREADY-FIXED`로 확정한 13개 행을 열린 보드에서 제거하고 원래 묶음에 정정 사유를 남겼다. 요약표는 실측 재계산했으며 총계 문장도 행 합계와 함께 검사한다.
+  → [소개](기능소개/문서보드-정리.md), 근거 PR #175·#181·#178·#177·#182·#189·#188·#190, 증적 `.omo/evidence/fs3/task-16-parallel-followup-sweep-3.txt`.
+
+### Discord 공개 표면 노출 제거 (2026-08-21)
+
+- **Discord 공개 메시지 필터링** — 1:1 DM이 아닌 모든 Discord 표면(길드 채널·스레드·미지 chat_type)에서 이벤트 유형 allowlist로 사용자용 이벤트 5종만 내보내고, 스트리밍 초안·tool-progress·reasoning·내부 status·하트비트·백그라운드 원시 출력·승인 원시 명령을 억제한다. 문자열 세척이 아니라 유형 판정이며 미지 이벤트는 기본 비공개다.
+  `hermes_compat` 패치 캐리어 2건(`discord-public-message-policy`·`discord-public-approval-details`)으로 정착했고 배포는 owner-gated로 남는다. → [소개](기능소개/discord-공개-메시지-필터링.md), [패치](patch/2026-08-21-hermes-compat-public-message-policy.md)

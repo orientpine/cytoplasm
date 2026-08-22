@@ -38,11 +38,16 @@ python_bin="${MAILON_RUNTIME_PYTHON:-python3}"
 "$python_bin" --version >/dev/null 2>&1 || fail "python not runnable: $python_bin" 6
 
 # --- content digests (provenance + venv reuse) -----------------------------
-# Source digest: sha256 over sorted mailon/*.py contents (byte-identical gate).
-src_digest="$(
-  find "$vendor_dir/mailon" -type f -name '*.py' -print0 \
-    | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16
-)"
+# Source digest: sha256 over sorted mailon/*.py contents. The formula lives in the
+# shared helper because the drift probe recomputes it from the release tree — if the
+# producer and the detector each kept a copy, the drift detector could drift. It used
+# to be inline here and folded the absolute vendor path into the hash (sha256sum prints
+# "<hash>  <path>"), so identical bytes unpacked elsewhere digested differently.
+# shellcheck source=/dev/null
+. "$(dirname "${BASH_SOURCE[0]}")/mailon_vendor_digest.sh" \
+  || fail "digest helper missing beside mailon_runtime_release.sh" 2
+src_digest="$(mailon_vendor_digest "$vendor_dir/mailon")" \
+  || fail "digest of $vendor_dir/mailon failed" 2
 req_digest="$(sha256sum "$vendor_dir/requirements.txt" | cut -c1-16)"
 py_tag="$("$python_bin" -c 'import sys;print(f"cp{sys.version_info.major}{sys.version_info.minor}")')"
 venv_key="${py_tag}-${req_digest}"

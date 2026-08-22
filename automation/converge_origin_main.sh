@@ -10,8 +10,12 @@
 # execution under sudo. This helper removes both halves of that.
 #
 # CONTRACT (each clause is pinned by tests/unit/test_provision_deploy_converge.py):
-#   * NO ARGUMENTS. It resolves the node's signed-update policy itself, so a caller
-#     cannot choose the sha that gets installed. There is nothing to inject.
+#   * NO ARGUMENTS, AND NO NODE CONFIGURATION. It resolves the trusted release from
+#     signatures alone, so neither a caller nor a file an unprivileged account can
+#     write may aim it at a sha. It used to pass `~ops/.hermes/node.toml` to the
+#     verifier; `require_signed_updates = false` in that file made the verifier hand
+#     back the raw unsigned `origin/main`, and ops holds NOPASSWD sudo for this helper
+#     — one file in its own home reinstated the very escalation below (2026-08-21).
 #   * NO INHERITED ENVIRONMENT. PATH is fixed; PYTHONPATH/GIT_*/SSH_*/LD_* and any
 #     RELEASE_EXPECTED_SHA are cleared before anything runs.
 #   * NEVER EXECUTES THE MUTABLE RUNTIME TREE. Its dependencies are the root-owned
@@ -45,6 +49,10 @@ readonly SNAPSHOT="$LIBDIR/origin_snapshot.sh"
 readonly RELEASE_STORE="$LIBDIR/release_store.py"
 readonly UPDATE_TRUST="$LIBDIR/automation/update_trust.py"
 readonly ALLOWED_SIGNERS="/etc/autophagy/update-allowed-signers"
+# The C1 anti-rollback anchor, named here rather than derived from a configuration we
+# deliberately no longer read. Both verifiers must anchor to the SAME floor; the ops
+# pre-gate reaches this exact path through `release_floor_path()`.
+readonly RELEASE_FLOOR=$NODE_PRIVATE_ROOT/deploy-reconcile/release-floor.json
 readonly UPDATE_CHANNEL_STATE=$NODE_PRIVATE_ROOT/deploy-reconcile/update-channel.json
 # The same file every other caller opens. See converge-release-runtime.sh.
 #
@@ -70,8 +78,6 @@ die() { log "$1"; exit "${2:-1}"; }
 as_ops() { runuser -u "$OPS_USER" -- "${@}"; }
 
 # --- Resolve and verify the target ourselves. No caller gets a say. ----------------
-readonly OPS_CONFIG="$(getent passwd "$OPS_USER" | awk -F: 'NR == 1 {print $6 "/.hermes/node.toml"}')"
-[[ "$OPS_CONFIG" == /* ]] || die "SYNC-BLOCK: cannot resolve ops node configuration" 4
 remote_env=()
 if [[ -e "$UPDATE_CHANNEL_STATE" ]]; then
   update_channel="$(python3 -I - "$UPDATE_CHANNEL_STATE" <<'PY'
@@ -103,7 +109,7 @@ PY
     )
   fi
 fi
-target="$(as_ops "${remote_env[@]}" python3 -I "$UPDATE_TRUST" resolve --mirror "$MIRROR" --node-config "$OPS_CONFIG" --allowed-signers "$ALLOWED_SIGNERS")" \
+target="$(as_ops "${remote_env[@]}" python3 -I "$UPDATE_TRUST" resolve-signed --mirror "$MIRROR" --allowed-signers "$ALLOWED_SIGNERS" --floor-path "$RELEASE_FLOOR")" \
   || die "SYNC-BLOCK: update trust rejected the remote target" 4
 [[ "$target" =~ ^[0-9a-f]{40,64}$ ]] || die "SYNC-BLOCK: verifier returned an invalid target" 4
 

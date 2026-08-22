@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
-"""Personal wiki CLI (W2-2): draft/confirm/discard/query/backlinks/cleanup.
-
-Exit codes: 0 ok | 1 confirmation absent or invalid (nothing saved)
-            2 frontmatter schema rejected (guidance printed) | 3 config/env error
-
-Env: WIKI_ROOT (default ~/wiki), WIKI_GATE_DIR (default ~/.hermes/wiki-gate),
-     INTEROP_RUNTIME, INTEROP_CONFIG, E2E_TEST_MODE, INTEROP_E2E_SECRET,
-     DISCORD_BOT_TOKEN (production DM-confirm path only).
-"""
+"""Personal wiki draft gate, read-only query, cleanup, and knowledge consultation CLI."""
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+from importlib import import_module
 from pathlib import Path
+from typing import Any
 
-import wiki_gate
-import wiki_store
+wiki_evidence = import_module(".wiki_evidence", __package__) if __package__ else import_module("wiki_evidence")
+wiki_gate = import_module(".wiki_gate", __package__) if __package__ else import_module("wiki_gate")
+wiki_store = import_module(".wiki_store", __package__) if __package__ else import_module("wiki_store")
 
 WIKI_ROOT = Path(os.environ.get("WIKI_ROOT", "~/wiki")).expanduser()
 
@@ -42,12 +37,13 @@ def template_warnings(kind: str, body: str) -> list[str]:
     ]
 
 
-def _with_twin_flags(meta: dict, args: argparse.Namespace) -> dict:
+def _with_twin_flags(meta: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     updated = dict(meta)
     for key in wiki_store.TWIN_KEYS:
-        value = getattr(args, key)
-        if value is not None:
-            updated[key] = value
+        value = getattr(args, key, None)
+        if value is None:
+            continue
+        updated[key] = _tags(value) if key in wiki_store.LIST_TWIN_KEYS else value
     return updated
 
 
@@ -65,7 +61,7 @@ def _read_body(args: argparse.Namespace) -> str | None:
     return None
 
 
-def _summary(record: dict) -> str:
+def _summary(record: dict[str, Any]) -> str:
     meta, body = wiki_store.parse_note(record["note_text"])
     preview = "\n".join(body.strip().splitlines()[:5])
     return (
@@ -80,8 +76,9 @@ def _summary(record: dict) -> str:
     )
 
 
-def cmd_draft(args: argparse.Namespace) -> int:
+def cmd_draft(args: argparse.Namespace, evidence_pack: object | None = None) -> int:
     body = _read_body(args)
+    pack = evidence_pack
     now = wiki_store.utc_now()
     if args.edit:
         note = wiki_store.load_note(WIKI_ROOT, args.edit)
@@ -95,6 +92,8 @@ def cmd_draft(args: argparse.Namespace) -> int:
         meta["updated"] = now
         meta = _with_twin_flags(meta, args)
         final_body = body if body is not None else note.body
+        final_body, pack = wiki_evidence.prepare_draft(
+            str(meta["title"]), list(meta["tags"]), final_body, bool(args.with_evidence), pack)
         note_text = wiki_store.compose_note(meta, final_body)
         record = wiki_gate.create_draft("edit", args.edit, note_text, args.channel_id)
     else:
@@ -112,8 +111,12 @@ def cmd_draft(args: argparse.Namespace) -> int:
             args,
         )
         final_body = body or ""
+        final_body, pack = wiki_evidence.prepare_draft(
+            str(meta["title"]), list(meta["tags"]), final_body, bool(args.with_evidence), pack)
         note_text = wiki_store.compose_note(meta, final_body)
         record = wiki_gate.create_draft("create", slug, note_text, args.channel_id)
+    if pack is not None:
+        wiki_evidence.write_sidecar(wiki_gate.GATE_DIR, str(record["id"]), pack)
     print(_summary(record))
     kind = meta.get("kind")
     if isinstance(kind, str):
@@ -171,6 +174,10 @@ def cmd_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_consult(args: argparse.Namespace, evidence_pack: object | None = None) -> int:
+    return wiki_evidence.command_consult(WIKI_ROOT, args, evidence_pack)
+
+
 def cmd_backlinks(args: argparse.Namespace) -> int:
     count = 0
     for note in wiki_store.backlinks(WIKI_ROOT, args.slug):
@@ -224,6 +231,10 @@ def build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--status", help="twin: active|superseded|archived")
     draft.add_argument("--review-after", metavar="YYYY-MM-DD", help="twin 재검토 기한")
     draft.add_argument("--supersedes", metavar="SLUG", help="twin: 대체하는 노트")
+    draft.add_argument("--entity", help="twin v2: 노트가 다루는 고유명사 (쉼표 구분)")
+    draft.add_argument("--relations", help="twin v2: '<술어>:<대상>' 쉼표 구분")
+    draft.add_argument("--event-date", metavar="YYYY-MM-DD", help="twin v2: 사건 당일")
+    draft.add_argument("--with-evidence", action="store_true")
     draft.set_defaults(func=cmd_draft)
 
     confirm = sub.add_parser("confirm", help="소유자 확인 검증 후에만 저장")
@@ -241,6 +252,12 @@ def build_parser() -> argparse.ArgumentParser:
     query.add_argument("term", nargs="?")
     query.add_argument("--tag")
     query.set_defaults(func=cmd_query)
+
+    consult = sub.add_parser("consult", help="지식 파사드 기반 판단 컨설트 (읽기 전용)")
+    consult.add_argument("text")
+    consult.add_argument("--limit", type=int, default=8)
+    consult.add_argument("--json", action="store_true")
+    consult.set_defaults(func=cmd_consult)
 
     back = sub.add_parser("backlinks", help="이 노트를 참조하는 노트 (읽기 전용)")
     back.add_argument("slug")

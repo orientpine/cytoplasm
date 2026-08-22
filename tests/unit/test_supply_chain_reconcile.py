@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from email.message import Message
@@ -34,14 +33,9 @@ _OWNER_ID = "111111111111111111"
 _CHANNEL_ID = "100000000000000009"
 _SKILL = "wiki"
 _NOT_FOUND = HTTPError("https://discord.test", 404, "error", Message(), None)
-_DEPLOY_BINDING = re.compile(
-    "".join(
-        (
-            r"\A\[skill-deploy\] 승인 요청\n- skill: `(?P<skill>[a-z0-9][a-z0-9-]{1,40})`\n",
-            r"- sha256: `(?P<digest>[0-9a-f]{64})`\n- deploy_nonce: `(?P<nonce>[0-9a-f]{32})`\n",
-        )
-    )
-)
+#: 정규식을 베껴 적지 않는다 — 사본은 본진이 바뀔 때 조용히 갈라지고, 그러면 이 테스트는
+#: 실제 게이트가 아닌 자기 사본을 검증하게 된다(2026-08-20 실측으로 정확히 그랬다).
+_DEPLOY_BINDING = skill_gate._REQUEST_BINDING
 DiscordResult = dict[str, str] | list[dict[str, str | bool]] | None
 
 

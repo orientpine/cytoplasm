@@ -2,6 +2,7 @@
 name: report
 description: "개인 노트를 민감도 게이트 뒤 보고서·reveal.js 슬라이드·발표 대본으로 생성한다. 모든 산출물은 agent 전용 outputs에만 저장한다. W5-3."
 version: 1.0.1
+author: autophagy-agents
 license: MIT
 metadata:
   hermes:
@@ -30,7 +31,11 @@ prerequisites:
 ```bash
 # !report [선택 키워드] — 최근 노트에서 보고서 초안 생성
 python3 ~/.hermes/skills/report/scripts/report_cli.py report \
-  [--query "키워드"] [--limit 12] [--title "보고서 제목"]
+  [--query "키워드"] [--limit 12] [--title "보고서 제목"] [--with-evidence]
+
+# 원문 없이 근거 수와 계층 상태 미리보기
+python3 ~/.hermes/skills/report/scripts/report_cli.py evidence \
+  [--query "키워드"] [--limit 12] [--title "보고서 제목"] [--json]
 
 # !slides <report-path> — reveal.js HTML 생성
 python3 ~/.hermes/skills/report/scripts/report_cli.py slides --report <~/outputs/report-*.md>
@@ -43,10 +48,21 @@ python3 ~/.hermes/skills/report/scripts/report_cli.py script \
 `!report`가 `자료 부족`을 반환하면 노트를 먼저 추가하거나 `--query`를 넓힌다.
 민감 적중의 provider 결과만 DM으로 알려 주고, 원문·매칭어·본문은 표시하지 않는다.
 
+## 지식 근거 규칙
+
+`--with-evidence`는 기존 `~/notes` 선택 결과에 읽기 전용 지식 파사드의 RAG/wiki/twin
+근거를 추가한다. 검색·랭킹·출처 형식은 직접 만들지 않고 반드시
+[`지식 계층 규약`](../../docs/guide/지식-계층-규약.md)의 `automation.knowledge`를
+경유한다. 보고서의 `## 근거`는 파사드 `sources` 형식만 쓰며 원본 팩은 같은
+`report-*.evidence.json`(0600)에 보관한다. 팩 밖 `[En]` 인용은 제거하고,
+근거가 없으면 "근거 없음", 조회 불가면 "근거 수집 불가"를 표시한 뒤 생성을
+계속한다. 근거 본문도 기존 민감도 라우팅 입력에 포함한다.
+
 ## Sandbox
 
 `scripts/scenario.sh`은 더미 시크릿과 임시 노트만 써서 보고서·슬라이드·대본의 구조,
-빈 노트 처리, 민감 입력의 codex 전용 라우팅을 검증한다.
+빈 노트 처리, 민감 입력의 codex 전용 라우팅, `KNOWLEDGE_FAKE_PACK` 오프라인
+근거·0600 사이드카를 검증한다.
 
 ## Drive 게시 (최종본)
 최종 산출물은 `DRIVE_PUBLISH_ENABLED=1`일 때 cha 본인 Drive의 `Autophagy 산출물/report/<YYYY-MM>/`에 생성 즉시 자동 업로드된다(초안 제외, 리뷰용, 게이트 없음). 공통 vendored 헬퍼 `scripts/drive_publish.py` 사용. 루트=`DRIVE_OUTPUTS_ROOT`, 기간=`DRIVE_PUBLISH_PERIOD`. 상세: `docs/guide/drive-publish.md`.

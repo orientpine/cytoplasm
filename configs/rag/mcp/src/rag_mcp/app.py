@@ -55,8 +55,11 @@ async def load_memory(
 async def search_memory(
     query: Annotated[str, Field(min_length=1, max_length=100_000)],
     limit: Annotated[int, Field(ge=1, le=20)] = 5,
+    entity_anchors: Annotated[list[str] | None, Field(max_length=20)] = None,
 ) -> list[MemorySearchResult]:
-    return await memory_store.search(query, limit)
+    if entity_anchors is None:
+        return await memory_store.search(query, limit)
+    return await memory_store.search(query, limit, entity_anchors)
 
 
 @mcp.tool

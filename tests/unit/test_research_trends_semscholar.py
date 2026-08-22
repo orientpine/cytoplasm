@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import email.message
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RUNTIME = _ROOT / "automation" / "research_trends"
+os.environ.setdefault("TOPICS_SCRIPTS", str(_ROOT / "skills" / "topics" / "scripts"))
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_RUNTIME))
 

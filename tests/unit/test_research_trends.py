@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import email.message
+import os
 import sys
 import types
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RUNTIME = _ROOT / "automation" / "research_trends"
+os.environ.setdefault("TOPICS_SCRIPTS", str(_ROOT / "skills" / "topics" / "scripts"))
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_RUNTIME))
 
@@ -27,6 +29,15 @@ ATOM = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
     <link rel=\"alternate\" href=\"https://arxiv.org/abs/2607.00001\" />
   </entry>
 </feed>"""
+
+
+def test_topics_modules_resolve_from_the_scripts_override() -> None:
+    # Given: collection configured the topics scripts override before module import.
+    expected = Path(os.environ["TOPICS_SCRIPTS"])
+
+    # When/Then: the runtime records both the selected override and live default.
+    assert research_trends.SCRIPTS_DIR == expected
+    assert research_trends._LIVE_SCRIPTS == "/srv/autophagy-skills/live/topics/scripts"
 
 
 def test_parse_arxiv_atom_returns_public_paper() -> None:

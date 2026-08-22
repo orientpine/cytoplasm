@@ -120,19 +120,19 @@ def test_deploy_sources_the_runtime_root_resolver() -> None:
 
 
 def test_deploy_prefers_release_current_when_present() -> None:
-    # When the release runtime exists, the sync path converges a pinned snapshot
-    # release and flips current BEFORE peer attestation, instead of ff-pulling the
-    # mutable mirror. A parallel session's dirty mirror can no longer block deploy.
+    # When the release runtime exists, the sync path converges a signed release and flips
+    # current BEFORE peer attestation, instead of ff-pulling the mutable mirror. A parallel
+    # session's dirty mirror can no longer block deploy.
     script = DEPLOY.read_text(encoding="utf-8")
     def_idx = script.index("sync_ops_checkout_for_peer_attest() {")
     body = script[def_idx : script.index("\n}", def_idx)]
     assert 'RELEASE_CURRENT="$NODE_RELEASE_CURRENT"' in script
     assert "$RELEASE_CURRENT" in body
-    assert "converge-release-runtime.sh" in body
-    # the converge helper is where the snapshot primitive is invoked
-    converge = (ROOT / "automation" / "converge-release-runtime.sh").read_text(encoding="utf-8")
+    assert "autophagy-converge-origin-main" in body
+    # the privileged helper is where the snapshot primitive is invoked
+    converge = (ROOT / "automation" / "converge_origin_main.sh").read_text(encoding="utf-8")
     assert "origin_snapshot" in converge
-    assert "autophagy-install-release" in converge
+    assert "release_store.py" in converge
 
 
 def test_deploy_release_probe_failure_reports_ops_access_error() -> None:
@@ -266,13 +266,23 @@ def test_converge_serializes_the_install_and_flip() -> None:
     assert "TMPDIR" not in lock_line
 
 
-def test_deploy_runs_the_converger_from_the_runtime_root_not_the_mirror() -> None:
+def test_deploy_never_converges_out_of_a_tree_a_merge_can_change() -> None:
+    """The converger a deploy runs must not be code the deploy itself can replace.
+
+    This used to mean "run `converge-release-runtime.sh` from `$RELEASE_CURRENT`, never
+    from the mutable mirror" (DG-6). The privileged helper subsumes that: it is installed
+    BY VALUE under a root-owned libexec by `provision-deploy-converge.sh`, so it lives in
+    no tree a merge or a parallel session can touch — and it verifies signatures besides.
+    """
     script = DEPLOY.read_text(encoding="utf-8")
     def_idx = script.index("sync_ops_checkout_for_peer_attest() {")
     body = script[def_idx : script.index("\n}", def_idx)]
-    converge_line = next(line for line in body.splitlines() if "converge-release-runtime.sh" in line)
-    assert "/srv/autophagy-agents/automation/converge-release-runtime.sh" not in converge_line
-    assert "$RELEASE_CURRENT" in converge_line
+    converge_line = next(
+        line for line in body.splitlines() if "autophagy-converge-origin-main" in line
+    )
+    assert "/srv/autophagy-agents/automation/" not in converge_line
+    assert "$RELEASE_CURRENT" not in converge_line
+    assert "$NODE_LIBEXEC_DIR/autophagy-converge-origin-main" in converge_line
 
 
 
@@ -304,3 +314,28 @@ def test_deploy_can_replace_a_read_only_tree_it_shipped_earlier(tmp_path: Path) 
     _ = subprocess.run(["chmod", "-R", "u+w", str(sealed)], check=False)
     _ = subprocess.run(["rm", "-rf", str(sealed)], check=False)
     assert not sealed.exists(), "unsealing first must make the tree removable"
+
+
+def test_release_convergence_goes_through_the_signature_gated_privileged_helper() -> None:
+    """A skill deployment must not be able to install unsigned code as the runtime.
+
+    DG-4 made the deploy converge the release runtime so the peer verifier and the
+    execution lease run from a sealed tree rather than a mutable mirror. It did that
+    with `converge-release-runtime.sh`, which takes its target BY VALUE and defaults to
+    whatever `origin/main` is right now — no signature, no release floor. Measured
+    2026-08-21: production was running 2c065bdf, a commit no release tag ever pointed
+    at, installed by the `meeting` skill deploy at 23:02 UTC while the floor still read
+    v1.0.24. So approving one skill silently promoted the whole code runtime onto an
+    unsigned head.
+
+    ops already holds NOPASSWD sudo for the argument-free helper the reconciler uses,
+    and that helper resolves the signed release itself and takes the same lock. Using it
+    keeps DG-4's sealed-verifier property while restoring the signature invariant, and
+    leaves exactly one convergence path that can move production.
+    """
+    script = DEPLOY.read_text(encoding="utf-8")
+    start = script.index("sync_ops_checkout_for_peer_attest() {")
+    body = script[start : script.index("\n}", start)]
+
+    assert "converge-release-runtime.sh" not in body
+    assert "autophagy-converge-origin-main" in body

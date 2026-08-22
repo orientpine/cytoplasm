@@ -111,6 +111,9 @@ class SignerInstallRequest:
     principal: str
     target: SignerTarget
     namespaces: str = GIT_SIGNATURE_NAMESPACE
+    #: Currently installed file text. Non-empty only for an overlap rotation,
+    #: where the node must trust the old and the new key at the same time.
+    existing: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +234,30 @@ def parse_allowed_signers(text: str) -> tuple[SignerEntry, ...]:
     return tuple(entries)
 
 
+def _merge_entries(existing: str, entry: SignerEntry) -> tuple[SignerEntry, ...]:
+    """Keep the installed signers so a key rotation can overlap old and new.
+
+    A rotation is only safe when every node already trusts the new key before a
+    release is signed with it, so both keys have to coexist for the length of
+    the transition. Re-installing the same key replaces its entry rather than
+    duplicating it, which keeps the installer idempotent.
+
+    A file that parses to no entries at all is a half-written trust anchor;
+    `parse_allowed_signers` raises there and we let it, because guessing at the
+    contents of the file that decides which releases are genuine is worse than
+    stopping.
+    """
+    if not existing.strip():
+        return (entry,)
+    kept = tuple(
+        current
+        for current in parse_allowed_signers(existing)
+        if (current.principal, current.key.material)
+        != (entry.principal, entry.key.material)
+    )
+    return (*kept, entry)
+
+
 def plan_signer_install(request: SignerInstallRequest) -> InstallPlan:
     if request.target.path == request.target.forbidden_path:
         raise TrustKeyError(
@@ -246,7 +273,9 @@ def plan_signer_install(request: SignerInstallRequest) -> InstallPlan:
     entry = SignerEntry(request.principal, key, request.namespaces)
     return InstallPlan(
         path=request.target.path,
-        content=render_allowed_signers((entry,), request.target),
+        content=render_allowed_signers(
+            _merge_entries(request.existing, entry), request.target
+        ),
         mode=REQUIRED_MODE,
         uid=ROOT_UID,
         gid=ROOT_GID,

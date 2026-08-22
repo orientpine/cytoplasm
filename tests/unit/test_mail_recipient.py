@@ -182,6 +182,9 @@ NOW = "2026-07-20T09:00:00Z"
 
 
 def _sent_compose(created: str, to: str, subject: str = "내일 오후 12시 탁구 — 회신 요청",
+                  # `status` 근거: 사이트가 낸 값이 아니라 **우리가 쓰는** 값이다 —
+                  # skills/mail/scripts/triage_gate.py:414 가 발송 후 draft 를 "executed"
+                  # 로 기록한다. 그래서 실측이 아니라 생산 지점을 근거로 달아 둔다.
                   *, kind: str = "compose", status: str = "executed") -> dict:
     return {"kind": kind, "status": status, "created": created,
             "to": to, "subject": subject}

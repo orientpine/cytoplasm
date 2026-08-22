@@ -5,9 +5,32 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = _SCRIPTS_DIR.parents[2]
+if (REPO_ROOT / "skills" / "prompt" / "scripts").is_dir():
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+else:
+    # Deployed layout: /srv/autophagy-skills/releases/prompt/<sha256>/scripts/ —
+    # no importable `skills` package sits above it, so synthesize `skills` and
+    # `skills.prompt` with __path__ at the skill root, exactly like doctype and
+    # procurement do. The naive parents[3] insert died in production with
+    # ModuleNotFoundError on 2026-08-22 (masked in the sandbox by a
+    # namespace-package accident of the ~/.hermes/skills staging path).
+    import types
 
-from skills.prompt.scripts import prompt_schema, prompt_store
+    _SKILL_ROOT = _SCRIPTS_DIR.parent
+    if "skills" not in sys.modules:
+        _pkg = types.ModuleType("skills")
+        _pkg.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["skills"] = _pkg
+    if "skills.prompt" not in sys.modules:
+        _sk = types.ModuleType("skills.prompt")
+        _sk.__path__ = [str(_SKILL_ROOT)]  # type: ignore[attr-defined]
+        sys.modules["skills.prompt"] = _sk
+        setattr(sys.modules["skills"], "prompt", _sk)
+
+from skills.prompt.scripts import prompt_schema, prompt_store  # noqa: E402
 
 
 class PromptCliError(ValueError):

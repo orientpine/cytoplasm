@@ -169,7 +169,8 @@ def load_prompt_template(path) -> str:
 
 
 def build_prompt(
-    template: str, *, subject: str, sender: str, body: str, instruction: str = ""
+    template: str, *, subject: str, sender: str, body: str, instruction: str = "",
+    evidence: str = "",
 ) -> str:
     for placeholder in ("{{SUBJECT}}", "{{SENDER}}", "{{BODY}}"):
         if placeholder not in template:
@@ -181,10 +182,17 @@ def build_prompt(
     elif instruction.strip():
         # Fail closed: an owner instruction must never be silently dropped.
         raise ValueError("prompt template missing {{INSTRUCTION}} for a non-empty instruction")
-    return (
+    prompt = (
         template.replace("{{SUBJECT}}", subject)
         .replace("{{SENDER}}", sender)
         .replace("{{BODY}}", body[:PROMPT_BODY_LIMIT])
+    )
+    if not evidence:
+        return prompt
+    return (
+        f"{prompt}\n\n{evidence}\n\n"
+        "Use only MATERIAL/EVIDENCE, cite [En], do not invent. "
+        "For the recipient-facing mail body, emit no [En] citations and mention no private sources."
     )
 
 

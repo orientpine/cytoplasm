@@ -60,6 +60,11 @@ WRAPPER_EXIT = {
     "ok": 0,
     "config_error": 1,
     "auth_error": 2,
+    # Same process exit code as auth_error on purpose: exit 2 is mailon's own
+    # `auth_or_browser_error`, so callers keep switching on 2 while the JSON error_code
+    # and the guidance say which half it was. See mailon_failure.classify_exit_two.
+    "browser_error": 2,
+    "auth_or_browser_error": 2,
     "read_path_error": 3,
     "usage_error": 4,
     "not_found": 5,
@@ -72,7 +77,7 @@ REAUTH_GUIDANCE = (
     "① ~agent/.env.secrets의 MAILON_ID/MAILON_PW/MAILON_TOTP_SECRET 존재·길이 확인 "
     "② 잔여 브라우저 세션 정리(pkill -u agent -f chrome) 후 재시도 — 중단된 sync 뒤 "
     "'ipt-id' 로그인 실패는 이 잔여 세션이 원인 "
-    "③ 수동 검증: cd ~/emailAutomation && set -a; . ~/.env.secrets; set +a; "
+    "③ 수동 검증: cd ~/.hermes/mailon-runtime/current && set -a; . ~/.env.secrets; set +a; "
     ".venv/bin/python -m mailon.main login "
     "④ 반복 실패 시 자동 재시도 금지 — cha 에스컬레이션 및 mail-mode 재판정(W4-2 규칙)."
 )
@@ -94,3 +99,7 @@ SYSTEM_ENV_KEEP = (
     "HOME", "PATH", "LANG", "LC_ALL", "TZ", "TERM", "USER", "LOGNAME",
     "SHELL", "TMPDIR", "XDG_RUNTIME_DIR",
 )
+
+#: `resolve` 후보 순서를 결정론으로 둔다 — 실측으로 한 사람에 후보 3건·주소 2종이 순위 없이
+#: 돌아왔고, 호출자가 임의로 고르면 되돌릴 수 없는 오발송이 된다. 목록에 없는 group 은 맨 뒤.
+RESOLVE_GROUP_PRIORITY = ("organization", "contacts", "history")

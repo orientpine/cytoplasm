@@ -51,17 +51,21 @@ from __future__ import annotations
 
 
 class Adapter:
-    async def on_message(self, message):
-        if True:
-            if True:
-                if True:
-                    _role_authorized = bool(getattr(self, "_allowed_role_ids", set()))
-                
-                # Multi-agent filtering: if the message mentions specific bots
-                pass
+    async def _dispatch_discord_message(self, message):
+        admitted, role_authorized = self._discord_message_admission(
+            message, claim=True,
+        )
+        if not admitted:
+            return False
+        return await self._handle_message(message, role_authorized=role_authorized)
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
-        """Swap the in-progress reaction for a final success/failure reaction."""
+        """Swap the in-progress reaction for final reaction and durable state."""
+        await asyncio.to_thread(
+            self._record_discord_processing_complete,
+            event,
+            outcome,
+        )
         if not self._reactions_enabled():
             return
         message = event.raw_message
@@ -88,37 +92,9 @@ class Adapter:
                 existing.media_types.extend(event.media_types)
 '''
 
-_INGRESS_PREIMAGE = '''\
-        if existing is None:
-            event._last_chunk_len = chunk_len  # type: ignore[attr-defined]
-            self._pending_text_batches[key] = event
-        else:
-            if event.text:
-                existing.text = f"{existing.text}\\n{event.text}" if existing.text else event.text
-            existing._last_chunk_len = chunk_len  # type: ignore[attr-defined]
-            if event.media_urls:
-                existing.media_urls.extend(event.media_urls)
-                existing.media_types.extend(event.media_types)
-'''
-_RECEIVE_PREIMAGE = '''\
-                    _role_authorized = bool(getattr(self, "_allowed_role_ids", set()))
-                
-                # Multi-agent filtering: if the message mentions specific bots
-'''
-_LIFECYCLE_PREIMAGE = '''\
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
-        """Swap the in-progress reaction for a final success/failure reaction."""
-        if not self._reactions_enabled():
-            return
-        message = event.raw_message
-        if hasattr(message, "add_reaction"):
-            await self._remove_reaction(message, "👀")
-            if outcome == ProcessingOutcome.SUCCESS:
-                await self._add_reaction(message, "✅")
-            elif outcome == ProcessingOutcome.FAILURE:
-                await self._add_reaction(message, "❌")
-'''
-_PREIMAGES = (_INGRESS_PREIMAGE, _RECEIVE_PREIMAGE, _LIFECYCLE_PREIMAGE)
+# Derive the preimages from the applier itself: they *are* the contract, and a
+# rebase (v0.18.2 -> v0.20.3) must not require editing the same strings twice.
+_PREIMAGES = (patcher._MOD1_PRE, patcher._MOD2_PRE, patcher._MOD3_PRE)
 
 
 def test_patch_applies_all_receipt_modifications_and_compiles() -> None:
@@ -135,7 +111,7 @@ def test_patch_applies_all_receipt_modifications_and_compiles() -> None:
         "existing.metadata.setdefault(_receipt_members_key, [existing.raw_message]).append("
         "event.raw_message)"
     ) in patched
-    assert "await adapter_self._add_reaction(message, \"👀\")" in patched
+    assert 'await self._add_reaction(message, "👀")' in patched
     assert "_receipt_ledger.record_received(" in patched
     assert "from automation.hermes_compat.receipt_apply import resolve_receipts" in patched
     assert "await _resolve_receipts(self, event, ok=" in patched
@@ -148,10 +124,10 @@ def test_receipt_injections_run_in_required_lifecycle_order() -> None:
 
     # Then
     assert patched.index("_hermes_receipts_done: owner DM receipt") > patched.index(
-        "_role_authorized ="
+        "admitted, role_authorized = self._discord_message_admission("
     )
     assert patched.index("_hermes_receipts_done: owner DM receipt") < patched.index(
-        "# Multi-agent filtering"
+        "return await self._handle_message(message, role_authorized=role_authorized)"
     )
     assert patched.index("event.metadata[_receipt_members_key]") < patched.index(
         "self._pending_text_batches[key] = event"

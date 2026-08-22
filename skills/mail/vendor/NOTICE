@@ -1,14 +1,57 @@
 Vendored mailon source
 ======================
 
-`skills/mail/vendor/mailon/` is vendored, unmodified source from the
+`skills/mail/vendor/mailon/` is vendored source from the
 `orientpine/emailAutomation` repository. The source was added to this
 repository by commit `ba67e73a94f8f650ac2364f51018b8c588a45dea` on
 2026-07-30 (`feat(mail): vendor mailon engine into repo (integrate emailAutomation)`).
 
 Per the repository owner's D9 attestation (2026-08-11), this vendored source
 is the owner's work and is covered by the repository's Apache-2.0 license.
-The vendored source files are kept byte-identical to the upstream material.
+The vendored source files are kept byte-identical to the upstream material,
+except for the local fixes listed below. `orientpine/emailAutomation` was
+absorbed into this repository, so there is no separate upstream to send them
+to; per the root `AGENTS.md` vendoring convention they are applied to the
+vendor source directly and redeployed.
+
+Local fixes
+-----------
+
+* 2026-08-18 — `mailon/login.py`: login completion was decided by
+  `wait_url("**/mail**")`, and the URL was validated only inside that wait's
+  `except` branch. The glob matches the *host* (`mailon.kr` contains "mail"),
+  so the wait returned immediately, the guard never ran, and a rejected
+  credential was logged as "login succeeded" — the real failure then surfaced
+  much later as a `BrowserError`, which exit code 2 folds into
+  `auth_or_browser_error`. Login completion is now decided by polling the URL
+  *path* and is validated on every exit from the wait. Regression:
+  `tests/unit/test_mailon_login_detection.py`.
+
+* 2026-08-18 — `mailon/resolve.py`: `resolve_name()` called
+  `window._tbar.compose()` as soon as login returned. Reaching `/mail` does not
+  mean the mailbox SPA can service that call yet, and compose then throws inside
+  the site's own `main.js`. That became a `BrowserError`, which exit code 2
+  again folds into `auth_or_browser_error`, so a startup race was reported as an
+  auth failure. A readiness *predicate* does not fix it: measured, the page
+  passes through several distinct broken states (`_tbar` undefined, then
+  `tabPanel._getMenuById is not a function`), so a guard that only asked whether
+  `tabPanel` was defined passed while compose still failed. Compose is now
+  driven by `open_compose_when_ready()`, which retries the real call until it
+  succeeds — opening compose is read-only, nothing is submitted — and fails with
+  a named timeout carrying the last error otherwise. Regression:
+  `tests/unit/test_mailon_compose_readiness.py`.
+
+* 2026-08-18 — `mailon/send.py`, `mailon/send_trigger.py`, and
+  `mailon/resolve.py`: the send path still called `window._tbar.compose()`
+  directly, so dry runs reached the measured mailbox SPA startup race without
+  the retry already protecting recipient resolution. Real sends survived only
+  incidentally because duplicate suppression delayed compose by 3–5 seconds;
+  dry runs skip that block and failed after login with
+  `FAIL [external_service_error]` (exit 2). The proven retry helper now lives in
+  `send_trigger.py`, which owns compose/send triggering, and both resolution and
+  sending share it. The 3-second form settle remains because only compose
+  callability has been measured, not completion of CSRF, recipient-field, and
+  editor rendering. Regression: `tests/unit/test_mailon_compose_readiness.py`.
 
 The private development repository preserves those bytes. Public-history
 snapshots run `automation/public_export_redaction.py` against the materialized

@@ -21,6 +21,7 @@ secret="${AUTOPHAGY_DEMO_SECRET:-}"
 [[ "$secret" == DUMMY-* ]] || fail "secret does not carry the DUMMY- prefix (real secrets forbidden in sandbox)"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../../.." && pwd)"
 work="$(mktemp -d)"
 trap 'cd / && rm -rf "$work"' EXIT
 cd "$work"  # sandbox cwd may be unreadable to this account
@@ -284,6 +285,19 @@ PY
 chmod +x "$work/glm-stub" "$work/hermes-stub" "$work/mailon-send-stub"
 tri() { python3 "$script_dir/triage_cli.py" "$@"; }
 send_calls() { [ -f "$work/mailon-send-calls.log" ] && wc -l < "$work/mailon-send-calls.log" || echo 0; }
+cat > "$work/evidence-pack.json" <<'JSON'
+{"version":"knowledge-v1","query":{"text":"peer@example.invalid 일정","purpose":"synthesize","sources":["rag","wiki","twin"],"tags":[],"limit":8,"caller":"mail"},"verdict":"hit","items":[{"id":"E1","store":"rag","source_type":"note","ref":"contacts/peer.md","title":"상대 노트","doc_date":"2026-08-18","date_basis":"path","score":0.9,"grounded":true,"authority":null,"expired":null,"sensitivity":null,"content":"지난 일정 합의","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"layers":{"rag":"hit","wiki":"none","twin":"none"},"notes":[]}
+JSON
+if PYTHONPATH="$repo_root" python3 -c \
+  'import automation.entity_preflight.gate; import automation.knowledge.render' 2>/dev/null; then
+  AUTOPHAGY_REPO_ROOT="$repo_root" KNOWLEDGE_FAKE_PACK="$work/evidence-pack.json" \
+    tri evidence --counterparty peer@example.invalid --subject 일정 --json \
+    | grep -q '"evidence_count": 1' || fail "offline evidence preview"
+else
+  AUTOPHAGY_REPO_ROOT="$repo_root" KNOWLEDGE_FAKE_PACK="$work/evidence-pack.json" \
+    tri evidence --counterparty peer@example.invalid --subject 일정 \
+    | grep -q '근거 수집 불가' || fail "offline evidence degradation"
+fi
 
 # --- 5) triage happy tick: gate order, routing split, drafts, no send ----------
 tri process --no-sync --no-post > "$work/t1.out" || fail "triage process failed"

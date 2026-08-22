@@ -15,14 +15,13 @@ import json
 import os
 import re
 import stat
-import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Sequence
 from typing import Final
+
 
 _DEFAULT_VERDICTS_PATH: Final = "~/.hermes/skill-gate/review-verdicts.jsonl"
 _REQUIRED_CHECKS: Final = ("frontmatter", "scenario", "secret_scan", "content_digest")
@@ -80,6 +79,18 @@ def verdicts_path() -> Path:
     return Path(os.environ.get("REVIEW_VERDICTS_PATH", _DEFAULT_VERDICTS_PATH)).expanduser()
 
 
+#: 마운트되지 **않는** 파일 — 단일 진실. `deploy-skill.sh` 가 이 값을 읽어 아카이브에서도
+#: 같은 이름을 뺀다. 둘이 갈라지면 승인 해시가 덤지 않는 파일이 노드에 올라가므로,
+#: `tests/unit/test_skill_mount_scope.py` 가 두 집합의 일치를 기계적으로 강제한다.
+#:
+#: `deploy.sh` 는 배포 **도구**이지 스킬 내용이 아니다 — 배포는 항상 개발 체크아웃이나
+#: 릴리스에서 돌고, 마운트본의 그 파일은 한 번도 실행되지 않는다. 그런데도 digest 에
+#: 들어 있어서, 2026-08-20 에 배포 도구를 고친 변경(PR #191) 하나가 **무관한 스킬 6개의**
+#: 마운트를 무효화해 소유자 ✅ 를 6번 요구했다. 제외해도 승인 범위는 약해지지 않는다 —
+#: 실제로 도는 것(SKILL.md·scripts/)은 그대로 100% 덤고, 노드에 올라가는 파일이 하나 준다.
+MOUNT_EXCLUDED_BASENAMES: Final = frozenset({"deploy.sh"})
+
+
 def _skill_files(skill_dir: Path) -> tuple[Path, ...]:
     if not skill_dir.is_dir():
         return ()
@@ -89,6 +100,7 @@ def _skill_files(skill_dir: Path) -> tuple[Path, ...]:
         if path.is_file() and not path.is_symlink()
         and "__pycache__" not in path.relative_to(skill_dir).parts
         and path.suffix not in {".pyc", ".pyo"}
+        and path.name not in MOUNT_EXCLUDED_BASENAMES
     )
     return tuple(sorted(files, key=lambda path: os.fsencode(path.relative_to(skill_dir).as_posix())))
 
@@ -122,35 +134,14 @@ def _frontmatter_passes(skill_dir: Path, skill: str) -> bool:
 
 
 def _scenario_passes(skill_dir: Path, output_file: Path | None) -> bool:
-    resolved_skill_dir = skill_dir.resolve()
-    scenario = resolved_skill_dir / "scripts" / "scenario.sh"
-    if not scenario.is_file() or scenario.is_symlink():
-        return False
     if output_file is not None:
         try:
             return "SCENARIO-PASS" in output_file.read_text(encoding="utf-8")
         except OSError:
             return False
-    with tempfile.TemporaryDirectory(prefix="skill-review-") as home:
-        environment = {
-            "HOME": home,
-            "PATH": "/usr/bin:/bin",
-            "AUTOPHAGY_DEMO_SECRET": "DUMMY-skill-review",
-        }
-        try:
-            completed = subprocess.run(
-                ["bash", str(scenario)],
-                cwd=resolved_skill_dir,
-                env=environment,
-                check=False,
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-    return completed.returncode == 0 and "SCENARIO-PASS" in completed.stdout
+    from automation.scenario_runner import scenario_passes
+
+    return scenario_passes(skill_dir, None)
 
 
 def _secret_scan_passes(skill_dir: Path) -> bool:

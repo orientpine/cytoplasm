@@ -1,7 +1,8 @@
 ---
 name: proposal
 description: "개인 제안서 워크스페이스에서 섹션 Kanban·초안·인간 기여분·취합·Codex 최종 검토를 안전하게 관리한다. W5-4."
-version: 1.0.1
+version: 1.1.0
+author: autophagy-agents
 license: MIT
 metadata:
   hermes:
@@ -24,7 +25,8 @@ prerequisites:
    취합본에 저장하고, `PROPOSAL_DM_TARGET` 또는 `~/.hermes/proposal/config.json`의 `dm_target`으로
    cha에게 DM한다. 재검토 대신 사람이 검토 결과를 직접 반영한다.
 3. 타인 기여분은 사람이 전달한 `--file` 또는 `--text`만 `contribute`로 섹션에 접는다. URL/외부
-   문서 자동 수집은 이 스킬에 없다.
+   문서 자동 수집은 이 스킬에 없다. `--with-evidence`의 읽기 전용 개인 지식 조회는 타인 기여분
+   수집이 아니며 아래 지식 파사드 규약만 따른다.
 4. 섹션 카드는 전용 `proposal-<slug>` 보드에 `needs_input` 사유가 있는 `blocked`로 만든다. 이는
    실제 인간 입력 대기 상태이며, Ready 주차 용도가 아니다. 초안이 생기면 Ready로 옮기지 않고
    직접 완료해 디스패처 LLM 워커를 만들지 않는다.
@@ -48,7 +50,11 @@ python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py section-add \
 python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py draft \
   --slug <kebab-slug> --section need --file <local-file>
 python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py draft \
-  --slug <kebab-slug> --section approach --brief-file <local-file>
+  --slug <kebab-slug> --section approach --brief-file <local-file> --with-evidence
+
+# 생성 전에 원문을 노출하지 않는 팩 요약 또는 파사드 렌더 출처를 미리 확인
+python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py evidence \
+  --slug <kebab-slug> --section approach --brief-file <local-file> --json
 
 # 사람이 전달한 자료만 관련 섹션에 취합
 python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py contribute \
@@ -61,10 +67,24 @@ python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py assemble --slug <kebab
 python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py review --slug <kebab-slug>
 ```
 
+## 지식 근거
+
+근거 조회는 opt-in `--with-evidence`일 때만 [`지식 계층 규약`](../../docs/guide/지식-계층-규약.md)의
+읽기 전용 `automation.knowledge` 파사드를 경유한다. proposal은 RAG/wiki/Obsidian을 직접 검색하거나
+검색 임계값을 바꾸지 않는다. 초안의 `### 근거` 각주와 취합본 말미의 `## 근거 목록`은 모두
+`render_citations`가 만든 단일 출처 형식을 쓰며, 팩 밖 인용은 생성 직후 제거한다. 팩은 섹션 옆
+`*.evidence.json`(0600)에 보관한다.
+
+관련 근거가 없으면 초안 머리에 "근거 없음"을 명시하고 소유자의 과거·노트에 관한 사실 주장을
+근거 있는 것처럼 쓰지 않는다. 계층 조회가 불가능하면 "근거 수집 불가"를 표시하되 생성은 계속하며
+재시도하거나 자체 검색으로 우회하지 않는다. patent-sensitive 근거와 센티널 content는 GLM에 보내지
+않고 기존 Codex 전용 민감도 경로를 사용한다.
+
 ## Sandbox
 
 `scripts/scenario.sh`은 더미 시크릿과 임시 0700 워크스페이스만 사용한다. Kanban과 DM을 비활성화한
-상태로 섹션 생성·인간 기여분 취합·전체/누락 취합·상태 메타 무본문을 검증한다.
+상태로 섹션 생성·인간 기여분 취합·전체/누락 취합·상태 메타 무본문과
+`KNOWLEDGE_FAKE_PACK` 기반 오프라인 근거 초안·각주·사이드카를 검증한다.
 
 ## Drive 게시 (최종본)
 최종 산출물은 `DRIVE_PUBLISH_ENABLED=1`일 때 cha 본인 Drive의 `Autophagy 산출물/proposal/<YYYY-MM>/`에 생성 즉시 자동 업로드된다(초안 제외, 리뷰용, 게이트 없음). 공통 vendored 헬퍼 `scripts/drive_publish.py` 사용. 루트=`DRIVE_OUTPUTS_ROOT`, 기간=`DRIVE_PUBLISH_PERIOD`. 상세: `docs/guide/drive-publish.md`.

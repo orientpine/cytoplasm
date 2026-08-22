@@ -30,10 +30,26 @@ class OwnerDmDirectory(Protocol):
     def owner_dm(self) -> str: ...
 
 
+def repo_root() -> Path:
+    """The checkout that actually carries ``automation.interop``.
+
+    A mounted release makes ``parents[3]`` point at ``.../releases``. On
+    2026-08-18 that made the approval surface refuse its own shared lifecycle.
+    """
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT")
+    if override:
+        return Path(override).expanduser()
+    here = Path(__file__).resolve()
+    candidates = [*here.parents[2:6], Path("/srv/autophagy-agent-current"), Path("/srv/autophagy-agents")]
+    for candidate in candidates:
+        if (candidate / "automation" / "interop").is_dir():
+            return candidate
+    current = Path("/srv/autophagy-agent-current")
+    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
+
+
 def _repo_module(name: str) -> ModuleType:
-    root = Path(
-        os.environ.get("AUTOPHAGY_REPO_ROOT", str(Path(__file__).resolve().parents[3]))
-    ).expanduser()
+    root = repo_root()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     try:

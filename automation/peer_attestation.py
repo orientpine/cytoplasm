@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pwd
 import os
+import sys
 import re
 import stat
 import subprocess
@@ -48,6 +49,20 @@ _PEER_START: Final = re.compile(r"^  [a-z0-9][a-z0-9-]*:\s*$")
 _PEER_FIELD: Final = re.compile(r"^    (?P<key>account|bot_user_id):\s*(?P<value>[^#\s]+)\s*$")
 _SNOWFLAKE: Final = re.compile(r"[0-9]{17,19}")
 _UNTRUSTED_WRITE_BITS: Final = stat.S_IWGRP | stat.S_IWOTH
+# The peer registry's trust anchor. Deliberately a hardcoded literal and NOT
+# node config: `~/.hermes/node.toml` is agent-writable, so reading `ops_account`
+# from there would put agent-controlled input into a trust anchor (threat model
+# E7), and staging node_config.py into the gate instead drags its transitive
+# imports through deploy-skill.sh's staging list. Both costs are the owner's to
+# weigh, so the decision is unchanged here — only its silence is.
+#
+# It is not a vulnerability: /etc/autophagy is root-owned 0755, so a wider uid
+# set would have no file inside it to apply to. The damage is availability — an
+# installation that renamed ops_account and then followed the documented
+# contract fails every discord-mode deploy with `valid peer attestation absent`
+# and nothing naming the cause.
+TRUST_ANCHOR_ACCOUNT: Final = "ops"
+_ANCHOR_CODE: Final = "PEER-TRUST-ANCHOR"
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +119,7 @@ def parse_timestamp(value: str) -> datetime | None:
 
 def _trusted_owner_uids() -> frozenset[int]:
     try:
-        ops_uid = pwd.getpwnam("ops").pw_uid
+        ops_uid = pwd.getpwnam(TRUST_ANCHOR_ACCOUNT).pw_uid
     except (KeyError, OSError):
         return frozenset({0})
     return frozenset({0, ops_uid})
@@ -125,6 +140,18 @@ def _is_trusted_peer_config_path(path: Path) -> bool:
         and parent_stat.st_uid in trusted
         and config_stat.st_mode & _UNTRUSTED_WRITE_BITS == 0
         and parent_stat.st_mode & _UNTRUSTED_WRITE_BITS == 0
+    )
+
+
+def peer_trust_anchor_refusal(path: Path) -> str:
+    """Name why `path` cannot serve as the peer trust root."""
+    trusted = sorted(_trusted_owner_uids())
+    owner = str(path.lstat().st_uid) if path.exists() else "없음"
+    return (
+        f"{_ANCHOR_CODE}: {path} 소유 uid={owner}, 신뢰 uid={trusted} — 앵커는 root와 "
+        f"하드코드 계정명 {TRUST_ANCHOR_ACCOUNT}뿐이며 node config의 ops_account를 보지 "
+        f"않는다. 그 계정을 다른 이름으로 둔 설치라면 레지스트리를 root 소유로 두거나 "
+        f"{TRUST_ANCHOR_ACCOUNT} 계정을 만든다 — 정규 파일 여부와 쓰기 비트도 함께 본다."
     )
 
 
@@ -207,6 +234,9 @@ def valid_signed_attestation(
 def load_bot_ids(path: Path) -> BotIds | None:
     """Read the agent and peer bot identities from simple trusted YAML."""
     if not _is_trusted_peer_config_path(path):
+        # Callers only ever learn "attestation absent"; without this the cause
+        # never reaches the operator (2026-08-15 authorization audit).
+        print(peer_trust_anchor_refusal(path), file=sys.stderr)
         return None
     try:
         lines = path.read_text(encoding="utf-8").splitlines()

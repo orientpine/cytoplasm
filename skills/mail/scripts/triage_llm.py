@@ -166,12 +166,13 @@ def classify(
 
 def draft_reply(
     *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str,
-    prompt_path: Path, instruction: str = "",
+    prompt_path: Path, instruction: str = "", evidence: str = "",
 ) -> tuple[str, str, str]:
     """Step-3 Korean final-text reply — ALWAYS the non-GLM quality tier."""
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body, instruction=instruction,
+        evidence=evidence,
     )
     raw = call_codex(prompt)
     _log_call(provider=NON_GLM_PROVIDER, model=codex_model(), purpose="draft_reply",
