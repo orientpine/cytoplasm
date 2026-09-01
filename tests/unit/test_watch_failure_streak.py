@@ -7,13 +7,20 @@
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
 
-_SOURCE = Path(__file__).resolve().parents[2] / "skills" / "mail" / "scripts" / "watch_failure_streak.py"
+_REPO = Path(__file__).resolve().parents[2]
+_SOURCE = _REPO / "skills" / "mail" / "scripts" / "watch_failure_streak.py"
+_SHARED_HELPER_ADOPTERS = (
+    ("research-trends", _REPO / "automation" / "research_trends" / "research_trends.py", 1),
+    ("notes-weekly-organize", _REPO / "automation" / "notes_organize" / "notes_organize.py", 1),
+    ("budget-watch", _REPO / "skills" / "budget" / "scripts" / "budget_watch.py", 3),
+)
 
 
 def _module():
@@ -29,6 +36,38 @@ def _module():
 def streak(tmp_path: Path):
     module = _module()
     return module, tmp_path
+
+
+def _failure_notice_threshold(source: Path) -> int:
+    for node in ast.parse(source.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        else:
+            continue
+        if isinstance(target, ast.Name) and target.id == "FAILURE_NOTICE_THRESHOLD":
+            assert isinstance(value, ast.Constant)
+            assert isinstance(value.value, int)
+            return value.value
+    raise AssertionError(f"{source} does not expose FAILURE_NOTICE_THRESHOLD")
+
+
+@pytest.mark.parametrize(
+    ("watch_name", "source", "expected_threshold"), _SHARED_HELPER_ADOPTERS
+)
+def test_shared_helper_adopter_inventory_pins_each_notice_threshold(
+    watch_name: str, source: Path, expected_threshold: int
+) -> None:
+    """Each adopter must retain its explicit threshold when using the shared helper."""
+    text = source.read_text(encoding="utf-8")
+
+    assert "watch_failure_streak.record(" in text, (
+        f"{watch_name} must call the shared watch_failure_streak helper"
+    )
+    assert _failure_notice_threshold(source) == expected_threshold, (
+        f"{watch_name} must keep FAILURE_NOTICE_THRESHOLD={expected_threshold}"
+    )
 
 
 def test_a_healthy_watcher_stays_completely_silent(streak) -> None:

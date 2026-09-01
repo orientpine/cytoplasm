@@ -8,10 +8,13 @@ from datetime import UTC, datetime
 from email.message import Message
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import unquote
 
 import pytest
+
+from automation.interop.approval_surface import POLICY_VERSION
 
 _REPO = Path(__file__).resolve().parents[2]
 _COORDINATION = _REPO / "skills" / "coordination" / "scripts"
@@ -25,9 +28,14 @@ coordination_lifecycle = importlib.import_module("coordination_lifecycle")
 coordination_pending = importlib.import_module("coordination_pending")
 
 OWNER = "owner-coordination"
+ORIGIN_CHANNEL = "origin-chan-1"
+ORIGIN_MESSAGE = "origin-msg-1"
 SLOT = "2026-07-28T09:00:00+09:00"
 KEY = f"coord:{SLOT}"
 OWNER_DM_CHANNEL_ID = "1526487935975952385"
+AGENT_CHAT_CHANNEL_ID = "1526487935975952390"
+AGENT_CHAT_THREAD_ID = "1526487935975952391"
+AGENT_CHAT_GUILD_ID = "1526487935975952392"
 
 
 class FakeDiscord:
@@ -36,6 +44,7 @@ class FakeDiscord:
         self.contents: dict[str, str] = {}
         self.approved: set[str] = set()
         self.deleted: set[str] = set()
+        self.post_channels: list[str] = []
         self.posts = 0
 
     def owner_channel(self, _owner_id: str) -> str:
@@ -43,6 +52,7 @@ class FakeDiscord:
 
     def post(self, _channel_id: str, content: str) -> str:
         self.posts += 1
+        self.post_channels.append(_channel_id)
         message_id = f"msg-{self.posts}"
         self.contents[message_id] = content
         self.calls.append(f"POST:{message_id}")
@@ -53,12 +63,18 @@ class FakeDiscord:
 
     def api(
         self, method: str, path: str, _payload: dict[str, str] | None = None
-    ) -> dict[str, str] | list[dict[str, str | bool]] | None:
+    ) -> Any:
         parts = path.strip("/").split("/")
         if method == "POST" and path == "/users/@me/channels":
             return {"id": OWNER_DM_CHANNEL_ID}
         if method == "GET" and path == f"/channels/{OWNER_DM_CHANNEL_ID}":
             return {"id": OWNER_DM_CHANNEL_ID, "name": "", "recipients": [{"id": OWNER}], "type": 1}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}":
+            return {"id": AGENT_CHAT_CHANNEL_ID, "guild_id": AGENT_CHAT_GUILD_ID, "name": "agent-chat", "type": 0}
+        if method == "GET" and path == f"/guilds/{AGENT_CHAT_GUILD_ID}/threads/active":
+            return {"threads": [{"id": AGENT_CHAT_THREAD_ID, "name": "승인-coordination", "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD_ID}":
+            return {"id": AGENT_CHAT_THREAD_ID, "name": "승인-coordination", "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}
         message_id = parts[3] if len(parts) > 3 else ""
         if method == "DELETE":
             self.calls.append(f"DELETE:{message_id}")
@@ -83,7 +99,10 @@ def coordination_env(
     calls: list[str] = []
     fake = FakeDiscord(calls)
     interop = tmp_path / "interop.json"
-    interop.write_text(json.dumps({"agent_id": "agent", "owner_id": OWNER}), encoding="utf-8")
+    interop.write_text(
+        json.dumps({"agent_id": "agent", "owner_id": OWNER, "agent_chat_channel_id": AGENT_CHAT_CHANNEL_ID}),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
     monkeypatch.setenv("CALENDAR_GATE_DIR", str(tmp_path / "calendar-gate"))
     monkeypatch.setenv("COORDINATION_PENDING_CONFIRMS", str(tmp_path / "pending.jsonl"))
@@ -107,6 +126,8 @@ def _args(summary: str = "peer meeting") -> Namespace:
         calendar="primary",
         e2e_confirm=False,
         peer="agent-peer",
+        origin_channel_id=ORIGIN_CHANNEL,
+        origin_message_id=ORIGIN_MESSAGE,
     )
 
 
@@ -130,6 +151,7 @@ def test_second_confirm_same_slot_and_hash_posts_nothing_and_keeps_message_id(
 
     entries = tuple(entry for entry in _store().load() if entry.key == KEY)
     assert fake.posts == 1
+    assert fake.post_channels == [AGENT_CHAT_THREAD_ID]
     assert len(entries) == 1
     assert entries[0].dm_message_id == "msg-1"
 
@@ -152,6 +174,7 @@ def test_changed_content_deletes_message_before_dropping_row_then_posts_once(
     assert calls.index("DELETE:msg-1") < calls.index("DROP:msg-1") < calls.index("POST:msg-2")
     entries = tuple(entry for entry in _store().load() if entry.key == KEY)
     assert fake.posts == 2
+    assert fake.post_channels == [AGENT_CHAT_THREAD_ID, AGENT_CHAT_THREAD_ID]
     assert [entry.dm_message_id for entry in entries] == ["msg-2"]
 
 
@@ -168,6 +191,7 @@ def test_owner_already_approved_defers_without_deleting_or_dropping(
 
     assert "DELETE:msg-1" not in calls
     assert fake.posts == 1
+    assert fake.post_channels == [AGENT_CHAT_THREAD_ID]
     assert _store().path.read_bytes() == before
 
 
@@ -198,6 +222,23 @@ def test_corrupt_row_refuses_without_posting(
 
     assert fake.posts == 0
     assert _store().path.read_text(encoding="utf-8") == "{not-json\n"
+
+
+def test_owner_leg_persists_the_instruction_origin_into_the_pending_record(
+    coordination_env: tuple[FakeDiscord, list[str]],
+) -> None:
+    # Given / When: a channel-instructed request reaches the owner approval leg
+    _fake, _calls = coordination_env
+    assert _request() == 7
+
+    # Then: the stored pending record carries the origin binding for result routing
+    [entry] = tuple(entry for entry in _store().load() if entry.key == KEY)
+    assert entry.origin_channel_id == ORIGIN_CHANNEL
+    assert entry.origin_message_id == ORIGIN_MESSAGE
+    assert entry.dm_channel_id == AGENT_CHAT_THREAD_ID
+    assert entry.channel_id == AGENT_CHAT_THREAD_ID
+    assert entry.surface == "agent-chat-thread"
+    assert entry.policy_version == POLICY_VERSION
 
 
 def test_coordination_legacy_record_derives_key_from_slot(

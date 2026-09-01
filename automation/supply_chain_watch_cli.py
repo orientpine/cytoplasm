@@ -33,11 +33,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-from automation import skill_gate
+from automation import skill_gate, skill_gate_request, skill_gate_surface
+from automation.interop.approval_reminder_config import (
+    load_approval_reminder_config,
+)
+from automation.interop.approval_surface import ApprovalKind
 from automation.skill_gate_approval import SkillApprovalGate
 from automation.skill_store import STORE_ROOT
 from automation.supply_chain_plan import PendingRequest
 from automation.supply_chain_reconcile import Reconciled, reconcile
+from automation.supply_chain_shadow_watch import run_shadow_check
+from automation.supply_chain_remind import remind_unanswered
 from automation.supply_chain_watch import (
     FailureAttempt,
     TickResult,
@@ -55,6 +61,10 @@ COMMAND_UNAVAILABLE: Final = 127
 
 _TIMEOUT: Final = 3600.0
 _STATE_DEFAULT: Final = "~/.hermes/supply-chain-watch/tick.json"
+
+
+class ReminderDeliveryError(ValueError):
+    """The approval channel cannot produce a safe guild message link."""
 
 
 def state_path() -> Path:
@@ -189,6 +199,48 @@ def main() -> int:
         eligible=eligible,
     )
     results = tick.requests
+
+    guild_ids: dict[str, str] = {}
+
+    def guild_of(source_channel_id: str) -> str:
+        cached = guild_ids.get(source_channel_id)
+        if cached is not None:
+            return cached
+        channel = identity.api("GET", f"/channels/{source_channel_id}")
+        guild_id = channel.get("guild_id") if isinstance(channel, dict) else None
+        if not isinstance(guild_id, str) or not guild_id:
+            raise ReminderDeliveryError("approval channel has no guild binding")
+        guild_ids[source_channel_id] = guild_id
+        return guild_id
+
+    def deliver(source_channel_id: str, body: str) -> None:
+        _ = identity.api(
+            "POST",
+            f"/channels/{source_channel_id}/messages",
+            {"content": body},
+        )
+
+    def channel_of(record: Mapping[str, str]) -> str:
+        return skill_gate_surface.surface_for(
+            ApprovalKind.SKILL_DEPLOY, identity
+        ).stored(record).channel_id
+
+    _ = remind_unanswered(
+        results,
+        skill_gate.GATE_DIR,
+        decision_of=decision_of,
+        channel_of=channel_of,
+        deliver=deliver,
+        guild_of=guild_of,
+        lease=skill_gate_request.lease(skill_gate.GATE_DIR),
+        config=load_approval_reminder_config(),
+        clock=lambda: datetime.now(UTC),
+        on_error=lambda key, reason: print(
+            f"[supply-chain-watch] {key} reminder-error ({reason})",
+            file=sys.stderr,
+        ),
+    )
+
     next_failures = dict(failures)
     if tick.succeeded:
         live_keys = {result.request.key for result in results}
@@ -233,6 +285,12 @@ def main() -> int:
         timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         failures=next_failures,
     )
+    try:  # SC-1: 그림자 검사는 틱을 절대 막지 않는다(fail-soft) — 저널 한 줄이 신호다
+        shadows = run_shadow_check()
+        if shadows:
+            print(f"[supply-chain-watch] SHADOWS-GOVERNED {' '.join(shadows)}", file=sys.stderr)
+    except Exception as error:  # noqa: BLE001 - 탐지 실패가 승인 재개를 세우면 안 된다
+        print(f"[supply-chain-watch] shadow-check-error ({type(error).__name__})", file=sys.stderr)
     return 1 if alerted else 0
 
 

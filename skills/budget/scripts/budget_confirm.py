@@ -128,12 +128,64 @@ def delete_message(message_id: str, channel_id: str) -> None:
 
 
 def dm_owner(content: str) -> str:
-    """Send a terse cancellation notice to the owner's direct-message channel."""
-    import budget_binding
+    """Send a sanitized result notice through the shared channel-or-DM facade.
 
-    channel_id = budget_binding.approval_directory().owner_dm()
-    message = _api("POST", f"/channels/{channel_id}/messages", {"content": content})
-    return str(message["id"])
+    결과 문구에는 금액·잔액을 싣지 않는다. ``owner_notice``가 지정 통지 채널을
+    우선하고, 설정이 없을 때만 소유자 DM을 연다.
+    """
+    if not os.environ.get("DISCORD_BOT_TOKEN", "").strip():
+        os.environ["DISCORD_BOT_TOKEN"] = bot_token()
+    if not os.environ.get("AUTOPHAGY_OWNER_ID", "").strip():
+        os.environ["AUTOPHAGY_OWNER_ID"] = owner_id()
+    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    if str(runtime) not in sys.path:
+        sys.path.insert(0, str(runtime))
+    from automation.owner_notice import notify_owner  # noqa: PLC0415
+
+    if not notify_owner(content):
+        raise GateError("소유자 결과 통지 전송 실패", 3)
+    return "OWNER-NOTICE-SENT"
+
+
+def _origin_notice():
+    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    sys.path.insert(0, str(runtime))
+    from automation.interop import origin_notice  # noqa: PLC0415
+
+    return origin_notice
+
+
+def _thread_transport(channel_id: str):
+    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    sys.path.insert(0, str(runtime))
+    from automation.interop.discord_transport import DiscordTransport  # noqa: PLC0415
+
+    return DiscordTransport(token=bot_token(), channel_id=channel_id)
+
+
+def notify_result(draft: dict, content: str) -> str:
+    """Route a send/cancel result: origin-channel thread first, owner fallback.
+
+    라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
+    `automation.interop.origin_notice.deliver`가 소유한다(2026-08-23 전 스킬
+    공통화). 금액·잔액은 결과 문구에 싣지 않는다 — SKILL.md 민감도 규칙.
+    """
+    try:
+        origin_notice = _origin_notice()
+    except ImportError as error:  # 낡은 interop 런타임/샌드박스 — 결과는 그래도 소유자에게 닿아야 한다
+        print(
+            f"NOTIFY-HELPER-MISSING draft={draft['id']} err={type(error).__name__}",
+            file=sys.stderr,
+        )
+        return dm_owner(content)
+    return origin_notice.deliver(
+        api=_api,
+        transport_factory=_thread_transport,
+        record=draft,
+        thread_name=f"과제비: {draft['subject']} (draft {draft['id']})",
+        content=content,
+        fallback=dm_owner,
+    )
 
 
 def _owner_reacted(users: list[dict], owner: str) -> bool:

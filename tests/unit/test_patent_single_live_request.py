@@ -26,6 +26,8 @@ OWNER = "owner-patent-live"
 SLUG = "single-live"
 APPROVALS_CHANNEL = "1528936606856122421"  # digit-only: bindings refuse a placeholder id
 OWNER_DM_CHANNEL = "1526487935975952385"  # the DM this bot opens with the owner
+AGENT_CHAT_CHANNEL = "1526487935975952390"
+AGENT_CHAT_THREAD = "1526487935975952391"
 NOW = 1_800_000_000
 
 
@@ -47,7 +49,23 @@ class FakeDiscord:
         if method == "GET" and len(parts) == 2 and parts[0] == "channels":
             if parts[1] == OWNER_DM_CHANNEL:
                 return {"id": parts[1], "type": 1, "recipients": [{"id": OWNER}]}
+            if parts[1] == AGENT_CHAT_CHANNEL:
+                return {"id": parts[1], "type": 0, "name": "agent-chat", "guild_id": "guild"}
+            if parts[1] == AGENT_CHAT_THREAD:
+                return {
+                    "id": parts[1],
+                    "type": 11,
+                    "name": "승인-patent-export",
+                    "parent_id": AGENT_CHAT_CHANNEL,
+                }
             return {"id": parts[1], "type": 0, "name": "approvals"}
+        if method == "GET" and path == "/guilds/guild/threads/active":
+            return {"threads": [{
+                "id": AGENT_CHAT_THREAD,
+                "type": 11,
+                "name": "승인-patent-export",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }]}
         if method == "POST" and path.endswith("/messages"):
             self.posts += 1
             message_id = f"msg-{self.posts}"
@@ -84,7 +102,11 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PatentEnv:
     export_root = tmp_path / "export"
     interop = tmp_path / "interop.json"
     interop.write_text(
-        json.dumps({"owner_id": OWNER, "personal_approvals_channel_id": APPROVALS_CHANNEL}),
+        json.dumps({
+            "owner_id": OWNER,
+            "personal_approvals_channel_id": APPROVALS_CHANNEL,
+            "agent_chat_channel_id": AGENT_CHAT_CHANNEL,
+        }),
         encoding="utf-8",
     )
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))

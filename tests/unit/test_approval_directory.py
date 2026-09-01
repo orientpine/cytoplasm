@@ -9,7 +9,7 @@ from urllib.error import HTTPError
 import pytest
 
 from automation.interop.approval_directory import DiscordChannelDirectory, JsonValue
-from automation.interop.approval_surface import ApprovalSurfaceError, ChannelFacts
+from automation.interop.approval_surface import ApprovalKind, ApprovalSurfaceError, ChannelFacts
 
 RequestKey = tuple[str, str]
 RecordedCall = tuple[str, str, dict[str, JsonValue] | None]
@@ -411,3 +411,106 @@ def test_request_when_wrapping_a_cause_then_the_message_stays_short_enough_to_su
     # Then: skills/mail/scripts/triage_cli.py:125 logs redact(str(error))[:120], so a
     # longer message would slice the new diagnostic out of the very log this fixes.
     assert len(str(excinfo.value)) <= 120
+
+
+def _agent_chat_config(interop_config: Path, channel_id: str) -> None:
+    interop_config.write_text(
+        json.dumps({"agent_chat_channel_id": channel_id}), encoding="utf-8",
+    )
+
+
+def test_agent_chat_thread_refuses_an_unset_config_key(interop_config: Path) -> None:
+    # Given: an interop config carrying no agent-chat channel id.
+    interop_config.write_text("{}", encoding="utf-8")
+    fake = FakeApi("bot-a", {})
+    directory = _directory(fake)
+
+    # When / Then: resolution fails closed before any Discord request is made.
+    with pytest.raises(ApprovalSurfaceError):
+        _ = directory.agent_chat_thread(ApprovalKind.TODO)
+    assert fake.calls == []
+
+
+def test_agent_chat_thread_reuses_an_active_thread(interop_config: Path) -> None:
+    # Given: an active 승인-todo thread already hangs under the configured channel.
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {
+        ("GET", "/channels/chan-1"): {"id": "chan-1", "type": 0, "guild_id": "guild-1"},
+        ("GET", "/guilds/guild-1/threads/active"): {"threads": [
+            {"id": "thread-9", "name": "승인-todo", "parent_id": "chan-1", "type": 11},
+        ]},
+    })
+    directory = _directory(fake)
+
+    # When: the todo approval surface is resolved.
+    thread_id = directory.agent_chat_thread(ApprovalKind.TODO)
+
+    # Then: the existing thread is reused and nothing is created.
+    assert thread_id == "thread-9"
+    assert all(method != "POST" for method, _path, _payload in fake.calls)
+
+
+def test_agent_chat_thread_ignores_a_foreign_or_misnamed_thread(interop_config: Path) -> None:
+    # Given: active threads that either hang elsewhere or carry another kind's name.
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {
+        ("GET", "/channels/chan-1"): {"id": "chan-1", "type": 0, "guild_id": "guild-1"},
+        ("GET", "/guilds/guild-1/threads/active"): {"threads": [
+            {"id": "thread-7", "name": "승인-todo", "parent_id": "chan-2", "type": 11},
+            {"id": "thread-8", "name": "승인-wiki", "parent_id": "chan-1", "type": 11},
+        ]},
+        ("GET", "/channels/chan-1/threads/archived/public"): {"threads": []},
+        ("POST", "/channels/chan-1/threads"): {"id": "thread-new"},
+    })
+    directory = _directory(fake)
+
+    # When / Then: neither candidate matches, so a fresh thread is created.
+    assert directory.agent_chat_thread(ApprovalKind.TODO) == "thread-new"
+
+
+def test_agent_chat_thread_revives_an_archived_thread(interop_config: Path) -> None:
+    # Given: the 승인-todo thread exists but has been auto-archived.
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {
+        ("GET", "/channels/chan-1"): {"id": "chan-1", "type": 0, "guild_id": "guild-1"},
+        ("GET", "/guilds/guild-1/threads/active"): {"threads": []},
+        ("GET", "/channels/chan-1/threads/archived/public"): {"threads": [
+            {"id": "thread-5", "name": "승인-todo", "parent_id": "chan-1", "type": 11},
+        ]},
+    })
+    directory = _directory(fake)
+
+    # When / Then: the archived thread is reused (posting into it un-archives it).
+    assert directory.agent_chat_thread(ApprovalKind.TODO) == "thread-5"
+    assert all(method != "POST" for method, _path, _payload in fake.calls)
+
+
+def test_agent_chat_thread_creates_one_when_absent(interop_config: Path) -> None:
+    # Given: no matching thread exists in any state.
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {
+        ("GET", "/channels/chan-1"): {"id": "chan-1", "type": 0, "guild_id": "guild-1"},
+        ("GET", "/guilds/guild-1/threads/active"): {"threads": []},
+        ("GET", "/channels/chan-1/threads/archived/public"): {"threads": []},
+        ("POST", "/channels/chan-1/threads"): {"id": "thread-new"},
+    })
+    directory = _directory(fake)
+
+    # When: the surface is resolved.
+    thread_id = directory.agent_chat_thread(ApprovalKind.TODO)
+
+    # Then: one channel thread is created with the frozen name and 7-day archive window.
+    assert thread_id == "thread-new"
+    created = [payload for method, path, payload in fake.calls if method == "POST"]
+    assert created == [{"name": "승인-todo", "auto_archive_duration": 10080, "type": 11}]
+
+
+def test_describe_maps_a_thread_parent_faithfully(interop_config: Path) -> None:
+    # Given: Discord describes a public thread under its parent channel.
+    fake = FakeApi("bot-a", {("GET", "/channels/thread-9"): {
+        "id": "thread-9", "type": 11, "name": "승인-todo", "parent_id": "chan-1",
+    }})
+    directory = _directory(fake)
+
+    # When / Then: the parent survives into the channel facts.
+    assert directory.describe("thread-9") == ChannelFacts(11, "승인-todo", (), "chan-1")

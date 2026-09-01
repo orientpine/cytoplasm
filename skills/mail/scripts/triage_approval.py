@@ -297,6 +297,50 @@ def request_approval(draft: dict, *, notice: str = "") -> Verdict:
     )
 
 
+def expire_retired_approval(draft: dict) -> bool:
+    """Expire an undecided request whose persisted surface has been retired.
+
+    The approval-key lease closes the reaction/delete/store race. An owner decision
+    always wins: decided requests return to the normal resolver and are never expired.
+    """
+    if not triage_binding.is_retired_binding(draft):
+        return False
+    created_at = draft.get("created")
+    if not isinstance(created_at, str) or not created_at:
+        return False
+    key = approval_key(draft)
+    with confirm_lease().hold(key) as owned:
+        if not owned:
+            raise triage_gate.GateError("승인 처리 lease 사용 중 — 다음 tick 재시도", 1)
+        message_id = _bound_message_id(draft)
+        if not message_id:
+            triage_gate.expire_draft(str(draft["id"]), "", "approval-surface-retired")
+            return True
+        channel_id = triage_binding.persisted_channel_id(draft)
+        if channel_id is None:
+            channel_id = str(stored_binding(draft).channel_id)
+        request = lifecycle().ApprovalRequest(
+            key=key,
+            action_hash=_approval_action_hash(draft),
+            message_id=message_id,
+            channel_id=channel_id,
+            created_at=str(draft.get("approval_created_at", created_at)),
+        )
+        gate = MailApprovalGate(draft)
+        probe = gate.probe(request)
+        state = lifecycle().Probe
+        if probe in (state.APPROVED, state.CANCELLED):
+            return False
+        if probe is state.BOUND_PENDING:
+            gate.delete(request)
+        elif probe is not state.MISSING:
+            raise triage_gate.GateError(
+                f"폐지 승인 표면의 바인딩 검증 실패 ({probe.value}) — 만료 거부", 3,
+            )
+        triage_gate.expire_draft(str(draft["id"]), message_id, "approval-surface-retired")
+        return True
+
+
 def _refusal(verdict: Verdict) -> triage_gate.GateError:
     reason = verdict.reason.value if verdict.reason is not None else "unknown"
     exit_code = 3 if reason in {"store-unreadable", "posting-journal-stale"} else 1

@@ -57,15 +57,21 @@ def test_pending_write_is_atomic_and_carries_the_complete_schema(
         "argv_summary": "gws tasks tasks insert --params [masked] --json [masked]",
         "channel_id": "1526487935975952385",
         "created_at": "2026-08-16T12:00:00+00:00",
+        "due": None,
         "generation": 1,
         "key": "todo:sha256:fixture",
         "kind": "todo",
         "message_id": "1530000000000000001",
+        "notes": None,
+        "origin_channel_id": "",
+        "origin_message_id": "",
         "outcome": None,
         "policy_version": 7,
         "state": "pending",
         "surface": "owner-dm",
         "target_id": "tool:gws_tasks_mutation:gws",
+        "tasklist": "",
+        "title": "",
     }
     assert bound.message_id == "1530000000000000001"
 

@@ -9,7 +9,10 @@ the timer, not GitHub, is the authority.
 The half that matters is the complaining. A reconciler that retries forever in silence
 is the same silence with extra steps. Hence the state machine here, whose contract is
 counting: **one** owner notice per incident, **one** recovery notice, and never a
-notice for contention that is merely someone else converging right now.
+notice for contention that is merely someone else converging right now. An unsigned
+origin/main is the NORMAL state between releases (VA-3: merges accumulate, a release
+deploys), so it is not an incident — it becomes a periodic release-backlog digest
+only once the backlog has aged past ``BACKLOG_NOTICE_SECONDS``.
 
 Pure and injected on purpose — the two shas, a clock, a converge callable and a
 delivery callable come from the caller. That is what makes "exactly one DM" assertable
@@ -76,6 +79,82 @@ def _drift_notice(*, origin_sha: str, current_sha: str, failures: int, elapsed: 
 
 def _recovery_notice(*, current_sha: str) -> str:
     return f"prod가 origin/main에 다시 도달했습니다: {current_sha}"
+
+
+#: 머지=축적, 릴리스=배포(VA-3, §10-1). 서명 없는 origin/main 은 릴리스 사이의 정상
+#: 상태라 사고 통지 대상이 아니다 — 백로그가 이 시간 이상 묵으면 다이제스트 1건을 보내고,
+#: 같은 간격마다 반복하며, 릴리스가 착지하면 reconcile_tick 의 clean reset 이 리셋한다.
+BACKLOG_NOTICE_SECONDS: Final = 3 * 24 * 3600.0
+
+
+def _release_backlog_notice(
+    *, remote_head: str, current_sha: str, commit_count: int | None, elapsed: float
+) -> str:
+    runtime = current_sha or "(none)"
+    count = f"{commit_count}건" if commit_count is not None else "수 미상"
+    return (
+        "릴리스 대기 중인 머지가 쌓여 있습니다 (머지=축적, 릴리스=배포).\n"
+        f"  미배포 커밋 : {count} · {int(elapsed // 86400)}일 경과\n"
+        f"  origin/main : {remote_head}\n"
+        f"  runtime     : {runtime}\n"
+        "릴리스하려면 워크스테이션에서 `automation/release.sh` 를 실행하세요 (소유자 ✅ 1회).\n"
+        "노드는 서명 없는 head 를 설치하지 않으며, 이 상태는 사고가 아닙니다."
+    )
+
+
+def reconcile_unsigned_head(
+    state: ReconcileState,
+    *,
+    remote_head: str,
+    current_sha: str,
+    now: float,
+    deliver: Deliver,
+    commit_count: int | None = None,
+) -> ReconcileState:
+    """Digest the release backlog once per aged period — never once per sha.
+
+    Pre-VA this was one incident notice per unsigned head, which under merge=축적
+    would page the owner once per merge. The clock keys on the backlog EPISODE (the
+    first unsigned tick since the last release), survives head advances — resetting
+    per sha would mean the busier the merging, the later the digest — and only a
+    landed release (reconcile_tick's clean reset) starts a new episode.
+    """
+    if state.pending_notice is not None:
+        if not deliver(state.pending_notice):
+            return state
+        state = replace(state, pending_notice=None)
+
+    reason = "release-backlog"
+    same_episode = state.skip_reason == reason
+    failures = state.consecutive_failures + 1 if same_episode else 1
+    backlog_since = (
+        state.drift_since if same_episode and state.drift_since is not None else now
+    )
+    state = replace(
+        state,
+        consecutive_failures=failures,
+        drift_since=backlog_since,
+        skip_reason=reason,
+    )
+    elapsed = now - backlog_since
+    period = int(elapsed // BACKLOG_NOTICE_SECONDS)
+    incident_key = f"backlog:{int(backlog_since)}:{period}"
+    if period < 1 or state.notified_target == incident_key:
+        return state
+
+    notice = _release_backlog_notice(
+        remote_head=remote_head,
+        current_sha=current_sha,
+        commit_count=commit_count,
+        elapsed=elapsed,
+    )
+    delivered = deliver(notice)
+    return replace(
+        state,
+        notified_target=incident_key,
+        pending_notice=None if delivered else notice,
+        incident_open=True,
+    )
 
 
 def reconcile_skip(

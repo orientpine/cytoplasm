@@ -40,6 +40,7 @@ from automation.node_config import NodeConfig
 _SCHEMA_VERSION: Final = 1
 _FLOOR_KEYS: Final = frozenset({"schema_version", "tag", "commit_sha"})
 _MAX_TAG_LENGTH: Final = 128
+_AUTHORITATIVE_FLOOR: Final = Path("/var/lib/autophagy/update-trust/release-floor.json")
 
 #: Exactly the shape ``automation/public_export.sh:54`` accepts for ``--version``.
 #: Anything else never came from the release procedure and is refused rather
@@ -78,14 +79,9 @@ class ReleaseFloor:
 
 
 def release_floor_path(config: NodeConfig) -> Path:
-    """The one location both verification paths agree on.
-
-    ops owns it, and both callers reach it as ops: the reconciler timer runs as
-    ops, and the root helper runs the verifier through ``runuser -u ops``. A
-    floor only one of the two paths could read would leave the other exactly as
-    exposed as it is today.
-    """
-    return config.private_root / "deploy-reconcile" / "release-floor.json"
+    """Return the root-owned installation-wide rollback-prevention anchor."""
+    del config
+    return _AUTHORITATIVE_FLOOR
 
 
 def parse_release_version(tag: str) -> tuple[int, int, int]:
@@ -140,20 +136,32 @@ def refuse_release_rollback(floor: ReleaseFloor | None, candidate: ReleaseFloor)
 
 
 def advance_release_floor(path: Path, tag: str, commit_sha: str) -> None:
-    """Refuse an already-superseded release, then pin the one just verified.
+    """Read-only pre-gate check retained under the verifier's existing API.
 
-    Called where verification SUCCEEDS, not where convergence does. What prod is
-    actually running, and whether its gateway smoke test passed, are separate
-    concerns that ``release_rollback`` already owns; making the anti-rollback
-    anchor depend on them would give a flaky restart the power to reopen this
-    window. Same split as ``managed_sync.state.record_verified`` versus
-    ``record_activated``.
+    The ops reconciler may authenticate and compare a candidate, but it must
+    never mutate the authoritative floor. Its root-owned 0755 parent prevents
+    ops from creating, deleting, or replacing the file, so absence means this
+    installation has never been seeded rather than that ops erased its anchor.
+    Unreadable or malformed state still fails closed in ``load_release_floor``.
     """
+    candidate = release_floor(tag, commit_sha)
+    floor = load_release_floor(path)
+    refuse_release_rollback(floor, candidate)
+
+
+def privileged_advance_release_floor(path: Path, tag: str, commit_sha: str) -> None:
+    """Monotonically advance a candidate already re-verified by the root helper."""
     candidate = release_floor(tag, commit_sha)
     floor = load_release_floor(path)
     refuse_release_rollback(floor, candidate)
     if floor is None or candidate.ordering > floor.ordering:
         save_release_floor(path, candidate)
+        try:
+            path.chmod(0o644)
+        except OSError as error:
+            raise ReleaseFloorError(
+                "RELEASE-FLOOR", f"cannot make release floor readable: {path}"
+            ) from error
 
 
 def _invalid(message: str) -> ReleaseFloorError:

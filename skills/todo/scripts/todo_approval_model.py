@@ -21,6 +21,12 @@ class TodoApprovalSpec:
     surface: str
     channel_id: str
     policy_version: int
+    origin_channel_id: str = ""
+    origin_message_id: str = ""
+    tasklist: str = ""
+    title: str = ""
+    notes: str | None = None
+    due: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,3 +44,9 @@ class TodoApprovalRecord:
     surface: str
     channel_id: str
     policy_version: int
+    origin_channel_id: str = ""
+    origin_message_id: str = ""
+    tasklist: str = ""
+    title: str = ""
+    notes: str | None = None
+    due: str | None = None

@@ -167,6 +167,27 @@ class _ConfigLoader(Protocol):
     def __call__(self) -> object: ...
 
 
+def _home_config() -> Mapping[str, object]:
+    """Read the fallback ``~/.hermes/config.yaml``, tolerating a home the sandbox hides.
+
+    ``autophagy-repair-approval-watch.service`` runs ``User=ops`` with ``ProtectHome=yes``,
+    so /home is an empty directory to that process and probing the default path raises
+    EACCES instead of answering False — CPython's ``Path.is_file()`` swallows only
+    ENOENT/ENOTDIR/EBADF/ELOOP. That raise happens *inside* the ImportError handler below,
+    where the sibling ``except Exception`` cannot translate it, so it escaped raw and killed
+    the unit at startup: 5,329 failures on the primary node between 2026-08-21 and 2026-08-26,
+    with repair owner-approval reactions unconsumed throughout. A config file this process cannot
+    see is the same as one that is not there — defaults. A malformed one still raises.
+    """
+    default_path = Path.home() / ".hermes" / "config.yaml"
+    try:
+        if not default_path.is_file():
+            return {}
+        return _load_yaml(default_path)
+    except OSError:
+        return {}
+
+
 def load_approval_reminder_config(
     *,
     config: Mapping[str, object] | None = None,
@@ -194,8 +215,7 @@ def load_approval_reminder_config(
             loaded_mapping = cast(Mapping[object, object], loaded)
             config = {str(key): value for key, value in loaded_mapping.items()}
         except (ImportError, ModuleNotFoundError):
-            default_path = Path.home() / ".hermes" / "config.yaml"
-            config = _load_yaml(default_path) if default_path.is_file() else {}
+            config = _home_config()
         except Exception as error:  # noqa: BLE001 - translate to startup-facing config error
             raise ApprovalReminderConfigError(
                 f"cannot load config.yaml at watcher startup: {error}"

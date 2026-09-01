@@ -1,5 +1,8 @@
+automation/drive_client.py | cohesive low-level gws argv client; splitting would fragment the single argv-building convention; grew for taxonomy facade (move/rename/list_children/trash)
+automation/interop/approval_directory.py | The sole AS-1.3-exempt approval-path resolver crossed the ceiling by the v7 agent-chat thread find-or-create path (2026-08-24); moving resolution into a second module would create the parallel approval-path resolver the AS inventory conformance exists to forbid.
 automation/interop/approval_lifecycle.py | Shared approval lifecycle; lease-scoped snapshot, re-probe, supersede, and enriched-journal recovery form one fail-closed request boundary, while extracting a helper would require changing frozen deploy staging.
 automation/interop/approval_reminder.py | Shared reminder scheduler and minimum-information delivery boundary landed from two ticket-owned implementations; splitting it in this cycle would obscure their single lifecycle contract.
+automation/interop/approval_surface.py | Pure surface policy crossed the ceiling by the v7 AGENT_CHAT_THREAD surface (2026-08-24); the append-only transition ledger, facts validation, and instruction rendering are one S1-S5 contract and splitting them would let the pieces drift.
 automation/bootstrap-accounts.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
 automation/deploy-skill.sh | Four-stage deployment pipeline; splitting requires a separate staging/approval contract cycle.
 automation/hermes_compat/patch_busy_fifo.py | Compatibility patch carrier; byte-preserving host patch structure is maintained as one deployable unit.
@@ -13,30 +16,45 @@ automation/openclaw-arm64-smoke.sh | Shell operator script; the 250 pure-LOC cei
 automation/provision-agent.sh | Shell provisioner crossed the threshold only by rendering the three non-secret reminder defaults; splitting config rendering would fragment its atomic desired-state output.
 automation/public_export.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
 automation/repair/repair_report_consumer.py | Agent-owned repair report queue executor; lock discipline, hardened reads, identity and reservation checks, phase state machine, and receipt ordering form one fail-closed tick boundary.
-automation/research_trends/research_trends.py | Weekly report orchestration entrypoint; source collection and report emission share the operational contract.
 automation/skill_gate.py | 분할 시 deploy-skill.sh staging 목록과 충돌하므로 별도 사이클
 automation/skill_gate_approval.py | Approval record transition adapter; legacy and current schemas are intentionally normalized in one gate boundary.
 automation/skill_store.py | Skill installation and managed-skill routing share the reserved-prefix and collision checks.
 automation/update_trust.py | Update trust verifier and its CLI; provision-deploy-converge.sh installs this module BY VALUE as one root-owned file that the privileged helper executes, so splitting the CLI out would add a second file to the privileged install set — a change to that surface should not ride along with a security fix to it.
+skills/budget/scripts/budget_cli.py | Budget CLI crossed the ceiling by the best-effort result-notice wrappers (_notify_sent/_notify_cancelled) that share the watch tick's never-break contract (2026-08-23 origin-thread routing); splitting the deployed CLI touches the mounted-skill ABI and is a separate cycle.
 skills/budget/scripts/budget_gate.py | Budget mutation gate; owner confirmation, hash binding, and fail-closed effect checks are one decision boundary.
+skills/budget/scripts/budget_confirm.py | Budget owner-approval transport; owner identity, bound-channel reaction validation, and signed E2E injection acceptance form one fail-closed decision boundary.
 skills/calendar/scripts/calendar_confirm.py | Calendar confirmation workflow; reaction resolution and owner-bound execution remain one gate contract.
 skills/calendar/scripts/confirm_reaction_watch.py | Existing calendar watcher now invokes the shared reminder facade in the same tick; extracting that small bridge would create the parallel watcher shape the approval rules forbid.
+skills/coordination/scripts/confirm_reaction_watch.py | Coordination reaction watcher crossed the ceiling by the origin-thread result routing (2026-08-23); its notice bridge rides the same tick as reaction resolution and extracting it would create the parallel watcher shape the approval rules forbid.
+skills/meeting/plugin/__init__.py | Gateway plugin crossed the ceiling by the anchored-thread ACK path; the plugin process is import-isolated (no INTEROP_RUNTIME guarantee) and ships as one unit under plugin.yaml, so the small thread-anchor helper stays in place.
+skills/meeting/scripts/meeting_cli.py | Meeting ingest CLI crossed the ceiling by the thread-anchored notice path (2026-08-23); ingest pipeline and its result notice are one no-agent contract and the split is a separate cycle.
+skills/todo/scripts/todo_cli.py | Todo CLI crossed the ceiling by the post-write result notice wired right after the verified receipt (2026-08-23); create_task is the single write path the preflight guard wraps, so it is not split without re-validating that wrap.
 skills/mail/scripts/scenario.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
 skills/mail/scripts/triage_approval.py | Mail triage approval state machine; draft binding and reaction resolution must stay aligned.
 skills/mail/scripts/triage_cli.py | Mail triage CLI; mode routing, persistence, and result rendering share the user-facing command contract.
 skills/mail/scripts/triage_core.py | Mail triage pipeline core; classification and fail-open item handling are coupled by the digest contract.
 skills/mail/scripts/triage_digest.py | Mail digest builder; grouping, failure annotations, and output formatting form one stable report boundary.
-skills/mail/scripts/triage_gate.py | Mail triage external-effect gate; recipient checks and owner approval are inseparable safety checks.
 skills/mail/vendor/mailon/browser.py | byte-identical vendoring policy forbids modification
 skills/mail/vendor/mailon/main.py | byte-identical vendoring policy forbids modification
 skills/mail/vendor/mailon/scraper.py | byte-identical vendoring policy forbids modification
 skills/mail/vendor/mailon/send.py | byte-identical vendoring policy forbids modification
 skills/mail/vendor/mailon/send_trigger.py | byte-identical vendoring policy forbids modification
 skills/mail/vendor/tests/test_offline.py | byte-identical vendoring policy forbids modification
-skills/meeting/scripts/meeting_actions.py | Calendar/coordination action routing and mutation guards share one deterministic dispatch boundary.
-skills/todo/scripts/todo_confirm_reaction_watch.py | Existing todo watcher now invokes the shared reminder facade in the same tick; extracting that small bridge would create the parallel watcher shape the approval rules forbid.
 skills/wiki/scripts/scenario.sh | Shell scenario harness; scenario setup and teardown are intentionally kept as one executable fixture.
 skills/wiki/scripts/wiki_gate.py | Wiki write gate; schema validation, draft hashing, and owner approval form one fail-closed boundary.
 skills/wiki/scripts/wiki_store.py | Wiki persistence; five-field schema validation and atomic upsert behavior share one storage contract.
-automation/healthcheck.sh | Probe registry: a check costs a LIVE_CHECKS row plus a run_check case, so the file grows by construction with every probe. 2026-08-20: #177 bought room by joining source lines and this probe spent it. The split worth doing is the registry (LIVE_CHECKS + run_check) away from the sweep/ticket machinery, but folding that refactor into a probe change would mix two unrelated diffs in a file three sessions are editing this week.
 skills/wiki/scripts/wiki_cli.py | Deployed skill CLI; build_parser wires every subcommand handler through set_defaults, so the v2 draft flags that put it 2 lines over cannot be extracted without moving the command dispatch across a module boundary inside the same owner-approved deploy cycle.
+skills/proposal/scripts/proposal_cli.py | Proposal v2 command surface; parser wiring and stage dispatch form one user-facing CLI contract.
+skills/proposal/scripts/proposal_delta.py | Proposal version comparison and deterministic delta rendering share one artifact contract.
+skills/proposal/scripts/proposal_images.py | Image planning, spend gating, resumable generation, and manifest updates form one fail-closed stage.
+skills/proposal/scripts/proposal_improve_cmd.py | Improvement orchestration keeps section assembly, evidence binding, and version promotion in one deterministic stage.
+skills/proposal/scripts/proposal_knowledge.py | Proposal knowledge adapter keeps facade collection and proposal-specific evidence conversion together.
+skills/proposal/scripts/proposal_publish.py | Publish validation, Drive upsert, receipt generation, and state updates form one idempotent effect boundary.
+skills/proposal/scripts/proposal_refine.py | Refinement sentinel protection, chunking, transport, and artifact validation form one fail-closed stage.
+skills/proposal/scripts/proposal_render.py | Proposal document layout and deterministic HWPX rendering share one output contract.
+skills/proposal/scripts/proposal_research.py | Research brief generation, Hermes invocation, and synthesis validation form one stage boundary.
+skills/proposal/scripts/proposal_version.py | Version-store locking, promotion, reuse, and recovery form one atomic persistence contract.
+automation/drive_migrate_outputs.py | one-shot owner-run migration CLI: enumeration+dedupe+normalize+move plan is one cohesive procedure; splitting would sever the dry-run/apply symmetry
+skills/report/scripts/report_cli.py | report skill CLI aggregating report/slides/script subcommands; crossed ceiling via facade conversion
+automation/research_trends/research_trends.py | Weekly report orchestration entrypoint; source collection and report emission share the operational contract.
+automation/release_approval.py | Release approval producer crossed the ceiling by the stale-pending self-recovery (abandon subcommand + RELEASE-REQUEST-STALE enrichment, 2026-08-31); the module is the single argv surface release_approval_remote.sh stages and executes on the node, and splitting the recovery out would create a second producer module on that authority boundary.

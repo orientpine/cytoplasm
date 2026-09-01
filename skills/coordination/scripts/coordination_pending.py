@@ -31,6 +31,11 @@ class PendingConfirm:
     correlation: str
     duration_min: int
     created: datetime
+    # Where the owner's instruction came from — empty means "no origin, owner notice".
+    # 바인딩 4필드(kind/surface/channel_id/policy_version)가 레코드의 마지막이어야 하는
+    # SI-5 conformance 때문에 origin은 그 앞에 둔다.
+    origin_channel_id: str = field(default="", compare=False)
+    origin_message_id: str = field(default="", compare=False)
     key: str = field(default="", compare=False)
     kind: str | None = field(default=None, compare=False)
     surface: str | None = field(default=None, compare=False)
@@ -55,6 +60,8 @@ class PendingConfirm:
             "draft_id": self.draft_id,
             "duration_min": self.duration_min,
             "key": self.key,
+            "origin_channel_id": self.origin_channel_id,
+            "origin_message_id": self.origin_message_id,
             "sha256": self.sha256,
             "slot": self.slot,
             "summary": self.summary,
@@ -74,6 +81,14 @@ class PendingConfirm:
             separators=(",", ":"),
             sort_keys=True,
         )
+
+    def origin_record(self) -> dict[str, str]:
+        """Render what the shared result-notice router reads: origin + draft identity."""
+        return {
+            "id": self.draft_id,
+            "origin_channel_id": self.origin_channel_id,
+            "origin_message_id": self.origin_message_id,
+        }
 
 
 class PendingConfirmStore:
@@ -191,6 +206,9 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
     kind, surface = raw.get("kind"), raw.get("surface")
     channel_id = raw.get("channel_id", raw["dm_channel_id"])
     policy_version = raw.get("policy_version")
+    # Rows written before the origin binding existed stay readable with no origin.
+    origin_channel_id = raw.get("origin_channel_id", "")
+    origin_message_id = raw.get("origin_message_id", "")
     if (
         not isinstance(key, str)
         or not key
@@ -198,6 +216,8 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
         or not isinstance(surface, str | None)
         or not isinstance(channel_id, str)
         or not isinstance(policy_version, int | None)
+        or not isinstance(origin_channel_id, str)
+        or not isinstance(origin_message_id, str)
     ):
         raise ValueError("key is invalid")
     return PendingConfirm(
@@ -205,6 +225,7 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
         dm_message_id=raw["dm_message_id"], slot=raw["slot"], summary=raw["summary"],
         correlation=raw["correlation"], duration_min=duration, created=created.astimezone(UTC), key=key,
         kind=kind, surface=surface, channel_id=channel_id, policy_version=policy_version,
+        origin_channel_id=origin_channel_id, origin_message_id=origin_message_id,
     )
 
 

@@ -115,8 +115,19 @@ docs/기능소개/관리형-채널-신원-검증.md
 docs/기능소개/fs3-재판정-원장.md
 docs/기능소개/후속과제-총계-가드.md
 docs/기능소개/착지-영수증과-공개집합-게이트.md
+docs/기능소개/메일-결과-원채널-스레드.md
+docs/기능소개/결과-통지-원채널-스레드-전스킬.md
+docs/기능소개/승인-agent-chat-스레드.md
 docs/기능소개/서명-전용-특권-수렴-경계.md
 docs/기능소개/discord-공개-메시지-필터링.md
 docs/기능소개/게이트웨이-커맨드-동기화-bulk.md
 docs/기능소개/위키-큐레이션과-스키마-v2.md
+docs/기능소개/todo-승인-후-자동-등록.md
+docs/기능소개/제안서-본문-구조-복원.md
+docs/기능소개/제안서-제출본-완성.md
 configs/public-export-grandfathered.txt
+
+# Private engine integration: pins two private repositories a public subscriber cannot reach.
+docs/guide/kd-at-두-저장소-운영.md
+automation/proposal_engine_provision.sh
+tests/unit/test_proposal_engine_provision.py

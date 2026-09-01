@@ -90,7 +90,10 @@ def _record_probe_argv(tmp_path: Path, private_root: Path) -> list[str]:
     )
     completed = subprocess.run(
         ("bash", "-c", command),
-        env={**os.environ, "NODE_PRIVATE_ROOT": str(private_root)},
+        env={
+            **os.environ,
+            "HEALTHCHECK_RELEASE_FLOOR": str(private_root / "release-floor.json"),
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -114,7 +117,7 @@ def test_update_trust_probe_asks_the_same_question_convergence_asks(tmp_path: Pa
     assert "resolve-signed" in argv
     assert "--node-config" not in argv
     floor = argv[argv.index("--floor-path") + 1]
-    assert floor == str(tmp_path / "private" / "deploy-reconcile" / "release-floor.json")
+    assert floor == str(tmp_path / "private" / "release-floor.json")
 
 
 def test_update_trust_probe_fails_closed_when_the_floor_cannot_be_resolved(
@@ -122,7 +125,10 @@ def test_update_trust_probe_fails_closed_when_the_floor_cannot_be_resolved(
 ) -> None:
     """No floor means no anti-rollback anchor, so the probe must not answer PASS."""
     fake_python = tmp_path / "python3"
-    _ = fake_python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    _ = fake_python.write_text(
+        "#!/usr/bin/env bash\nprintf 'RELEASE-FLOOR: release floor is absent\\n' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
     fake_python.chmod(0o755)
     mirror = tmp_path / "mirror"
     mirror.mkdir(exist_ok=True)
@@ -132,7 +138,7 @@ def test_update_trust_probe_fails_closed_when_the_floor_cannot_be_resolved(
         f'UPDATE_TRUST_SCRIPT="{tmp_path / "update_trust.py"}" '
         f'probe_update_trust ignored ignored "{mirror}"'
     )
-    environment = {key: value for key, value in os.environ.items() if key != "NODE_PRIVATE_ROOT"}
+    environment = dict(os.environ)
 
     completed = subprocess.run(
         ("bash", "-c", command),

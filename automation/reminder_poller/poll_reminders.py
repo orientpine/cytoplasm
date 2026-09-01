@@ -41,7 +41,6 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 try:
     from automation.reminder_poller import poller_core, reminder_store
@@ -55,9 +54,7 @@ except ImportError:
     import poller_core  # pyright: ignore[reportMissingImports] # noqa: F401
     import reminder_store  # pyright: ignore[reportMissingImports] # noqa: F401
 
-DISCORD_API = "https://discord.com/api/v10"
 ENV_SECRETS = Path.home() / ".env.secrets"
-INTEROP_CONFIG = Path.home() / ".hermes" / "interop" / "config.json"
 GWS_TIMEOUT_S = 120
 LOOKAHEAD = timedelta(minutes=90)
 
@@ -127,45 +124,31 @@ def bot_token() -> str:
     raise RuntimeError("DISCORD_BOT_TOKEN not available")
 
 
-def _discord_post(token: str, path: str, payload: dict[str, object]) -> dict[str, object]:
-    request = Request(
-        DISCORD_API + path,
-        data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type": "application/json",
-            "User-Agent": "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)",
-        },
-        method="POST",
-    )
-    with urlopen(request, timeout=30) as response:  # noqa: S310 — fixed https host
-        raw = response.read().decode()
-    parsed: object = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise RuntimeError("discord response is not a JSON object")
-    return parsed
+def _release_runtime_root() -> Path:
+    """owner_notice 파사드가 사는 릴리스 런타임 — 배포 사본이 늦게 해석한다(ON-2)."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
+    if override:
+        return Path(override)
+    release = Path("/srv/autophagy-agent-current")
+    return release if release.is_dir() else Path("/srv/autophagy-agents")
 
 
 class DmSender:
-    """Owner-DM transport: channel created once, then one POST per reminder."""
-
-    def __init__(self) -> None:
-        self._channel_id = ""
+    """Owner-notice transport — 목적지(지정 채널/DM)는 owner_notice 파사드가 정한다(ON-2)."""
 
     def send(self, body: str) -> None:
         if os.environ.get("REMINDER_DRY_RUN", "") == "1":
             print(f"DRY-RUN {body}")
             return
-        token = bot_token()
-        if not self._channel_id:
-            config: object = json.loads(INTEROP_CONFIG.read_text(encoding="utf-8"))
-            if not isinstance(config, dict):
-                raise RuntimeError("interop config is not a JSON object")
-            channel = _discord_post(
-                token, "/users/@me/channels", {"recipient_id": str(config["owner_id"])}
-            )
-            self._channel_id = str(channel["id"])
-        _discord_post(token, f"/channels/{self._channel_id}/messages", {"content": body})
+        os.environ.setdefault("DISCORD_BOT_TOKEN", bot_token())
+        root = str(_release_runtime_root())
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from automation.owner_notice import notify_owner
+
+        if not notify_owner(body):
+            # claim-before-send: raise → 호출자가 claim 을 release 해 다음 틱 재시도
+            raise RuntimeError("owner notice delivery failed")
 
 
 def _deliver(db: Path, sender: DmSender, kind: str, key: str, body: str) -> None:

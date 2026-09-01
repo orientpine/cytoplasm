@@ -26,34 +26,38 @@ runtime_package_is_cache_path() {
 # it in the release snapshot made the probe report ABSENT cron/<pkg>_watch.py on every
 # tick (2026-08-22, first live run after the allowlist was regenerated). The release
 # side alone is filtered on purpose — the remote command text is pinned by the
-# allowlist wrapper, and the drift digest does not cover that text.
-runtime_package_selected() { # <profile> <relative-path>
-  local profile="$1" relative="$2"
+# allowlist wrapper, and the drift digest does not cover that text. An optional
+# manifest file list narrows only the release snapshot: the runtime remains complete
+# so stale extra files still fail the comparison.
+runtime_package_selected() { # <profile> <relative-path> [deployed-python-files]
+  local profile="$1" relative="$2" files="${3:-}"
   runtime_package_is_cache_path "$relative" && return 1
   case "$profile" in
     python) [[ "$relative" == *.py && "$relative" != cron/* ]] ;;
     tree) [[ "$relative" != .env.secrets ]] ;;
     *) return 2 ;;
-  esac
+  esac || return 1
+  [[ -z "$files" || ",$files," == *",$relative,"* ]]
 }
 
 # Snapshot format is sha256|package-relative-path. The tree profile intentionally
 # hashes every managed file, not only Python: Dockerfiles, compose, pyproject, lock
 # files, service/env examples, and dockerignore files can all alter what is deployed.
-runtime_package_local_snapshot() { # <root> [python|tree]
-  local root="$1" profile="${2:-python}" file relative hash
+runtime_package_local_snapshot() ( # <root> [python|tree] [deployed-python-files]
+  local root="$1" profile="${2:-python}" files="${3:-}" file relative hash
+  cd / || return 1
   [[ -d "$root" && -r "$root" && -x "$root" ]] || return 1
   [[ "$profile" == python || "$profile" == tree ]] || return 1
   find "$root" -type d \( -name __pycache__ -o -name .venv -o -name .ruff_cache -o -name .pytest_cache \) -prune -o -type f -print >/dev/null 2>&1 || return 1
   printf 'SNAPSHOT-V1\n'
   while IFS= read -r -d '' file; do
     relative="${file#"$root"/}"
-    runtime_package_selected "$profile" "$relative" || continue
+    runtime_package_selected "$profile" "$relative" "$files" || continue
     [[ -r "$file" ]] || return 1
     hash="$(sha256sum -- "$file" | cut -d' ' -f1)" || return 1
     printf '%s|%s\n' "$hash" "$relative"
   done < <(find "$root" -type d \( -name __pycache__ -o -name .venv -o -name .ruff_cache -o -name .pytest_cache \) -prune -o -type f -print0 | sort -z)
-}
+)
 
 runtime_package_remote_snapshot() { # <node> <account> <home-relative-runtime> <profile>
   local node="$1" account="$2" runtime="$3" profile="${4:-python}"
@@ -120,19 +124,20 @@ probe_runtime_packages_current() {
   local source_root="${HEALTHCHECK_RELEASE_SOURCE_ROOT:-/srv/autophagy-agent-current}"
   local runtime_root="${HEALTHCHECK_RUNTIME_PACKAGE_ROOT:-}"
   local selector_filter="${HEALTHCHECK_RUNTIME_PACKAGE_SELECTOR:-all}"
-  local failed=0 selected=0 row account source runtime policy selector profile extra row_node deployer release_data runtime_data
+  local failed=0 selected=0 row account source runtime policy selector profile files extra row_node deployer release_data runtime_data
   [[ "$selector_filter" =~ ^(all|default|rag)$ ]] || { runtime_package_log "RUNTIME-PACKAGE-UNKNOWN: invalid selector filter"; return 1; }
   [[ -r "$manifest" ]] || { runtime_package_log "RUNTIME-PACKAGE-UNKNOWN: unreadable manifest=$manifest"; return 1; }
   local -a rows=(); mapfile -t rows < "$manifest"
   for row in "${rows[@]}"; do
     [[ -n "${row//[[:space:]]/}" ]] || continue
     [[ "${row#"${row%%[![:space:]]*}"}" == \#* ]] && continue
-    IFS='|' read -r account source runtime policy selector profile extra <<< "$row"
+    IFS='|' read -r account source runtime policy selector profile files extra <<< "$row"
     selector="${selector:-default}"; profile="${profile:-python}"
     [[ "$selector_filter" == all || "$selector" == "$selector_filter" ]] || continue
     selected=$((selected + 1))
     if ! [[ "$account" =~ ^[a-z][a-z0-9_-]*$ && "$source" =~ ^[A-Za-z0-9_./-]+$ && "$runtime" =~ ^[A-Za-z0-9_./-]+$ ]] \
-      || [[ "$policy" != required || -n "$extra" || ! "$selector" =~ ^(default|rag)$ || ! "$profile" =~ ^(python|tree)$ ]]; then
+      || [[ "$policy" != required || -n "$extra" || ! "$selector" =~ ^(default|rag)$ || ! "$profile" =~ ^(python|tree)$ ]] \
+      || [[ -n "$files" && ( "$profile" != python || ! "$files" =~ ^([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.py(,([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.py)*$ ) ]]; then
       runtime_package_log "RUNTIME-PACKAGE-UNKNOWN: invalid manifest row: ${row:0:80}"; failed=1; continue
     fi
     row_node="$node"
@@ -141,7 +146,7 @@ probe_runtime_packages_current() {
       [[ -n "$row_node" ]] || { runtime_package_log "RUNTIME-PACKAGE-UNKNOWN: RAG node is not configured"; failed=1; continue; }
     fi
     deployer="$(runtime_package_deploy_script "$source")"
-    if ! release_data="$(runtime_package_local_snapshot "$source_root/$source" "$profile")"; then
+    if ! release_data="$(runtime_package_local_snapshot "$source_root/$source" "$profile" "$files")"; then
       runtime_package_log "RUNTIME-PACKAGE-UNKNOWN: unreadable release source $source — run $deployer"; failed=1; continue
     fi
     if [[ -n "$runtime_root" ]]; then

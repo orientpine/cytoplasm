@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# Refuse direct main updates only from linked session worktrees.
-# Installed into the shared common hooks directory by automation/worktree.sh.
+# Two refusals, one chokepoint. Installed into the shared common hooks directory by
+# automation/worktree.sh, so every linked worktree gets both.
+#
+#   1. A session worktree cannot push refs/heads/main directly.
+#   2. No branch reaches the remote without a local CI receipt for the tree being pushed.
+#
+# (2) exists because branch protection is unavailable on this repository (private + Free
+# answers 403), so a required status check cannot be configured — the GitHub run is advisory
+# and a red PR can be merged. The push is the only place the check can actually bind.
 set -u
 
 git_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
@@ -14,6 +21,8 @@ if [[ "$gitdir_line" =~ ^gitdir:\ .*/\.git/worktrees/[^/]+$ ]]; then
   linked_worktree=1
 fi
 
+local_ci="$git_root/automation/local_ci.sh"
+
 while read -r local_ref local_sha remote_ref remote_sha; do
   if (( linked_worktree )) && [[ "$remote_ref" == "refs/heads/main" ]]; then
     cat >&2 <<'REFUSAL_EOF'
@@ -21,6 +30,55 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
   Push the session branch and open a PR instead. Main-checkout landing remains
   available through automation/land.sh.
+REFUSAL_EOF
+    exit 1
+  fi
+
+  # Deleting a ref sends the zero sha: there is no tree to have verified.
+  [[ "$local_sha" =~ ^0+$ ]] && continue
+  # The receipt binds where work lands: a branch update. A tag names a commit that has
+  # already landed, and refusing it would stall the release reconciler instead of
+  # protecting anything — AGENTS.md 「릴리스 태그 규칙」 measured 132 consecutive failures
+  # from a merge whose tag never got cut.
+  [[ "$remote_ref" == refs/heads/* ]] || continue
+  # Landing on main is automation/land.sh's contract, which carries its own guards.
+  [[ "$remote_ref" == "refs/heads/main" ]] && continue
+
+  if [[ "${LOCAL_CI_ALLOW_UNVERIFIED:-0}" == "1" ]]; then
+    printf '[pre-push] LOCAL_CI_ALLOW_UNVERIFIED=1 — %s goes out with no local CI receipt.\n' \
+      "$remote_ref" >&2
+    continue
+  fi
+
+  # A branch cut before the gate existed carries no in-repo remedy, so refusing it would
+  # strand work instead of protecting anything. Say so out loud and let it through; every
+  # branch whose own tree carries the gate is held to it.
+  if ! git cat-file -e "$local_sha:automation/local_ci.sh" 2>/dev/null; then
+    printf '[pre-push] %s predates automation/local_ci.sh — pushed unverified. Rebase onto main to opt in.\n' \
+      "$remote_ref" >&2
+    continue
+  fi
+
+  if [[ ! -f "$local_ci" ]]; then
+    cat >&2 <<REFUSAL_EOF
+[pre-push] REFUSED — $remote_ref carries the gate but $local_ci is missing here.
+
+  Restore it, push from a checkout that has it, or set LOCAL_CI_ALLOW_UNVERIFIED=1
+  for a deliberate one-off (sandbox use only).
+REFUSAL_EOF
+    exit 1
+  fi
+
+  if ! verdict="$(bash "$local_ci" verify "$local_sha" 2>&1)"; then
+    cat >&2 <<REFUSAL_EOF
+[pre-push] REFUSED — $remote_ref has no valid local CI receipt.
+
+  ${verdict}
+
+  Run: automation/local_ci.sh run
+  It runs what the GitHub workflow runs (lint, unit tests, clean-host installer
+  check) and writes a receipt keyed by this tree. Amending or rebasing without
+  changing content keeps the receipt valid.
 REFUSAL_EOF
     exit 1
   fi

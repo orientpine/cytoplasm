@@ -1,7 +1,7 @@
 ---
 name: todo
 description: Google Tasks 할 일 등록·조회 스킬. 등록(mutate)은 외부효과 승인 게이트를 반드시 경유하고, 쓰기 성공 뒤 tasks.tasks.get 재조회로 저장된 제목·식별자를 검증한다. 조회(list)는 READ이므로 게이트 대상이 아니다. 터미널에서 raw `gws tasks tasks insert`를 직접 실행하지 말 것 — 같은 명령이 denylist 규칙 gws_tasks_mutation에 매칭되어 승인 없이는 차단된다.
-version: 1.2.0
+version: 1.4.0
 author: autophagy-agents
 license: proprietary
 metadata:
@@ -28,27 +28,42 @@ Google Tasks 쓰기에는 **repo 측 코드가 아예 없었다.** 에이전트�
 2. **재조회로 증명하지 않으면 성공이라 말하지 않는다.** `insert` 뒤 반드시
    `gws tasks tasks get`으로 다시 읽어 저장된 제목·id가 보낸 값과 같은지 대조한다.
    불일치·빈 응답·재조회 실패는 전부 명시적 실패(비-0 종료)다.
-3. **승인 하나는 한 번만 실행한다.** 워처가 ✅를 원장과 불변 archive에 기록하고,
-   `create`는 그 generation을 경쟁 안전 claim한 뒤에만 insert한다. 성공 receipt가 있거나
-   `write_started`가 남은 generation은 자동 재실행하지 않는다.
+3. **승인 하나는 한 번만, 그러나 반드시 실행된다.** 워처가 ✅를 원장과 불변 archive에
+   기록하고 **같은 틱에서 그 generation을 경쟁 안전 claim한 뒤 등록까지 수행한다**. 성공
+   receipt가 있거나 `write_started`가 남은 generation은 자동 재실행하지 않는다 — 상태는
+   저장하지 않고 (archive된 approved 세대 × claim receipt)로 매 틱 유도하므로, 중간에
+   죽어도 다음 틱이 이어받고 두 번 쓰지 않는다.
+4. **결과는 지시가 온 곳으로 돌아간다 (2026-08-23, 소유자 지시 — 전 스킬 공통).** cha가
+   채널(예: agent-chat)에서 할일 등록을 지시하면 `request`/`create`에
+   `--origin-channel-id <채널ID>`(지시 메시지 id를 알면 `--origin-message-id`도)를 전달한다.
+   승인 레코드가 origin을 기억하므로 등록 완료(`✅ 할일 등록 완료: <제목> (task <id>)`)와
+   워처의 ⛔ 취소 통지는 그 채널의 스레드(지시 메시지 앵커 우선)에 게시된다 — **승인
+   카드(✅/⛔) 자체는 `#agent-chat` 의 `승인-todo` 스레드 전용**(정책 v7). origin이 없으면 레코드에 저장된 승인 채널로 통지한다. 통지는
+   best-effort(실패 시 `NOTIFY-THREAD-FAIL`→저장 채널 폴백, `NOTIFY-FAIL`)라 receipt·원장·
+   exit code를 바꾸지 않으며, E2E 승인은 `NOTIFY-SKIP`으로 실제 통지를 열지 않는다.
 
 ## 사용법
 
 ```bash
 # ① 조회 (READ — 게이트 대상 아님)
-python3 ~/.hermes/skills/todo/scripts/todo_cli.py list --tasklist @default
+python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py list --tasklist @default
 
 # ② 승인 대상 확인 (READ — 실행하지 않고 hash/target만 계산)
-python3 ~/.hermes/skills/todo/scripts/todo_cli.py plan --title "실험 노트 정리"
+python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py plan --title "실험 노트 정리"
 
 # ③ 승인 요청 (owner 확인 카드의 유일한 공개 producer)
-python3 ~/.hermes/skills/todo/scripts/todo_cli.py request --title "실험 노트 정리" \
+python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py request --title "실험 노트 정리" \
   --tasklist @default --notes "합성 메모" --due 2026-08-01T00:00:00Z
 
-# ④ owner DM에서 ✅ 또는 ⛔ 선택 (워처가 원장·archive에 반영)
+# ④ #agent-chat 의 `승인-todo` 스레드에서 ✅ 또는 ⛔ 선택
+#    ✅ 를 누르면 그것으로 끝난다 — 다음 워처 틱(매 1분)이 동결된 인자로 등록까지 수행하고
+#    `tasks.tasks.get` 재조회로 검증한 뒤 결과를 지시가 온 채널의 스레드로 통지한다.
+#    사용자에게 "✅ 를 누르면 자동 등록된다"고 안내해도 된다.
 
-# ⑤ 등록 (MUTATE — 유효한 미소비 approved generation 필요)
-python3 ~/.hermes/skills/todo/scripts/todo_cli.py create --title "실험 노트 정리" \
+# ⑤ (진단용) 수동 등록 — 정상 흐름에서는 필요 없다
+#    워처가 이미 실행했으므로 같은 generation 으로 부르면 exit 4(이미 소비됨)로 거부된다.
+#    워처가 멈춘 상황을 진단할 때만 쓴다.
+python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py create --title "실험 노트 정리" \
   --tasklist @default --notes "합성 메모" --due 2026-08-01T00:00:00Z
 ```
 
@@ -78,10 +93,19 @@ python3 ~/.hermes/skills/todo/scripts/todo_cli.py create --title "실험 노트 
   `/srv/autophagy-agent-current` → 상주 미러 `/srv/autophagy-agents`)으로 현재 SSOT를
   해석한다. denylist 또는 runtime root를 읽을 수 없으면 fail-closed하며, 경로를
   추측하거나 게이트를 우회하지 않는다. 진단에는 `todo_cli.py runtime-root`를 쓴다.
-- `request`가 동결된 제목·notes·due의 action hash와 owner DM 확인 카드를 만들고,
+- `request`가 동결된 tasklist·제목·notes·due를 승인 레코드에 함께 적고(그 4개가 없으면
+  승인만으로는 무엇을 쓸지 복원할 수 없다 — `argv_summary`는 마스킹되어 있다) action hash와
+  확인 카드를 `approval_surface`가 정한 표면(정책 v7 = `#agent-chat` `승인-todo` 스레드)에 만들고,
   owner 본인의 ✅/⛔만 `todo_confirm_reaction_watch.py`가 판정한다. 워처는 결정과 메시지
   바인딩을 `manual_reaction` 원장 및 불변 archive generation에 함께 기록하며 ⛔를 항상
   우선한다. raw `gws tasks tasks insert` 또는 수동 승인 레코드 작성은 금지한다.
+- **✅ 이후 등록은 워처가 수행한다.** 매 틱 `execute_approved_writes()`가 archive된 approved
+  세대를 훑어 claim receipt가 없는 것만 골라 `todo_cli.create_task`(단일 쓰기 경로)로 실행한다.
+  실행 전 동결된 4개 인자로 argv를 재구성해 action hash를 다시 계산하고 승인된 해시와 다르면
+  쓰지 않는다. `write_started`가 남은 세대는 재실행하지 않고 조정 대상으로 보고한다.
+  실행 파라미터가 없는 옛 레코드는 복원할 수 없으므로 건너뛴다. 이것은 바뀔 수 없는 상태이지
+  사건이 아니므로 매 틱 저널에 남기지 않는다(`already-verified` 와 같은 취급) — 결과는
+  호출자에게 `legacy-unreplayable` 로 그대로 반환된다.
 - `create`는 유효한 미소비 approved generation을 경쟁 안전하게 단 한 번 claim한 뒤
   동결된 argv로만 insert한다. 성공 후에는 `tasks.tasks.get` 재조회로 저장된 id와 제목을
   검증하고 receipt를 남긴다. 승인 없음·재사용·불확실한 `write_started` 상태에서는

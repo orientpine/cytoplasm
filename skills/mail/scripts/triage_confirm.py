@@ -118,11 +118,54 @@ def _dm_transport(channel_id: str):
 
 
 def dm_owner(content: str) -> str:
+    """오너 통지 1건 — 대화 채널 우선(2026-08-24 소유자 지시), 미설정 시 기존 폴백 경로.
+
+    다이제스트 본문과 결과 통지 폴백이 이 경로를 탄다. 통지는 도달이 우선이므로
+    (승인 게이트와 달리) 채널 해석 실패는 조용히 기존 폴백 경로로 내려간다.
+    """
     import triage_approval
 
-    channel_id = triage_approval.approval_directory().owner_dm()
+    directory = triage_approval.approval_directory()
+    try:
+        channel_id = directory.agent_chat()
+    except Exception:  # noqa: BLE001 — 통지는 도달 우선: 미설정/해석 실패는 DM 폴백
+        channel_id = directory.owner_dm()
     sent = _dm_transport(channel_id).send(content)
     return sent[-1].message_id
+
+
+def _origin_notice():
+    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    sys.path.insert(0, str(runtime))
+    from automation.interop import origin_notice  # noqa: PLC0415
+
+    return origin_notice
+
+
+def notify_result(draft: dict, content: str) -> str:
+    """Deliver a send/cancel result to the origin-channel thread, else to the owner.
+
+    라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
+    `automation.interop.origin_notice.deliver`가 소유한다(2026-08-23 일반화 —
+    스킬별 사본 증식 방지). 이 함수는 mail의 주입 지점(_api/_dm_transport/
+    dm_owner)과 스레드 이름만 바인딩한다.
+    """
+    try:
+        origin_notice = _origin_notice()
+    except ImportError as error:  # 낡은 interop 런타임/샌드박스 — 결과는 그래도 소유자에게 닿아야 한다
+        print(
+            f"NOTIFY-HELPER-MISSING draft={draft['id']} err={type(error).__name__}",
+            file=sys.stderr,
+        )
+        return dm_owner(content)
+    return origin_notice.deliver(
+        api=_api,
+        transport_factory=_dm_transport,
+        record=draft,
+        thread_name=f"메일: {draft['subject']} (draft {draft['id']})",
+        content=content,
+        fallback=dm_owner,
+    )
 
 
 def _owner_reacted(users: list[dict], owner: str) -> bool:

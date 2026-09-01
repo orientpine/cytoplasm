@@ -352,6 +352,8 @@ def draft_sha256(record: dict) -> str:
     }
     if "cc" in record:
         bound["cc"] = record["cc"]
+    if "quote" in record:  # the answered mail sent below the body (mail_quote)
+        bound["quote"] = record["quote"]
     # Keep legacy/no-attachment draft hashes byte-for-byte compatible while
     # binding every new attachment draft to its full manifest.
     if "attachments" in record:
@@ -391,13 +393,17 @@ def render_approvals_message(
             f"- 발신 계정: `{draft['sender_account']}`",
             f"- 작업: `{draft['gmail_approval_snapshot']['action_kind']}`",
             f"- 수신자: `{draft['to']}`",
+        ]
+        if draft.get("cc"):
+            lines.append(f"- Cc: `{draft['cc']}`")
+        lines.extend([
             f"- 회신 대상: `{draft['reply_target'] or '-'}`",
             f"- 제목: `{draft['subject']}`",
             "- 본문:",
             "```",
             draft["body"],
             "```",
-        ]
+        ])
     elif draft.get("kind") == "compose":
         lines = [
             "[mail-triage] 새 메일 발송 승인 요청 (DM 확정)",
@@ -422,6 +428,8 @@ def render_approvals_message(
         ]
         match destination:
             case ApprovalRenderDestination.OWNER_DM:
+                if draft.get("cc"):
+                    lines.append(f"- Cc: `{draft['cc']}`")
                 lines.extend([
                     f"- 회신 제목: {draft['subject']}",
                     "- 회신 본문:",
@@ -440,12 +448,18 @@ def render_approvals_message(
             f"- 분류: {draft['category']} / 플래그: {', '.join(draft['flags']) or '-'}",
             f"- 발신(마스킹): `{draft['sender_masked']}`",
             f"- 원문 제목: {draft['mail_subject']}",
+        ]
+        if draft.get("cc"):
+            lines.append(f"- Cc: `{draft['cc']}`")
+        lines.extend([
             f"- 회신 제목: {draft['subject']}",
             "- 회신 본문:",
             "```",
             preview + ("…" if len(draft["body"]) > 600 else ""),
             "```",
-    ]
+        ])
+    if draft.get("quote"):  # noted, never dumped — Discord posts are capped at 2,000 chars
+        lines.append("- 원문 인용: 포함 (수신 메일 원문이 발송 본문 하단에 붙습니다)")
     attachments = draft.get("attachments") or []
     if attachments:
         if draft.get("provider") == "gmail":

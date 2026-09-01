@@ -23,6 +23,8 @@ from automation.interop.approval_surface import (
 OWNER_ID = "280680578314010625"
 DM_CHANNEL_ID = "1526487935975952385"
 SKILL_CHANNEL_ID = "1528936606856122421"
+AGENT_CHAT_CHANNEL_ID = "1601000000000000001"
+AGENT_CHAT_THREAD_ID = "1601000000000000002"
 
 class FakeDirectory:
     """Mutable in-memory directory used to exercise the injected boundary."""
@@ -30,9 +32,12 @@ class FakeDirectory:
     def __init__(self) -> None:
         self.dm_channel_id: str = DM_CHANNEL_ID
         self.skill_channel_id: str = SKILL_CHANNEL_ID
+        self.agent_chat_channel_id: str = AGENT_CHAT_CHANNEL_ID
+        self.agent_chat_thread_id: str = AGENT_CHAT_THREAD_ID
         self.facts: dict[str, ChannelFacts] = {
             DM_CHANNEL_ID: ChannelFacts(1, "", (OWNER_ID,)),
             SKILL_CHANNEL_ID: ChannelFacts(0, "approvals", ()),
+            AGENT_CHAT_THREAD_ID: ChannelFacts(11, "승인-todo", (), AGENT_CHAT_CHANNEL_ID),
         }
         self.calls: list[str] = []
 
@@ -43,6 +48,14 @@ class FakeDirectory:
     def skill_approvals(self) -> str:
         self.calls.append("skill_approvals")
         return self.skill_channel_id
+
+    def agent_chat(self) -> str:
+        self.calls.append("agent_chat")
+        return self.agent_chat_channel_id
+
+    def agent_chat_thread(self, kind: ApprovalKind) -> str:
+        self.calls.append("agent_chat_thread")
+        return self.agent_chat_thread_id
 
     def describe(self, channel_id: str) -> ChannelFacts:
         self.calls.append(f"describe:{channel_id}")
@@ -61,6 +74,14 @@ class RaisingDirectory:
         self.calls.append("skill_approvals")
         return SKILL_CHANNEL_ID
 
+    def agent_chat(self) -> str:
+        self.calls.append("agent_chat")
+        return AGENT_CHAT_CHANNEL_ID
+
+    def agent_chat_thread(self, kind: ApprovalKind) -> str:
+        self.calls.append("agent_chat_thread")
+        raise ApprovalSurfaceError("agent-chat channel is not configured")
+
     def describe(self, channel_id: str) -> ChannelFacts:
         self.calls.append(f"describe:{channel_id}")
         return ChannelFacts(0, "approvals", ())
@@ -76,21 +97,21 @@ def _mail_flipped_at_v2() -> TransitionLedger:
     }
 
 
-def test_approval_kind_has_exactly_fifteen_members() -> None:
+def test_approval_kind_has_exactly_sixteen_members() -> None:
     # Given / When: the closed set of approval kinds is enumerated.
     kinds = tuple(ApprovalKind)
 
     # Then: every planned flow has exactly one kind.
-    assert len(kinds) == 15
+    assert len(kinds) == 16
 
 
-def test_todo_kind_routes_to_owner_dm() -> None:
+def test_todo_kind_lands_on_dm_then_moves_to_agent_chat() -> None:
     # Given / When: the todo kind is parsed through the closed approval enum.
     kind = ApprovalKind("todo")
 
-    # Then: its initial and current policy both select the owner DM.
+    # Then: it landed on the owner DM and current policy moves it to the agent-chat thread.
     assert surface_at_policy(kind, 0) is ApprovalSurface.OWNER_DM
-    assert required_surface(kind) is ApprovalSurface.OWNER_DM
+    assert required_surface(kind) is ApprovalSurface.AGENT_CHAT_THREAD
 
 
 @pytest.mark.parametrize(
@@ -136,6 +157,7 @@ def test_migrating_kinds_stay_on_skill_approvals_at_v1(kind: ApprovalKind) -> No
         ApprovalKind.SKILL_PUBLISH,
         ApprovalKind.SKILL_SUBMIT,
         ApprovalKind.MANAGED_ACTIVATE,
+        ApprovalKind.RELEASE,
     ),
 )
 @pytest.mark.parametrize("policy_version", range(POLICY_VERSION + 6))
@@ -236,18 +258,22 @@ def test_binding_refuses_an_implicit_or_non_snowflake_channel(channel_id: str) -
         )
 
 
-def test_resolve_new_binding_validates_owner_dm() -> None:
-    # Given: an injected directory with a valid owner DM.
+def test_resolve_new_binding_routes_repair_to_the_agent_chat_thread() -> None:
+    # Given: v8 (§10-7) — the Ops bot joins the personal guild, so repair leaves
+    # the last remaining owner-DM surface for the agent-chat thread.
     directory = FakeDirectory()
+    directory.facts[AGENT_CHAT_THREAD_ID] = ChannelFacts(
+        11, "승인-repair", (), AGENT_CHAT_CHANNEL_ID,
+    )
 
-    # When: a DM-routed kind creates a new binding.
-    binding = resolve_new_binding(ApprovalKind.MAIL_COMPOSE, directory, OWNER_ID)
+    # When: repair creates a new binding at current policy.
+    binding = resolve_new_binding(ApprovalKind.REPAIR, directory, OWNER_ID)
 
-    # Then: the concrete DM and current policy version are stamped.
+    # Then: the concrete thread and current policy version are stamped.
     assert binding == ApprovalBinding(
-        ApprovalKind.MAIL_COMPOSE,
-        ApprovalSurface.OWNER_DM,
-        DM_CHANNEL_ID,
+        ApprovalKind.REPAIR,
+        ApprovalSurface.AGENT_CHAT_THREAD,
+        AGENT_CHAT_THREAD_ID,
         POLICY_VERSION,
     )
 
@@ -281,14 +307,19 @@ def test_resolve_new_binding_accepts_an_explicit_skill_channel_id() -> None:
     assert "skill_approvals" not in directory.calls
 
 
+def _stored_repair_dm_binding() -> ApprovalBinding:
+    """A v5-era repair record — v8 flips NEW bindings, stored DMs still validate."""
+    return ApprovalBinding(ApprovalKind.REPAIR, ApprovalSurface.OWNER_DM, DM_CHANNEL_ID, 5)
+
+
 def test_dm_with_guild_channel_type_raises() -> None:
-    # Given: the DM resolver returns facts for a guild text channel.
+    # Given: the stored DM binding's facts describe a guild text channel.
     directory = FakeDirectory()
     directory.facts[DM_CHANNEL_ID] = ChannelFacts(0, "approvals", (OWNER_ID,))
 
     # When / Then: the mismatch fails closed.
     with pytest.raises(ApprovalSurfaceError):
-        _ = resolve_new_binding(ApprovalKind.MAIL_COMPOSE, directory, OWNER_ID)
+        _ = validate_stored_binding(_stored_repair_dm_binding(), directory, OWNER_ID)
 
 
 def test_dm_without_owner_recipient_raises() -> None:
@@ -298,7 +329,7 @@ def test_dm_without_owner_recipient_raises() -> None:
 
     # When / Then: the mismatch fails closed.
     with pytest.raises(ApprovalSurfaceError):
-        _ = resolve_new_binding(ApprovalKind.MAIL_COMPOSE, directory, OWNER_ID)
+        _ = validate_stored_binding(_stored_repair_dm_binding(), directory, OWNER_ID)
 
 
 def test_skill_channel_with_wrong_name_raises() -> None:
@@ -312,13 +343,14 @@ def test_skill_channel_with_wrong_name_raises() -> None:
 
 
 def test_directory_exception_becomes_surface_error_without_fallback() -> None:
-    # Given: owner-DM lookup fails before yielding a channel.
+    # Given: agent-chat thread lookup fails before yielding a channel (v8: repair's
+    # resolution — e.g. the ops account has no agent_chat_channel_id configured).
     directory = RaisingDirectory()
 
-    # When / Then: the typed error propagates and no guild fallback is attempted.
+    # When / Then: the typed error propagates and no DM/guild fallback is attempted.
     with pytest.raises(ApprovalSurfaceError):
-        _ = resolve_new_binding(ApprovalKind.MAIL_COMPOSE, directory, OWNER_ID)
-    assert directory.calls == ["owner_dm"]
+        _ = resolve_new_binding(ApprovalKind.REPAIR, directory, OWNER_ID)
+    assert directory.calls == ["agent_chat_thread"]
 
 
 @pytest.mark.parametrize(
@@ -371,6 +403,7 @@ def test_reaction_instruction_names_no_surface_by_default() -> None:
     (
         (ApprovalSurface.OWNER_DM, "소유자 DM"),
         (ApprovalSurface.SKILL_APPROVALS, "개인 서버 #approvals"),
+        (ApprovalSurface.AGENT_CHAT_THREAD, "개인 서버 #agent-chat 스레드"),
     ),
 )
 def test_reaction_instruction_names_surface_when_requested(
@@ -386,3 +419,115 @@ def test_reaction_instruction_names_surface_when_requested(
 
     # Then: the central formatter includes the correct human surface name.
     assert surface_name in instruction
+
+
+AGENT_CHAT_KINDS = (
+    ApprovalKind.MAIL_REPLY,
+    ApprovalKind.MAIL_COMPOSE,
+    ApprovalKind.BUDGET_MAIL,
+    ApprovalKind.PATENT_EXPORT,
+    ApprovalKind.CALENDAR,
+    ApprovalKind.COORDINATION,
+    ApprovalKind.WIKI,
+    ApprovalKind.OBSIDIAN_WRITE,
+    ApprovalKind.TODO,
+)
+
+
+@pytest.mark.parametrize("kind", AGENT_CHAT_KINDS)
+def test_v7_moves_owner_approvals_to_the_agent_chat_thread(kind: ApprovalKind) -> None:
+    # Given / When: an owner-approval kind is resolved before and after the flip.
+    before = surface_at_policy(kind, 6)
+    current = surface_at_policy(kind, POLICY_VERSION)
+
+    # Then: v6 stays on the owner DM and v7 lands on the agent-chat thread.
+    assert before is ApprovalSurface.OWNER_DM
+    assert current is ApprovalSurface.AGENT_CHAT_THREAD
+
+
+def test_v8_moves_repair_to_the_agent_chat_thread() -> None:
+    # Given / When: repair is resolved before and after v8 (§10-7 Ops-bot invite).
+    before = surface_at_policy(ApprovalKind.REPAIR, 7)
+    current = required_surface(ApprovalKind.REPAIR)
+
+    # Then: v7 records stay on the owner DM; new bindings land on the thread —
+    # the last DM-resident approval surface is gone.
+    assert before is ApprovalSurface.OWNER_DM
+    assert current is ApprovalSurface.AGENT_CHAT_THREAD
+
+
+def test_resolve_new_binding_validates_agent_chat_thread() -> None:
+    # Given: an injected directory with a configured agent-chat thread.
+    directory = FakeDirectory()
+
+    # When: an owner-approval kind creates a new binding.
+    binding = resolve_new_binding(ApprovalKind.TODO, directory, OWNER_ID)
+
+    # Then: the concrete thread and current policy version are stamped.
+    assert binding == ApprovalBinding(
+        ApprovalKind.TODO,
+        ApprovalSurface.AGENT_CHAT_THREAD,
+        AGENT_CHAT_THREAD_ID,
+        POLICY_VERSION,
+    )
+    assert "agent_chat_thread" in directory.calls
+
+
+def test_agent_chat_thread_with_a_foreign_parent_raises() -> None:
+    # Given: the resolved thread hangs under a channel that is not agent-chat.
+    directory = FakeDirectory()
+    directory.facts[AGENT_CHAT_THREAD_ID] = ChannelFacts(
+        11, "승인-todo", (), "999000000000000000",
+    )
+
+    # When / Then: the mismatch fails closed.
+    with pytest.raises(ApprovalSurfaceError):
+        _ = resolve_new_binding(ApprovalKind.TODO, directory, OWNER_ID)
+
+
+def test_agent_chat_thread_with_a_plain_channel_type_raises() -> None:
+    # Given: the resolver returned a plain guild channel rather than a thread.
+    directory = FakeDirectory()
+    directory.facts[AGENT_CHAT_THREAD_ID] = ChannelFacts(
+        0, "agent-chat", (), AGENT_CHAT_CHANNEL_ID,
+    )
+
+    # When / Then: the mismatch fails closed.
+    with pytest.raises(ApprovalSurfaceError):
+        _ = resolve_new_binding(ApprovalKind.TODO, directory, OWNER_ID)
+
+
+def test_agent_chat_private_thread_is_accepted() -> None:
+    # Given: the agent-chat thread is a private thread under the configured channel.
+    directory = FakeDirectory()
+    directory.facts[AGENT_CHAT_THREAD_ID] = ChannelFacts(
+        12, "승인-todo", (), AGENT_CHAT_CHANNEL_ID,
+    )
+
+    # When: the binding is resolved.
+    binding = resolve_new_binding(ApprovalKind.TODO, directory, OWNER_ID)
+
+    # Then: the private thread is a valid agent-chat surface.
+    assert binding.channel_id == AGENT_CHAT_THREAD_ID
+
+
+def test_agent_chat_resolution_failure_fails_closed_without_dm_fallback() -> None:
+    # Given: the agent-chat thread resolver fails (for example an unset config key).
+    directory = RaisingDirectory()
+
+    # When / Then: the typed error propagates and no owner-DM fallback is attempted.
+    with pytest.raises(ApprovalSurfaceError):
+        _ = resolve_new_binding(ApprovalKind.TODO, directory, OWNER_ID)
+    assert directory.calls == ["agent_chat_thread"]
+
+
+def test_stored_v6_dm_binding_survives_the_v7_flip() -> None:
+    # Given: a pending v6 owner-DM record written before the agent-chat flip.
+    directory = FakeDirectory()
+    binding = ApprovalBinding(ApprovalKind.TODO, ApprovalSurface.OWNER_DM, DM_CHANNEL_ID, 6)
+
+    # When: the stored record is validated at its stamped version.
+    validated = validate_stored_binding(binding, directory, OWNER_ID)
+
+    # Then: it still drains through the owner DM it was posted to.
+    assert validated is binding

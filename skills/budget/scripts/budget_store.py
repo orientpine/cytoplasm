@@ -16,7 +16,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
     taken_at TEXT NOT NULL,
     hash TEXT NOT NULL,
-    rows_json TEXT NOT NULL
+    rows_json TEXT NOT NULL,
+    sheet_key TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS change_claims (
     claim_key TEXT PRIMARY KEY,
@@ -35,24 +36,39 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     connection.executescript(_SCHEMA)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(snapshots)")}
+    if "sheet_key" not in columns:
+        connection.execute(
+            "ALTER TABLE snapshots ADD COLUMN sheet_key TEXT NOT NULL DEFAULT ''"
+        )
     return connection
 
 
-def latest_snapshot(db_path: Path) -> tuple[str, list[tuple[str, ...]]] | None:
+def latest_snapshot(
+    db_path: Path, *, sheet_key: str = ""
+) -> tuple[str, list[tuple[str, ...]]] | None:
     with _connect(db_path) as connection:
         row = connection.execute(
-            "SELECT hash, rows_json FROM snapshots ORDER BY rowid DESC LIMIT 1"
+            "SELECT hash, rows_json FROM snapshots WHERE sheet_key = ?"
+            " ORDER BY rowid DESC LIMIT 1",
+            (sheet_key,),
         ).fetchone()
     if row is None:
         return None
     return str(row[0]), [tuple(item) for item in json.loads(str(row[1]))]
 
 
-def store_snapshot(db_path: Path, snapshot_hash: str, rows: list[tuple[str, ...]], taken_at: str) -> None:
+def store_snapshot(
+    db_path: Path, snapshot_hash: str, rows: list[tuple[str, ...]], taken_at: str,
+    *, sheet_key: str = "",
+) -> None:
     with _connect(db_path) as connection:
         connection.execute(
-            "INSERT INTO snapshots (taken_at, hash, rows_json) VALUES (?, ?, ?)",
-            (taken_at, snapshot_hash, json.dumps([list(row) for row in rows], ensure_ascii=False)),
+            "INSERT INTO snapshots (taken_at, hash, rows_json, sheet_key) VALUES (?, ?, ?, ?)",
+            (
+                taken_at, snapshot_hash,
+                json.dumps([list(row) for row in rows], ensure_ascii=False), sheet_key,
+            ),
         )
 
 

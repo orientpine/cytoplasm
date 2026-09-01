@@ -5,8 +5,10 @@ import argparse
 import os
 import sys
 import tempfile
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import coordinate_io as io
 from confirm_reaction_watch import APPROVE_EMOJI, CANCEL_EMOJI, DiscordApi, reaction_action
@@ -51,6 +53,8 @@ def owner_leg(args: argparse.Namespace, config: dict[str, str], correlation: str
                     f"`실행 {draft['id']}`/`취소 {draft['id']}` 텍스트도 가능\n"
                     f"sha256:{draft['sha256']}"
                 ),
+                origin_channel_id=args.origin_channel_id,
+                origin_message_id=args.origin_message_id,
             ),
             config["owner_id"],
         )
@@ -75,7 +79,14 @@ def owner_leg(args: argparse.Namespace, config: dict[str, str], correlation: str
     event_id = executed_event_id(confirmed.stdout)
     io.obs(step="executed", draft_id=draft["id"], event_prefix=event_id[:6])
     state, commands = coordination.on_executed(state)
-    return finish(config, correlation, commands, label, args.summary, event_id)
+    return finish(
+        config, correlation, commands, label, args.summary, event_id,
+        record={
+            "id": draft["id"],
+            "origin_channel_id": args.origin_channel_id,
+            "origin_message_id": args.origin_message_id,
+        },
+    )
 
 
 def finalize(args: argparse.Namespace) -> int:
@@ -101,14 +112,19 @@ def finalize(args: argparse.Namespace) -> int:
         True,
     )
     _, commands = coordination.on_executed(state)
+    entry = _pending_entry(args.draft, required=False)
     return finish(
         config, args.correlation, commands, io.kst_label(args.slot, args.duration_min),
         args.summary, event_id,
+        record=entry.origin_record() if entry is not None else {"id": args.draft},
     )
 
 
-def finish(config: dict[str, str], correlation: str, commands, label: str, summary: str, event_id: str) -> int:
-    """Send only the established terse team notice and owner result DM."""
+def finish(
+    config: dict[str, str], correlation: str, commands, label: str, summary: str, event_id: str,
+    *, record: dict[str, str] | None = None,
+) -> int:
+    """Send only the established terse team notice and the routed result notice."""
     from automation.interop import coordination
 
     for command in commands:
@@ -118,12 +134,65 @@ def finish(config: dict[str, str], correlation: str, commands, label: str, summa
             )
             io.obs(step="team_notice", message_suffix=team_message[-4:])
         elif command.kind == "notify_result":
-            send_owner_dm(
-                config["owner_id"],
-                f"✅ 일정 조율 완료 ({correlation}): {summary} — {label}. 캘린더에 등록되었습니다.",
-            )
+            _notify_completion(config, correlation, label, summary, record or {})
     print(f"EXECUTED correlation={correlation} event={event_id[:6]}…")
     return 0
+
+
+def _notify_completion(
+    config: dict[str, str], correlation: str, label: str, summary: str, record: dict[str, str]
+) -> None:
+    """Best-effort result notice — the calendar write is already committed."""
+    try:
+        notify_result(
+            record,
+            f"✅ 일정 조율 완료 ({correlation}): {summary} — {label}. 캘린더에 등록되었습니다.",
+            fallback=lambda content: send_owner_dm(config["owner_id"], content),
+        )
+    except Exception as error:  # noqa: BLE001 — a notice failure must not change the exit code
+        print(f"NOTIFY-FAIL correlation={correlation} err={type(error).__name__}", file=sys.stderr)
+
+
+def _origin_notice() -> Any:
+    io.ensure_runtime()
+    from automation.interop import origin_notice  # noqa: PLC0415
+
+    return origin_notice
+
+
+def _thread_transport(channel_id: str) -> Any:
+    io.ensure_runtime()
+    from automation.interop.discord_transport import DiscordTransport  # noqa: PLC0415
+
+    return DiscordTransport(token=io.discord_bot_token(), channel_id=channel_id)
+
+
+def notify_result(
+    pending_or_draft: dict[str, str], content: str, *, fallback: Callable[[str], object]
+) -> object:
+    """Route a coordination result: origin-channel thread first, caller's fallback.
+
+    라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
+    ``automation.interop.origin_notice.deliver``가 소유한다(2026-08-23 전 스킬
+    공통화). 폴백은 호출자가 넘긴다: CLI는 소유자 통지를, 워처는 자기 Discord
+    표면을 쓰기 때문이다. 스레드 이름에는 일정 제목을 싣지 않는다(SKILL.md 규칙 3).
+    """
+    try:
+        origin_notice = _origin_notice()
+    except ImportError as error:  # 낡은 interop 런타임/샌드박스 — 결과는 그래도 소유자에게 닿아야 한다
+        print(
+            f"NOTIFY-HELPER-MISSING id={pending_or_draft.get('id', '')} err={type(error).__name__}",
+            file=sys.stderr,
+        )
+        return fallback(content)
+    return origin_notice.deliver(
+        api=io.api,
+        transport_factory=_thread_transport,
+        record=pending_or_draft,
+        thread_name=f"일정 조율 결과 (draft {pending_or_draft.get('id', '')})",
+        content=content,
+        fallback=fallback,
+    )
 
 
 def send_owner_dm(owner_id: str, content: str) -> tuple[str, str]:

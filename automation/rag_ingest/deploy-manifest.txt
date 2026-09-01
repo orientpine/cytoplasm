@@ -1,0 +1,1 @@
+agent|automation/rag_ingest/cron/rag_ingest_watch.py|.hermes/scripts/rag_ingest_watch.py|required

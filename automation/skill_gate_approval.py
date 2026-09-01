@@ -16,8 +16,11 @@ L6  Every read, react and delete takes its channel from the binding the record
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Final, Literal, Protocol, TypeAlias, assert_never
 from urllib.error import HTTPError
@@ -36,6 +39,110 @@ from automation.skill_gate_surface import ApprovalBindings, binding_of_post
 
 _TRANSPORT_ERRORS: Final = (OSError, ValueError, KeyError, TypeError)
 OwnerDecision: TypeAlias = Literal["approved", "denied", "absent"]
+
+#: stderr prefix every binding refusal carries, so a journal names WHICH check said no.
+REJECT_TOKEN: Final = "APPROVAL-BINDING-REJECT"
+#: Sibling of ``pending/``: one 0600 copy per refused record, kept for reproduction.
+PENDING_REJECTED_DIRNAME: Final = "pending-rejected"
+
+
+class RejectCause(StrEnum):
+    """One value per refusing branch of the execution-binding judgment — never shared.
+
+    2026-08-29: fifteen resumes of ``skill-deploy:proposal`` produced one journal line,
+    ``REJECTED: owner approval binding invalid``, for a dozen possible causes. A cause
+    that cannot be told apart from eleven others is not diagnosable, so each branch
+    below owns exactly one token.
+    """
+
+    RECORD_ABSENT = "record-absent"
+    RECORD_UNREADABLE = "record-unreadable"
+    LEGACY_BINDING_INCOMPLETE = "legacy-binding-incomplete"
+    BINDING_UNREADABLE = "binding-unreadable"
+    KEY_MISMATCH = "key-mismatch"
+    SHA_MISMATCH = "sha-mismatch"
+    MESSAGE_ID_MISMATCH = "message-id-mismatch"
+    NONCE_MISMATCH = "nonce-mismatch"
+    ACTION_MISMATCH = "action-mismatch"
+    DESTINATION_MISMATCH = "destination-mismatch"
+    CHANNEL_MISMATCH = "channel-mismatch"
+    PENDING_NONCE_REUSED = "pending-nonce-reused"
+    PENDING_RECORD_UNREADABLE = "pending-record-unreadable"
+    APPROVAL_LOG_UNREADABLE = "approval-log-unreadable"
+    APPROVAL_LOG_NONCE_REBOUND = "approval-log-nonce-rebound"
+    SURFACE_UNVERIFIABLE = "surface-unverifiable"
+    MESSAGE_MISSING = "message-missing"
+    PROBE_BINDING_MISMATCH = "probe-binding-mismatch"
+    PROBE_UNVERIFIABLE = "probe-unverifiable"
+    OWNER_CANCELLED = "owner-cancelled"
+    OWNER_REACTION_ABSENT = "owner-reaction-absent"
+
+
+#: Every non-approving probe state maps to its own cause; ``APPROVED`` maps to none.
+_PROBE_CAUSES: Final[Mapping[Probe, RejectCause]] = {
+    Probe.MISSING: RejectCause.MESSAGE_MISSING,
+    Probe.BINDING_MISMATCH: RejectCause.PROBE_BINDING_MISMATCH,
+    Probe.UNVERIFIABLE: RejectCause.PROBE_UNVERIFIABLE,
+    Probe.CANCELLED: RejectCause.OWNER_CANCELLED,
+    Probe.BOUND_PENDING: RejectCause.OWNER_REACTION_ABSENT,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class BindingOutcome:
+    """The rich verdict behind the outward bool: the state reached and why it refused.
+
+    ``cause`` is ``None`` only for :data:`Probe.APPROVED`; every other outcome names
+    the single branch that produced it, whether or not the caller demands ✅.
+    """
+
+    state: Probe | None
+    cause: RejectCause | None
+
+    def approved(self) -> bool:
+        """The owner's current ✅ authorizes this exact execution."""
+        return self.state is Probe.APPROVED
+
+    def bound(self) -> bool:
+        """The binding is current — approved, or still awaiting the owner's decision."""
+        return self.state in (Probe.APPROVED, Probe.BOUND_PENDING)
+
+
+def _refused(cause: RejectCause) -> BindingOutcome:
+    return BindingOutcome(None, cause)
+
+
+def _report(cause: RejectCause | None) -> None:
+    if cause is not None:
+        print(f"{REJECT_TOKEN}:{cause.value}", file=sys.stderr)
+
+
+def preserve_rejected(gate: SkillApprovalGate, cause: RejectCause | None) -> Path | None:
+    """Copy the refused pending record aside BEFORE a later supersede can delete it.
+
+    2026-08-29: the record that would have explained fifteen refusals was gone by the
+    time anyone looked. Best-effort by design — preservation is diagnostics, and a
+    failure to write evidence must never convert a refusal into a crash.
+    """
+    if cause is None:
+        return None
+    try:
+        doomed = gate.path().read_text(encoding="utf-8")
+    except OSError:
+        return None
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    target = (
+        gate.surface.gate_dir
+        / PENDING_REJECTED_DIRNAME
+        / f"{gate.spec.record_name()}-{stamp}-{cause.value}.json"
+    )
+    try:
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _ = target.write_text(doomed, encoding="utf-8")
+        target.chmod(0o600)
+    except OSError:
+        return None
+    return target
 
 
 def owner_decision(reacted: Callable[[str], bool]) -> OwnerDecision:
@@ -183,79 +290,94 @@ class SkillApprovalGate:
             case unreachable:
                 assert_never(unreachable)
 
+    def approval_outcome(self, execution: ApprovalExecution, approval_log: Path) -> BindingOutcome:
+        """The rich verdict :meth:`valid_approval` reduces to a bool, one token per refusal."""
+        outcome = self._binding_outcome(execution, approval_log)
+        if not outcome.approved():
+            _report(outcome.cause)
+        return outcome
+
     def valid_approval(self, execution: ApprovalExecution, approval_log: Path) -> bool:
         """Accept only the current owner decision for one complete execution binding."""
-        return self._execution_state(execution, approval_log) is Probe.APPROVED
+        return self.approval_outcome(execution, approval_log).approved()
 
     def valid_binding(self, execution: ApprovalExecution, approval_log: Path) -> bool:
         """Accept a current undecided or approved binding for signed E2E owner injection."""
-        return self._execution_state(execution, approval_log) in (
-            Probe.APPROVED,
-            Probe.BOUND_PENDING,
-        )
+        outcome = self._binding_outcome(execution, approval_log)
+        if not outcome.bound():
+            _report(outcome.cause)
+        return outcome.bound()
 
-    def _execution_state(
+    def _binding_outcome(
         self, execution: ApprovalExecution, approval_log: Path
-    ) -> Probe | None:
+    ) -> BindingOutcome:
         request = execution.request
         try:
             record = self.stored()
-            if record is None:
-                return None
-            found = self.spec.stored(record)
+        except (ApprovalRecordsError, ApprovalSurfaceError):
+            return _refused(RejectCause.RECORD_UNREADABLE)
+        if record is None:
+            return _refused(RejectCause.RECORD_ABSENT)
+        found = self.spec.stored(record)
+        if found is None:
+            return _refused(RejectCause.LEGACY_BINDING_INCOMPLETE)
+        try:
             channel_id = self._channel_of(record)
         except (ApprovalRecordsError, ApprovalSurfaceError):
-            return None
-        if found is None or (
-            request.key,
-            found.action_hash,
-            found.message_id,
-            found.nonce,
-            record.get("approval_action", ""),
-            record.get("approval_destination", ""),
-            channel_id,
-        ) != (
-            self.spec.key(),
-            request.action_hash,
-            request.message_id,
-            execution.nonce,
-            execution.action,
-            execution.destination,
-            request.channel_id,
+            return _refused(RejectCause.BINDING_UNREADABLE)
+        for cause, stored, expected in (
+            (RejectCause.KEY_MISMATCH, request.key, self.spec.key()),
+            (RejectCause.SHA_MISMATCH, found.action_hash, request.action_hash),
+            (RejectCause.MESSAGE_ID_MISMATCH, found.message_id, request.message_id),
+            (RejectCause.NONCE_MISMATCH, found.nonce, execution.nonce),
+            (RejectCause.ACTION_MISMATCH, record.get("approval_action", ""), execution.action),
+            (
+                RejectCause.DESTINATION_MISMATCH,
+                record.get("approval_destination", ""),
+                execution.destination,
+            ),
+            (RejectCause.CHANNEL_MISMATCH, channel_id, request.channel_id),
         ):
-            return None
-        if self._pending_nonce_reused(execution.nonce) or self._approval_nonce_reused(
-            execution, approval_log
-        ):
-            return None
+            if stored != expected:
+                return _refused(cause)
+        reused = self._pending_nonce_reused(execution.nonce)
+        if reused is None:
+            reused = self._approval_nonce_reused(execution, approval_log)
+        if reused is not None:
+            return _refused(reused)
         try:
             probe_result = self.probe(request)
-            return probe_result
         except ApprovalSurfaceError:
-            return None
+            return _refused(RejectCause.SURFACE_UNVERIFIABLE)
+        return BindingOutcome(probe_result, _PROBE_CAUSES.get(probe_result))
 
-    def _pending_nonce_reused(self, nonce: str) -> bool:
+    def _pending_nonce_reused(self, nonce: str) -> RejectCause | None:
         for candidate in self.path().parent.glob("*.json"):
             if candidate == self.path():
                 continue
             try:
                 decoded = json.loads(candidate.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
-                return True
+                return RejectCause.PENDING_RECORD_UNREADABLE
             if not isinstance(decoded, dict):
-                return True
-            candidate_nonce = decoded.get("deploy_nonce", decoded.get("publish_nonce"))
+                return RejectCause.PENDING_RECORD_UNREADABLE
+            candidate_nonce = decoded.get(
+                "deploy_nonce",
+                decoded.get("publish_nonce", decoded.get("release_nonce")),
+            )
             if candidate_nonce == nonce:
-                return True
-        return False
+                return RejectCause.PENDING_NONCE_REUSED
+        return None
 
-    def _approval_nonce_reused(self, execution: ApprovalExecution, approval_log: Path) -> bool:
+    def _approval_nonce_reused(
+        self, execution: ApprovalExecution, approval_log: Path
+    ) -> RejectCause | None:
         try:
             lines = approval_log.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
-            return False
+            return None
         except OSError:
-            return True
+            return RejectCause.APPROVAL_LOG_UNREADABLE
         expected = {
             "action": execution.action,
             "action_hash": execution.request.action_hash,
@@ -272,8 +394,8 @@ class SkillApprovalGate:
             if not isinstance(binding, dict) or binding.get("deploy_nonce") != execution.nonce:
                 continue
             if binding != expected:
-                return True
-        return False
+                return RejectCause.APPROVAL_LOG_NONCE_REBOUND
+        return None
 
     def delete(self, request: ApprovalRequest) -> None:
         """404-tolerant: a message the owner already removed is not a supersede failure."""

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,34 @@ def _generate(*args: str) -> subprocess.CompletedProcess[str]:
         check=False,
         env=env,
     )
+
+
+def _digest_with_recorded_http_command(
+    remote_command: str, *, unrelated_marker: str = ""
+) -> str:
+    """원격 명령을 기록만 하도록 프로브 하나를 대체한다(ssh 없음)."""
+    script = f'''source "{_GENERATOR}"
+source "{_HEALTHCHECK}"
+probe_http_200() {{
+  : {shlex.quote(unrelated_marker)}
+  capture_on_node "$1" "$RECORDED_HTTP_COMMAND"
+}}
+wrapper_inputs_digest "$PRIMARY_NODE"
+'''
+    result = subprocess.run(
+        ("bash", "-c", script),
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "HEALTHCHECK_SSH_USER": "",
+            "HEALTHCHECK_SSH_IDENTITY": "",
+            "RECORDED_HTTP_COMMAND": remote_command,
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout.strip()
 
 
 def _run_probe(
@@ -84,6 +113,32 @@ def test_the_allowlist_is_observed_from_the_checks_not_hand_listed() -> None:
     # 일어났는가"만 본다.
     assert len(hashes) >= 10, f"관측이 거의 아무것도 잡지 못했다: {len(hashes)}"
     assert len(hashes) == len(set(hashes)), "중복 해시는 목록만 부풀린다"
+
+
+def test_the_inputs_digest_moves_when_only_a_recorded_probe_command_moves() -> None:
+    before = _digest_with_recorded_http_command("curl --fail http://one")
+    after = _digest_with_recorded_http_command("curl --fail http://two")
+
+    assert re.fullmatch(r"[0-9a-f]{64}", before)
+    assert before != after
+
+
+def test_the_inputs_digest_ignores_unrelated_probe_edits() -> None:
+    before = _digest_with_recorded_http_command(
+        "curl --fail http://unchanged", unrelated_marker="before"
+    )
+    after = _digest_with_recorded_http_command(
+        "curl --fail http://unchanged", unrelated_marker="after"
+    )
+
+    assert before == after
+
+
+def test_the_inputs_digest_is_stable_for_identical_recorded_commands() -> None:
+    first = _digest_with_recorded_http_command("curl --fail http://stable")
+    second = _digest_with_recorded_http_command("curl --fail http://stable")
+
+    assert first == second
 
 
 def test_the_inputs_digest_moves_when_the_check_list_moves(tmp_path: Path) -> None:

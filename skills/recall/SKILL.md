@@ -1,7 +1,7 @@
 ---
 name: recall
 description: "개인 RAG(personal_cha) 검색 스킬. `!recall <질문>` 명시 호출 + 개인/프로젝트 지식 질문에 자동 사용. 검색 결과를 출처(위키 경로/회의/보고 id)와 함께 인용하고, 결과가 없으면 반드시 '기억 없음'이라고 답한다(지어내기 금지). RAG 노드 다운 시 '검색 불가' 안내 후 일반 답변. W2-5."
-version: 1.1.0
+version: 1.2.0
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -70,6 +70,26 @@ python3 ~/.hermes/skills/recall/scripts/recall_cli.py evidence "<질문>" \
 python3 ~/.hermes/skills/recall/scripts/recall_cli.py search "<관계 질문>" \
   --entity-fallback --json
 ```
+
+## 참고자료 조회 (소유자 Drive 폴더)
+
+소유자가 Drive 「내 드라이브/KIMM」에 모아 둔 자료에서 **근거 구절**을 찾는다. RAG 검색과
+다른 표면이다 — 이쪽은 인제스트된 기억이 아니라 소유자가 방금 올려 둔 원본 파일을 본다.
+
+```bash
+python3 ~/.hermes/skills/recall/scripts/recall_reference.py "<질의>" [--limit 3] [--json]
+```
+
+- 루트는 `DRIVE_REFERENCE_ROOT`(기본 `KIMM`, `/`로 중첩 경로 가능), Drive 접근은 다른 Drive
+  경로와 같은 옵트인 `DRIVE_PUBLISH_ENABLED=1`을 따른다. 꺼져 있으면 아무것도 조회하지 않는다.
+- **읽기 전용**이다. 그 폴더에 폴더·파일을 만들지 않으며, 루트가 없으면 만들지 않고
+  `REFERENCE-ROOT-MISSING` 사유만 낸다.
+- 읽는 형식은 pdf·pptx·docx·hwpx·xlsx·md·txt·csv와 Google 문서·슬라이드·스프레드시트(내보내기)다.
+  Google 설문처럼 내보낼 수 없는 것, 구형 `.hwp`, 64MiB 초과 파일은 **내려받기 전에** 사유만
+  남기고 자리를 양보한다 — 읽을 수 있는 자료가 먼저 조회된다. `.hwp` 는 소유자에게 hwpx 나
+  pdf 로 다시 저장하라고 안내한다.
+- **종료 코드는 항상 0**이고 사유는 본문에 적힌다 — 근거를 못 찾은 것은 실패가 아니다.
+  못 찾았으면 지어내지 말고 "참고자료에서 근거를 찾지 못했다"고 답한다.
 
 ## 특허 민감 분류 경계 (v2, model-aware — 2026-07-22)
 

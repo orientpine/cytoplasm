@@ -46,10 +46,17 @@ def _lease_module() -> ModuleType:
 
 
 def approval_key(draft: dict) -> str:
-    """The logical key one live request message belongs to."""
+    """The logical key one live request message belongs to.
+
+    A registry draft carries its project/year so sibling sheets never supersede
+    each other's live request; a legacy draft keeps the historical single key.
+    """
     recipient = draft.get("mail_to")
     if not isinstance(recipient, str) or not recipient:
         raise budget_gate.GateError("드래프트 mail_to 누락 — 승인 키를 만들 수 없음", 3)
+    project, year = draft.get("project"), draft.get("year")
+    if isinstance(project, str) and project and isinstance(year, int) and year:
+        return f"budget:{recipient}:{project}/{year}"
     return f"budget:{recipient}"
 
 

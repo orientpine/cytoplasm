@@ -49,10 +49,9 @@ readonly SNAPSHOT="$LIBDIR/origin_snapshot.sh"
 readonly RELEASE_STORE="$LIBDIR/release_store.py"
 readonly UPDATE_TRUST="$LIBDIR/automation/update_trust.py"
 readonly ALLOWED_SIGNERS="/etc/autophagy/update-allowed-signers"
-# The C1 anti-rollback anchor, named here rather than derived from a configuration we
-# deliberately no longer read. Both verifiers must anchor to the SAME floor; the ops
-# pre-gate reaches this exact path through `release_floor_path()`.
-readonly RELEASE_FLOOR=$NODE_PRIVATE_ROOT/deploy-reconcile/release-floor.json
+# Root owns the authoritative rollback-prevention anchor. ops can read it for the
+# pre-gate but cannot erase or advance it.
+readonly RELEASE_FLOOR=/var/lib/autophagy/update-trust/release-floor.json
 readonly UPDATE_CHANNEL_STATE=$NODE_PRIVATE_ROOT/deploy-reconcile/update-channel.json
 # The same file every other caller opens. See converge-release-runtime.sh.
 #
@@ -109,9 +108,46 @@ PY
     )
   fi
 fi
-target="$(as_ops "${remote_env[@]}" python3 -I "$UPDATE_TRUST" resolve-signed --mirror "$MIRROR" --allowed-signers "$ALLOWED_SIGNERS" --floor-path "$RELEASE_FLOOR")" \
+pre_gate_target="$(as_ops "${remote_env[@]}" python3 -I "$UPDATE_TRUST" resolve-signed --mirror "$MIRROR" --allowed-signers "$ALLOWED_SIGNERS" --floor-path "$RELEASE_FLOOR")" \
   || die "SYNC-BLOCK: update trust rejected the remote target" 4
-[[ "$target" =~ ^[0-9a-f]{40,64}$ ]] || die "SYNC-BLOCK: verifier returned an invalid target" 4
+[[ "$pre_gate_target" =~ ^[0-9a-f]{40,64}$ ]] \
+  || die "SYNC-BLOCK: verifier returned an invalid target" 4
+
+# Re-verify with root-owned code executed as ops, because Git must stay ops-owned and
+# Git refuses a cross-owner checkout. Root performs only the final monotonic write,
+# whose comparison cannot lower an existing floor.
+verified="$(as_ops "${remote_env[@]}" python3 -I - "$LIBDIR" "$MIRROR" "$ALLOWED_SIGNERS" "$RELEASE_FLOOR" "${update_channel:-}" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from automation.update_trust import resolve_signed_update
+
+mirror, signers, floor = map(Path, sys.argv[2:5])
+release = resolve_signed_update(
+    mirror,
+    signers,
+    remote_url=sys.argv[5] or None,
+    floor_path=floor,
+)
+print(release.tag, release.commit_sha)
+PY
+)" || die "SYNC-BLOCK: privileged update trust rejected the remote target" 4
+read -r verified_tag target extra <<<"$verified"
+[[ -z "${extra:-}" ]] && [[ "$target" =~ ^[0-9a-f]{40,64}$ ]] \
+  || die "SYNC-BLOCK: privileged verifier returned an invalid release" 4
+[[ "$target" == "$pre_gate_target" ]] \
+  || die "SYNC-BLOCK: signed target changed between verification passes" 4
+python3 -I - "$LIBDIR" "$RELEASE_FLOOR" "$verified_tag" "$target" <<'PY' \
+  || die "SYNC-BLOCK: cannot advance authoritative release floor" 4
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from automation.update_trust_state import privileged_advance_release_floor
+
+privileged_advance_release_floor(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
+PY
 
 # --- Already there? Say nothing and cost nothing. -----------------------------------
 if python3 -I "$RELEASE_STORE" current --verify "$target" --store-root "$STORE_PARENT" \

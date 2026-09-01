@@ -1,7 +1,7 @@
 ---
 name: report
 description: "개인 노트를 민감도 게이트 뒤 보고서·reveal.js 슬라이드·발표 대본으로 생성한다. 모든 산출물은 agent 전용 outputs에만 저장한다. W5-3."
-version: 1.0.1
+version: 1.0.2
 author: autophagy-agents
 license: MIT
 metadata:
@@ -65,4 +65,4 @@ python3 ~/.hermes/skills/report/scripts/report_cli.py script \
 근거·0600 사이드카를 검증한다.
 
 ## Drive 게시 (최종본)
-최종 산출물은 `DRIVE_PUBLISH_ENABLED=1`일 때 cha 본인 Drive의 `Autophagy 산출물/report/<YYYY-MM>/`에 생성 즉시 자동 업로드된다(초안 제외, 리뷰용, 게이트 없음). 공통 vendored 헬퍼 `scripts/drive_publish.py` 사용. 루트=`DRIVE_OUTPUTS_ROOT`, 기간=`DRIVE_PUBLISH_PERIOD`. 상세: `docs/guide/drive-publish.md`.
+최종 산출물은 `DRIVE_PUBLISH_ENABLED=1`일 때 cha 본인 Drive의 `autophagy/주간동향/<YYYY>/<YYYY-Www>_주간연구동향/`에 생성 즉시 자동 업로드된다(초안 제외, 리뷰용, 게이트 없음). 보고서·슬라이드·대본 3종이 그 주간 번들 폴더 한 곳에 모이며, 같은 주에 다시 만들면 새 파일이 생기지 않고 기존 파일이 갱신된다. 발행은 공용 파사드 `automation.drive_outputs`만 쓴다. 상세: `docs/guide/drive-publish.md`.

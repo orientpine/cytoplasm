@@ -38,6 +38,7 @@ def test_installer_keeps_signed_seed_for_new_nodes() -> None:
         if spec.path.name == "node.toml"
     }
     assert set(runtime_configs) == {
+        Path("/etc/autophagy/node.toml"),
         seed.agent_home / ".hermes" / "node.toml",
         seed.peer_home / ".hermes" / "node.toml",
         seed.ops_home / ".hermes" / "node.toml",

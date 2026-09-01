@@ -37,7 +37,10 @@ def test_topics_modules_resolve_from_the_scripts_override() -> None:
 
     # When/Then: the runtime records both the selected override and live default.
     assert research_trends.SCRIPTS_DIR == expected
-    assert research_trends._LIVE_SCRIPTS == "/srv/autophagy-skills/live/topics/scripts"
+    # 덮어쓰기가 없으면 공유 정의의 governed live 기본값으로 fail-closed 한다.
+    assert research_trends.skill_scripts("topics", env_var="TOPICS_SCRIPTS", env={}) == Path(
+        "/srv/autophagy-skills/live/topics/scripts"
+    )
 
 
 def test_parse_arxiv_atom_returns_public_paper() -> None:
@@ -142,17 +145,57 @@ def test_bot_token_raises_typed_owner_dm_error_when_unavailable(
     assert issubclass(OwnerDmDeliveryError, RuntimeError)
 
 
-def test_send_dm_raises_typed_owner_dm_error_for_invalid_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_send_dm_raises_typed_owner_dm_error_when_not_delivered(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = tmp_path / "config.json"
-    _ = config.write_text("{}", encoding="utf-8")
+    # ON-2: destination resolution lives in the owner_notice facade; this module
+    # only maps "not delivered" onto its typed error so main() exits masked.
+    from automation import owner_notice
+
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fixture-token")
-    monkeypatch.setattr(research_trends, "INTEROP_CONFIG", config)
+    monkeypatch.setattr(owner_notice, "notify_owner", lambda _report: False)
 
     with pytest.raises(OwnerDmDeliveryError):
         research_trends._send_dm("report")
 
+
+def test_send_dm_delegates_the_report_to_the_notice_facade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from automation import owner_notice
+
+    sent: list[str] = []
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "fixture-token")
+    monkeypatch.setattr(
+        owner_notice, "notify_owner", lambda report: sent.append(report) or True
+    )
+
+    research_trends._send_dm("report")
+
+    assert sent == ["report"]  # 마스킹·본문은 그대로, 목적지만 파사드가 정한다
+
+
+def test_send_dm_exports_the_token_for_the_facade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The deployed cron carries the token in ~/.env.secrets, not the env; the
+    # facade reads DISCORD_BOT_TOKEN from the env, so _send_dm must export it.
+    from automation import owner_notice
+
+    secrets = tmp_path / "env.secrets"
+    _ = secrets.write_text("DISCORD_BOT_TOKEN=from-secrets\n", encoding="utf-8")
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+    monkeypatch.setattr(research_trends, "SECRETS", secrets)
+    seen: list[str] = []
+    monkeypatch.setattr(
+        owner_notice,
+        "notify_owner",
+        lambda _report: seen.append(os.environ.get("DISCORD_BOT_TOKEN", "")) or True,
+    )
+
+    research_trends._send_dm("report")
+
+    assert seen == ["from-secrets"]
 
 class _FakeResponse:
     """Minimal urlopen context-manager stand-in for retry tests."""

@@ -8,7 +8,7 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, override
+from typing import Final
 
 from automation.git_tag_signature import (
     DetachedSignatureInvocation,
@@ -17,6 +17,7 @@ from automation.git_tag_signature import (
     verify_detached_signature,
 )
 from automation.managed_sync.fetch import GitRunner
+from ..typing_compat import override
 
 from .parser import parse_roster
 from .schema import Roster

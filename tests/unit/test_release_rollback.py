@@ -15,7 +15,12 @@ from automation.release_rollback import (
     load_failed_release,
 )
 from automation.release_store import activate_release, rollback_current
-from automation.update_trust_state import advance_release_floor, load_release_floor
+from automation.update_trust_state import (
+    load_release_floor,
+    privileged_advance_release_floor,
+    release_floor,
+    save_release_floor,
+)
 
 
 _PRIOR_SHA = "a" * 40
@@ -140,7 +145,8 @@ def test_intentional_runtime_rollback_does_not_lower_the_verified_release_floor(
 ) -> None:
     # Given: signature verification already advanced the installation-wide floor.
     floor = tmp_path / "private" / "deploy-reconcile" / "release-floor.json"
-    advance_release_floor(floor, "v2.0.0", _TARGET_SHA)
+    save_release_floor(floor, release_floor("v1.0.0", _PRIOR_SHA))
+    privileged_advance_release_floor(floor, "v2.0.0", _TARGET_SHA)
     runtime = _runtime(tmp_path)
     fake = _FakeCommands(runtime, restart_codes=[0, 0], smoke_code=23)
 

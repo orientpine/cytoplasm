@@ -41,7 +41,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
     (notes / "weekly.md").write_text("# 주간 기록\n\n현장 작업 요약\n", encoding="utf-8")
     return argparse.Namespace(
         notes_root=str(notes), outputs_root=str(tmp_path / "outputs"), query="현장", limit=12,
-        title="주간 보고", response_file="", with_evidence=True,
+        title="주간 보고", response_file="", with_evidence=True, period_date=None,
     )
 
 

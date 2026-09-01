@@ -43,17 +43,36 @@ _BARE_RE = re.compile(r"^[0-9A-Za-z가-힣._-]+$")
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
 
 SCHEMA_GUIDE = """\
-frontmatter 스키마 안내 (필수 키 5개 정확히, 그 외 키 금지):
+frontmatter 스키마 안내 (필수 키 5개와 선택 키 9개만 허용):
+필수 키: title, tags, created, updated, links
+선택 키: kind, authority, provenance, status, review_after, supersedes, entity, relations, event_date
 ---
 title: "노트 제목"
 tags: [tag-1, 연구]
 created: 2026-07-15T00:00:00Z
 updated: 2026-07-15T00:00:00Z
 links: [다른-노트-슬러그]
+kind: note
+authority: default
+provenance: stated
+status: active
+review_after: 2026-12-31
+supersedes: 이전-노트-슬러그
+entity: [autophagy]
+relations: [about:autophagy]
+event_date: 2026-07-15
 ---
 - title: 비어있지 않은 문자열
-- tags / links: 문자열 리스트 (빈 리스트 [] 허용, 공백·경로 문자 금지)
-- created / updated: UTC ISO-8601 (YYYY-MM-DDTHH:MM:SSZ)"""
+- tags / links / entity: 문자열 리스트 (빈 리스트 [] 허용, 항목의 앞뒤 공백 금지)
+- created / updated: UTC ISO-8601 (YYYY-MM-DDTHH:MM:SSZ)
+- kind: decision, principle, preference, note 중 하나; kind 외 선택 키 사용 시 필수
+- authority: strict, default, advisory 중 하나
+- provenance: stated, observed, inferred 중 하나
+- decision / principle / preference에는 authority와 provenance 필수
+- status: active, superseded, archived 중 하나
+- review_after / event_date: YYYY-MM-DD (event_date는 작성 시각이 아닌 사건 날짜)
+- supersedes: 노트 슬러그
+- relations: '<술어>:<대상>' 문자열 리스트 (술어는 소문자로 시작하는 [a-z0-9_-])"""
 
 
 class SchemaError(ValueError):

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from automation.interop import approval_reminder_config as reminder_config
 from automation.interop.approval_reminder_config import (
     ApprovalReminderConfig,
     ApprovalReminderConfigError,
@@ -108,3 +109,35 @@ def test_disabled_config_is_an_explicit_consumer_model() -> None:
         config={"approval_reminders": {"enabled": False}}
     )
     assert config.enabled is False
+
+
+def test_a_home_directory_the_sandbox_hides_does_not_kill_the_watcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback home probe must answer, not raise, under ``ProtectHome=yes``.
+
+    `autophagy-repair-approval-watch.service` runs `User=ops` with `ProtectHome=yes`,
+    which presents /home to the service as an empty directory. `Path.is_file()` only
+    swallows ENOENT/ENOTDIR/EBADF/ELOOP (CPython `_IGNORED_ERRNOS`), so probing
+    ``~/.hermes/config.yaml`` raises EACCES instead of answering False — for a file that
+    does not exist at all. And because that raise happens *inside* the
+    ``except (ImportError, ModuleNotFoundError)`` clause, the sibling ``except Exception``
+    cannot translate it: it escapes raw and the unit dies at startup.
+
+    Measured on the primary node: every minute from 2026-08-21 07:58 UTC, 5,329
+    PermissionErrors, with repair owner-approval reactions unconsumed the whole time.
+    """
+    module = reminder_config
+
+    def no_hermes_config(name: str) -> object:
+        raise ImportError(f"no module named {name}")
+
+    def hidden_home(_self: Path) -> bool:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(module.importlib, "import_module", no_hermes_config)
+    monkeypatch.setattr(Path, "is_file", hidden_home)
+
+    config = module.load_approval_reminder_config()
+
+    assert config == module.parse_approval_reminder_config({})

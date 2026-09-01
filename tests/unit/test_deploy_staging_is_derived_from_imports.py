@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 from pathlib import Path
 from typing import Final
+
+import pytest
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 DEPLOY: Final = ROOT / "automation" / "deploy-skill.sh"
 ENTRY: Final = "automation/skill_gate.py"
+_FIXTURE_ROOT: Final = ROOT / "tests" / "fixtures" / "deploy_staging_imports"
 
 _HELPER_ARRAY: Final = re.compile(
     r"^(?:GATE_HELPERS|GATE_INTEROP_HELPERS)=\(([^)]*)\)$",
@@ -55,15 +59,25 @@ def _automation_imports(path: Path) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         names: list[str] = []
-        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.append(node.module)
+        candidates: list[Path] = []
+        if isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                names.append(node.module)
+            elif node.level >= 1:
+                package = path.parent
+                for _ in range(node.level - 1):
+                    package = package.parent
+                if node.module:
+                    candidates.append(package / (node.module.replace(".", "/") + ".py"))
+                else:
+                    candidates.extend(package / f"{alias.name}.py" for alias in node.names)
         elif isinstance(node, ast.Import):
             names.extend(alias.name for alias in node.names)
         for dotted in names:
-            if dotted == "automation" or not dotted.startswith("automation."):
-                continue
-            candidate = ROOT / (dotted.replace(".", "/") + ".py")
-            if candidate.is_file():
+            if dotted != "automation" and dotted.startswith("automation."):
+                candidates.append(ROOT / (dotted.replace(".", "/") + ".py"))
+        for candidate in candidates:
+            if candidate.is_file() and candidate.is_relative_to(ROOT):
                 found.add(str(candidate.relative_to(ROOT)))
     return found
 
@@ -81,6 +95,22 @@ def _required() -> frozenset[str]:
         if path.is_file():
             queue.extend(_automation_imports(path))
     return frozenset(seen)
+
+
+def test_relative_imports_require_staging_their_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a staged module that imports a sibling helper relatively.
+    staged = frozenset({"automation/relative_importer.py"})
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", _FIXTURE_ROOT)
+    monkeypatch.setattr(sys.modules[__name__], "_staged", lambda: staged)
+
+    # When: its import closure is derived from the fixture package.
+    required = _required()
+
+    # Then: omitting the helper fails closure, while staging it closes the package.
+    assert required - staged == {"automation/relative_helper.py"}
+    assert not required - staged - {"automation/relative_helper.py"}
 
 
 def test_staging_covers_every_automation_import_of_the_staged_chain() -> None:

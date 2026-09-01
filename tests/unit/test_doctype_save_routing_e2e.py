@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import final
 
 import pytest
 
+from automation import drive_outputs
 from automation.drive_client import DriveClient
 from automation.interop.external_effect_gate import (
     ApprovalBinding,
@@ -107,6 +110,19 @@ class FakeDriveRunner:
 
     def _list(self, argv: list[str]) -> dict[str, JsonValue]:
         query = _json_string(argv[argv.index("--params") + 1], "q")
+        if "name =" not in query:
+            parent = query.split("'")[1]
+            children: list[JsonValue] = [
+                {"id": identifier, "name": name, "mimeType": "application/vnd.google-apps.folder"}
+                for (name, folder_parent), identifier in self.folders.items()
+                if folder_parent == parent
+            ]
+            children.extend(
+                {"id": identifier, "name": name, "mimeType": "text/markdown"}
+                for (name, file_parent), identifier in self.files.items()
+                if file_parent == parent
+            )
+            return {"files": children}
         quoted = query.split("'")
         key = (quoted[1], quoted[3])
         registry = self.folders if "mimeType" in query else self.files
@@ -185,7 +201,6 @@ def _harness(
     adapters = SaveAdapters(
         obsidian_config=ObsidianWriteConfig("git@example.invalid:owner/vault.git", clone_dir, key_path),
         drive_client=DriveClient("gws", tmp_path / "drive-folders.json", runner=drive),
-        drive_folder_parts=("Autophagy", "doctype"),
         git_runner=git,
         approval_context=approval,
     )
@@ -243,10 +258,19 @@ def test_personal_note_when_routed_then_commits_pushes_and_verifies_obsidian_onl
     assert harness.drive.calls == []
 
 
-def test_destinationless_report_when_routed_then_private_drive_upserts_and_redownloads_only(tmp_path: Path) -> None:
+def test_destinationless_report_when_routed_then_facade_publishes_canonical_drive_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Given
     artifact = _artifact(tmp_path)
     harness = _harness(tmp_path)
+
+    class FixedDate:
+        @staticmethod
+        def today() -> date:
+            return date(2026, 8, 23)
+
+    monkeypatch.setattr(drive_outputs, "date", FixedDate)
 
     # When
     route = _run_save(artifact, "주간 보고서를 만들어 저장해줘", harness)
@@ -254,11 +278,17 @@ def test_destinationless_report_when_routed_then_private_drive_upserts_and_redow
     # Then
     assert route == SaveRoute(("drive",), "default-drive", False)
     assert harness.git.calls == []
-    assert _operations(harness.drive.calls) == [
-        ("files", "list"), ("files", "create"), ("files", "list"), ("files", "create"),
-        ("files", "list"), ("+upload", str(artifact)), ("files", "get"),
-        ("permissions", "list"), ("files", "get"),
+    creates = [
+        json.loads(call[call.index("--json") + 1])["name"]
+        for call in harness.drive.calls
+        if call[2:4] == ("files", "create")
     ]
+    assert creates == ["autophagy", "문서", "2026"]
+    upload = next(call for call in harness.drive.calls if call[2] == "+upload")
+    assert upload == (
+        "gws", "drive", "+upload", str(artifact), "--parent", "folder-3", "--name",
+        "2026-08-23_weekly-report.md",
+    )
 
 
 def test_explicit_both_when_routed_then_executes_verified_obsidian_and_drive_saves(tmp_path: Path) -> None:
@@ -308,10 +338,23 @@ def test_adapter_failures_when_routed_then_surface_one_overall_failure_without_s
     # Given / When / Then: each Drive verification rejection prevents a success receipt.
     hash_failure = _harness(tmp_path / "hash", corrupt_download=True)
     hash_artifact = _artifact(tmp_path / "hash")
-    with pytest.raises(DocumentSaveError, match="drive"):
+    with pytest.raises(DocumentSaveError, match="drive") as hash_error:
         _ = _run_save(hash_artifact, "주간 보고서를 만들어 저장해줘", hash_failure)
+    assert hash_error.value.destination == "drive"
 
     permissions_failure = _harness(tmp_path / "permissions", owner_only=False)
     permissions_artifact = _artifact(tmp_path / "permissions")
-    with pytest.raises(DocumentSaveError, match="drive"):
+    with pytest.raises(DocumentSaveError, match="drive") as permissions_error:
         _ = _run_save(permissions_artifact, "주간 보고서를 만들어 저장해줘", permissions_failure)
+    assert permissions_error.value.destination == "drive"
+
+
+def test_missing_drive_artifact_when_routed_then_fails_closed_without_drive_argv(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    missing = tmp_path / "missing.md"
+
+    with pytest.raises(DocumentSaveError, match="drive") as error:
+        save_artifact(missing, SaveRoute(("drive",), "default-drive", False), harness.adapters)
+
+    assert error.value.destination == "drive"
+    assert harness.drive.calls == []

@@ -4,7 +4,7 @@ import base64
 from dataclasses import replace
 from pathlib import Path
 
-from automation.install.assets import build_inputs
+from automation.install.assets import build_inputs, render_node_toml
 from automation.node_config import load_node_config
 
 
@@ -63,17 +63,62 @@ def test_build_inputs_renders_node_bound_units_helpers_hooks_and_runtime_config(
     assert load_node_config(node_toml) == replace(config, peer_attest_mode="signed")
 
 
-def test_build_inputs_installs_same_node_config_for_each_runtime_account() -> None:
+def test_build_inputs_installs_node_config_for_reconciler_and_runtime_accounts() -> None:
     config = load_node_config(_REPO / "configs" / "node.example.toml")
 
     inputs = build_inputs(_REPO, config, _public_key())
     files = {spec.path: spec for spec in inputs.files}
+    rendered = render_node_toml(replace(config, peer_attest_mode="signed"))
 
-    contents = {
-        files[home / ".hermes" / "node.toml"].content
-        for home in (config.agent_home, config.peer_home, config.ops_home)
+    reconciler = files[Path("/etc/autophagy/node.toml")]
+    assert reconciler.content == rendered
+    assert reconciler.mode == 0o644
+    assert reconciler.owner == "root"
+    assert reconciler.group == "root"
+
+    for account, home in (
+        (config.agent_account, config.agent_home),
+        (config.peer_account, config.peer_home),
+        (config.ops_account, config.ops_home),
+    ):
+        runtime = files[home / ".hermes" / "node.toml"]
+        assert runtime.content == reconciler.content
+        assert runtime.mode == 0o600
+        assert runtime.owner == account
+        assert runtime.group == account
+
+
+def test_build_inputs_installs_command_sync_dropins_for_both_gateways() -> None:
+    config = replace(
+        load_node_config(_REPO / "configs" / "node.example.toml"),
+        agent_account="third-agent",
+        peer_account="third-peer",
+        agent_home=Path("/home/third-agent"),
+        peer_home=Path("/home/third-peer"),
+        agent_gateway_unit="third-agent-gateway.service",
+        peer_gateway_unit="third-peer-gateway.service",
+    )
+
+    inputs = build_inputs(_REPO, config, _public_key())
+    files = {spec.path: spec for spec in inputs.files}
+    content = "[Service]\nEnvironment=DISCORD_COMMAND_SYNC_POLICY=bulk\n"
+    expected = {
+        Path(
+            "/home/third-agent/.config/systemd/user/"
+            "third-agent-gateway.service.d/30-command-sync.conf"
+        ): "third-agent",
+        Path(
+            "/home/third-peer/.config/systemd/user/"
+            "third-peer-gateway.service.d/30-command-sync.conf"
+        ): "third-peer",
     }
-    assert len(contents) == 1
+
+    for path, account in expected.items():
+        dropin = files[path]
+        assert dropin.content == content
+        assert dropin.mode == 0o600
+        assert dropin.owner == account
+        assert dropin.group == account
 
 
 def test_update_trust_file_comes_from_existing_bootstrap_contract() -> None:

@@ -105,6 +105,13 @@ $EDITOR /tmp/node.toml
 `InstallAssetError`로 거부한다(조용히 잘못 설치하지 않는다).
 
 작성한 파일은 설치기가 각 계정 홈의 `~/.hermes/node.toml`(0600)로 배포한다.
+agent·peer 계정에는 각 게이트웨이 user unit의
+`~/.config/systemd/user/<gateway-unit>.d/30-command-sync.conf`(0600)도 배포한다. 이
+drop-in은 `DISCORD_COMMAND_SYNC_POLICY=bulk`를 고정해 게이트웨이 재시동 때 Discord
+slash command를 건별 mutation하지 않고 한 번에 동기화한다. 설치기가 명시적으로
+소유하는 desired state이므로 내용·소유권·모드가 달라지면 다음 실행에서 수렴하고,
+이미 같으면 계획에서 빠진다.
+
 `--config`를 생략하면 예제와 동일한 기본값이 쓰이므로, 제3자 설치는 **항상
 `--config`를 명시한다.**
 
@@ -143,6 +150,9 @@ INSTALL PLAN
 31. repository /srv/autophagy-agents origin=<your-origin>
 ...
 33. file /etc/autophagy/update-allowed-signers owner=root:root mode=0644 sha256=...
+...
+37. file /home/agent/.config/systemd/user/hermes-gateway.service.d/30-command-sync.conf owner=agent:agent mode=0600 sha256=...
+38. file /home/peer/.config/systemd/user/hermes-gateway.service.d/30-command-sync.conf owner=peer:peer mode=0600 sha256=...
 ...
 58. timer autophagy-deploy-reconcile.timer enabled
 61. check update-trust

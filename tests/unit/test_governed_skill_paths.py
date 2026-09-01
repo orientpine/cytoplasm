@@ -37,13 +37,17 @@ def _non_docstring_literals(path: Path) -> tuple[str, ...]:
 
 
 def test_calendar_watch_default_when_env_absent_then_uses_live_scripts() -> None:
+    # 경로 사본 대신 공유 정의(automation/skill_mount.py)를 경유한다 — 판정은
+    # tests/unit/test_skill_mount_definition.py 가 주입된 live 루트로 고정한다.
     source = _source("skills/calendar/scripts/confirm_reaction_watch.py")
-    assert f'_LIVE_SCRIPTS: Final = "{_LIVE_ROOT}/calendar/scripts"' in source
+    assert 'skill_scripts("calendar", env_var="CALENDAR_SCRIPTS")' in source
+    assert f'LIVE_ROOT: Final = Path("{_LIVE_ROOT}")' in _source("automation/skill_mount.py")
 
 
 def test_coordination_watch_default_when_env_absent_then_uses_live_scripts() -> None:
     source = _source("skills/coordination/scripts/confirm_reaction_watch.py")
-    assert f'_LIVE_SCRIPTS: Final = "{_LIVE_ROOT}/coordination/scripts"' in source
+    assert 'skill_scripts("coordination", env_var="COORDINATION_SCRIPTS")' in source
+    assert f'LIVE_ROOT: Final = Path("{_LIVE_ROOT}")' in _source("automation/skill_mount.py")
 
 
 def test_coordination_calendar_default_when_env_absent_then_uses_live_cli() -> None:
@@ -78,7 +82,7 @@ def test_meeting_rules_defaults_when_env_absent_then_both_use_live_config() -> N
 
 def test_meeting_prompt_default_when_env_absent_then_uses_live_prompt() -> None:
     source = _source("skills/meeting/scripts/meeting_cli.py")
-    assert f'"{_LIVE_ROOT}/meeting/prompts/meeting-extraction-v3.md"' in source
+    assert f'"{_LIVE_ROOT}/meeting/prompts/meeting-extraction-v5.md"' in source
 
 
 def test_patent_watch_default_when_env_absent_then_uses_live_scripts() -> None:

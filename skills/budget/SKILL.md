@@ -1,7 +1,7 @@
 ---
 name: budget
-description: "과제비 원장(W0-10 Google Sheet) 조회 + 변경 감지 스킬. `!budget [항목]`은 게이트 없이 즉시 조회. 변경 감지 cron(30분)이 잔액 탭을 SQLite 스냅샷과 diff해 변경 시 규정 요청메일 초안을 만들고, 발송은 반드시 행위 봇의 소유자 DM 승인 메시지에서 cha 본인의 ✅/⛔ 리액션 확인(봇이 두 반응을 미리 추가, 제약 1) 이후에만 일어난다. 승인 표면은 `approval_surface.py` 정책과 초안에 저장된 바인딩으로 결정된다. W4-3."
-version: 1.1.1
+description: "과제비 원장(W0-10 Google Sheet) 조회 + 변경 감지 스킬 — 과제별×년도별 다중 시트 레지스트리(~/.hermes/budget/sheets.json) 지원. `!budget [항목]`은 게이트 없이 즉시 조회. 변경 감지 cron(30분)이 잔액 탭을 SQLite 스냅샷과 diff해 변경 시 규정 요청메일 초안을 만들고, 발송은 반드시 행위 봇의 소유자 DM 승인 메시지에서 cha 본인의 ✅/⛔ 리액션 확인(봇이 두 반응을 미리 추가, 제약 1) 이후에만 일어난다. 승인 표면은 `approval_surface.py` 정책과 초안에 저장된 바인딩으로 결정된다. W4-3."
+version: 1.5.0
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -14,9 +14,13 @@ prerequisites:
 
 # 과제비 조회 + 변경 감지 (budget)
 
-cha의 과제비 원장 Sheet를 비공개 런타임 설정 `BUDGET_SHEET_ID`로 지정해 gws CLI(OAuth,
-W0-6)로 읽는다. `configs/budget-sheet.md`에는 공개용 형식 예시만 둔다. Sheet는 읽기 전용 —
-값 수정 권한은 오너(cha)에게만 있다. 설정이 없으면 조회·감지는 fail-closed로 중단된다.
+cha의 과제비 원장 Sheet를 비공개 런타임 설정으로 지정해 gws CLI(OAuth, W0-6)로 읽는다.
+시트 지정은 두 모드다: 레지스트리 `~/.hermes/budget/sheets.json`(과제별×년도별 다중 시트,
+`BUDGET_SHEETS_FILE` 오버라이드)이 있으면 그것이 유일한 소스이고, 없으면 기존
+`BUDGET_SHEET_ID` 단일 시트 모드다(완전 호환). 레지스트리가 있는데 `BUDGET_SHEET_ID`가
+미등재면 fail-closed(exit 3)다. `configs/budget-sheet.md`·`configs/budget-sheets.example.json`
+에는 공개용 형식 예시만 둔다. Sheet는 읽기 전용 — 값 수정 권한은 오너(cha)에게만 있다.
+설정이 없으면 조회·감지는 fail-closed로 중단된다.
 
 ## 절대 규칙 (안전)
 
@@ -36,7 +40,13 @@ W0-6)로 읽는다. `configs/budget-sheet.md`에는 공개용 형식 예시만 �
 ```bash
 python3 ~/.hermes/skills/budget/scripts/budget_cli.py query            # 전체 항목
 python3 ~/.hermes/skills/budget/scripts/budget_cli.py query --item 재료비
+python3 ~/.hermes/skills/budget/scripts/budget_cli.py query --project 무인굴착기 --year 2026
+python3 ~/.hermes/skills/budget/scripts/budget_cli.py sheets           # 활성 시트 목록 (ID 마스킹)
 ```
+
+레지스트리 모드에서는 `--project`로 과제를 고른다 — 다과제인데 지정하지 않으면 exit 2로
+알려진 과제 목록을 안내하고, `--year` 생략은 그 과제의 최신 년도다. `BUDGET-OK` 끝의
+`sheet=<과제>/<년도>`가 어느 시트를 읽었는지 말한다.
 
 출력의 `ROW {...}` JSON 라인들(항목/예산/집행액/잔액/최종수정)을 읽기 좋은
 표로 정리해 cha의 DM으로 답한다. `BUDGET-OK n=…`이 없으면 실패다 — exit 4는
@@ -45,9 +55,16 @@ Sheet 접근 실패이니 stderr의 `SHEET-FAIL …` 내용을 그대로 cha에�
 
 ### 2) 변경 감지 파이프라인 — cron이 자동 수행 (30분, budget-watch)
 
-`snapshot`이 잔액 탭(7행 이후)을 SQLite 이전 스냅샷과 diff하고, 변경이 있으면
-규정 요청메일 초안을 만들어 **소유자 DM에 마스킹된 승인 요청을 게시**한다.
+`snapshot [--origin-channel-id <채널ID>] [--origin-message-id <메시지ID>]`이 잔액 탭(7행 이후)을
+SQLite 이전 스냅샷과 diff하고, 변경이 있으면 규정 요청메일 초안을 만들어 **소유자 DM에
+마스킹된 승인 요청을 게시**한다(origin 인자는 결과 통지 목적지 — §3).
 같은 변경은 claim 키로 멱등 — 초안이 중복 생성되지 않는다.
+
+레지스트리 모드에서는 tick이 **등록된 전 시트**를 순회한다. 스냅샷 스트림·claim 키·승인
+요청 키가 시트별(`<과제>/<년도>` 스코프)로 격리되어 같은 tick에 두 과제가 변해도 서로의
+승인 메시지를 대체하지 않으며, 승인 요청·요청 메일에 대상 과제/년도가 표기된다. 한 시트의
+읽기 실패는 그 시트만 재시도 큐(`[<과제>/<년도>] …`)에 남기고 나머지는 계속 처리한다
+(실패가 있으면 exit 4).
 
 게시는 공유 승인 생명주기(`budget_approval` → `automation/interop/approval_lifecycle.py`)를
 거치며 승인 키 `budget:{mail_to}`에는 **라이브 승인 메시지가 항상 1건뿐**이다: 같은 초안·같은
@@ -65,8 +82,16 @@ v1·v2에 저장된 기존 초안은 원래 개인 서버 `#approvals`에서 계
 초안 게시 직후 봇이 해당 승인 메시지에 ✅와 ⛔를 이 순서로 미리 추가한다.
 cha는 **그 메시지에** ✅로 확정하거나 ⛔로 취소한다. 다음 cron tick의 `watch`가
 소유자 반응(봇/타인 거부), 초안 sha256 결합, ⛔ 우선을 독립 재검증한다. ✅만 유효하면
-approvals.jsonl 기록 후 `gws gmail +send`를 실행하며, 유효한 ⛔면 초안을 폐기하고
-소유자에게 짧게 취소 사실만 알린다.
+approvals.jsonl 기록 후 `gws gmail +send`를 실행하며, 유효한 ⛔면 초안을 폐기한다.
+
+**결과 통지 (2026-08-23, 소유자 지시 — 전 스킬 공통 프로세스)**: 발송 완료/취소 결과는
+제목·수신자·draft id·사유를 담아 통지한다(`✉️ 발송 완료: <제목> → <수신자> (draft <id>)` /
+`⛔ 발송 취소: …`; 금액·잔액은 싣지 않는다). cha가 **채널(예: agent-chat)에서 요청**해
+에이전트가 `snapshot`을 실행하는 경우 `--origin-channel-id <채널ID>`(지시 메시지 id를 알면
+`--origin-message-id`도)를 전달한다 — 결과는 그 채널의 스레드(지시 메시지 앵커 우선)에
+게시되고 **DM은 승인(✅/⛔) 전용**으로 남는다. origin 미지정(cron tick·DM 지시)이면 기존대로
+소유자 DM 통지. 스레드 게시 실패는 `NOTIFY-THREAD-FAIL` 후 DM 폴백이며 어떤 통지 실패도
+tick을 깨지 않는다.
 
 승인이 없으면 pending 상태이며 **아무것도 발송되지 않는다**. CTA의
 `실행/취소 <id>`는 문서화된 대체 수단일 뿐, 기본 확인은 리액션이다. 소유자에게
@@ -81,6 +106,28 @@ python3 …/budget_cli.py retry-queue    # Sheet 접근 실패 재시도 큐
 
 Sheet 접근 실패는 조용히 사라지지 않는다: 오류가 보고되고 재시도 큐에
 적재되며, 다음 성공 tick이 큐를 resolve한다.
+
+**재시도 큐 의미 (2026-08-24 고정)**: `SHEET-FAIL` 한 건이 `retry_queue`에 한 행을 쌓고,
+다음 성공 tick의 `snapshot`이 **열린 행 전부를 한 번에** resolve한다(`RETRY-RESOLVED n=…`).
+즉 이 큐는 실패했던 조회를 되돌려 재생하는 replay 큐가 아니라 "언제부터 언제까지 Sheet에
+닿지 못했나"를 남기는 **인시던트 표식**이다 — 다음 성공 스냅샷이 현재 잔액을 그대로 읽으므로
+개별 재생은 필요 없다. 회귀 고정: `tests/unit/test_budget_retry_queue_consumption.py`.
+
+### 5) 연속 실패 통지 (`budget-watch`, 임계치 3)
+
+건강한 tick은 예전처럼 무음이다(빈 stdout + exit 0). 달라진 것은 실패가 이어질 때다:
+`budget_watch.py`가 공유 헬퍼 `watch_failure_streak`로 스트릭을 세어 **3회 연속 실패에
+도달한 그 tick에 1줄**, 이후 처음 성공하는 tick에 복구 1줄만 낸다. 30분 주기라 3회는 약
+1.5시간 — 2026-08-23 23:30 Sheets 503처럼 다음 tick에 낫는 장애는 조용히 지나가고, 권한
+회수나 탭 삭제처럼 지속되는 고장은 반드시 말한다. 스트릭에 **기록된** 실패 tick은 stdout이
+비고 **exit 0**이다 — `--deliver discord`에서 스케줄러는 rc≠0이면 stdout과 무관하게 자체
+실패 배너를 게시하므로(2026-08-24 18:30·20:30 KST 실측), 침묵은 기록된 실패의 exit 0으로만
+산다. 마스킹한 상세는 임계치 notice 안에만 들어간다. 기록하지 못한 tick(헬퍼 미배포·record
+예외)과 래퍼 크래시만 exit 1로 남아 스케줄러 배너가 최후 방어선이 된다.
+
+**전달 경로**: deploy가 기존 job까지 `--deliver discord`로 수렴시키므로 임계치·복구 두 줄은
+소유자에게 닿는다. 자식 stdout/stderr와 매 tick 진단 줄은 전달하지 않아 지속 장애도 사고당
+개시 1건·복구 1건을 넘지 않는다. 헬퍼가 미배포된 경우에만 마스킹한 호환 폴백 한 줄을 낸다.
 
 ## Sandbox scenario
 

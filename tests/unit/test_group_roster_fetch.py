@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,32 @@ from tests.unit.roster_fetch_fixtures import (
     publish_unsigned_roster,
     roster_bytes,
 )
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def test_group_roster_imports_when_runtime_typing_has_no_override() -> None:
+    # Given: the no-agent interpreter exposes the Python 3.11 typing surface.
+    script = """
+import typing
+
+if hasattr(typing, "override"):
+    del typing.override
+
+import automation.group_roster
+"""
+
+    # When: the deployed group-roster package is imported through its public surface.
+    result = subprocess.run(
+        (sys.executable, "-c", script),
+        cwd=_REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Then: typing-only decorators cannot prevent the runtime from starting.
+    assert result.returncode == 0, result.stderr
 
 
 class RecordingGitRunner:

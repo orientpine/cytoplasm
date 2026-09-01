@@ -19,6 +19,7 @@ tests/
 - `conftest.py` 없음 — unit은 `tmp_path`/`monkeypatch`/stub 실행파일/env override 패턴을 직접 사용.
 
 ## 규칙
+- **FS3 정산 레코드가 고정한 테스트 파일에는 케이스를 더하지 않는다.** `.omo/evidence/fs3/completions/task-*.json` 의 `green`/`red` 는 특정 테스트 파일들의 **출력 해시**를 못박고 `tests/unit/test_fs3_replay_gate.py` 가 매번 재생을 대조한다 — 그 파일에 한 줄만 더해도 과거 RED/GREEN 증적이 재현되지 않는다(2026-08-26 실측: `test_watch_failure_streak.py`·`test_deploy_host_fail_closed.py`). 원장의 해시를 고쳐 맞추는 것은 증적 위조다. 새 검사는 **새 파일**에 두고 왜 갈라놨는지를 그 파일 docstring 에 적는다(선례: `test_watch_failure_streak_store.py`, `test_deploy_host_fail_closed_all.py`).
 - **버그 수리는 RED→GREEN 회귀 고정 선행.** 특히 no-agent cron의 자식 subprocess 자격증명 전파는
   회귀로 못박는다 — 선례: `test_calendar_confirm_watch_subprocess.py`,
   `test_coordination_confirm_watch_subprocess.py` (부모 env에 토큰 없고 accessor만 해석 가능한 상황에서 자식이 토큰을 받는지 검증).

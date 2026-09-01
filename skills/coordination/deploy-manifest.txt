@@ -1,0 +1,1 @@
+agent|skills/coordination/scripts/confirm_reaction_watch.py|.hermes/scripts/confirm_reaction_watch.py|required

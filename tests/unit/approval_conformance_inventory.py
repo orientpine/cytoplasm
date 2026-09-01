@@ -35,6 +35,7 @@ APPROVAL_PRODUCERS: Final[Mapping[str, str]] = {
     "automation/obsidian_write/gate_binding.py::request_approval": "automation/obsidian_write/gate_binding.py",
     "automation/memory_relocate/approval_gate.py::request_approval": "automation/memory_relocate/approval_gate.py",
     "skills/todo/scripts/todo_cli.py::_cmd_request": "skills/todo/scripts/todo_approval.py",
+    "automation/release_approval.py::cmd_request": "automation/skill_gate_approval.py",
 }
 
 _LIFECYCLE_HOSTS: Final[Mapping[str, str]] = {
@@ -79,13 +80,15 @@ _EXEMPT: Final[Mapping[str, str]] = {
     "automation/selfskill_audit/report.py::send_report": "자체 스킬 감사 알림이며 승인 포인터를 생성하지 않는다.",
     "skills/mail/scripts/triage_cli.py::_remind_pending": "기존 승인 원문을 가리키는 무반응 최소정보 리마인더이며 새 승인 포인터를 저장하지 않는다.",
     "automation/repair/repair_ops_reaction_watch.py::RepairApprovalWatcher._process.deliver": "기존 승인 원문을 가리키는 무반응 최소정보 리마인더이며 새 승인 포인터를 저장하지 않는다.",
-    "automation/reminder_poller/poll_reminders.py::DmSender.send": "SQLite claim()으로 중복을 막는 알림 DM이며 승인 메시지 포인터가 없다.",
-    "skills/budget/scripts/budget_confirm.py::dm_owner": "승인 결과 안내 DM이며 승인 요청 메시지를 저장하지 않는다.",
+    "skills/budget/scripts/budget_confirm.py::notify_result": "발송/취소 결과 안내(원 채널 스레드, 소유자 DM 폴백)이며 승인 요청 메시지를 저장하지 않는다.",
     "skills/calendar/scripts/calendar_confirm.py::send_owner_dm": "확정 결과 알림 DM이며 pending 승인 메시지를 만들지 않는다.",
     "skills/coordination/scripts/confirm_reaction_watch.py::DiscordApi.send_owner_dm": "워처의 처리 결과 알림이며 승인 요청을 게시하지 않는다.",
     "skills/coordination/scripts/coordination_lifecycle.py::finish": "피어 조율 완료 통지이며 승인 메시지 포인터를 만들지 않는다.",
     "skills/coordination/scripts/coordination_lifecycle.py::send_owner_dm": "조율 완료 알림 DM이며 승인 게이트가 아니다.",
     "skills/mail/scripts/triage_confirm.py::dm_owner": "승인 결과 안내 DM이며 draft message_id를 쓰지 않는다.",
+    "skills/mail/scripts/triage_confirm.py::notify_result": "발송/취소 결과 안내(원 채널 스레드, 소유자 DM 폴백)이며 승인 요청 메시지를 저장하지 않는다.",
+    "automation/interop/origin_notice.py::resolve_thread_id": "결과 통지용 원 채널 스레드 해석·생성 공유 구현이며 승인 메시지를 게시하지 않는다.",
+    "automation/interop/origin_notice.py::deliver": "결과 통지 공유 배달기(원 채널 스레드, 호출자 폴백)이며 승인 요청 메시지를 저장하지 않는다.",
     "skills/patent-prep/scripts/patent_export_gate.py::dm_owner": "승인 결과 안내 DM이며 manifest message_id를 쓰지 않는다.",
 }
 
@@ -116,6 +119,7 @@ APPROVAL_KINDS: Final[Mapping[str, str]] = {
     "automation/obsidian_write/gate_binding.py::request_approval": "obsidian-write",
     "automation/memory_relocate/approval_gate.py::request_approval": "obsidian-write",
     "skills/todo/scripts/todo_cli.py::_cmd_request": "todo",
+    "automation/release_approval.py::cmd_request": "release",
 }
 
 # Commit surface (the ONLY writer of a flow's message_id) → the module that
@@ -146,24 +150,9 @@ _PENDING_MIGRATION: Final[Mapping[str, str]] = {
 }
 
 # `/users/@me/channels` call sites that are NOT approval surfaces (SI-2 scope
-# limit). Keys are copied verbatim from `_KNOWN_DM_OPENERS` in
-# tests/unit/test_approval_surface_inventory.py.
-# Derivation (mechanical, not hand-typed): `_KNOWN_DM_OPENERS` (14) minus the
-# eight approval-flow openers of Codified decision 1 — see docs/qa/AS-1/.
-_NON_APPROVAL_DM_SENDERS: Final[Mapping[str, str]] = {
-    "automation/cost-report/send_cost_report.py::send_dm":
-        "비용 리포트 DM이며 pending 레코드도 리액션 소비도 없다.",
-    "automation/interop/gate_driver.py::main":
-        "W1-5 게이트 드라이버의 결과 전달이며 승인 메시지를 게시하지 않는다.",
-    "automation/interop/hermes_plugin/__init__.py::_send_direct_result":
-        "인터롭 결과 전달 DM이며 message_id 포인터를 저장하지 않는다.",
-    "automation/reminder_poller/poll_reminders.py::DmSender.send":
-        "리마인더 알림 DM이며 SQLite claim()이 중복을 막는다.",
-    "automation/research_trends/research_trends.py::_send_dm":
-        "연구동향 리포트 DM이며 승인 게이트가 아니다.",
-    "skills/procurement/scripts/procure_review.py::send_review":
-        "검토 알림 DM이며 pending 레코드·리액션 소비·supersede가 없다.",
-}
+# limit). Notice senders resolve targets through `automation/owner_notice.py`,
+# so this intentionally remains empty.
+_NON_APPROVAL_DM_SENDERS: Final[Mapping[str, str]] = {}
 
 # Text that legitimately tells the owner WHERE to look (digest footer, CLI help).
 # Text that legitimately tells the owner WHERE to look, or reports on a surface
@@ -180,10 +169,6 @@ _SURFACE_NAMING_ALLOWED: Final[Mapping[str, str]] = {
         + "승인을 게시하지 않고(전부 GET) 표면을 해석하지도 않는다.",
     "automation/install/discord_check.py::evaluate_permissions":
         "봇이 어느 서버에도 초대되지 않았을 때의 조치 안내문 — 승인 표면 해석이 아니다.",
-    "automation/interop/hermes_plugin/__init__.py::_send_direct_result":
-        "승인 게이트가 아닌 결과 전달 DM이며 수신 위치를 알려주는 문구다.",
-    "automation/memory_curator/effects.py::<module>":
-        "메모리 큐레이터의 근접 경고/트윈 승격 효과 설명문이며, 재사용하는 wiki 게이트를 지목할 뿐 자체 승인 표면이 아니다.",
     "automation/research_trends/research_trends.py::_send_dm":
         "연구동향 리포트 DM 본문이며 승인 표면과 무관하다.",
     "skills/calendar/scripts/confirm_reaction_watch.py::DiscordApi.send_owner_dm":
@@ -217,7 +202,13 @@ _BANNED_RESOLVER_LITERALS: Final[frozenset[str]] = frozenset({
 
 _BANNED_ENV_OVERRIDE: Final = re.compile(r"^[A-Z_]*APPROVALS_CHANNEL_ID$")
 
-_SURFACE_LITERALS: Final[frozenset[str]] = frozenset({"#approvals", "owner DM", "승인 DM", "개인 서버"})
+_SURFACE_LITERALS: Final[frozenset[str]] = frozenset({
+    "#approvals",
+    "#agent-chat",
+    "owner DM",
+    "승인 DM",
+    "개인 서버",
+})
 
 _BINDING_FIELDS: Final[frozenset[str]] = frozenset({"kind", "surface", "channel_id", "policy_version"})
 

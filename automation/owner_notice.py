@@ -17,8 +17,33 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
+
+
+def owner_notice_channel(home: Path | None = None) -> str:
+    """ON-1: 지정 통지 채널 id — env 가 먼저, 없으면 이 계정의 interop config.
+
+    확정(2026-08-28 §10-6): 정기 통지는 별도 `#notifications` 채널로 분리한다. 키는
+    `owner_notice_channel_id`(`agent_chat_channel_id` 와 같은 해석 위치). **설정되면
+    그 채널로만 보낸다 — DM 폴백 없음**(게시 실패는 False 로 호출자 큐잉·재시도).
+    미설정이면 지금처럼 DM(레거시 설치 무영향).
+
+    확인 불가는 "" 로 답한다 — ProtectHome 유닛에서 홈을 찌르는 코드는 답해야지
+    던지면 안 된다(2026-08-21 repair 워처 5일 정지, 9e1b7ad0).
+    """
+    from_env = os.environ.get("OWNER_NOTICE_CHANNEL_ID", "").strip()
+    if from_env:
+        return from_env
+    config = (Path.home() if home is None else home) / ".hermes" / "interop" / "config.json"
+    try:
+        document = json.loads(config.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - EACCES 포함 어떤 실패도 "미설정"으로 답한다
+        return ""
+    value = document.get("owner_notice_channel_id", "") if isinstance(document, dict) else ""
+    return value.strip() if isinstance(value, str) else ""
 
 
 def owner_dm_channel(token: str, owner_id: str) -> str:
@@ -26,6 +51,36 @@ def owner_dm_channel(token: str, owner_id: str) -> str:
     from automation.interop.approval_directory import DiscordChannelDirectory
 
     return DiscordChannelDirectory(token=token, owner_id=owner_id).owner_dm()
+
+
+def _config_owner_id() -> str:
+    """owner id — env 가 먼저, 없으면 이 계정의 interop config(확인 불가는 "")."""
+    from_env = os.environ.get("AUTOPHAGY_OWNER_ID", "").strip()
+    if from_env:
+        return from_env
+    config = Path.home() / ".hermes" / "interop" / "config.json"
+    try:
+        document = json.loads(config.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - ProtectHome: 답해야지 던지면 안 된다
+        return ""
+    value = document.get("owner_id", "") if isinstance(document, dict) else ""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def resolve_notice_target(token: str) -> str:
+    """통지가 갈 채널 id — 지정 채널이 있으면 그것뿐, 없으면 소유자 DM.
+
+    ON-2 이관 발신자 중 첨부를 보내는 쪽(procurement)이 채널 id 자체를 필요로 해서
+    여기서만 해석한다 — DM 오픈이 파사드 밖으로 새지 않도록(실제 오픈은 central directory).
+    "" = 미설정(자격 부족). DM 해석의 네트워크 실패는 호출자가 감싼다.
+    """
+    channel = owner_notice_channel()
+    if channel:
+        return channel
+    owner_id = _config_owner_id()
+    if not owner_id:
+        return ""
+    return owner_dm_channel(token, owner_id)
 
 
 def send_notice(token: str, channel_id: str, body: str) -> None:
@@ -46,15 +101,15 @@ def notify_owner(notice: str) -> bool:
     exists to remove, so every failed attempt leaves a journal line — without the token.
     """
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
-    owner_id = os.environ.get("AUTOPHAGY_OWNER_ID", "")
-    if not token or not owner_id:
+    if not token or not (owner_notice_channel() or _config_owner_id()):
         print(
             "[owner-notice] NOTIFY-UNCONFIGURED: owner credential missing, notice not sent",
             file=sys.stderr,
         )
         return False
     try:
-        send_notice(token, owner_dm_channel(token, owner_id), notice)
+        # 채널이 지정되면 그 채널로만 — DM 폴백 없음("해당 채널에서만"이 요구다).
+        send_notice(token, resolve_notice_target(token), notice)
     except Exception as error:  # noqa: BLE001 - see docstring: escaping would stop prod
         print(f"[owner-notice] NOTIFY-FAILED: {type(error).__name__}", file=sys.stderr)
         return False

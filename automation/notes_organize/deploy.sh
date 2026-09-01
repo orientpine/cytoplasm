@@ -3,7 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 eval "$(python3 "$repo_root/automation/node_config_sh.py" --print-env)"
-host="${DEPLOY_SSH_HOST:-$NODE_DEPLOY_SSH_HOST}"
+host="${DEPLOY_SSH_HOST:-${NODE_DEPLOY_SSH_HOST:-}}"
+if [ -z "$host" ]; then
+  echo "DEPLOY-BLOCK: DEPLOY_SSH_HOST is unset. Export it (or configure ~/.hermes/node.toml)" >&2
+  echo "              and re-run; refusing to ssh to an unresolvable placeholder." >&2
+  exit 3
+fi
 
 run_agent() {
   local script="$1"
@@ -19,9 +24,16 @@ source "$repo_root/automation/deploy_push.sh"
 # automation/deploy_provenance.sh for why a silent revert is otherwise inevitable).
 source "$repo_root/automation/deploy_provenance.sh"
 deploy_provenance_check "$repo_root" \
-  "$repo_root/automation/notes_organize/notes_organize.py" || exit 4
+  "$repo_root/automation/notes_organize/notes_organize.py" \
+  "$repo_root/skills/mail/scripts/watch_failure_streak.py" || exit 4
 
+# Ship the shared incident helper first. The wrapper keeps running if a partial deploy
+# omits it, but notices cannot open or recover until this file is present.
+push_file "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
+  '.hermes/scripts/watch_failure_streak.py'
 push_file "$repo_root/automation/notes_organize/notes_organize.py" '.hermes/scripts/notes_organize.py'
 run_agent 'grep -qx "timezone: Asia/Seoul" "$HOME/.hermes/config.yaml"'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; if hermes cron list | grep -Eq "Name:[[:space:]]+notes-weekly-organize$"; then exit 0; fi; hermes cron create "0 8 * * 1" --name notes-weekly-organize --no-agent --script notes_organize.py --deliver local'
+# Weekdays provide catch-up after a failed Monday tick. The delivered-week watermark
+# makes every later tick in a successfully consumed week a silent no-op.
+run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+notes-weekly-organize\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "0 8 * * 1-5" --deliver discord --no-agent --script notes_organize.py; else hermes cron create "0 8 * * 1-5" --name notes-weekly-organize --no-agent --script notes_organize.py --deliver discord; fi'
 run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list'

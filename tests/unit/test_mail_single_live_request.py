@@ -34,6 +34,8 @@ import triage_mode  # noqa: E402
 
 OWNER = "owner-mail"
 DM_CHANNEL = "100000000000000002"
+AGENT_CHAT_CHANNEL = "100000000000000003"
+AGENT_CHAT_THREAD = "100000000000000004"
 # IPC 대기 상한 — 불변식이 아니라 hang 방지용이다. 직렬화 판정은 결과 단언(정확히 1 POST +
 # 나머지 defer)이 한다.
 #
@@ -60,6 +62,17 @@ class FakeDiscord:
             return {"id": DM_CHANNEL}
         if method == "GET" and path == f"/channels/{DM_CHANNEL}":
             return {"type": 1, "name": "", "recipients": [{"id": OWNER}]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
+            return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
+        if method == "GET" and path == "/guilds/guild-1/threads/active":
+            return {"threads": [{
+                "id": AGENT_CHAT_THREAD,
+                "type": 11,
+                "name": "승인-mail-reply",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
+            return {"type": 11, "name": "승인-mail-reply", "parent_id": AGENT_CHAT_CHANNEL}
         if method == "POST" and parts[-1] == "messages":
             self.posts += 1
             message_id = f"m-{self.posts}"
@@ -101,6 +114,12 @@ def mail_env(
     monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "mail-gate"))
     monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail-home"))
     monkeypatch.setenv("TRIAGE_MAILON_PYTHON", "python3")
+    interop = tmp_path / "interop-config.json"
+    interop.write_text(
+        json.dumps({"owner_id": OWNER, "agent_chat_channel_id": AGENT_CHAT_CHANNEL}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INTEROP_CONFIG", str(interop))
     monkeypatch.setattr(triage_confirm, "owner_id", lambda: OWNER)
     monkeypatch.setattr(triage_confirm, "_api", fake.api)
     return fake, calls, tmp_path / "mail-gate" / "drafts"

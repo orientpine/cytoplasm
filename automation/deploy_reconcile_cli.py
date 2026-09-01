@@ -21,8 +21,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
-from automation.deploy_reconcile import reconcile_skip, reconcile_tick
+from automation.deploy_reconcile import reconcile_tick
 from automation.deploy_reconcile_state import DEFAULT_STATE_PATH, load_state, save_state
+from automation.deploy_reconcile_unsigned import IncidentRecorder, raw_remote_main_sha, unreleased_commit_count
 from automation.deploy_update_channel import (
     UpdateChannelSource,
     read_roster_update_channel,
@@ -68,7 +69,6 @@ _RELEASE_RUNTIME: Final = ReleaseRuntime(
     smoke_script=RELEASE_POINTER / "automation" / "release-smoke.sh",
 )
 
-_LS_REMOTE_TIMEOUT: Final = 30.0
 _CONVERGE_TIMEOUT: Final = 900.0
 _VERDICT_TIMEOUT: Final = 60.0
 _GIT_TIMEOUT: Final = 30.0
@@ -239,15 +239,8 @@ def sync_mirror(
     return MIRROR_PULLED
 
 
-def _record_skip(reason: str) -> None:
-    state = load_state(DEFAULT_STATE_PATH)
-    updated = reconcile_skip(
-        state,
-        reason=reason,
-        now=time.time(),
-        deliver=notify_owner,
-    )
-    save_state(DEFAULT_STATE_PATH, updated)
+def _incidents() -> IncidentRecorder:
+    return IncidentRecorder(DEFAULT_STATE_PATH, notify_owner)
 
 
 def main() -> int:
@@ -267,13 +260,22 @@ def main() -> int:
         )
     except UpdateTrustError as error:
         print(f"[deploy-reconcile] UPDATE-TRUST-BLOCK {error} — skipping tick", file=sys.stderr)
-        _record_skip("update-trust-block")
+        remote_head = (
+            raw_remote_main_sha(MIRROR, update_channel)
+            if error.prefix == "UNSIGNED-HEAD"
+            else ""
+        )
+        if remote_head:
+            current = current_release_sha()
+            _incidents().unsigned(remote_head, current, unreleased_commit_count(MIRROR, current, remote_head))
+        else:
+            _incidents().skip("update-trust-block")
         return 0
     if not target_sha:
         # One transport miss is not drift. Repeated identical misses are structurally
         # indistinguishable from a permanently unreachable update channel and are counted.
         print("[deploy-reconcile] update target unresolved — skipping tick", file=sys.stderr)
-        _record_skip("update-target-unresolved")
+        _incidents().skip("update-target-unresolved")
         return 0
     try:
         persist_update_channel_binding(update_channel, UPDATE_CHANNEL_STATE)
@@ -282,7 +284,7 @@ def main() -> int:
             f"[deploy-reconcile] UPDATE-CHANNEL-BINDING-BLOCK {error} — skipping tick",
             file=sys.stderr,
         )
-        _record_skip("update-channel-binding-block")
+        _incidents().skip("update-channel-binding-block")
         return 0
     state = load_state(DEFAULT_STATE_PATH)
     current_sha = current_release_sha()

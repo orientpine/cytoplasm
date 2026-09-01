@@ -1,6 +1,6 @@
 """What each skill gate binds the owner's ✅ to: message text, record shape, action hash.
 
-One spec per gate — ``skill-deploy`` and ``skill-publish``. The ``action_hash`` is a
+One spec per gate — ``skill-deploy``/``skill-publish`` (``ReleaseSpec``: ``release_spec.py``). The ``action_hash`` is a
 pure function of every authorizing field the request message DISPLAYS and excludes
 the random nonce, so an unchanged request reuses its live message instead of
 orphaning it. The nonce is supplied per run and persisted only on a real post.
@@ -13,7 +13,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Final, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from automation.interop.approval_surface import ApprovalBinding
 
@@ -34,9 +34,7 @@ CANCEL_EMOJI: Final = "\u26d4"  # ⛔ NO ENTRY
 _PERSONAL_HEAD: Final = re.compile(r"[0-9a-f]{40,64}\Z")
 #: First line of deploy requests posted before #199 — still live, still must resolve.
 _LEGACY_DEPLOY_HEADER: Final = "[skill-deploy] 승인 요청\n"
-_APPROVAL_LINE: Final = (
-    f"- 승인 방법: 이 메시지에 cha가 {APPROVE_EMOJI} 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
-)
+_APPROVAL_LINE: Final = f"- 승인 방법: 이 메시지에 cha가 {APPROVE_EMOJI} 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
 
 
 class ProvenanceError(ValueError):
@@ -316,4 +314,9 @@ class PublishSpec:
         )
 
 
-GateSpec: TypeAlias = DeploySpec | PublishSpec
+if TYPE_CHECKING:
+    from automation.release_spec import ReleaseSpec
+
+# 문자열 전방 참조 — release_spec 이 이 모듈의 공유 프리미티브를 import 하므로(단일 사본),
+# 여기서 런타임 import 를 되돌리면 순환이 된다. 이 alias 는 annotation 에서만 쓰인다.
+GateSpec: TypeAlias = "DeploySpec | PublishSpec | ReleaseSpec"

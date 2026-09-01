@@ -1,10 +1,11 @@
 """AS-1.6 — the manifest decides WHERE a patent-export approval lives.
 
 A new request resolves the surface ONCE, persists it in the manifest, and every
-later read/react/delete replays that stored answer. Since AS-2.3 a new request
-lands in the owner DM, so these cases also lock the direction that matters most:
-a manifest bound to the guild ``#approvals`` before the flip is still acted on in
-the channel its message actually lives in, never retargeted to the new surface.
+later read/react/delete replays that stored answer. Since v7 a new request lands
+in its ``#agent-chat`` thread, so these cases also lock the direction that matters
+most: a manifest bound to the guild ``#approvals`` before the flip is still acted
+on in the channel its message actually lives in, never retargeted to the new
+surface.
 """
 from __future__ import annotations
 
@@ -30,6 +31,8 @@ OWNER: Final = "280680578314010625"
 GUILD_APPROVALS: Final = "1528936606856122421"
 RESOLVER_CHANNEL: Final = "1999999999999999999"
 OWNER_DM: Final = "1526487935975952385"
+AGENT_CHAT_CHANNEL: Final = "1526487935975952390"
+AGENT_CHAT_THREAD: Final = "1526487935975952391"
 SLUG: Final = "binding-slug"
 NOW: Final = 1_800_000_000
 SHA: Final = "sha256:" + "a" * 64
@@ -57,6 +60,13 @@ class FakeDiscord:
 
     def api(self, method: str, path: str, payload: dict | None = None) -> object:
         parts = path.strip("/").split("/")
+        if method == "GET" and path == "/guilds/guild/threads/active":
+            return {"threads": [{
+                "id": AGENT_CHAT_THREAD,
+                "type": 11,
+                "name": "승인-patent-export",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }]}
         if parts[:2] == ["users", "@me"] and parts[2:] == ["channels"]:
             return {"id": OWNER_DM}
         if parts[0] != "channels":
@@ -84,6 +94,15 @@ class FakeDiscord:
     def _describe(self, channel: str) -> dict[str, object]:
         if channel == OWNER_DM:
             return {"id": channel, "type": 1, "recipients": [{"id": OWNER}]}
+        if channel == AGENT_CHAT_CHANNEL:
+            return {"id": channel, "type": 0, "name": "agent-chat", "guild_id": "guild"}
+        if channel == AGENT_CHAT_THREAD:
+            return {
+                "id": channel,
+                "type": 11,
+                "name": "승인-patent-export",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }
         return {"id": channel, "type": 0, "name": "approvals"}
 
     def seed(self, channel: str, content: str) -> None:
@@ -109,7 +128,11 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> BindingEnv:
     export_root = tmp_path / "export"
     interop = tmp_path / "interop.json"
     interop.write_text(
-        json.dumps({"owner_id": OWNER, "personal_approvals_channel_id": GUILD_APPROVALS}),
+        json.dumps({
+            "owner_id": OWNER,
+            "personal_approvals_channel_id": GUILD_APPROVALS,
+            "agent_chat_channel_id": AGENT_CHAT_CHANNEL,
+        }),
         encoding="utf-8",
     )
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
@@ -204,15 +227,15 @@ def test_a_new_request_persists_the_binding_it_posted_under(env: BindingEnv) -> 
     assert env.fake.messages[str(stored.message_id)][0] == stored.channel_id
 
 
-def test_new_export_request_posts_to_the_owner_dm(env: BindingEnv) -> None:
+def test_new_export_request_posts_to_the_agent_chat_thread(env: BindingEnv) -> None:
     # Given / When: a brand-new export approval is requested under current policy.
     patent_export.prepare_export(env.paths, SLUG, mode="enc")
 
-    # Then: it lives in the acting bot's DM with the owner, and the shared guild
-    # #approvals — which the peer attestation bot can also read — gains nothing.
+    # Then: it lives in the patent-export thread under #agent-chat, while the shared
+    # guild #approvals — which the peer attestation bot can also read — gains nothing.
     stored = manifest.load_manifest(SLUG)
-    assert (stored.surface, stored.channel_id) == ("owner-dm", OWNER_DM)
-    assert env.fake.messages[str(stored.message_id)][0] == OWNER_DM
+    assert (stored.surface, stored.channel_id) == ("agent-chat-thread", AGENT_CHAT_THREAD)
+    assert env.fake.messages[str(stored.message_id)][0] == AGENT_CHAT_THREAD
     assert GUILD_APPROVALS not in env.fake.channels()
 
 
@@ -221,7 +244,7 @@ def test_the_approval_message_carries_the_policy_reaction_line(env: BindingEnv) 
     policy = importlib.import_module("automation.interop.approval_surface")
     expected = policy.reaction_instruction(
         policy.ApprovalKind.PATENT_EXPORT,
-        policy.ApprovalSurface.OWNER_DM,
+        policy.ApprovalSurface.AGENT_CHAT_THREAD,
     )
 
     # When: a brand-new export approval is posted.
@@ -240,7 +263,7 @@ def test_supersede_deletes_from_the_manifest_channel_not_the_current_policy(
     env: BindingEnv,
 ) -> None:
     # Given: a live v1 request whose message really sits in the guild #approvals,
-    # while current policy would post a brand-new request to the owner DM.
+    # while current policy would post a brand-new request to its #agent-chat thread.
     _persist(
         env,
         kind="patent-export",
@@ -260,7 +283,7 @@ def test_supersede_deletes_from_the_manifest_channel_not_the_current_policy(
     assert ("DELETE", GUILD_APPROVALS) in env.fake.touched
     assert not [channel for method, channel in env.fake.touched if method == "DELETE" and channel != GUILD_APPROVALS]
     replacement = manifest.load_manifest(SLUG)
-    assert env.fake.messages[str(replacement.message_id)][0] == OWNER_DM
+    assert env.fake.messages[str(replacement.message_id)][0] == AGENT_CHAT_THREAD
 
 
 def test_the_manifests_default_kind_still_names_the_policy_enum() -> None:

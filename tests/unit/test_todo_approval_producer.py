@@ -1,4 +1,4 @@
-"""Owner-DM producer contracts for the todo request command."""
+"""Agent-chat-thread producer contracts for the todo request command."""
 from __future__ import annotations
 
 import sys
@@ -30,7 +30,8 @@ _REPO = Path(__file__).resolve().parents[2]
 _SCRIPTS = _REPO / "skills" / "todo" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 _OWNER = "owner-fixture"
-_CHANNEL = "1526487935975952385"
+_AGENT_CHAT_CHANNEL = "1526487935975952390"
+_CHANNEL = "1526487935975952391"
 _NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
 
 
@@ -39,14 +40,21 @@ class FakeDirectory:
     described: list[str]
 
     def owner_dm(self) -> str:
-        return _CHANNEL
+        raise AssertionError("todo must not resolve the owner-DM approval surface")
 
     def skill_approvals(self) -> str:
         raise AssertionError("todo must not resolve the skill approval surface")
 
+    def agent_chat(self) -> str:
+        return _AGENT_CHAT_CHANNEL
+
+    def agent_chat_thread(self, kind: ApprovalKind) -> str:
+        assert kind is ApprovalKind.TODO
+        return _CHANNEL
+
     def describe(self, channel_id: str) -> ChannelFacts:
         self.described.append(channel_id)
-        return ChannelFacts(1, "", (_OWNER,))
+        return ChannelFacts(11, "승인-todo", (), _AGENT_CHAT_CHANNEL)
 
 
 @dataclass(slots=True)
@@ -119,7 +127,7 @@ def _runtime_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUTOPHAGY_RUNTIME_ROOT", str(_REPO))
 
 
-def test_request_posts_owner_dm_card_and_persists_binding(tmp_path: Path) -> None:
+def test_request_posts_agent_chat_thread_card_and_persists_binding(tmp_path: Path) -> None:
     # Given: an isolated store, directory, and fake Discord transport.
     todo = import_module("todo_cli")
     approval = import_module("todo_approval")
@@ -135,13 +143,15 @@ def test_request_posts_owner_dm_card_and_persists_binding(tmp_path: Path) -> Non
         _runtime(approval, store, transport, directory, [_NOW], tmp_path),
     )
 
-    # Then: one DM card is posted, both reactions are primed, and sensitive notes are absent.
+    # Then: one agent-chat thread card is posted, both reactions are primed, and sensitive notes are absent.
     assert verdict.outcome is Outcome.POSTED
     assert [call[0] for call in transport.calls] == ["post", "react", "react"]
     record = store.active(f"todo:{intent.action_hash}")
     assert record is not None
     assert (record.action_hash, record.target_id) == (intent.action_hash, intent.target_id)
-    assert (record.kind, record.surface, record.channel_id) == ("todo", "owner-dm", _CHANNEL)
+    assert (record.kind, record.surface, record.channel_id) == (
+        "todo", "agent-chat-thread", _CHANNEL,
+    )
     assert "합성 승인 과제" in next(iter(transport.messages.values()))
     assert "본문 비저장" not in next(iter(transport.messages.values()))
 

@@ -29,6 +29,12 @@ next_release_tag() { # next_release_tag <repo_root>
   printf 'v%s.%s.%s\n' "$major" "$minor" "$((patch + 1))"
 }
 
+latest_release_base() { # latest_release_base <repo_root> — the sha the newest release tag peels to
+  git -C "$1" ls-remote --tags origin 'refs/tags/v*' 2>/dev/null \
+    | awk '$2 ~ /\^\{\}$/ { sub("refs/tags/", "", $2); sub(/\^\{\}$/, "", $2); print $2 " " $1 }' \
+    | sort -V | tail -n 1 | awk '{ print $2 }'
+}
+
 released_tag_at() { # released_tag_at <repo_root> <sha> — the tag already peeling to sha
   git -C "$1" ls-remote --tags origin 2>/dev/null \
     | awk -v sha="$2" '$1 == sha && $2 ~ /\^\{\}$/ { sub("refs/tags/", "", $2); sub(/\^\{\}$/, "", $2); print $2 }' \

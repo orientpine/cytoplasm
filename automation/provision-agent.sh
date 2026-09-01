@@ -162,8 +162,19 @@ EOF
 # to retain the same defaults.
 approval_reminders:
   enabled: true
-  initial_delay: 3h
+  initial_delay: 1h
   repeat_interval: 1h
+
+# Discord 로 나가는 것은 의미 있는 문장(interim assistant·최종 응답·승인 요청)이고,
+# 도구 실행 진행 라인은 나가지 않는다. 공개 채널은 discord-public-message-policy 가
+# 막지만 1:1 DM 은 그 정책의 대상이 아니라 여기서 끈다. 전역 display.tool_progress 를
+# 쓰지 않는 이유는 그것이 운영자의 CLI 뷰까지 함께 끄기 때문이고, "off" 를 인용하는
+# 이유는 YAML 1.1 이 bare off 를 boolean 으로 읽어 hermes config get 출력이 읽히지
+# 않게 되기 때문이다.
+display:
+  platforms:
+    discord:
+      tool_progress: "off"
 EOF
 }
 

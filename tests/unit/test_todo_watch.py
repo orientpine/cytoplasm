@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from pathlib import Path
@@ -23,7 +24,8 @@ _REPO = Path(__file__).resolve().parents[2]
 _SCRIPTS = _REPO / "skills" / "todo" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 _OWNER = "owner-fixture"
-_CHANNEL = "1526487935975952385"
+_AGENT_CHAT_CHANNEL = "1526487935975952390"
+_CHANNEL = "1526487935975952391"
 _MESSAGE = "1530000000000000001"
 _NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
 
@@ -38,9 +40,15 @@ class FakeDirectory:
     def skill_approvals(self) -> str:
         raise AssertionError("the watcher must not resolve another surface")
 
+    def agent_chat(self) -> str:
+        return _AGENT_CHAT_CHANNEL
+
+    def agent_chat_thread(self, _kind: object) -> str:
+        raise AssertionError("the watcher must use the stored channel binding")
+
     def describe(self, channel_id: str) -> ChannelFacts:
         self.described.append(channel_id)
-        return ChannelFacts(1, "", (_OWNER,))
+        return ChannelFacts(11, "승인-todo", (), _AGENT_CHAT_CHANNEL)
 
 
 @dataclass(slots=True)
@@ -93,9 +101,13 @@ def _fixture(root: Path, *, title: str = "합성 워처 과제") -> Fixture:
         decision.target_id,
         import_module("todo_approval").masked_argv_summary(argv),
         "todo",
-        "owner-dm",
+        "agent-chat-thread",
         _CHANNEL,
         7,
+        tasklist=request.tasklist,
+        title=request.title,
+        notes=request.notes,
+        due=request.due,
     )
     store = store_module.TodoApprovalStore(root / "state")
     record = store.bind_message(store.prepare(spec, _NOW), _MESSAGE)
@@ -234,3 +246,196 @@ def test_deploy_installs_unique_no_agent_watcher_behind_provenance_guard() -> No
     assert ".hermes/scripts/todo_confirm_reaction_watch.py" in text
     assert "hermes cron create" in text
     assert "--no-agent" in text
+
+
+def test_approval_record_carries_the_execution_parameters(tmp_path: Path) -> None:
+    """An approved generation must be replayable by the watcher.
+
+    ``argv_summary`` is deliberately masked (``--json [masked]``), so it cannot rebuild
+    the write. Without the four ``TaskRequest`` fields on the record, consuming the ✅
+    leaves nobody able to say WHAT to create — which is exactly how repair ticket
+    t_e3243dc5 recurred as occurrences 2 and 4.
+    """
+    store_module = import_module("todo_approval_store")
+    spec = store_module.TodoApprovalSpec(
+        "todo:hash-fixture",
+        "hash-fixture",
+        "tool:gws_tasks_mutation:fixture",
+        "gws tasks tasks insert --params [masked] --json [masked]",
+        "todo",
+        "agent-chat-thread",
+        _CHANNEL,
+        7,
+        tasklist="@default",
+        title="합성 실행 파라미터 과제",
+        notes="합성 메모",
+        due="2026-08-26T00:00:00.000Z",
+    )
+    store = store_module.TodoApprovalStore(tmp_path / "state")
+    record = store.bind_message(store.prepare(spec, _NOW), _MESSAGE)
+    reloaded = store.active(record.key)
+
+    assert reloaded is not None
+    assert (reloaded.tasklist, reloaded.title, reloaded.notes, reloaded.due) == (
+        "@default",
+        "합성 실행 파라미터 과제",
+        "합성 메모",
+        "2026-08-26T00:00:00.000Z",
+    )
+
+
+@dataclass(slots=True)
+class FakeGws:
+    """In-memory ``gws`` stand-in — the watcher must never reach a real binary in tests."""
+
+    stored_title: str = "합성 워처 과제"
+    calls: list[tuple[str, ...]] = field(default_factory=list)
+
+    def __call__(self, argv: list[str]) -> dict[str, object]:
+        self.calls.append(tuple(argv))
+        if argv[3] == "insert":
+            body = json.loads(argv[argv.index("--json") + 1])
+            return {"id": "task-watch-1", "title": body["title"]}
+        return {"id": "task-watch-1", "title": self.stored_title}
+
+    @property
+    def methods(self) -> list[str]:
+        return [call[3] for call in self.calls]
+
+
+def test_owner_approval_executes_the_approved_write_and_verifies_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """✅ alone must finish the job — insert then the mandatory tasks.get re-read.
+
+    Before this, run_once appended the approval to the ledger and archived the
+    generation, and stopped. The write only happened if a human re-ran
+    ``todo_cli create``. Repair ticket t_e3243dc5 recorded that as occurrence 2
+    (2026-08-24) and again as occurrence 4 (2026-08-25).
+    """
+    item = _fixture(tmp_path)
+    item.transport.reactions["✅"] = ((_OWNER, False),)
+    gws = FakeGws()
+    monkeypatch.setattr(item.todo, "run_gws", gws)
+
+    _run(item, _NOW + timedelta(minutes=1))
+
+    archived = item.store.archives(item.record.key)[0]
+    claims = import_module("todo_execution_claim").ApprovalClaimStore(item.store.root)
+    assert gws.methods == ["insert", "get"]
+    assert claims.status(archived) == "verified"
+
+
+def test_a_later_tick_never_writes_the_same_approval_twice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reconciler runs every minute; the receipt — not luck — stops the second write."""
+    item = _fixture(tmp_path)
+    item.transport.reactions["✅"] = ((_OWNER, False),)
+    gws = FakeGws()
+    monkeypatch.setattr(item.todo, "run_gws", gws)
+
+    _run(item, _NOW + timedelta(minutes=1))
+    _run(item, _NOW + timedelta(minutes=2))
+    _run(item, _NOW + timedelta(minutes=3))
+
+    assert gws.methods == ["insert", "get"]
+
+
+def test_a_mismatched_reread_stays_unverified_and_is_not_rewritten(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write we cannot prove must never be reported as done, nor retried blindly.
+
+    The re-read disagreeing with what was sent leaves the claim at ``write_started``:
+    the row needs reconciliation, and a later tick must not insert a second task.
+    """
+    item = _fixture(tmp_path)
+    item.transport.reactions["✅"] = ((_OWNER, False),)
+    gws = FakeGws(stored_title="조용히 뒤바뀐 제목")
+    monkeypatch.setattr(item.todo, "run_gws", gws)
+
+    _run(item, _NOW + timedelta(minutes=1))
+
+    archived = item.store.archives(item.record.key)[0]
+    claims = import_module("todo_execution_claim").ApprovalClaimStore(item.store.root)
+    assert claims.status(archived) == "write_started"
+
+    _run(item, _NOW + timedelta(minutes=2))
+    assert gws.methods == ["insert", "get"]
+
+
+def test_a_generation_with_no_execution_parameters_is_reported_but_not_logged(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A pre-fix approval can never become replayable — that is a state, not an event.
+
+    Approvals archived before the execution parameters existed carry no title, so the
+    reconciler cannot rebuild their argv and correctly skips them. But the reconciler runs
+    every minute forever, and a property that can never change is not news: four such
+    generations on the primary node would emit 5,760 identical lines a day and bury the
+    outcomes that ARE events. The outcome still comes back to the caller.
+
+    An empty title unambiguously means pre-fix: ``todo_cli request`` requires --title, so
+    every generation written since carries one.
+    """
+    store_module = import_module("todo_approval_store")
+    watch = import_module("todo_confirm_reaction_watch")
+    store = store_module.TodoApprovalStore(tmp_path / "state")
+    spec = store_module.TodoApprovalSpec(
+        "todo:sha256:legacy",
+        "sha256:legacy",
+        "tool:gws_tasks_mutation:gws",
+        "gws tasks tasks insert --params [masked] --json [masked]",
+        "todo",
+        "agent-chat-thread",
+        _CHANNEL,
+        7,
+    )
+    pending = store.bind_message(store.prepare(spec, _NOW), _MESSAGE)
+    store.archive(pending, store_module.ApprovalState.ARCHIVED, "approved")
+
+    results = watch.execute_approved_writes(
+        store=store, approval_log=tmp_path / "approvals.jsonl", owner_id=_OWNER
+    )
+
+    assert results == (("todo:sha256:legacy", "legacy-unreplayable"),)
+    assert capsys.readouterr().err == ""
+
+
+def test_execution_failures_back_off_without_preventing_later_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A failed approved write is retried without printing the same failure every tick."""
+    item = _fixture(tmp_path)
+    item.transport.reactions["✅"] = ((_OWNER, False),)
+
+    create_task = item.todo.create_task
+
+    def fail_create_task(*_args: object, **_kwargs: object) -> None:
+        raise OSError("expired credentials")
+
+    monkeypatch.setattr(item.todo, "create_task", fail_create_task)
+    for minute in range(1, 11):
+        _run(item, _NOW + timedelta(minutes=minute))
+
+    failures = [
+        line for line in capsys.readouterr().err.splitlines() if line.startswith("TODO-EXEC failed:")
+    ]
+    assert 0 < len(failures) < 10
+
+    gws = FakeGws()
+    monkeypatch.setattr(item.todo, "create_task", create_task)
+    monkeypatch.setattr(item.todo, "run_gws", gws)
+    _run(item, _NOW + timedelta(minutes=20))
+
+    archived = item.store.archives(item.record.key)[0]
+    claims = import_module("todo_execution_claim").ApprovalClaimStore(item.store.root)
+    assert gws.methods == ["insert", "get"]
+    assert claims.status(archived) == "verified"

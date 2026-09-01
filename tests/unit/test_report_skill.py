@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date
 from importlib import import_module
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -93,6 +95,80 @@ def test_sensitive_notes_route_only_to_openai_codex(tmp_path: Path) -> None:
     assert route.sensitive is True
 
 
+def test_report_publish_calls_use_weekly_bundle_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    report_path = tmp_path / "source.md"
+    report_path.write_text("# Weekly\n\n## 자료 범위\n\nScope.\n\n## 핵심 내용\n\nAnalysis.\n", encoding="utf-8")
+    response = tmp_path / "response.md"
+    response.write_text("Draft", encoding="utf-8")
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "note.md").write_text("# Note\n\nBody", encoding="utf-8")
+    calls: list[tuple[str, str, str, date | None]] = []
+
+    def publish(kind: str, title: str, artifacts: list[tuple[Path, str]], *, on: date | None = None, **_: object) -> object:
+        calls.append((kind, title, artifacts[0][1], on))
+        return SimpleNamespace(links=("https://drive.test/file",))
+
+    import automation.drive_outputs as drive_outputs
+    monkeypatch.setattr(drive_outputs, "publish_best_effort", publish)
+    monkeypatch.setenv("REPORT_RULES_PATH", str(ROOT / "configs" / "sensitivity-rules.yaml"))
+    period = date(2026, 8, 10)
+    assert report_cli._report(SimpleNamespace(
+        notes_root=str(tmp_path / "notes"), outputs_root=str(tmp_path / "outputs"), query="",
+        limit=12, title="", response_file=str(response), with_evidence=False, period_date=period,
+    )) == 0
+    assert report_cli._slides(SimpleNamespace(report=str(report_path), outputs_root=str(tmp_path / "outputs"), period_date=period)) == 0
+    assert report_cli._script(SimpleNamespace(report=str(report_path), outputs_root=str(tmp_path / "outputs"), slides="", period_date=period)) == 0
+    assert calls == [
+        ("report", "주간연구동향", "주간연구동향", period),
+        ("report", "주간연구동향", "발표슬라이드", period),
+        ("report", "주간연구동향", "발표스크립트", period),
+    ]
+
+
+def test_report_real_facade_disabled_makes_zero_runner_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from automation.drive_client import DriveClient
+    import automation.drive_outputs as drive_outputs
+
+    monkeypatch.delenv("DRIVE_PUBLISH_ENABLED", raising=False)
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> dict[str, object]:
+        calls.append(argv)
+        return {}
+
+    client = DriveClient("fake-gws", tmp_path / "folders.json", runner=runner)
+    monkeypatch.setattr(drive_outputs, "client_from_environment", lambda: client)
+    response = tmp_path / "response.md"
+    response.write_text("Draft", encoding="utf-8")
+    monkeypatch.setattr(report_cli.report_llm, "generate", lambda *_: "Draft")
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "note.md").write_text("# Note\n\nBody", encoding="utf-8")
+    assert report_cli._report(SimpleNamespace(
+        notes_root=str(tmp_path / "notes"), outputs_root=str(tmp_path / "outputs"), query="",
+        limit=12, title="", response_file=str(response), with_evidence=False, period_date=None,
+    )) == 0
+    assert calls == []
+
+
+def test_report_import_failure_keeps_local_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    response = tmp_path / "response.md"
+    response.write_text("Draft", encoding="utf-8")
+    original = report_cli.import_module
+    def fail_facade(name: str, package: str | None = None) -> object:
+        if name == "automation.drive_outputs":
+            raise ImportError("injected")
+        return original(name, package)
+    monkeypatch.setattr(report_cli, "import_module", fail_facade)
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "note.md").write_text("# Note\n\nBody", encoding="utf-8")
+    assert report_cli._report(SimpleNamespace(
+        notes_root=str(tmp_path / "notes"), outputs_root=str(tmp_path / "outputs"), query="",
+        limit=12, title="", response_file=str(response), with_evidence=False, period_date=None,
+    )) == 0
+    assert next((tmp_path / "outputs").glob("report-*.md")).exists()
+    assert "DRIVE-PUBLISH-SKIP reason=ImportError" in capsys.readouterr().err
+
+
 def test_report_with_no_notes_returns_insufficient_material(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     result = report_cli.main(
         ["report", "--notes-root", str(tmp_path / "notes"), "--outputs-root", str(tmp_path / "outputs")]
@@ -145,9 +221,6 @@ def test_cli_runs_as_main_from_hash_named_deploy_layout(tmp_path: Path) -> None:
         _ = (deploy_scripts / module.name).write_text(
             module.read_text(encoding="utf-8"), encoding="utf-8"
         )
-    _ = (deploy_scripts / "drive_publish.py").write_text(
-        (SCRIPTS / "drive_publish.py").read_text(encoding="utf-8"), encoding="utf-8"
-    )
     notes = tmp_path / "notes"
     notes.mkdir()
     _write_note(notes / "one.md", "One", "body one", 10)

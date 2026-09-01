@@ -21,11 +21,13 @@ from automation.update_trust import (
     resolve_update_target,
 )
 from automation import update_trust as update_trust_module
+from automation.node_config import NodeConfig
 from automation.update_trust import main as update_trust_main
 from automation.update_trust_state import (
     ReleaseFloorError,
     load_release_floor,
     parse_release_version,
+    privileged_advance_release_floor,
     refuse_release_rollback,
     release_floor,
     release_floor_path,
@@ -124,8 +126,10 @@ def update_repository(tmp_path: Path) -> UpdateRepository:
 
 @pytest.fixture
 def floor(tmp_path: Path) -> Path:
-    """The durable anti-rollback anchor, outside every checkout (C1)."""
-    return tmp_path / "private" / "deploy-reconcile" / "release-floor.json"
+    """A migrated authoritative floor, outside every checkout (C1)."""
+    path = tmp_path / "root-state" / "release-floor.json"
+    save_release_floor(path, release_floor("v0.0.0", "0" * 40))
+    return path
 
 
 def test_resolve_signed_update_when_main_advances_without_tag_then_blocks_unsigned_head(
@@ -293,10 +297,10 @@ def test_resolve_signed_cli_returns_the_commit_of_a_trusted_release_tag(
         ]
     )
 
-    # Then: it prints that commit and advances the floor both verifiers share.
+    # Then: it prints the commit but leaves the root-owned floor unchanged.
     assert status == 0
     assert capsys.readouterr().out.strip() == expected
-    assert load_release_floor(floor) == release_floor("v1.0.0", expected)
+    assert load_release_floor(floor) == release_floor("v0.0.0", "0" * 40)
 
 
 def test_resolve_update_target_when_channel_is_set_then_uses_it_without_changing_origin(
@@ -324,15 +328,16 @@ def test_resolve_update_target_when_channel_is_set_then_uses_it_without_changing
     )
 
     # When: the resolver receives the roster's non-null update channel.
+    channel_floor = tmp_path / "channel-floor.json"
+    origin_floor = tmp_path / "origin-floor.json"
+    for path in (channel_floor, origin_floor):
+        save_release_floor(path, release_floor("v0.0.0", "0" * 40))
     selected = resolve_update_target(
         update_repository.mirror,
         require_signed_updates=True,
         allowed_signers=update_repository.allowed_signers,
         remote_url=str(channel),
-        # Two floors on purpose: this test owns channel SELECTION. What ONE
-        # shared floor does to a backwards channel switch is stated outright by
-        # test_resolve_update_target_when_a_channel_switch_goes_backwards_then_refuses.
-        floor_path=tmp_path / "channel-floor.json",
+        floor_path=channel_floor,
     )
 
     # Then: it selects that channel without mutating the default origin behavior or config.
@@ -341,7 +346,7 @@ def test_resolve_update_target_when_channel_is_set_then_uses_it_without_changing
         update_repository.mirror,
         require_signed_updates=True,
         allowed_signers=update_repository.allowed_signers,
-        floor_path=tmp_path / "origin-floor.json",
+        floor_path=origin_floor,
     ) == origin_sha
     assert _run("git", "remote", "get-url", "origin", cwd=update_repository.mirror) == str(
         update_repository.remote
@@ -377,11 +382,13 @@ def test_resolve_signed_update_when_origin_rewinds_to_an_older_signed_tag_then_r
     # Given: the node has already verified v2.0.0, and v1.0.0 is still validly signed.
     old_sha = _publish(update_repository, "OLD-1.0.0", "v1.0.0")
     _ = _publish(update_repository, "NEW-2.0.0", "v2.0.0")
-    assert resolve_signed_update(
+    verified = resolve_signed_update(
         update_repository.mirror,
         update_repository.allowed_signers,
         floor_path=floor,
-    ).tag == "v2.0.0"
+    )
+    assert verified.tag == "v2.0.0"
+    privileged_advance_release_floor(floor, verified.tag, verified.commit_sha)
 
     # When: an attacker who cannot sign anything rewinds main onto the old release.
     _rewind_origin(update_repository, old_sha)
@@ -407,6 +414,10 @@ def test_resolve_signed_update_when_the_same_release_resolves_twice_then_both_pa
     # When/Then: re-resolving the SAME release at the SAME commit stays accepted.
     # A strictly-greater-per-resolution rule would refuse the second half of
     # every convergence and freeze the node after its first successful update.
+    first = resolve_signed_update(
+        update_repository.mirror, update_repository.allowed_signers, floor_path=floor
+    )
+    privileged_advance_release_floor(floor, first.tag, first.commit_sha)
     for _tick in range(5):
         assert resolve_signed_update(
             update_repository.mirror,
@@ -424,15 +435,17 @@ def test_resolve_signed_update_when_a_newer_release_lands_then_the_floor_advance
 ) -> None:
     # Given: a verified release, then a genuine forward publication.
     _ = _publish(update_repository, "NEW-1.0.0", "v1.0.0")
-    _ = resolve_signed_update(
+    initial = resolve_signed_update(
         update_repository.mirror, update_repository.allowed_signers, floor_path=floor
     )
+    privileged_advance_release_floor(floor, initial.tag, initial.commit_sha)
     forward = _publish(update_repository, "NEW-1.0.1", "v1.0.1")
 
-    # When: the node resolves again.
+    # When: root re-verifies and explicitly advances after the read-only pre-gate.
     advanced = resolve_signed_update(
         update_repository.mirror, update_repository.allowed_signers, floor_path=floor
     )
+    privileged_advance_release_floor(floor, advanced.tag, advanced.commit_sha)
 
     # Then: normal upgrades are unaffected and the anchor moves with them.
     assert (advanced.tag, advanced.commit_sha) == ("v1.0.1", forward)
@@ -445,22 +458,21 @@ def test_resolve_signed_update_when_no_floor_exists_yet_then_the_first_release_b
     update_repository: UpdateRepository,
     floor: Path,
 ) -> None:
-    # Given: a fresh installation with no persisted floor at all.
+    # Given: a fresh installation has no legacy or authoritative floor.
     expected = _publish(update_repository, "FIRST-1.0.0", "v1.0.0")
-    assert not floor.exists()
-    assert load_release_floor(floor) is None
+    floor.unlink()
 
-    # When: it verifies its first release.
+    # When: ops performs its read-only verification, then root re-verifies and seeds.
     trusted = resolve_signed_update(
         update_repository.mirror, update_repository.allowed_signers, floor_path=floor
     )
+    assert not floor.exists()
+    privileged_advance_release_floor(floor, trusted.tag, trusted.commit_sha)
 
-    # Then: bootstrap accepts, and the anchor exists from that moment on, 0600.
+    # Then: first convergence succeeds and leaves the authoritative anchor in place.
     assert trusted.commit_sha == expected
-    assert floor.stat().st_mode & 0o777 == 0o600
-    pinned = load_release_floor(floor)
-    assert pinned is not None
-    assert pinned.tag == "v1.0.0"
+    assert floor.stat().st_mode & 0o777 == 0o644
+    assert load_release_floor(floor) == release_floor("v1.0.0", expected)
 
 
 def test_resolve_signed_update_when_an_unsigned_tag_claims_a_higher_version_then_it_cannot_pin(
@@ -483,12 +495,9 @@ def test_resolve_signed_update_when_an_unsigned_tag_claims_a_higher_version_then
         update_repository.mirror, update_repository.allowed_signers, floor_path=floor
     )
 
-    # Then: freshness is recorded only for what authorship already accepted —
-    # otherwise pushing an unsigned v9.0.0 would pin the channel shut forever.
+    # Then: the unprivileged verifier accepts the genuine candidate but writes nothing.
     assert trusted.commit_sha == expected
-    pinned = load_release_floor(floor)
-    assert pinned is not None
-    assert pinned.tag == "v1.0.0"
+    assert load_release_floor(floor) == release_floor("v0.0.0", "0" * 40)
 
 
 def test_resolve_signed_update_when_the_release_tag_is_not_semver_then_refuses(
@@ -508,7 +517,7 @@ def test_resolve_signed_update_when_the_release_tag_is_not_semver_then_refuses(
         _ = resolve_signed_update(
             update_repository.mirror, update_repository.allowed_signers, floor_path=floor
         )
-    assert not floor.exists()
+    assert load_release_floor(floor) == release_floor("v0.0.0", "0" * 40)
 
 
 @pytest.mark.parametrize(
@@ -570,12 +579,13 @@ def test_resolve_update_target_when_a_channel_switch_goes_backwards_then_refuses
     # Given: the node verified v2.0.0 from origin, and a second channel that
     # publishes an older — but genuinely signed — v1.0.0.
     _ = _publish(update_repository, "ORIGIN-2.0.0", "v2.0.0")
-    assert resolve_update_target(
+    verified_sha = resolve_update_target(
         update_repository.mirror,
         require_signed_updates=True,
         allowed_signers=update_repository.allowed_signers,
         floor_path=floor,
     )
+    privileged_advance_release_floor(floor, "v2.0.0", verified_sha)
     channel = tmp_path / "lagging-channel.git"
     _ = _run("git", "init", "--bare", str(channel))
     _ = _run("git", "remote", "add", "lagging", str(channel), cwd=update_repository.publisher)
@@ -602,6 +612,7 @@ def test_update_trust_cli_reports_a_rollback_through_the_existing_block_channel(
     update_repository: UpdateRepository,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a node configuration that requires signed updates and owns a
     # private root, plus a floor already at v2.0.0.
@@ -613,6 +624,12 @@ def test_update_trust_cli_reports_a_rollback_through_the_existing_block_channel(
         f'require_signed_updates = true\nprivate_root = "{private_root}"\n',
         encoding="utf-8",
     )
+    authoritative = tmp_path / "root-state" / "release-floor.json"
+    save_release_floor(authoritative, release_floor("v2.0.0", new_sha))
+    def authoritative_path(_config: NodeConfig) -> Path:
+        return authoritative
+
+    monkeypatch.setattr(update_trust_module, "release_floor_path", authoritative_path)
     argv = [
         "resolve",
         "--mirror", str(update_repository.mirror),
@@ -643,17 +660,13 @@ def test_release_floor_path_is_the_single_location_both_verifiers_derive() -> No
     from automation.node_config import default_node_config, load_node_config
 
     config = default_node_config()
-    assert release_floor_path(config) == (
-        config.private_root / "deploy-reconcile" / "release-floor.json"
+    assert release_floor_path(config) == Path(
+        "/var/lib/autophagy/update-trust/release-floor.json"
     )
-    # The ops pre-gate resolves it from the node configuration exactly as the
-    # root-owned helper's `--node-config` run does, and it lands beside the
-    # update-channel binding already proven to be ops-writable private state.
+    # The ops pre-gate resolves the fixed root-owned path, separate from its
+    # writable update-channel binding.
     assert deploy_reconcile_cli.RELEASE_FLOOR == release_floor_path(load_node_config())
-    assert (
-        deploy_reconcile_cli.RELEASE_FLOOR.parent
-        == deploy_reconcile_cli.UPDATE_CHANNEL_STATE.parent
-    )
+    assert deploy_reconcile_cli.RELEASE_FLOOR.parent != deploy_reconcile_cli.UPDATE_CHANNEL_STATE.parent
 
 
 @pytest.mark.parametrize(

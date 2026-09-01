@@ -12,14 +12,8 @@ probe_update_trust() {
   local python="${UPDATE_TRUST_PYTHON:-python3}"
   local script="${UPDATE_TRUST_SCRIPT:-$UPDATE_TRUST_PROBE_DIR/update_trust.py}"
   local target="${HEALTHCHECK_OPS_CHECKOUT:-$checkout}" output command_status=0
-  local floor="${HEALTHCHECK_RELEASE_FLOOR:-}" private_root="${NODE_PRIVATE_ROOT:-}"
+  local floor="${HEALTHCHECK_RELEASE_FLOOR:-/var/lib/autophagy/update-trust/release-floor.json}"
   [[ "$target" == /* ]] || return 1
-  # Derive from the private root rather than interpolating it: an unset root still yields
-  # a string starting with "/", so a plain absolute-path check would pass a floor of
-  # "/deploy-reconcile/release-floor.json" and answer PASS with no anti-rollback anchor.
-  if [[ -z "$floor" ]] && [[ "$private_root" == /* ]]; then
-    floor="$private_root/deploy-reconcile/release-floor.json"
-  fi
   if [[ "$floor" != /* ]]; then
     printf '[update-trust] UPDATE-TRUST-BLOCK FLOOR-PATH: cannot resolve the release floor\n' >&2
     return 1

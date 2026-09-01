@@ -12,13 +12,52 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Final
+from typing import Final
 
+from meeting_schema import (
+    ActionItem,
+    Decision,
+    Extraction,
+    ExtractionParseError,
+    MeetingHeader,
+    NextMeeting,
+    OpenQuestion,
+    ResolvedAction,
+    Topic,
+    map_extraction,
+    parse_extraction,
+)
+
+__all__ = [
+    "ActionItem",
+    "CODEX_MODEL",
+    "Decision",
+    "Extraction",
+    "ExtractionParseError",
+    "GLM_MODEL",
+    "MeetingHeader",
+    "NextMeeting",
+    "OpenQuestion",
+    "ResolvedAction",
+    "PatentRoutingError",
+    "Topic",
+    "build_prompt",
+    "call_codex",
+    "call_litellm",
+    "extract",
+    "load_prompt_template",
+    "map_extraction",
+    "parse_extraction",
+]
+
+#: 노드 실측(2026-08-28): 38,499자 전사본(프롬프트 40,130자)의 왕복이 **258.9초**였다.
+#: 옛 기본값 180초는 그 아래라 `TimeoutError` 로 죽었고, 야간 배치는 매일 밤 같은 자리에서
+#: 실패했다 — 재시도가 있어도 한도가 그대로면 영원히 실패한다. 600초는 그 실측의 2.3배다.
+LLM_TIMEOUT: Final = 600.0
+TIMEOUT_ENV: Final = "MEETING_LLM_TIMEOUT"
 GLM_MODEL: Final = "glm-main"
 CODEX_MODEL: Final = "gpt-5.4"
 _PROMPT_MARKER: Final = "<<<PROMPT>>>"
@@ -26,30 +65,6 @@ _PROMPT_MARKER: Final = "<<<PROMPT>>>"
 
 class PatentRoutingError(Exception):
     """Raised when patent-sensitive text is about to reach a GLM tier."""
-
-
-class ExtractionParseError(Exception):
-    """Raised when the LLM response does not contain the required JSON."""
-
-
-@dataclass(frozen=True, slots=True)
-class ActionItem:
-    """One extracted todo/milestone/other-owner item."""
-
-    title: str
-    deadline: str | None
-    basis: str
-    owner: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Extraction:
-    """Validated extraction payload."""
-
-    decisions: tuple[str, ...] = ()
-    todos: tuple[ActionItem, ...] = ()
-    milestones: tuple[ActionItem, ...] = ()
-    others: tuple[ActionItem, ...] = ()
 
 
 def load_prompt_template(path: Path) -> str:
@@ -68,13 +83,21 @@ def load_prompt_template(path: Path) -> str:
 
 
 def build_prompt(
-    template: str, *, meeting_text: str, my_names: str, evidence: str = ""
+    template: str, *, meeting_text: str, my_names: str, evidence: str = "", slides: str = "",
+    open_actions: str = ""
 ) -> str:
-    """Substitute source material and append the optional bounded evidence block."""
+    """Substitute source material and append the optional bounded evidence block.
+
+    ``{{SLIDES}}`` sits INSIDE the template, before the closing instruction: the v1/v2
+    post-mortem in the prompt file says material after the instruction gets echoed back.
+    """
     if "{{MEETING_TEXT}}" not in template or "{{MY_NAMES}}" not in template:
         raise ValueError("prompt template missing required placeholders")
-    prompt = template.replace("{{MY_NAMES}}", my_names).replace(
-        "{{MEETING_TEXT}}", meeting_text
+    prompt = (
+        template.replace("{{MY_NAMES}}", my_names)
+        .replace("{{MEETING_TEXT}}", meeting_text)
+        .replace("{{SLIDES}}", slides)
+        .replace("{{OPEN_ACTIONS}}", open_actions)
     )
     if not evidence:
         return prompt
@@ -84,101 +107,12 @@ def build_prompt(
     )
 
 
-def map_extraction(extraction: Extraction, clean: Callable[[str], str]) -> Extraction:
-    """Apply one citation-integrity transform to every generated text field."""
-    def item(value: ActionItem) -> ActionItem:
-        return ActionItem(
-            clean(value.title), value.deadline, clean(value.basis),
-            clean(value.owner) if value.owner else None,
-        )
-
-    return Extraction(
-        tuple(clean(value) for value in extraction.decisions),
-        tuple(item(value) for value in extraction.todos),
-        tuple(item(value) for value in extraction.milestones),
-        tuple(item(value) for value in extraction.others),
-    )
-
-
-def _clean_deadline(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-        return text
-    return None
-
-
-def _clean_items(raw: object, *, with_owner: bool) -> tuple[ActionItem, ...]:
-    if not isinstance(raw, list):
-        return ()
-    items = []
-    for entry in raw:
-        if not isinstance(entry, dict):
-            continue
-        title = str(entry.get("title") or "").strip()
-        if not title:
-            continue
-        items.append(
-            ActionItem(
-                title=title,
-                deadline=_clean_deadline(entry.get("deadline")),
-                basis=str(entry.get("basis") or "").strip(),
-                owner=str(entry.get("owner") or "").strip() or None
-                if with_owner
-                else None,
-            )
-        )
-    return tuple(items)
-
-
-def parse_extraction(raw: str) -> Extraction:
-    """Extract the first balanced JSON object from raw text and validate it."""
-    start = raw.find("{")
-    if start < 0:
-        raise ExtractionParseError("no JSON object in LLM response")
-    depth = 0
-    end = -1
-    in_string = False
-    escape = False
-    for index in range(start, len(raw)):
-        char = raw[index]
-        if in_string:
-            if escape:
-                escape = False
-            elif char == "\\":
-                escape = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                end = index
-                break
-    if end < 0:
-        raise ExtractionParseError("unbalanced JSON object in LLM response")
+def _budget() -> float:
+    """Node-adjustable so a longer meeting does not have to wait for a release."""
     try:
-        payload = json.loads(raw[start : end + 1])
-    except json.JSONDecodeError as error:
-        raise ExtractionParseError(f"invalid JSON: {error}") from error
-    if not isinstance(payload, dict):
-        raise ExtractionParseError("LLM response JSON is not an object")
-    decisions = tuple(
-        str(item).strip()
-        for item in (payload.get("decisions") or [])
-        if str(item).strip()
-    )
-    return Extraction(
-        decisions=decisions,
-        todos=_clean_items(payload.get("todos"), with_owner=False),
-        milestones=_clean_items(payload.get("milestones"), with_owner=False),
-        others=_clean_items(payload.get("others"), with_owner=True),
-    )
+        return float(os.environ[TIMEOUT_ENV])
+    except (KeyError, ValueError):
+        return LLM_TIMEOUT
 
 
 def call_litellm(
@@ -187,9 +121,10 @@ def call_litellm(
     sensitive: bool,
     base_url: str,
     api_key: str,
-    timeout: float = 180.0,
+    timeout: float | None = None,
 ) -> str:
     """Call LiteLLM glm-main for NON-sensitive extraction only (fail closed)."""
+    budget = timeout if timeout is not None else _budget()
     if sensitive:
         raise PatentRoutingError(
             "patent-sensitive text must never be sent to a GLM tier"
@@ -210,7 +145,7 @@ def call_litellm(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=budget) as response:  # noqa: S310
         payload = json.loads(response.read().decode("utf-8"))
     return payload["choices"][0]["message"]["content"]
 
@@ -259,11 +194,13 @@ def extract(
     api_key: str,
     recorded_response: str | None = None,
     evidence: str = "",
+    slides: str = "",
+    open_actions: str = "",
 ) -> tuple[Extraction, str]:
     """Route by sensitivity, parse, and return (extraction, provider_used)."""
     prompt = build_prompt(
         load_prompt_template(prompt_path), meeting_text=meeting_text, my_names=my_names,
-        evidence=evidence,
+        evidence=evidence, slides=slides, open_actions=open_actions,
     )
     if recorded_response is not None:
         return parse_extraction(recorded_response), "recorded"

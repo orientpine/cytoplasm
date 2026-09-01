@@ -1,8 +1,9 @@
 """The sole approval-path Discord ``ChannelDirectory`` resolver.
 
 AS-1.3 exempts only this module from the approval-path resolver guard: it may
-open the owner DM, read the approval-channel config key, consult the cache, and
-scan guilds. AS-3.2 retired the per-flow ``*_APPROVALS_CHANNEL_ID`` compatibility
+open the owner DM, read the approval-channel config keys, consult the cache,
+scan guilds, and (v7) find-or-create the per-kind approval threads under the
+``agent_chat_channel_id`` channel. AS-3.2 retired the per-flow ``*_APPROVALS_CHANNEL_ID`` compatibility
 branch, so an approval surface is now resolved from the config key, the cache or a
 guild scan and from nothing else — no caller can name an environment variable to
 point one somewhere. The exemption is intentionally narrower than the whole
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Final, Protocol, TypeAlias
 from urllib.request import Request, urlopen
 
-from automation.interop.approval_surface import ApprovalSurfaceError, ChannelFacts
+from automation.interop.approval_surface import ApprovalKind, ApprovalSurfaceError, ChannelFacts
 
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -113,6 +114,51 @@ class DiscordChannelDirectory:
         self._write_cache(channel_id)
         return channel_id
 
+    def agent_chat(self) -> str:
+        """The configured owner-agent chat channel — config key only, fail closed."""
+        configured = _configured_agent_chat_channel()
+        if configured is None:
+            raise ApprovalSurfaceError(
+                "agent_chat_channel_id is not configured in the interop config",
+            )
+        return configured
+
+    def agent_chat_thread(self, kind: ApprovalKind) -> str:
+        """Find or create this kind's approval thread under the agent-chat channel.
+
+        Reuse order is deterministic: an active thread, then a public archived one
+        (posting into it un-archives it), then a fresh channel thread with a 7-day
+        auto-archive window. Matching is by parent channel, frozen name, and thread
+        type — a same-name thread under another channel never matches.
+        """
+        channel_id = self.agent_chat()
+        name = f"승인-{kind.value}"
+        guild_id = _required_string(
+            _json_object(self._request("GET", f"/channels/{channel_id}"), "agent-chat channel"),
+            "guild_id",
+            "agent-chat channel",
+        )
+        active = _matching_thread(
+            self._request("GET", f"/guilds/{guild_id}/threads/active"), channel_id, name,
+        )
+        if active is not None:
+            return active
+        archived = _matching_thread(
+            self._request("GET", f"/channels/{channel_id}/threads/archived/public"),
+            channel_id,
+            name,
+        )
+        if archived is not None:
+            return archived
+        created = self._request(
+            "POST",
+            f"/channels/{channel_id}/threads",
+            {"name": name, "auto_archive_duration": 10080, "type": 11},
+        )
+        return _required_string(
+            _json_object(created, "agent-chat thread"), "id", "agent-chat thread",
+        )
+
     def describe(self, channel_id: str) -> ChannelFacts:
         """Return parsed channel facts or refuse an unverifiable Discord response."""
         body = _json_object(self._request("GET", f"/channels/{channel_id}"), "channel description")
@@ -133,7 +179,10 @@ class DiscordChannelDirectory:
             _required_string(_json_object(recipient, "channel recipient"), "id", "channel recipient")
             for recipient in recipients
         )
-        return ChannelFacts(channel_type, channel_name, recipient_ids)
+        parent = body.get("parent_id")
+        if parent is not None and not isinstance(parent, str):
+            raise ApprovalSurfaceError("channel description has an invalid parent")
+        return ChannelFacts(channel_type, channel_name, recipient_ids, parent)
 
     def _request(
         self,
@@ -216,6 +265,14 @@ class DiscordChannelDirectory:
 
 
 def _configured_approvals_channel() -> str | None:
+    return _interop_config_string("personal_approvals_channel_id")
+
+
+def _configured_agent_chat_channel() -> str | None:
+    return _interop_config_string("agent_chat_channel_id")
+
+
+def _interop_config_string(key: str) -> str | None:
     path = Path(os.environ.get("INTEROP_CONFIG", _INTEROP_CONFIG)).expanduser()
     try:
         text = path.read_text(encoding="utf-8")
@@ -227,10 +284,26 @@ def _configured_approvals_channel() -> str | None:
         config = _json_object(json.loads(text), "interop config")
     except json.JSONDecodeError as error:
         raise ApprovalSurfaceError(f"interop config is malformed: {path}") from error
-    value = config.get("personal_approvals_channel_id")
+    value = config.get(key)
     if value is None:
         return None
-    return _required_string(config, "personal_approvals_channel_id", "interop config")
+    return _required_string(config, key, "interop config")
+
+
+def _matching_thread(listing: JsonValue, channel_id: str, name: str) -> str | None:
+    body = _json_object(listing, "thread listing")
+    threads = body.get("threads", [])
+    if not isinstance(threads, list):
+        raise ApprovalSurfaceError("thread listing response is malformed")
+    for thread in threads:
+        details = _json_object(thread, "thread")
+        if (
+            details.get("parent_id") == channel_id
+            and details.get("name") == name
+            and details.get("type") in (11, 12)
+        ):
+            return _required_string(details, "id", "thread")
+    return None
 
 
 def _json_object(value: JsonValue, context: str) -> dict[str, JsonValue]:

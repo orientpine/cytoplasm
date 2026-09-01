@@ -41,6 +41,7 @@ SUPPLY_CHAIN_KINDS: Final[tuple[ApprovalKind, ...]] = (
     ApprovalKind.SKILL_PUBLISH,
     ApprovalKind.SKILL_SUBMIT,
     ApprovalKind.MANAGED_ACTIVATE,
+    ApprovalKind.RELEASE,
 )
 
 CACHE_NAME: Final = "config.json"

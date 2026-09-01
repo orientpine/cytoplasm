@@ -13,7 +13,7 @@ cd "$work"
 export MEETING_NOTES_DIR="$work/notes"
 export MEETING_STATE_FILE="$work/state/milestones.yaml"
 export MEETING_RULES_FILE="$skill_dir/configs/sensitivity-rules.yaml"
-export MEETING_PROMPT_FILE="$skill_dir/prompts/meeting-extraction-v3.md"
+export MEETING_PROMPT_FILE="$skill_dir/prompts/meeting-extraction-v4.md"
 export MEETING_LOG_DIR="$work/logs"
 export MEETING_PLAN_DIR="$work/plan"
 export MEETING_CONFIG="$work/no-config.json"
@@ -81,5 +81,23 @@ python3 "$skill_dir/scripts/make_fixture_pdf.py" "$work/text.pdf" --text
 python3 "$cli" ingest --file "$work/text.pdf" \
   --recorded-response "$fx/recorded-clean.json" --offline \
   | grep -q '"provider": "recorded"' || { echo "FAIL pdf ingest"; exit 1; }
+
+echo "[8] slides deck labels the note, keeps the body clean, and joins the gate"
+rm -rf "$work/notes" "$work/plan" && mkdir -p "$work/plan"
+printf '# 킥오프\n과제명: AUTOPHAGY-2026 자율 연구 에이전트\n' > "$work/deck.md"
+python3 "$cli" ingest --file "$fx/meeting-clean.md" --slides "$work/deck.md" \
+  --recorded-response "$fx/recorded-clean.json" --offline > /dev/null
+note=$(echo "$work/notes/"*.md)
+grep -q '| 발표자료 | deck.md (1쪽) |' "$note" || { echo "FAIL slide label missing"; exit 1; }
+grep -q '^## 부록 · 근거와 원문$' "$note" || { echo "FAIL appendix boundary missing"; exit 1; }
+awk '/^## 부록 · 근거와 원문$/{exit} /근거:/{leak=1} END{exit leak?1:0}' "$note" \
+  || { echo "FAIL inline evidence leaked into the minutes body"; exit 1; }
+grep -q '^- \[근1\] ' "$note" || { echo "FAIL evidence not defined in the appendix"; exit 1; }
+
+rm -rf "$work/notes"
+printf '청구항 1항의 범위를 넓힌다\n' > "$work/patent-deck.md"
+python3 "$cli" ingest --file "$fx/meeting-clean.md" --slides "$work/patent-deck.md" \
+  --recorded-response "$fx/recorded-clean.json" --offline \
+  | grep -q '"sensitive": true' || { echo "FAIL patent slides bypassed the gate"; exit 1; }
 
 echo "SCENARIO-PASS"

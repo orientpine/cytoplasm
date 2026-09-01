@@ -33,6 +33,8 @@ OWNER_ID: Final = "280680578314010625"
 OWNER_DM_CHANNEL_ID: Final = "1526487935975952385"
 APPROVALS_CHANNEL_ID: Final = "1528936606856122421"
 BOUND_APPROVALS_CHANNEL_ID: Final = "1528936606856122422"
+AGENT_CHAT_CHANNEL_ID: Final = "1526487935975952390"
+AGENT_CHAT_THREAD_ID: Final = "1526487935975952391"
 _BINDING_FIELDS: Final = ("kind", "surface", "channel_id", "policy_version")
 
 
@@ -42,6 +44,7 @@ class _FakeDirectory:
     def __init__(self) -> None:
         self.approvals_calls = 0
         self.dm_calls = 0
+        self.thread_calls = 0
         self.described: list[str] = []
 
     def owner_dm(self) -> str:
@@ -52,10 +55,19 @@ class _FakeDirectory:
         self.approvals_calls += 1
         return APPROVALS_CHANNEL_ID
 
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_CHANNEL_ID
+
+    def agent_chat_thread(self, kind: object) -> str:
+        self.thread_calls += 1
+        return AGENT_CHAT_THREAD_ID
+
     def describe(self, channel_id: str) -> ChannelFacts:
         self.described.append(channel_id)
         if channel_id == OWNER_DM_CHANNEL_ID:
             return ChannelFacts(1, "", (OWNER_ID,))
+        if channel_id == AGENT_CHAT_THREAD_ID:
+            return ChannelFacts(11, "승인-mail-reply", (), AGENT_CHAT_CHANNEL_ID)
         return ChannelFacts(0, "approvals", ())
 
 

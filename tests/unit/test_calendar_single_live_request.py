@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from email.message import Message
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import unquote
 
@@ -25,6 +26,9 @@ calendar_pending = importlib.import_module("calendar_pending")
 OWNER = "owner-calendar"
 KEY = "calendar:primary:event-1"
 OWNER_DM_CHANNEL_ID = "1526487935975952385"
+AGENT_CHAT_CHANNEL_ID = "1526487935975952390"
+AGENT_CHAT_THREAD_ID = "1526487935975952391"
+AGENT_CHAT_GUILD_ID = "1526487935975952392"
 
 
 class OwnerDmDirectory:
@@ -37,24 +41,45 @@ class OwnerDmDirectory:
         return surface.ChannelFacts(1, "", (OWNER,))
 
 
+class AgentChatDirectory:
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_CHANNEL_ID
+
+    def agent_chat_thread(self, _kind: object) -> str:
+        return AGENT_CHAT_THREAD_ID
+
+    def describe(self, channel_id: str):
+        assert channel_id == AGENT_CHAT_THREAD_ID
+        surface = importlib.import_module("automation.interop.approval_surface")
+        return surface.ChannelFacts(11, "승인-calendar", (), AGENT_CHAT_CHANNEL_ID)
+
+
 class FakeDiscord:
     def __init__(self, calls: list[str]) -> None:
         self.calls = calls
         self.contents: dict[str, str] = {}
         self.approved: set[str] = set()
         self.deleted: set[str] = set()
+        self.post_channels: list[str] = []
         self.posts = 0
 
     def __call__(
         self, method: str, path: str, payload: dict[str, str] | None = None
-    ) -> dict[str, str] | list[dict[str, str | bool]] | None:
+    ) -> Any:
         parts = path.strip("/").split("/")
         if method == "POST" and path == "/users/@me/channels":
             return {"id": OWNER_DM_CHANNEL_ID}
         if method == "GET" and path == f"/channels/{OWNER_DM_CHANNEL_ID}":
             return {"id": OWNER_DM_CHANNEL_ID, "name": "", "recipients": [{"id": OWNER}], "type": 1}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}":
+            return {"id": AGENT_CHAT_CHANNEL_ID, "guild_id": AGENT_CHAT_GUILD_ID, "name": "agent-chat", "type": 0}
+        if method == "GET" and path == f"/guilds/{AGENT_CHAT_GUILD_ID}/threads/active":
+            return {"threads": [{"id": AGENT_CHAT_THREAD_ID, "name": "승인-calendar", "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD_ID}":
+            return {"id": AGENT_CHAT_THREAD_ID, "name": "승인-calendar", "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}
         if method == "POST" and len(parts) == 3:
             self.posts += 1
+            self.post_channels.append(parts[1])
             message_id = f"msg-{self.posts}"
             self.contents[message_id] = str((payload or {})["content"])
             self.calls.append(f"POST:{message_id}")
@@ -85,6 +110,9 @@ def calendar_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FakeD
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
     monkeypatch.setenv("CALENDAR_GATE_DIR", str(tmp_path / "gate"))
     monkeypatch.setenv("CALENDAR_PENDING_CONFIRMS", str(tmp_path / "pending.jsonl"))
+    config = tmp_path / "interop.json"
+    config.write_text(json.dumps({"agent_chat_channel_id": AGENT_CHAT_CHANNEL_ID}), encoding="utf-8")
+    monkeypatch.setenv("INTEROP_CONFIG", str(config))
     monkeypatch.setattr(calendar_confirm, "owner_id", lambda: OWNER)
     monkeypatch.setattr(calendar_confirm, "_api", fake)
     return fake, calls
@@ -127,6 +155,7 @@ def test_second_confirm_same_subject_and_hash_posts_nothing_and_keeps_message_id
 
     entries = tuple(entry for entry in _store().load() if entry.key == KEY)
     assert fake.posts == 1
+    assert fake.post_channels == [AGENT_CHAT_THREAD_ID]
     assert len(entries) == 1
     assert entries[0].dm_message_id == "msg-1"
 
@@ -150,6 +179,7 @@ def test_changed_content_deletes_message_before_dropping_row_then_posts_once(
     assert calls.index("DELETE:msg-1") < calls.index("DROP:msg-1") < calls.index("POST:msg-2")
     entries = tuple(entry for entry in _store().load() if entry.key == KEY)
     assert fake.posts == 2
+    assert fake.post_channels == [AGENT_CHAT_THREAD_ID, AGENT_CHAT_THREAD_ID]
     assert [entry.dm_message_id for entry in entries] == ["msg-2"]
 
 
@@ -167,6 +197,7 @@ def test_owner_already_approved_defers_without_deleting_or_dropping(
 
     assert "DELETE:msg-1" not in calls
     assert fake.posts == 1
+    assert fake.post_channels == [AGENT_CHAT_THREAD_ID]
     assert _store().path.read_bytes() == before
 
 
@@ -247,6 +278,7 @@ def test_calendar_orphan_legacy_record_is_never_destroyed(
     assert {entry.key for entry in entries} == {f"calendar:__orphan__:{orphan_id}", KEY}
     assert [entry.dm_message_id for entry in entries] == ["orphan-msg", "msg-1"]
     assert fake.posts == 1
+    assert fake.post_channels == [AGENT_CHAT_THREAD_ID]
 
 
 def test_legacy_dm_sentinel_record_still_resolves(
@@ -268,18 +300,19 @@ def test_legacy_dm_sentinel_record_still_resolves(
     assert request.channel_id == OWNER_DM_CHANNEL_ID
 
 
-def test_new_intent_carries_a_concrete_owner_dm_id(
+def test_new_intent_carries_a_concrete_agent_chat_thread_id(
     calendar_env: tuple[FakeDiscord, list[str]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Given: the directory resolves the owner DM to a concrete snowflake.
+    # Given: the directory resolves the calendar agent-chat thread to a concrete snowflake.
     _fake, _calls = calendar_env
     binding = importlib.import_module("calendar_binding")
-    monkeypatch.setattr(binding, "approval_directory", OwnerDmDirectory)
+    monkeypatch.setattr(binding, "approval_directory", AgentChatDirectory)
     draft = _draft()
 
     # When: the calendar flow creates a new lifecycle intent.
     intent = _approval().confirm_intent(draft)
 
-    # Then: no new intent can carry the legacy "dm" sentinel.
-    assert intent.channel_id == OWNER_DM_CHANNEL_ID
+    # Then: no new intent can carry the legacy "dm" sentinel or the former owner-DM id.
+    assert intent.channel_id == AGENT_CHAT_THREAD_ID
+    assert intent.channel_id != OWNER_DM_CHANNEL_ID
     assert intent.channel_id.isdigit()

@@ -37,6 +37,16 @@ def decode(raw: str) -> TodoApprovalRecord:
             raise TodoApprovalStoreError("approval generation is invalid")
         if isinstance(policy_version, bool) or not isinstance(policy_version, int):
             raise TodoApprovalStoreError("approval policy version is invalid")
+        origin_channel_id = payload.get("origin_channel_id") or ""
+        origin_message_id = payload.get("origin_message_id") or ""
+        if not isinstance(origin_channel_id, str) or not isinstance(origin_message_id, str):
+            raise TodoApprovalStoreError("approval origin binding is invalid")
+        tasklist = payload.get("tasklist") or ""
+        title = payload.get("title") or ""
+        if not isinstance(tasklist, str) or not isinstance(title, str):
+            raise TodoApprovalStoreError("approval execution parameters are invalid")
+        notes = _optional_string(payload, "notes")
+        due = _optional_string(payload, "due")
         return TodoApprovalRecord(
             _required_string(payload, "key"),
             generation,
@@ -51,6 +61,12 @@ def decode(raw: str) -> TodoApprovalRecord:
             _required_string(payload, "surface"),
             _required_string(payload, "channel_id"),
             policy_version,
+            origin_channel_id=origin_channel_id,
+            origin_message_id=origin_message_id,
+            tasklist=tasklist,
+            title=title,
+            notes=notes,
+            due=due,
         )
     except (KeyError, ValueError, json.JSONDecodeError) as error:
         raise TodoApprovalStoreError("approval record is malformed") from error
@@ -115,7 +131,23 @@ def _payload(record: TodoApprovalRecord) -> dict[str, JsonValue]:
         "surface": record.surface,
         "channel_id": record.channel_id,
         "policy_version": record.policy_version,
+        "origin_channel_id": record.origin_channel_id,
+        "origin_message_id": record.origin_message_id,
+        "tasklist": record.tasklist,
+        "title": record.title,
+        "notes": record.notes,
+        "due": record.due,
     }
+
+
+def _optional_string(payload: dict[str, JsonValue], key: str) -> str | None:
+    """Read a nullable execution parameter, tolerating records written before it existed."""
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TodoApprovalStoreError(f"approval record has a non-string {key}")
+    return value
 
 
 def _required_string(payload: dict[str, JsonValue], key: str) -> str:

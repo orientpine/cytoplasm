@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from importlib import import_module
 from pathlib import Path
 from typing import Protocol, cast
@@ -19,13 +19,11 @@ if __package__ in (None, ""):
     report_llm = import_module("report_llm")
     report_sensitivity = import_module("report_sensitivity")
     report_knowledge = import_module("report_knowledge")
-    report_drive = import_module("drive_publish")
 else:
     report_core = import_module(".report_core", __package__)
     report_llm = import_module(".report_llm", __package__)
     report_sensitivity = import_module(".report_sensitivity", __package__)
     report_knowledge = import_module(".report_knowledge", __package__)
-    report_drive = import_module(".drive_publish", __package__)
 
 
 def _private_directory(path: Path) -> Path:
@@ -42,6 +40,18 @@ def _output_path(directory: Path, kind: str, suffix: str) -> Path:
 def _write_private(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
     path.chmod(0o600)
+
+
+def _publish_report(output: Path, artifact_title: str, period_date: date | None) -> str | None:
+    try:
+        drive_outputs = import_module("automation.drive_outputs")
+    except ImportError:
+        print("DRIVE-PUBLISH-SKIP reason=ImportError", file=sys.stderr)
+        return None
+    result = drive_outputs.publish_best_effort(
+        "report", "주간연구동향", [(output, artifact_title)], on=period_date
+    )
+    return result.links[0] if result is not None and result.links else None
 
 
 class _Item(Protocol):
@@ -188,7 +198,7 @@ def _report(args: argparse.Namespace, evidence_pack: object | None = None) -> in
             output.with_suffix(".evidence.json"),
             json.dumps(_pack_dict(pack), ensure_ascii=False, indent=2) + "\n",
         )
-    link = report_drive.publish_best_effort(output, "report")
+    link = _publish_report(output, "주간연구동향", args.period_date)
     print(
         f"REPORT-CREATED path={output} drive={link} provider={route.provider} "
         f"sensitive={str(route.sensitive).lower()} notes={len(notes)}"
@@ -222,7 +232,7 @@ def _slides(args: argparse.Namespace) -> int:
     deck = report_core.render_slides(report)
     output = _output_path(_private_directory(Path(args.outputs_root).expanduser()), "slides", ".html")
     _write_private(output, deck.html)
-    link = report_drive.publish_best_effort(output, "report")
+    link = _publish_report(output, "발표슬라이드", args.period_date)
     print(f"SLIDES-CREATED path={output} drive={link} slides={len(deck.titles)}")
     return 0
 
@@ -232,7 +242,7 @@ def _script(args: argparse.Namespace) -> int:
     titles = report_core.render_slides(report).titles
     output = _output_path(_private_directory(Path(args.outputs_root).expanduser()), "script", ".md")
     _write_private(output, report_core.generate_script(titles))
-    link = report_drive.publish_best_effort(output, "report")
+    link = _publish_report(output, "발표스크립트", args.period_date)
     print(f"SCRIPT-CREATED path={output} drive={link} slides={len(titles)}")
     return 0
 
@@ -256,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--title", default="")
     report.add_argument("--response-file", default="")
     report.add_argument("--with-evidence", action="store_true")
+    report.add_argument("--period-date", type=date.fromisoformat, default=None)
     report.set_defaults(func=_report)
     evidence = commands.add_parser("evidence")
     evidence.add_argument("--notes-root", default="~/notes")
@@ -267,11 +278,13 @@ def build_parser() -> argparse.ArgumentParser:
     slides = commands.add_parser("slides")
     slides.add_argument("--report", required=True)
     slides.add_argument("--outputs-root", default="~/outputs")
+    slides.add_argument("--period-date", type=date.fromisoformat, default=None)
     slides.set_defaults(func=_slides)
     script = commands.add_parser("script")
     script.add_argument("--report", required=True)
     script.add_argument("--slides", default="")
     script.add_argument("--outputs-root", default="~/outputs")
+    script.add_argument("--period-date", type=date.fromisoformat, default=None)
     script.set_defaults(func=_script)
     organize = commands.add_parser("organize")
     organize.add_argument("--notes-root", default="~/notes")

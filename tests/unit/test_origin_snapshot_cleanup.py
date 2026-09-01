@@ -100,12 +100,19 @@ def test_worktree_enumeration_failure_deletes_nothing(tmp_path: Path) -> None:
     assert stale.is_dir()
 
 
-def test_registered_old_worktree_survives_pruning(tmp_path: Path) -> None:
+def test_stale_snapshot_is_pruned_but_fresh_and_dirty_ones_survive(tmp_path: Path) -> None:
     mirror, _ = _mirror(tmp_path)
     environment = _environment(tmp_path)
-    parent = Path(environment["TMPDIR"]) / "autophagy-snapshot.registered"
-    _git("worktree", "add", "--detach", str(parent / "tree"), "HEAD", cwd=mirror)
-    _age(parent)
+    tmpdir = Path(environment["TMPDIR"])
+    stale = tmpdir / "autophagy-snapshot.stale"
+    fresh = tmpdir / "autophagy-snapshot.fresh"
+    dirty = tmpdir / "autophagy-snapshot.dirty"
+    _git("worktree", "add", "--detach", str(stale / "tree"), "HEAD", cwd=mirror)
+    _git("worktree", "add", "--detach", str(dirty / "tree"), "HEAD", cwd=mirror)
+    (dirty / "tree" / "tracked.txt").write_text("changed\n", encoding="utf-8")
+    fresh.mkdir()
+    _age(stale)
+    _age(dirty)
 
     result = _shell(
         f"{_source()}; _origin_snapshot_prune_stale {shlex.quote(str(mirror))}",
@@ -113,7 +120,12 @@ def test_registered_old_worktree_survives_pruning(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert (parent / "tree").is_dir()
+    assert not stale.exists()
+    assert f"worktree {stale / 'tree'}" not in _git(
+        "worktree", "list", "--porcelain", cwd=mirror
+    )
+    assert fresh.is_dir()
+    assert (dirty / "tree").is_dir()
 
 
 def test_real_flock_competition_prunes_a_snapshot_once(tmp_path: Path) -> None:

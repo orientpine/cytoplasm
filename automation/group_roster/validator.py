@@ -7,7 +7,9 @@ import binascii
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Final, Literal, TypeAlias, override
+from typing import Final, Literal, TypeAlias
+
+from ..typing_compat import override
 
 from .schema import SCHEMA_VERSION, MemberStatus, Roster, RosterAdmin, RosterMember
 

@@ -134,6 +134,8 @@ def _draft_path(draft_id: str) -> Path:
 def create_draft(
     *, changes: list[budget_core.Change], subject: str, body: str, recipient: str,
     prev_hash: str, new_hash: str, claim_key: str,
+    origin_channel_id: str = "", origin_message_id: str = "",
+    project: str = "", year: int = 0,
 ) -> dict:
     draft_id = secrets.token_hex(3)
     while _draft_path(draft_id).exists():
@@ -148,9 +150,13 @@ def create_draft(
         "mail_to": recipient,
         "message_id": "",
         "new_hash": new_hash,
+        "origin_channel_id": origin_channel_id,
+        "origin_message_id": origin_message_id,
         "prev_hash": prev_hash,
+        "project": project,
         "status": "pending",
         "subject": subject,
+        "year": year,
     }
     record["sha256"] = budget_core.draft_sha256(record)
     write_json(_draft_path(draft_id), record)

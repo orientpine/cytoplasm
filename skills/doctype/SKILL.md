@@ -1,7 +1,7 @@
 ---
 name: doctype
 description: "문서(.docx/.hwpx/.md/.txt)의 ‘등록/스킬화/저장/개선/문서종류화’ 액션은 주제와 무관하게 항상 doctype이 수행한다. 작성/초안(draft)은 레지스트리에 등록된 이름으로 요청될 때만 doctype 소유이며, 미등록된 제안서 작성은 proposal, 개인 노트 기반 보고서/슬라이드/대본은 report, 발명신고서/선행기술은 patent-prep 스킬로 넘긴다."
-version: 1.3.2
+version: 1.3.3
 author: autophagy-agents
 license: MIT
 metadata:
@@ -98,7 +98,7 @@ private roots, stubs, and drafts only under `mktemp`, then removes them.
 ## 저장 어댑터 운영 설정
 Obsidian 저장은 `OBSIDIAN_WRITE_CONFIG`(기본 `~/.hermes/obsidian-write/config.json`)가 가리키는 설정의 전용 `clone_dir`, 읽기 가능한 `ssh_key_path`(쓰기 전용 deploy key), `repo_url`, `branch`를 사용한다. 쓰기 클론은 RAG 읽기 미러와 달라야 하며, key·승인 레코드가 없으면 push 전에 fail-closed한다.
 
-Drive 저장은 `DRIVE_GWS_BIN`(기본 `gws`), `DRIVE_DOCTYPE_ROOT`(기본 `Autophagy 산출물`), `DRIVE_DOCTYPE_CACHE`(기본 `~/.hermes/doctype/drive-folders.json`)를 사용한다. `<root>/doctype`에서 이름+부모 기준 upsert 후 owner-only permission과 재다운로드 SHA-256를 모두 확인해야 성공이다.
+Drive 저장은 공용 `automation.drive_outputs` 파사드를 통해 `autophagy/문서/<YYYY>/<YYYY-MM-DD>_<원제목>.<확장자>`에 이름+부모 기준 upsert한다. 날짜는 최초 저장일로 고정되므로 같은 문서를 다시 저장해도 사본이 아니라 기존 파일이 갱신된다. owner-only permission과 재다운로드 SHA-256를 모두 확인해야 성공이다. 규약 정본: `docs/guide/drive-publish.md`.
 
 ## 문서 저장 목적지 라우팅
 

@@ -83,7 +83,15 @@ def _draft_path(draft_id: str) -> Path:
 def create_draft(
     *, action: str, argv: tuple[str, ...], calendar_id: str, event_id: str,
     summary: str, start: str, end: str, channel_id: str,
+    origin_channel_id: str = "", origin_message_id: str = "",
 ) -> dict:
+    """Freeze one mutation as a draft; the origin refs only route its later result.
+
+    ``origin_*`` is where the owner's instruction arrived (empty when it came
+    straight from cha's own thread of control). It is deliberately NOT part of
+    ``draft_sha256`` — the hash binds the mutation, so a legacy draft and an
+    origin-bound draft of the same change keep the exact same content hash.
+    """
     draft_id = secrets.token_hex(3)
     while _draft_path(draft_id).exists():
         draft_id = secrets.token_hex(3)
@@ -96,6 +104,8 @@ def create_draft(
         "end": end,
         "event_id": event_id,
         "id": draft_id,
+        "origin_channel_id": origin_channel_id,
+        "origin_message_id": origin_message_id,
         "start": start,
         "status": "pending",
         "summary": summary,

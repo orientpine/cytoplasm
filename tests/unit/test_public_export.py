@@ -106,6 +106,32 @@ def _run(
     )
 
 
+def test_cleanup_non_venv_pycache_preserves_virtualenv_cache(tmp_path: Path) -> None:
+    non_venv_cache = tmp_path / "package" / "__pycache__"
+    virtualenv_cache = tmp_path / ".venv" / "package" / "__pycache__"
+    non_venv_cache.mkdir(parents=True)
+    virtualenv_cache.mkdir(parents=True)
+
+    result = subprocess.run(
+        (
+            "bash",
+            "-c",
+            'source "$1"; cleanup_non_venv_pycache "$2"',
+            "bash",
+            str(_SCRIPT),
+            str(tmp_path),
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "removing non-venv Python bytecode cache:" in result.stderr
+    assert not non_venv_cache.exists()
+    assert virtualenv_cache.is_dir()
+
+
 def _commit_source(sandbox: ExportSandbox, message: str) -> None:
     _ = _git(sandbox.source, "add", "-A")
     _ = _git(sandbox.source, "commit", "-m", message)

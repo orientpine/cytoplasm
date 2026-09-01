@@ -36,7 +36,6 @@ from automation.deploy_reconcile_cli import (
 from automation.node_asset_renderer import render_asset
 from automation.node_config import default_node_config
 from automation.owner_notice import notify_owner
-from automation.update_trust import UpdateTrustError
 
 _REPO = Path(__file__).resolve().parents[2]
 _SERVICE = _REPO / "automation" / "systemd" / "autophagy-deploy-reconcile.service"
@@ -187,42 +186,6 @@ def test_current_release_sha_is_empty_when_the_pointer_is_absent_or_broken(
     dangling = tmp_path / "dangling"
     dangling.symlink_to(tmp_path / "gone", target_is_directory=True)
     assert current_release_sha(dangling) == ""
-
-
-def test_main_when_signed_update_is_untrusted_then_never_calls_privileged_helper(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    # Given: the public branch head has no trusted signed release tag.
-    calls: list[str] = []
-    notices: list[str] = []
-
-    def blocked_target() -> str:
-        raise UpdateTrustError("UNSIGNED-HEAD", "origin/main lacks a signed release tag")
-
-    def unexpected_release(_target: str, _prior: str) -> int:
-        calls.append("converge")
-        return 0
-
-    monkeypatch.setattr(reconcile_cli, "candidate_update_sha", blocked_target)
-    monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
-    monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
-    monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
-    monkeypatch.setattr(reconcile_cli, "run_release_update", unexpected_release)
-    monkeypatch.setattr(reconcile_cli, "notify_owner", lambda notice: not notices.append(notice))
-
-    # When: the reconciliation timer runs.
-    results = [reconcile_cli.main() for _ in range(FAILURE_NOTICE_THRESHOLD)]
-
-    # Then: the pre-convergence gate blocks before any root helper or state mutation.
-    assert results == [0] * FAILURE_NOTICE_THRESHOLD
-    assert calls == []
-    assert len(notices) == 1
-    assert reconcile_cli.load_state(tmp_path / "state.json").consecutive_failures == (
-        FAILURE_NOTICE_THRESHOLD
-    )
-    assert "UPDATE-TRUST-BLOCK UNSIGNED-HEAD" in capsys.readouterr().err
 
 
 def test_main_when_update_target_stays_unresolved_then_notifies_at_failure_threshold(

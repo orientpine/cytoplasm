@@ -37,6 +37,8 @@ from automation.interop.approval_surface import POLICY_VERSION  # noqa: E402
 OWNER = "owner-budget"
 APPROVALS_CHANNEL = "1528936606856122421"
 DM_CHANNEL = "1526487935975952385"
+AGENT_CHAT_CHANNEL = "1526487935975952390"
+AGENT_CHAT_THREAD = "1526487935975952391"
 MAIL_TO = "office@example.invalid"
 # IPC 대기 상한 — 불변식이 아니라 hang 방지용이다. 직렬화 판정은 결과 단언(정확히 1 POST +
 # 나머지 defer)이 한다.
@@ -64,6 +66,17 @@ class FakeDiscord:
             return {"id": DM_CHANNEL}
         if method == "GET" and path == f"/channels/{DM_CHANNEL}":
             return {"id": DM_CHANNEL, "type": 1, "name": "", "recipients": [{"id": OWNER}]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
+            return {"id": AGENT_CHAT_CHANNEL, "type": 0, "name": "agent-chat", "guild_id": "guild-1"}
+        if method == "GET" and path == "/guilds/guild-1/threads/active":
+            return {"threads": [{
+                "id": AGENT_CHAT_THREAD,
+                "type": 11,
+                "name": "승인-budget-mail",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
+            return {"id": AGENT_CHAT_THREAD, "type": 11, "name": "승인-budget-mail", "parent_id": AGENT_CHAT_CHANNEL}
         if method == "POST" and parts[-1] == "messages":
             self.posts += 1
             message_id = f"m-{self.posts}"
@@ -107,7 +120,11 @@ def budget_env(
     config.write_text(json.dumps({"mail_to": MAIL_TO}), encoding="utf-8")
     interop = tmp_path / "interop-config.json"
     interop.write_text(
-        json.dumps({"owner_id": OWNER, "personal_approvals_channel_id": APPROVALS_CHANNEL}),
+        json.dumps({
+            "owner_id": OWNER,
+            "personal_approvals_channel_id": APPROVALS_CHANNEL,
+            "agent_chat_channel_id": AGENT_CHAT_CHANNEL,
+        }),
         encoding="utf-8",
     )
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
@@ -348,8 +365,8 @@ def test_the_commit_persists_the_surface_the_message_was_posted_to(
     stored = _stored(drafts, record["id"])
     assert stored["message_id"] == "m-1"
     assert stored["kind"] == "budget-mail"
-    assert stored["surface"] == "owner-dm"
-    assert stored["channel_id"] == DM_CHANNEL
+    assert stored["surface"] == "agent-chat-thread"
+    assert stored["channel_id"] == AGENT_CHAT_THREAD
     assert stored["policy_version"] == POLICY_VERSION
 
 
@@ -363,5 +380,5 @@ def test_a_stale_writer_cannot_drop_the_stored_binding(
     # When: a later caller re-binds the same message id from that stale record
     budget_gate.set_message_id(record, "m-1")
     # Then: the stored binding survives, so the owner's ✅ stays findable
-    assert _stored(drafts, record["id"])["channel_id"] == DM_CHANNEL
+    assert _stored(drafts, record["id"])["channel_id"] == AGENT_CHAT_THREAD
     assert _stored(drafts, record["id"])["policy_version"] == POLICY_VERSION

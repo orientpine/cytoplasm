@@ -1,0 +1,1 @@
+agent|skills/budget/scripts/budget_watch.py|.hermes/scripts/budget_watch.py|required

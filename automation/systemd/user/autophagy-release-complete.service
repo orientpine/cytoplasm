@@ -1,0 +1,11 @@
+# Workstation-only: the signing key lives here; never install this unit on a node.
+[Unit]
+Description=Complete an already-approved Autophagy release
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$RELEASE_COMPLETE_REPO
+ExecStart=/usr/bin/bash $RELEASE_COMPLETE_REPO/automation/release_complete.sh
+Environment=GIT_TERMINAL_PROMPT=0
+UMask=0077

@@ -3,6 +3,9 @@
 > **목적**: W4-3(과제비 변경 감지·`!budget` 조회)에 필요한 Google Sheet 좌표 형식을 설명한다.
 > 운영 규칙·스키마 상세: [`docs/guide/과제비-운영.md`](../docs/guide/과제비-운영.md).
 > 실제 식별자는 repo에 기록하지 않고 런타임 환경의 `BUDGET_SHEET_ID`로만 주입한다.
+> 과제별×년도별 다중 시트는 [`budget-sheets.example.json`](budget-sheets.example.json) 형식의
+> 레지스트리를 `~/.hermes/budget/sheets.json`(또는 `BUDGET_SHEETS_FILE` 경로)에 둔다 —
+> 역시 실제 ID는 repo 밖에만 존재한다.
 
 ## 좌표 (기계 소비용 — 키 이름 변경 금지)
 

@@ -37,11 +37,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from urllib.request import Request, urlopen
 
-DISCORD_API = "https://discord.com/api/v10"
 SSH_IDENTITY = Path.home() / ".ssh" / "autophagy-spend-ro"
-INTEROP_CONFIG = Path.home() / ".hermes" / "interop" / "config.json"
 ENV_SECRETS = Path.home() / ".env.secrets"
 SNAPSHOT_MAX_AGE_SECONDS = 600
 
@@ -152,29 +149,25 @@ def compose(snapshot: dict[str, object], soft_cap: float) -> str:
     return redact("\n".join(lines))
 
 
-def discord_post(token: str, path: str, payload: dict[str, object]) -> dict[str, object]:
-    request = Request(
-        DISCORD_API + path,
-        data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type": "application/json",
-            "User-Agent": "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)",
-        },
-        method="POST",
-    )
-    with urlopen(request, timeout=30) as response:
-        raw = response.read().decode()  # pyright: ignore[reportAny] — http.client response
-    return parse_json_object(raw, "discord response")
+def _release_runtime_root() -> Path:
+    """owner_notice 파사드가 사는 릴리스 런타임 — 배포 사본이 늦게 해석한다(ON-2)."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
+    if override:
+        return Path(override)
+    release = Path("/srv/autophagy-agent-current")
+    return release if release.is_dir() else Path("/srv/autophagy-agents")
 
 
-def send_dm(body: str) -> str:
-    config = parse_json_object(INTEROP_CONFIG.read_text(), "interop config")
-    owner_id = str(config["owner_id"])
-    token = bot_token()
-    channel = discord_post(token, "/users/@me/channels", {"recipient_id": owner_id})
-    message = discord_post(token, f"/channels/{channel['id']}/messages", {"content": body})
-    return str(message.get("id", ""))
+def send_dm(body: str) -> None:
+    """목적지(지정 채널/DM)는 owner_notice 파사드가 정한다(ON-2) — 마스킹은 여기 그대로."""
+    os.environ.setdefault("DISCORD_BOT_TOKEN", bot_token())
+    root = str(_release_runtime_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from automation.owner_notice import notify_owner
+
+    if not notify_owner(body):
+        raise RuntimeError("owner notice delivery failed")
 
 
 def main() -> int:
@@ -184,10 +177,8 @@ def main() -> int:
     if os.environ.get("COST_REPORT_DRY_RUN", "") == "1":
         print(body)
         return 0
-    message_id = send_dm(body)
-    # Success: stay silent (no_agent silent tick). Masked message id is logged
-    # nowhere except the Hermes cron output store, and only in masked form.
-    del message_id
+    send_dm(body)
+    # Success: stay silent (no_agent silent tick).
     return 0
 
 

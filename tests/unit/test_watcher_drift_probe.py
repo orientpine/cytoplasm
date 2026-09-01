@@ -15,12 +15,15 @@ calendar 는 `confirm_reaction_watch.py` 를 `calendar_confirm_reaction_watch.py
 from __future__ import annotations
 
 import os
-import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Final
 
 _REPO: Final = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from automation.watcher_manifest import HOME_DEPLOYED_PATTERN  # noqa: E402
 _PROBE: Final = _REPO / "automation" / "watcher_drift_probe.sh"
 _MANIFEST: Final = _REPO / "configs" / "watcher-deploy-manifest.txt"
 _HEALTHCHECK: Final = _REPO / "automation" / "healthcheck.sh"
@@ -76,12 +79,18 @@ def _manifest(tmp_path: Path, *rows: str) -> Path:
 # --- the table must describe reality -----------------------------------------------
 
 
+#: 계정 홈 배포물의 모양은 `automation.watcher_manifest.HOME_DEPLOYED_PATTERN` 이 단일
+#: 정의한다(RC-1). 사본이 갈라지며 생긴 사각지대(`scripts/` 만 보던 옛 정규식이 플러그인을
+#: 놓쳐 홈 사본이 5일 낡도록 침묵, 2026-08-28 실측)가 이동의 이유다 — 다시 베끼지 말 것.
+_HOME_DEPLOYED: Final = HOME_DEPLOYED_PATTERN
+
+
 def test_every_deploy_script_that_writes_a_wrapper_is_in_the_manifest() -> None:
-    """`deploy.sh` 가 새 래퍼를 배포하기 시작하면 이 테스트가 먼저 깨진다."""
+    """`deploy.sh` 가 새 배포물을 홈에 쓰기 시작하면 이 테스트가 먼저 깨진다."""
     destinations = {destination for _, _, destination, _ in _rows()}
     missing: list[str] = []
     for script in sorted(_REPO.glob("skills/*/deploy.sh")) + sorted(_REPO.glob("automation/*/deploy.sh")):
-        for written in re.findall(r"\.hermes/scripts/[A-Za-z0-9_.-]+", script.read_text(encoding="utf-8")):
+        for written in _HOME_DEPLOYED.findall(script.read_text(encoding="utf-8")):
             if written not in destinations:
                 missing.append(f"{script.relative_to(_REPO)} -> {written}")
     assert not missing, "manifest 에 없는 배포 대상: " + ", ".join(missing)

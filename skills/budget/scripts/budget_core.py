@@ -96,8 +96,9 @@ def snapshot_hash(rows: list[tuple[str, ...]]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def claim_key(prev_hash: str, new_hash: str) -> str:
-    return f"{prev_hash[:16]}->{new_hash[:16]}"
+def claim_key(prev_hash: str, new_hash: str, *, sheet_key: str = "") -> str:
+    key = f"{prev_hash[:16]}->{new_hash[:16]}"
+    return f"{sheet_key}:{key}" if sheet_key else key
 
 
 def diff_rows(old: list[tuple[str, ...]], new: list[tuple[str, ...]]) -> list[Change]:
@@ -135,16 +136,21 @@ def redact(text: str) -> str:
     return _LONG_DIGITS.sub("[MASKED-NUM]", _EMAIL.sub("[MASKED-EMAIL]", text))
 
 
-def render_mail(changes: list[Change], *, prev_hash: str, new_hash: str, now: datetime) -> tuple[str, str]:
+def render_mail(
+    changes: list[Change], *, prev_hash: str, new_hash: str, now: datetime, context: str = ""
+) -> tuple[str, str]:
     """Regulation-compliant request mail (real values; stays in 600 draft/mail)."""
     when = now.astimezone(KST)
-    subject = f"[과제비] 원장 변경 통지 및 처리 요청 ({when.strftime('%Y-%m-%d')})"
+    scope = f" {context}" if context else ""
+    subject = f"[과제비]{scope} 원장 변경 통지 및 처리 요청 ({when.strftime('%Y-%m-%d')})"
     lines = [
         "과제비 원장(항목별 잔액 탭)에서 아래 변경이 감지되어 과제비 운영 규칙에 따라 통지드리며,",
         "해당 변경 내역의 확인 및 필요한 행정 처리를 요청드립니다.",
         "",
         "1. 감지된 변경 내역",
     ]
+    if context:
+        lines.append(f"   - 대상 과제/년도: {context}")
     lines.extend(
         f"   - {change.item} / {change.field}: {change.old or '(없음)'} → {change.new or '(없음)'}"
         for change in changes
@@ -170,10 +176,11 @@ def render_approvals_message(draft: dict, *, instruction: str = "") -> str:
     surface is known simply omits it rather than guessing one.
     """
     changes = [Change(*entry) for entry in draft["changes"]]
-    lines = [
-        "[budget-mail] 과제비 변경 감지 — 요청 메일 발송 승인 요청",
-        f"- 변경 {len(changes)}건 (금액은 마스킹 — 원문은 `!budget` 조회):",
-    ]
+    lines = ["[budget-mail] 과제비 변경 감지 — 요청 메일 발송 승인 요청"]
+    project = draft.get("project")
+    if isinstance(project, str) and project:
+        lines.append(f"- 과제: {project} ({draft.get('year')}년)")
+    lines.append(f"- 변경 {len(changes)}건 (금액은 마스킹 — 원문은 `!budget` 조회):")
     lines.extend(
         f"  - {change.item} / {change.field}: {mask_value(change.old)} → {mask_value(change.new)}"
         for change in changes

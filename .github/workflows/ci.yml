@@ -5,9 +5,10 @@
 name: CI
 
 on:
+  # main push 재검증은 두지 않는다: PR 에서 이미 통과시킨 트리를 머지 직후 한 번 더 돌리는
+  # 중복이었고, 2026-08-25 실측으로 최근 100 회 실행 중 48 회가 그것이었다. 머지되는 트리의
+  # 판정은 PR 실행과 push 게이트(automation/local_ci.sh 영수증)가 이미 갖고 있다.
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read

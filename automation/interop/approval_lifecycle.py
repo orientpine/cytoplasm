@@ -8,13 +8,23 @@ L3  A request the owner has ALREADY decided (✅/⛔) is never destroyed — it 
 L4  Liveness that cannot be proven counts as live. Bindings that do not match
     are refused, never dropped.
 L5  Every terminal non-success carries a machine-readable reason and exits non-zero.
+L6  Superseding is never a net loss: if the replacement cannot be published, the
+    records this run destroyed are restored, and the failure is LOUD.
+L7  This module is staged onto deploy nodes by ``automation/deploy-skill.sh``. It
+    therefore imports NOTHING from ``automation`` outside the staged gate chain —
+    an owner notice arrives as an injected callable, never as an import.
 """
 from __future__ import annotations
 
+import json
+import os
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, assert_never
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, assert_never, runtime_checkable
 
 if TYPE_CHECKING:
     from automation.interop.approval_reminder import ReminderContext, ReminderVerdict
@@ -56,6 +66,19 @@ class ApprovalGate(Protocol):
     def post(self, intent: ApprovalIntent) -> PostedApproval: ...
 
     def commit(self, intent: ApprovalIntent, posted: PostedApproval, created_at: str) -> None: ...
+
+
+@runtime_checkable
+class ApprovalRestore(Protocol):
+    """Optional rollback seam — put a dropped record back exactly as it was.
+
+    Deliberately NOT part of ``ApprovalGate``: every adapter's ``commit()`` rebuilds a
+    record from *this* run's payload and nonce, so it can never re-persist a foreign
+    binding. A store that cannot offer this still gets the loud marker below; it just
+    cannot be rolled back.
+    """
+
+    def restore(self, request: ApprovalRequest) -> None: ...
 
 
 class Outcome(StrEnum):
@@ -132,6 +155,103 @@ def _destroy(
             case unreachable:
                 assert_never(unreachable)
     return None
+
+
+def _write_marker(root: Path, payload: dict[str, object]) -> bool:
+    """Append one fsync'd audit line — same convention as ``approval_lease.abandon``."""
+    try:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = root / "supersede-failures.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            _ = handle.write(json.dumps(payload, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        path.chmod(0o600)
+        return True
+    except OSError:
+        return False
+
+
+def _notify(notifier: Callable[[str], bool] | None, notice: str) -> bool:
+    """Best-effort owner notice — INJECTED, never imported (L7); never raises, never gates.
+
+    ``automation/owner_notice.py`` pulls in the Discord transport and its chunker, none of
+    which ``deploy-skill.sh`` stages. Importing it here — even lazily inside a guarded
+    try — puts three unstaged modules in the staged gate's import closure, which is the
+    exact rot ``test_deploy_staging_is_derived_from_imports`` exists to stop. Non-gate
+    callers wire ``owner_notice.notify_owner`` in; the staged gate passes nothing and
+    still gets the durable marker below.
+    """
+    if notifier is None:
+        return False
+    try:
+        return notifier(notice)
+    except Exception:  # noqa: BLE001 - 통지 실패가 원래의 publish 실패를 가려서는 안 된다
+        return False
+
+
+def _rescue_lost_supersede(
+    intent: ApprovalIntent,
+    gate: ApprovalGate,
+    journal: PostingJournal,
+    destroyed: tuple[Cleared, ...],
+    error: ApprovalSurfaceError | OSError,
+    notifier: Callable[[str], bool] | None,
+) -> Verdict:
+    """Publish failed AFTER this run destroyed live requests — 대기 0 으로 끝내지 않는다.
+
+    실측 2026-08-29 13:52 의 역방향 고아: 단일성 규칙은 지켜졌지만 소유자가 누를 것이
+    사라졌고 아무 신호도 나가지 않았다. 여기서 되돌리고(가능하면) 소리를 낸다.
+
+    The reservation is deliberately LEFT in place: the POST may have landed before the
+    error surfaced, and clearing the receipt would turn a recoverable orphan message
+    into an invisible one. The next run refuses loudly on the stale journal instead.
+    """
+    restored: list[ApprovalRequest] = []
+    lost: list[Cleared] = []
+    for item in destroyed:
+        if not isinstance(gate, ApprovalRestore):
+            lost.append(item)
+            continue
+        try:
+            gate.restore(item.request)
+        except (ApprovalSurfaceError, ApprovalRecordsError, OSError):
+            lost.append(item)
+        else:
+            restored.append(item.request)
+    superseded = [item.request.message_id for item in destroyed]
+    notice = (
+        f"[approval] 승인 요청 재게시 실패 key={intent.key} — "
+        f"기존 요청 {superseded} 중 복구 {[request.message_id for request in restored]}, "
+        f"소실 {[item.request.message_id for item in lost]} ({type(error).__name__}). "
+        "대기 중인 승인 요청이 없다면 수동 확인이 필요하다."
+    )
+    notified = _notify(notifier, notice)
+    marked = _write_marker(
+        journal.root,
+        {
+            "event": "supersede-publish-failed",
+            "key": intent.key,
+            "action_hash": intent.action_hash,
+            "at": _now(),
+            "error": type(error).__name__,
+            "superseded": superseded,
+            "restored": [request.message_id for request in restored],
+            "lost": [item.request.message_id for item in lost],
+            "notified": notified,
+        },
+    )
+    print(
+        f"[approval-lifecycle] SUPERSEDE-PUBLISH-FAILED: key={intent.key} "
+        f"restored={len(restored)} lost={len(lost)} notified={notified} marked={marked}",
+        file=sys.stderr,
+    )
+    return Verdict(
+        Outcome.REFUSED,
+        Reason.SUPERSEDE_FAILED,
+        cleared=tuple(lost),
+        blocked=tuple(restored),
+    )
 
 
 def _posting_request(
@@ -253,7 +373,11 @@ def request_owner_approval(
     gate: ApprovalGate,
     lease: ApprovalLease,
     journal: PostingJournal,
+    notifier: Callable[[str], bool] | None = None,
 ) -> Verdict:
+    """``notifier`` is the optional owner-notice sink used only when a supersede loses
+    its replacement (L6/L7). Default None keeps the staged gate import-free; it still
+    gets the durable journal marker and the stderr line."""
     with lease.hold(intent.key) as owned:
         if not owned:
             return Verdict(Outcome.DEFERRED, Reason.LEASE_HELD)
@@ -298,7 +422,15 @@ def request_owner_approval(
             return halted
         created_at = _now()
         journal.reserve(intent.key, intent.action_hash, created_at)
-        posted = gate.post(intent)
+        try:
+            posted = gate.post(intent)
+        except (ApprovalSurfaceError, OSError) as error:
+            # Nothing was destroyed ⇒ nothing to lose: the reservation wedges the key and
+            # the caller's own error handling stands (L5 unchanged). Only a run that already
+            # took a live request away owes the owner a restore + a signal.
+            if not cleared:
+                raise
+            return _rescue_lost_supersede(intent, gate, journal, tuple(cleared), error, notifier)
         gate.commit(intent, posted, created_at)
         journal.clear(intent.key)
         return Verdict(Outcome.POSTED, posted=posted, cleared=tuple(cleared))

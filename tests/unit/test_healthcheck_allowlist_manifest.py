@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ _REPO = Path(__file__).resolve().parents[2]
 _HEALTHCHECK = _REPO / "automation" / "healthcheck.sh"
 _MANIFEST_SCRIPT = _REPO / "automation" / "healthcheck_allowlist_manifest.sh"
 _COMMITTED_MANIFEST = _REPO / "automation" / "healthcheck_allowlist_manifest.example.txt"
+_NODE_EXAMPLE = _REPO / "configs" / "node.example.toml"
 _SECURE_PATH = "/test-secure/sbin:/test-secure/bin"
 _AGENT_UID = "4242"
 _SYNTHETIC = (
@@ -115,6 +117,10 @@ def test_healthcheck_has_a_source_execution_guard() -> None:
     assert 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi' in body
 
 
+def test_healthcheck_ships_executable() -> None:
+    assert os.access(_HEALTHCHECK, os.X_OK)
+
+
 def test_manifest_is_derived_from_every_live_check_plus_the_synthetic_check(
     tmp_path: Path,
 ) -> None:
@@ -128,6 +134,38 @@ def test_manifest_is_derived_from_every_live_check_plus_the_synthetic_check(
     assert all("sudo -n -u agent -H env PATH=" in line for line in lines)
     assert all("XDG_RUNTIME_DIR=/run/user/4242" in line for line in lines)
     assert all("/usr/bin/python3 -I" in line for line in lines)
+
+
+def test_probe_hash_manifest_is_derived_and_self_verifying(tmp_path: Path) -> None:
+    result = _manifest(tmp_path, "--probe-hashes")
+
+    assert result.returncode == 0, result.stderr
+    rows = [line.split("\t", maxsplit=1) for line in result.stdout.splitlines()]
+    assert len(rows) >= 10
+    assert rows == sorted(rows)
+    assert all(len(row) == 2 for row in rows)
+    assert all(
+        digest == hashlib.sha256(command.encode()).hexdigest()
+        for digest, command in rows
+    )
+
+
+def test_probe_hash_manifest_uses_the_node_runtime_config(tmp_path: Path) -> None:
+    config = tmp_path / "node.toml"
+    _ = config.write_text(
+        _NODE_EXAMPLE.read_text(encoding="utf-8").replace(
+            'primary_node_name = "example-primary-node"',
+            'primary_node_name = "custom-primary"',
+        ),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path)
+    env["HEALTHCHECK_NODE_CONFIG_PATH"] = str(config)
+
+    result = _manifest(tmp_path, "--probe-hashes", "custom-primary", env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip()
 
 
 def test_committed_manifest_matches_generator_bytes(tmp_path: Path) -> None:

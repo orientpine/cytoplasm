@@ -185,6 +185,80 @@ def test_main_alerts_a_new_failure_once_then_reports_backoff(
     assert "resume-exit:126" not in second_stderr, "but the alert itself fires only once"
 
 
+def test_main_runs_due_reminders_through_the_existing_gate_api(
+    tmp_path: Path, monkeypatch
+) -> None:
+    request = PendingRequest("skill-deploy:demo", "skill-deploy", "demo", "demo")
+    result = TickResult(request, "retain", "unanswered")
+    api_calls: list[tuple[str, str, dict[str, str] | None]] = []
+    reminder_calls: list[tuple[tuple[TickResult, ...], Path]] = []
+
+    class Directory:
+        def skill_approvals(self) -> str:
+            return "1528936606856122421"
+
+    class Identity:
+        @property
+        def api(self):
+            return fake_api
+
+        def directory(self) -> Directory:
+            return Directory()
+
+    def fake_api(
+        method: str, path: str, payload: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        api_calls.append((method, path, payload))
+        if method == "GET":
+            return {"guild_id": "1528936606264856737"}
+        return {"id": "sent"}
+
+    class Binding:
+        channel_id = "bound-channel"
+
+    class Surface:
+        def stored(self, record: dict[str, str]) -> Binding:
+            assert record["channel_id"] == "untrusted-channel"
+            return Binding()
+
+    def fake_remind(
+        results: tuple[TickResult, ...], gate_dir: Path, **kwargs
+    ) -> tuple[()]:
+        reminder_calls.append((results, gate_dir))
+        assert kwargs["decision_of"]("message") == "absent"
+        assert kwargs["channel_of"]({"channel_id": "untrusted-channel"}) == "bound-channel"
+        assert kwargs["guild_of"]("channel") == "1528936606264856737"
+        kwargs["deliver"]("channel", "body")
+        return ()
+
+    monkeypatch.setenv("SUPPLY_CHAIN_WATCH_STATE", str(tmp_path / "tick.json"))
+    monkeypatch.setattr(supply_chain_watch_cli.skill_gate, "_identity", lambda: Identity())
+    monkeypatch.setattr(supply_chain_watch_cli.skill_gate, "_owner_id", lambda: "owner")
+    monkeypatch.setattr(
+        supply_chain_watch_cli.skill_gate,
+        "_owner_decision",
+        lambda _args, _owner_id, _channel_id: "absent",
+    )
+    monkeypatch.setattr(
+        supply_chain_watch_cli,
+        "watch_tick",
+        lambda *_args, **_kwargs: EnumerationResult((result,), True),
+    )
+    monkeypatch.setattr(
+        supply_chain_watch_cli.skill_gate_surface,
+        "surface_for",
+        lambda _kind, _identity: Surface(),
+    )
+    monkeypatch.setattr(supply_chain_watch_cli, "remind_unanswered", fake_remind)
+
+    assert supply_chain_watch_cli.main() == 0
+    assert reminder_calls == [((result,), supply_chain_watch_cli.skill_gate.GATE_DIR)]
+    assert api_calls == [
+        ("GET", "/channels/channel", None),
+        ("POST", "/channels/channel/messages", {"content": "body"}),
+    ]
+
+
 def test_main_retries_as_soon_as_the_release_changes(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

@@ -1,10 +1,11 @@
-"""Contract for the curator's best-effort near-cap alert DM.
+"""Contract for the curator's best-effort near-cap alert notice.
 
 The alert is a notification, not an approval, so it lives in effects and
-fails closed: a dry-run prints, a real send creates the owner DM channel
-once then posts, a missing token no-ops, and any transport error is
-swallowed so a bad cron tick never crashes.  The Discord POST is injected
-so this is host-testable without touching Discord.
+fails closed: a dry-run prints, a real send delegates to the owner_notice
+facade (ON-2 — the facade owns the destination: configured channel or DM),
+an undelivered notice is False, and any error is swallowed so a bad cron
+tick never crashes.  The notice sender is injected so this is host-testable
+without touching Discord.
 """
 
 from __future__ import annotations
@@ -32,63 +33,36 @@ from skills.wiki.scripts import wiki_store
 
 def test_dry_run_prints_and_does_not_post(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("MEMORY_CURATOR_DRY_RUN", "1")
-    calls: list[tuple[str, str, dict[str, str]]] = []
+    calls: list[str] = []
 
-    def post(token: str, path: str, payload: dict[str, str]) -> dict[str, object]:
-        calls.append((token, path, payload))
-        return {"id": "x"}
-
-    sent = alert_owner("near cap!", post=post)
+    sent = alert_owner("near cap!", notify=lambda message: calls.append(message) or True)
     assert calls == []
     assert sent is False
     assert "DRY-RUN alert: near cap!" in capsys.readouterr().out
 
 
-def test_creates_owner_dm_channel_then_posts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    config = tmp_path / "config.json"
-    _ = config.write_text('{"owner_id": "999"}', encoding="utf-8")
-    monkeypatch.setattr("automation.memory_curator.effects._INTEROP_CONFIG", config)
+def test_delegates_the_message_to_the_notice_facade(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MEMORY_CURATOR_DRY_RUN", raising=False)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
-    calls: list[tuple[str, str, dict[str, str]]] = []
+    calls: list[str] = []
 
-    def post(token: str, path: str, payload: dict[str, str]) -> dict[str, object]:
-        calls.append((token, path, payload))
-        return {"id": "chan123"}
-
-    sent = alert_owner("\u26a0\ufe0f near cap", post=post)
-    assert calls[0] == ("tok", "/users/@me/channels", {"recipient_id": "999"})
-    assert calls[1] == ("tok", "/channels/chan123/messages", {"content": "\u26a0\ufe0f near cap"})
+    sent = alert_owner("\u26a0\ufe0f near cap", notify=lambda message: calls.append(message) or True)
+    assert calls == ["\u26a0\ufe0f near cap"]
     assert sent is True
 
 
-def test_no_token_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_undelivered_notice_is_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MEMORY_CURATOR_DRY_RUN", raising=False)
-    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
-    calls: list[tuple[str, str, dict[str, str]]] = []
 
-    def post(token: str, path: str, payload: dict[str, str]) -> dict[str, object]:
-        calls.append((token, path, payload))
-        return {"id": "y"}
-
-    sent = alert_owner("x", post=post)
-    assert calls == []
-    assert sent is False
+    assert alert_owner("x", notify=lambda _message: False) is False
 
 
-def test_transport_error_is_swallowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    config = tmp_path / "config.json"
-    _ = config.write_text('{"owner_id": "999"}', encoding="utf-8")
-    monkeypatch.setattr("automation.memory_curator.effects._INTEROP_CONFIG", config)
+def test_transport_error_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MEMORY_CURATOR_DRY_RUN", raising=False)
-    monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
 
-    def boom(
-        _token: str, _path: str, _payload: dict[str, str]
-    ) -> dict[str, object]:
+    def boom(_message: str) -> bool:
         raise RuntimeError("discord down")
 
-    assert alert_owner("x", post=boom) is False
+    assert alert_owner("x", notify=boom) is False
 
 
 

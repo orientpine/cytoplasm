@@ -49,15 +49,19 @@ REPAIR_BINDING = ApprovalBinding(ApprovalKind.REPAIR, ApprovalSurface.OWNER_DM, 
 # The mail draft record gained the resolved approval binding (AS-1.x): `surface`
 # and `policy_version` join the `channel_id` it already carried, so a posted draft
 # names WHERE its approval message lives and the policy version it was stamped at.
+# 2026-08-22: `origin_channel_id`/`origin_message_id` route the send/cancel RESULT
+# back to the requesting channel's thread — they are outside the sha256 binding.
 MAIL_DRAFT_KEYS = [
     "argv", "body", "category", "cc", "channel_id", "created", "flags", "id", "kind",
-    "mail_subject", "message_id", "policy_version", "sender", "sender_masked",
+    "mail_subject", "message_id", "origin_channel_id", "origin_message_id",
+    "policy_version", "sender", "sender_masked",
     "sensitive", "sha256", "status", "subject", "surface", "tags", "to", "uid",
     "uid_opaque",
 ]
 BUDGET_DRAFT_KEYS = [
     "argv", "body", "changes", "claim_key", "created", "id", "mail_to",
-    "message_id", "new_hash", "prev_hash", "sha256", "status", "subject",
+    "message_id", "new_hash", "origin_channel_id", "origin_message_id",
+    "prev_hash", "project", "sha256", "status", "subject", "year",
 ]
 # RTS-4 added the four content-binding keys: the record must be able to reproduce
 # the approval message, and the message now names the changed files and the digest.

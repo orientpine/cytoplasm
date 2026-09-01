@@ -9,17 +9,12 @@ Three mutually exclusive paths, all fail-closed:
 """
 from __future__ import annotations
 
-import fcntl
-import hashlib
-import hmac
 import json
 import os
-import secrets
-import stat
 import sys
 import uuid
 from contextlib import suppress
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -36,6 +31,8 @@ PendingConfirm = _pending.PendingConfirm
 PendingConfirmError = _pending.PendingConfirmError
 PendingConfirmStore = _pending.PendingConfirmStore
 calendar_binding = import_module("calendar_binding")
+_authz = import_module("calendar_confirm_authz")
+create_watcher_authorization = _authz.create_watcher_authorization
 
 DraftRecord: TypeAlias = dict[str, str | list[str]]
 
@@ -44,9 +41,6 @@ USER_AGENT = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
 DM_SCAN_LIMIT = 50
 APPROVE_EMOJI = "\u2705"
 CANCEL_EMOJI = "\u26d4"
-WATCH_AUTH_TTL = timedelta(minutes=5)
-WATCH_AUTH_MAX_BYTES = 16_384
-WATCH_AUTH_VERSION = 1
 
 
 def confirm_text(draft: DraftRecord) -> str:
@@ -94,78 +88,17 @@ def bot_token() -> str:
     raise GateError("DISCORD_BOT_TOKEN 누락 — 프로덕션 확인 경로 사용 불가", 3)
 
 
-def create_watcher_authorization(
-    entry: PendingConfirm, owner: str, *, now: datetime | None = None
-) -> Path:
-    """Create a short-lived, signed, one-use authorization for the watcher child.
-
-    Only the watcher calls this after independently validating the exact message,
-    draft hash, owner-only reaction, and cancel precedence.  The child validates
-    every binding against its current draft and pending store without querying
-    Discord a second time.
-    """
-    observed = (now or datetime.now(UTC)).astimezone(UTC)
-    if not owner:
-        raise GateError("watcher 승인 소유자가 비어 있습니다", 3)
-    nonce = secrets.token_hex(16)
-    payload: dict[str, str | int] = {
-        "action": "approve",
-        "dm_channel_id": entry.dm_channel_id,
-        "dm_message_id": entry.dm_message_id,
-        "draft_id": entry.draft_id,
-        "expires": (observed + WATCH_AUTH_TTL).isoformat(),
-        "nonce": nonce,
-        "observed": observed.isoformat(),
-        "owner_id": owner,
-        "pending_created": entry.created.astimezone(UTC).replace(microsecond=0).isoformat(),
-        "sha256": entry.sha256,
-        "version": WATCH_AUTH_VERSION,
-    }
-    payload["signature"] = _watch_auth_signature(payload)
-    path = _watch_auth_dir() / f"{nonce}.json"
-    _write_private_exclusive(path, _canonical_json(payload).encode("utf-8"))
-    return path
-
-
 def consume_watcher_authorization(draft: DraftRecord, authorization_path: Path) -> str:
-    """Atomically consume one watcher authorization bound to this exact draft/DM."""
-    auth_dir = _watch_auth_dir()
-    path = authorization_path.expanduser()
-    if path.parent != auth_dir or path.suffix != ".json" or path.is_symlink():
-        raise GateError("watcher 승인 파일 경로가 신뢰 경계 밖입니다", 1)
-    lock_path = auth_dir / ".lock"
-    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        os.chmod(lock_path, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        raw = _read_private_file(path)
-        try:
-            record = json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError) as error:
-            raise GateError("watcher 승인 파일 형식이 올바르지 않습니다", 1) from error
-        if type(record) is not dict:
-            raise GateError("watcher 승인 파일 형식이 올바르지 않습니다", 1)
-        signature = record.pop("signature", None)
-        if not isinstance(signature, str) or not hmac.compare_digest(
-            signature, _watch_auth_signature(record)
-        ):
-            raise GateError("watcher 승인 서명이 일치하지 않습니다", 1)
-        _validate_watcher_authorization(draft, record)
-        nonce = str(record["nonce"])
-        spent_path = auth_dir / f"{nonce}.spent"
-        try:
-            _write_private_exclusive(spent_path, b"spent\n")
-        except FileExistsError as error:
-            raise GateError("watcher 승인이 이미 사용되었습니다", 1) from error
-        try:
-            path.unlink()
-        except OSError as error:
-            spent_path.unlink(missing_ok=True)
-            raise GateError("watcher 승인 파일 소비에 실패했습니다", 3) from error
-    finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
-    return f"reaction:{record['dm_message_id']}"
+    """Atomically consume one watcher authorization bound to this exact draft/DM.
+
+    서명·잠금·nonce 소진은 `calendar_confirm_authz` 가 소유한다. 소유자 판정과 pending
+    조회는 이 모듈이 소유하므로 호출 시점에 그대로 넘긴다 — 사본을 만들지 않는다.
+    """
+    return _authz.consume_watcher_authorization(
+        draft,
+        authorization_path,
+        _authz.WatcherAuthorizationBindings(owner_id=owner_id, pending_entry=_pending_entry),
+    )
 
 
 def confirm_via_injection(draft: DraftRecord, injection_path: Path) -> str:
@@ -286,6 +219,48 @@ def send_owner_dm(owner: str, content: str) -> None:
     _api("POST", f"/channels/{channel_id}/messages", {"content": content})
 
 
+def _origin_notice():
+    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    sys.path.insert(0, str(runtime))
+    from automation.interop import origin_notice  # noqa: PLC0415
+
+    return origin_notice
+
+
+def _thread_transport(channel_id: str):
+    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    sys.path.insert(0, str(runtime))
+    from automation.interop.discord_transport import DiscordTransport  # noqa: PLC0415
+
+    return DiscordTransport(token=bot_token(), channel_id=channel_id)
+
+
+def notify_result(draft: DraftRecord, content: str) -> object:
+    """Route an execution/cancellation result: origin thread first, owner fallback.
+
+    라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
+    `automation.interop.origin_notice.deliver`가 소유한다(2026-08-23 전 스킬 공통화).
+    캘린더 내용(제목·시각·이벤트/캘린더 id)은 문구에도 스레드 이름에도 싣지 않는다 —
+    SKILL.md 반출 금지 규칙에 따라 호출자가 draft id 만 담은 문구를 넘긴다.
+    """
+    try:
+        origin_notice = _origin_notice()
+    except ImportError as error:  # 낡은 interop 런타임/샌드박스 — 결과는 그래도 소유자에게 닿아야 한다
+        print(
+            f"NOTIFY-HELPER-MISSING draft={draft['id']} err={type(error).__name__}",
+            file=sys.stderr,
+        )
+        return send_owner_dm(owner_id(), content)
+    return origin_notice.deliver(
+        api=_api,
+        transport_factory=_thread_transport,
+        record=draft,
+        thread_name=f"캘린더 확정 (draft {draft['id']})",
+        content=content,
+        fallback=lambda body: send_owner_dm(owner_id(), body),
+    )
+
+
 def confirmation_message_content(entry: PendingConfirm) -> str:
     """Return the exact posted confirmation content for hash binding."""
     channel_id = calendar_binding.channel_for_entry(entry)
@@ -342,125 +317,6 @@ def clear_pending(draft_id: str) -> None:
     entry = _pending_entry(draft_id, required=False)
     if entry is not None:
         PendingConfirmStore().remove_completed((entry,), ())
-
-
-def _validate_watcher_authorization(draft: DraftRecord, record: dict[str, Any]) -> None:
-    required_types = {
-        "action": str,
-        "dm_channel_id": str,
-        "dm_message_id": str,
-        "draft_id": str,
-        "expires": str,
-        "nonce": str,
-        "observed": str,
-        "owner_id": str,
-        "pending_created": str,
-        "sha256": str,
-        "version": int,
-    }
-    if set(record) != set(required_types) or any(
-        type(record.get(name)) is not expected for name, expected in required_types.items()
-    ):
-        raise GateError("watcher 승인 필드가 올바르지 않습니다", 1)
-    if record["version"] != WATCH_AUTH_VERSION or record["action"] != "approve":
-        raise GateError("watcher 승인 동작이 올바르지 않습니다", 1)
-    if record["draft_id"] != draft.get("id") or record["sha256"] != draft.get("sha256"):
-        raise GateError("watcher 승인 드래프트 바인딩이 일치하지 않습니다", 1)
-    if record["owner_id"] != owner_id():
-        raise GateError("watcher 승인 소유자가 일치하지 않습니다", 1)
-    try:
-        observed = _parse_ts(record["observed"])
-        expires = _parse_ts(record["expires"])
-        pending_created = _parse_ts(record["pending_created"])
-    except (TypeError, ValueError) as error:
-        raise GateError("watcher 승인 시각이 올바르지 않습니다", 1) from error
-    now = datetime.now(UTC)
-    if observed > now + timedelta(seconds=30) or expires <= now or expires - observed != WATCH_AUTH_TTL:
-        raise GateError("watcher 승인이 만료되었거나 시각이 올바르지 않습니다", 1)
-    entry = _pending_entry(str(draft["id"]))
-    if entry is None:
-        raise GateError("watcher 승인용 pending confirm이 없습니다", 1)
-    expected = (
-        entry.dm_channel_id,
-        entry.dm_message_id,
-        entry.created.astimezone(UTC),
-        entry.sha256,
-    )
-    actual = (
-        record["dm_channel_id"],
-        record["dm_message_id"],
-        pending_created.astimezone(UTC),
-        record["sha256"],
-    )
-    if actual != expected:
-        raise GateError("watcher 승인 메시지 바인딩이 일치하지 않습니다", 1)
-
-
-def _watch_auth_dir() -> Path:
-    gate_dir = Path(os.environ.get("CALENDAR_GATE_DIR", "~/.hermes/calendar-gate")).expanduser()
-    path = gate_dir / "watch-authorizations"
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if path.is_symlink() or stat.S_IMODE(path.stat().st_mode) & 0o077:
-        raise GateError("watcher 승인 디렉터리 권한이 안전하지 않습니다", 3)
-    return path
-
-
-def _watch_auth_key() -> bytes:
-    path = _watch_auth_dir() / ".hmac-key"
-    try:
-        _write_private_exclusive(path, secrets.token_bytes(32))
-    except FileExistsError:
-        pass
-    value = _read_private_file(path)
-    if len(value) != 32:
-        raise GateError("watcher 승인 서명 키가 올바르지 않습니다", 3)
-    return value
-
-
-def _watch_auth_signature(record: dict[str, Any]) -> str:
-    unsigned = {key: value for key, value in record.items() if key != "signature"}
-    return hmac.new(_watch_auth_key(), _canonical_json(unsigned).encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def _canonical_json(record: dict[str, Any]) -> str:
-    return json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-
-def _write_private_exclusive(path: Path, content: bytes) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-    descriptor = os.open(path, flags, 0o600)
-    try:
-        remaining = memoryview(content)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:
-                raise OSError("private file write made no progress")
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _read_private_file(path: Path) -> bytes:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.getuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o600
-            or metadata.st_size > WATCH_AUTH_MAX_BYTES
-        ):
-            raise GateError("watcher 승인 파일 권한 또는 크기가 올바르지 않습니다", 1)
-        content = bytearray()
-        while len(content) < metadata.st_size:
-            chunk = os.read(descriptor, metadata.st_size - len(content))
-            if not chunk:
-                break
-            content.extend(chunk)
-        return bytes(content)
-    finally:
-        os.close(descriptor)
 
 
 def _change_summary(draft: DraftRecord) -> str:

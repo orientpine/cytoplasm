@@ -138,12 +138,28 @@ def build_inputs(
     files.append(_file(trust.path, trust.content, trust.mode, root, root))
 
     node_toml = render_node_toml(config)
+    files.append(_file(Path("/etc/autophagy/node.toml"), node_toml, 0o644, root, root))
     for account, home in (
         (agent, config.agent_home),
         (config.peer_account, config.peer_home),
         (ops, config.ops_home),
     ):
         files.append(_file(home / ".hermes" / "node.toml", node_toml, 0o600, account, account))
+
+    command_sync_dropin = "[Service]\nEnvironment=DISCORD_COMMAND_SYNC_POLICY=bulk\n"
+    for account, home, gateway_unit in (
+        (agent, config.agent_home, config.agent_gateway_unit),
+        (config.peer_account, config.peer_home, config.peer_gateway_unit),
+    ):
+        files.append(
+            _file(
+                home / ".config/systemd/user" / f"{gateway_unit}.d" / "30-command-sync.conf",
+                command_sync_dropin,
+                0o600,
+                account,
+                account,
+            )
+        )
 
     systemd_source = automation / "systemd"
     for name in SYSTEM_UNITS:

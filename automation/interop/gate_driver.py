@@ -51,6 +51,16 @@ def channel(name: str) -> str:
     return next(x["id"] for x in req(f"/guilds/{guild['id']}/channels") if x["name"] == name)
 
 
+def _result_notice_target(token: str) -> str:
+    """Resolve the configured notice channel, falling back through the notice facade (ON-2)."""
+    from automation.owner_notice import resolve_notice_target
+
+    target = resolve_notice_target(token)
+    if not target:
+        raise RuntimeError("owner notice target is unavailable")
+    return target
+
+
 def main() -> None:
     role, phase, round_id = sys.argv[1:4]
     c = config()
@@ -80,11 +90,11 @@ def main() -> None:
                 break
             time.sleep(2)
 
-        dm = req("/users/@me/channels", {"recipient_id": c["owner_id"]})["id"]
+        notice_target = _result_notice_target(token)
         delivered = False
         dm_end = time.monotonic() + 30
         while time.monotonic() < dm_end:
-            messages = req(f"/channels/{dm}/messages?limit=50")
+            messages = req(f"/channels/{notice_target}/messages?limit=50")
             delivered = any(
                 f"Interop delegation result: {corr}" in m.get("content", "")
                 for m in messages

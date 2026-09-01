@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import fcntl
-import json
+import importlib
 import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Protocol
 
 
 _LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/todo/scripts"
@@ -18,11 +17,9 @@ if _SCRIPTS.is_dir() and str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 from todo_approval import (  # noqa: E402
-    ApprovalRuntime,
     DirectoryLike,
     TodoApprovalGate,
     TodoApprovalIntent,
-    TransportLike,
     _repo_module,
     lifecycle,
     surface_module,
@@ -33,15 +30,18 @@ from todo_approval_store import (  # noqa: E402
     TodoApprovalStore,
     approval_ttl,
 )
+from todo_execution_reconcile import (  # noqa: E402
+    RecordApproval,
+    append_manual_approval,
+    build_runtime,
+    execute_approved_writes,
+)
 
 if TYPE_CHECKING:
     from automation.interop.approval_lease import ApprovalLease
     from automation.interop.approval_lifecycle import ApprovalRequest, Probe
 
 
-JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
-RecordApproval: TypeAlias = Callable[[Path, TodoApprovalRecord, str, datetime], bool]
-_FILE_MODE: Final = 0o600
 _ENV_SECRETS: Final = Path.home() / ".env.secrets"
 
 
@@ -62,52 +62,6 @@ class ReactionTransport(Protocol):
     ) -> tuple[tuple[str, bool], ...]: ...
 
 
-def append_manual_approval(
-    path: Path,
-    record: TodoApprovalRecord,
-    owner_id: str,
-    now: datetime,
-) -> bool:
-    payload: dict[str, JsonValue] = {
-        "action": "external_effect.approval",
-        "approval": {
-            "channel": "approvals",
-            "message_id": record.message_id,
-            "method": "manual_reaction",
-            "owner_id": owner_id,
-        },
-        "hash": record.action_hash,
-        "result": {"status": "approved"},
-        "target_id": record.target_id,
-        "timestamp": now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            handle.seek(0)
-            if any(_same_approval(line, payload) for line in handle):
-                return False
-            handle.seek(0, os.SEEK_END)
-            handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    path.chmod(_FILE_MODE)
-    return True
-
-
-def _same_approval(raw: str, expected: dict[str, JsonValue]) -> bool:
-    try:
-        actual = json.loads(raw)
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(actual, dict):
-        return False
-    return all(actual.get(key) == expected[key] for key in ("action", "approval", "hash", "result", "target_id"))
-
-
 @dataclass(slots=True)
 class TodoOwnerDecision:
     record: TodoApprovalRecord
@@ -118,6 +72,7 @@ class TodoOwnerDecision:
     now: datetime
     record_approval: RecordApproval
     outcome: str | None = None
+    notify: Callable[[TodoApprovalRecord], None] | None = None
 
     def probe(self, request: ApprovalRequest) -> Probe:
         return self.gate.probe(request)
@@ -140,6 +95,14 @@ class TodoOwnerDecision:
         if current != self.record:
             raise TodoWatchError("todo pending generation changed before decision archive")
         self.store.archive(self.record, ApprovalState.ARCHIVED, self.outcome)
+        if self.outcome == "cancelled" and self.notify is not None:
+            try:
+                self.notify(self.record)
+            except Exception as error:  # noqa: BLE001 — notice must never undo the archive
+                print(
+                    f"NOTIFY-FAIL key={self.record.key} err={type(error).__name__}",
+                    file=sys.stderr,
+                )
 
 
 def run_once(
@@ -162,7 +125,7 @@ def run_once(
                 _expire(store, lease, record)
                 continue
             request = _request(record)
-            runtime = _runtime(store, transport, directory, owner_id, lease, record, moment)
+            runtime = build_runtime(store, transport, directory, owner_id, lease, record, moment)
             gate = TodoApprovalGate(_intent(record), runtime)
             decision = TodoOwnerDecision(
                 record,
@@ -172,6 +135,7 @@ def run_once(
                 owner_id,
                 moment,
                 record_approval,
+                notify=lambda cancelled: _notify_cancelled(cancelled, transport),
             )
             if reminder_config is not None:
                 reminder = _repo_module("approval_reminder")
@@ -189,6 +153,9 @@ def run_once(
                 )
                 lifecycle().remind_owner_approval(request, decision, lease, context)
             lifecycle().resolve_owner_decision(request, decision, lease)
+        execute_approved_writes(
+            store=store, approval_log=approval_log, owner_id=owner_id, now=moment, lease=lease
+        )
     except (OSError, RuntimeError, ValueError) as error:
         raise TodoWatchError("todo approval watcher failed closed") from error
 
@@ -215,35 +182,36 @@ def _request(record: TodoApprovalRecord) -> ApprovalRequest:
 
 
 def _intent(record: TodoApprovalRecord) -> TodoApprovalIntent:
-    return TodoApprovalIntent(record.action_hash, record.target_id, record.argv_summary, "", None)
-
-
-def _runtime(
-    store: TodoApprovalStore,
-    transport: ReactionTransport,
-    directory: DirectoryLike,
-    owner_id: str,
-    lease: ApprovalLease,
-    record: TodoApprovalRecord,
-    now: datetime,
-) -> ApprovalRuntime:
-    surface = surface_module()
-    binding = surface.ApprovalBinding(
-        surface.ApprovalKind(record.kind),
-        surface.ApprovalSurface(record.surface),
-        record.channel_id,
-        record.policy_version,
+    return TodoApprovalIntent(
+        record.action_hash,
+        record.target_id,
+        record.argv_summary,
+        record.title,
+        record.due,
+        origin_channel_id=record.origin_channel_id,
+        origin_message_id=record.origin_message_id,
+        tasklist=record.tasklist,
+        notes=record.notes,
     )
-    journal = _repo_module("approval_lease").PostingJournal(store.root / "posting-journal")
-    return ApprovalRuntime(
-        store,
-        cast(TransportLike, transport),
-        directory,
-        owner_id,
-        binding,
-        lease,
-        journal,
-        lambda: now,
+
+
+def _notify_cancelled(
+    record: TodoApprovalRecord, transport: object, *, transport_factory: object | None = None
+) -> None:
+    """⛔ notice for the archived generation — origin thread first, stored channel fallback."""
+    runtime = importlib.import_module("todo_approval_runtime")
+    runtime.notify_result(
+        {
+            "id": record.action_hash[:19],
+            "channel_id": record.channel_id,
+            "origin_channel_id": record.origin_channel_id,
+            "origin_message_id": record.origin_message_id,
+        },
+        f"⛔ 할일 등록 취소 (승인 {record.action_hash[:19]}) — 소유자 ⛔ 리액션으로 취소되어 "
+        "Google Tasks에 등록되지 않았습니다.",
+        thread_name="할일 등록",
+        transport=transport,
+        transport_factory=transport_factory,
     )
 
 

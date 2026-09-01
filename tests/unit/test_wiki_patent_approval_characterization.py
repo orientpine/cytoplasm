@@ -26,6 +26,8 @@ from scripts import patent_export_manifest as pm  # noqa: E402
 
 OWNER_ID = "owner-char-1"
 CHANNEL_ID = "1526487935975952385"
+AGENT_CHAT_CHANNEL_ID = "1526487935975952390"
+AGENT_CHAT_THREAD_ID = "1526487935975952391"
 PATENT_CHANNEL_ID = "1528936606856122421"  # AS-1.6: a binding refuses a placeholder id
 SLUG = "char-slug"
 NOTE_TEXT = (
@@ -281,7 +283,11 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
     monkeypatch.setenv("PATENT_ARCHIVE_FOLDER_ID", "folder-char")
     interop = export_root.parent / "interop.json"
     interop.write_text(
-        json.dumps({"owner_id": OWNER_ID, "personal_approvals_channel_id": PATENT_CHANNEL_ID}),
+        json.dumps({
+            "owner_id": OWNER_ID,
+            "personal_approvals_channel_id": PATENT_CHANNEL_ID,
+            "agent_chat_channel_id": AGENT_CHAT_CHANNEL_ID,
+        }),
         encoding="utf-8",
     )
     monkeypatch.setenv("INTEROP_CONFIG", str(interop))
@@ -292,17 +298,35 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
     patent_storage.write_private(paths.workspace_root / SLUG / "draft.md", "private draft\n")
     messages: dict[str, str] = {}
     posted: list[str] = []
+    post_channels: list[str] = []
 
     def api(
         method: str, path: str, payload: dict[str, str] | None = None
-    ) -> dict[str, str] | list[dict[str, str | bool]]:
+    ) -> dict[str, object] | list[dict[str, str | bool]]:
         if method == "POST" and path == "/users/@me/channels":
             return {"id": CHANNEL_ID}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}":
+            return {"id": AGENT_CHAT_CHANNEL_ID, "guild_id": "guild-char"}
+        if method == "GET" and path == "/guilds/guild-char/threads/active":
+            return {"threads": [{
+                "id": AGENT_CHAT_THREAD_ID,
+                "name": "승인-patent-export",
+                "parent_id": AGENT_CHAT_CHANNEL_ID,
+                "type": 11,
+            }]}
         if method == "POST" and path.endswith("/messages"):
             message_id = f"msg-{len(posted) + 1}"
             posted.append(message_id)
+            post_channels.append(path.split("/")[2])
             messages[message_id] = str((payload or {})["content"])
             return {"id": message_id}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD_ID}":
+            return {
+                "id": AGENT_CHAT_THREAD_ID,
+                "type": 11,
+                "name": "승인-patent-export",
+                "parent_id": AGENT_CHAT_CHANNEL_ID,
+            }
         if method == "PUT":
             return {}
         if method == "GET" and "/reactions/" in path:
@@ -329,6 +353,7 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
     assert first.message_id == "msg-1"
     assert second.message_id == first.message_id
     assert posted == ["msg-1"]
+    assert post_channels == [AGENT_CHAT_THREAD_ID]
     assert set(messages) == {"msg-1"}
 
 

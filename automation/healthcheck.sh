@@ -26,10 +26,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/release_store_probe.sh"
 # shellcheck source=automation/watcher_drift_probe.sh
 # shellcheck source=automation/healthcheck_wrapper_probe.sh
 # shellcheck source=automation/runtime_package_probe.sh
-source "$(dirname "${BASH_SOURCE[0]}")/release_helper_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/watcher_drift_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_wrapper_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/runtime_package_probe.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/release_helper_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/watcher_drift_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_wrapper_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/runtime_package_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_probe_evidence.sh"
+# shellcheck source=automation/release_receipt_probe.sh
+source "$(dirname "${BASH_SOURCE[0]}")/release_receipt_probe.sh"
 # shellcheck source=automation/healthcheck_command_builder.sh
 # shellcheck source=automation/healthcheck_validation.sh
-source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_command_builder.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_validation.sh"
+# shellcheck source=automation/healthcheck_probes.sh
+source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_command_builder.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_validation.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_probes.sh"
 # shellcheck source=automation/update_trust_probe.sh
 # shellcheck source=automation/healthcheck_roster_probe.sh
 source "$(dirname "${BASH_SOURCE[0]}")/update_trust_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_roster_probe.sh"
@@ -75,8 +78,9 @@ readonly -a LIVE_CHECKS=(
   "$PRIMARY_NODE skill mounts match the release|skill_mounts_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
   "$PRIMARY_NODE agent selfskill root topology|agent_selfskill_root_topology|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
   "$PRIMARY_NODE release store usage|release_store_usage|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_RELEASE_STORE"
+  "$PRIMARY_NODE release fully deployed|release_fully_deployed|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_DEPLOY_ALL_RECEIPT:-$NODE_PRIVATE_ROOT/deploy-all/receipt.json}"
   "$PRIMARY_NODE watcher wrappers match the release|watcher_wrappers_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_WATCHER_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/watcher-deploy-manifest.txt}"
-  "$PRIMARY_NODE runtime packages match the release|primary_runtime_packages_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}" "$RAG_NODE personal RAG source and MCP image match the release|rag_stack_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}" "$PRIMARY_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh"
+  "$PRIMARY_NODE runtime packages match the release|primary_runtime_packages_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}" "$RAG_NODE personal RAG source and MCP image match the release|rag_stack_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}" "$PRIMARY_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh" "$RAG_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh"
 )
 
 # Probes that run HERE, not over ssh. They must stay out of the remote tally: during a
@@ -84,7 +88,7 @@ readonly -a LIVE_CHECKS=(
 # guard from collapsing N tickets into one INFRA_FAILURE (regression d7ed0ad / γ).
 # One declaration on purpose — the same rule lived in two comparisons and the second
 # copy is always the one that gets forgotten.
-readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage"
+readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage release_fully_deployed"
 UPDATE_TRUST_BLOCK_REPORTED=0
 RELEASE_STALE_REPORTED=0
 
@@ -148,6 +152,7 @@ report_repair() {
   local probe_type="$2"
   local ssh_target="$PRIMARY_NODE" output repair_command command_status=0
 
+  [[ "${HEALTHCHECK_NO_REPAIR:-}" != "1" ]] || return 0
   [[ "$check_name" =~ ^[a-zA-Z0-9_.@:/[:space:]-]+$ ]] || return 1
   [[ -z "$SSH_REMOTE_USER" ]] || ssh_target="${SSH_REMOTE_USER}@${PRIMARY_NODE}"
   repair_command="$(healthcheck_repair_command "$check_name")" || return 1
@@ -157,91 +162,6 @@ report_repair() {
   else
     log "REPAIR_TICKET_FAILED rc=${command_status}"
   fi
-}
-
-# Capture only a probe's response for validation. No response body is printed
-# or logged, so logs contain only check names and up/down state.
-capture_on_node() {
-  local node="$1"
-  local remote_command="$2"
-  local result ssh_target="$node" command_status=0
-
-  [[ -z "$SSH_REMOTE_USER" ]] || ssh_target="${SSH_REMOTE_USER}@${node}"
-  result="$(timeout 45 ssh "${SSH_OPTIONS[@]}" "$ssh_target" "$remote_command" 2>&1)" || command_status=$?
-  result="$(printf '%s\n' "$result" | grep -v 18789 || true)"
-
-  (( command_status == 0 )) || return "$command_status"
-  printf '%s' "$result"
-}
-
-probe_http_200() {
-  local node="$1"
-  local account="$2"
-  local url="$3"
-  local status
-
-  valid_account "$account" && valid_http_url "$url" || return 1
-  status="$(capture_on_node "$node" "sudo -n -u ${account} -H curl --fail --silent --output /dev/null --write-out '%{http_code}' '${url}'")" || return 1
-  [[ "$status" == "200" ]]
-}
-
-probe_user_unit_active() {
-  local node="$1"
-  local account="$2"
-  local unit="$3"
-  local status
-
-  valid_account "$account" && valid_unit "$unit" || return 1
-  status="$(capture_on_node "$node" "sudo -n -u ${account} -H XDG_RUNTIME_DIR=/run/user/\$(id -u ${account}) systemctl --user is-active ${unit}")" || return 1
-  [[ "$status" == "active" ]]
-}
-
-# The W3-4 dashboard must both respond and refuse unauthenticated access, so
-# the healthy result for a credential-free probe is exactly HTTP 401.
-probe_http_unauth_401() {
-  local node="$1"
-  local account="$2"
-  local url="$3"
-  local status
-
-  valid_account "$account" && valid_http_url "$url" || return 1
-  status="$(capture_on_node "$node" "sudo -n -u ${account} -H curl --silent --output /dev/null --write-out '%{http_code}' '${url}'")" || return 1
-  [[ "$status" == "401" ]]
-}
-
-# The following three probes use exactly the W2-1 integration commands and
-# validate their documented healthy results without printing response bodies.
-probe_embedding_health() {
-  local node="$1"
-  local account="$2"
-  local url="$3"
-  local response
-
-  valid_account "$account" && valid_http_url "$url" || return 1
-  response="$(capture_on_node "$node" "sudo -n -u ${account} -H curl --fail --silent '${url}'")" || return 1
-  [[ "$response" == *'"status"'*'"ok"'* && "$response" == *'"model"'*'"BAAI/bge-m3"'* && "$response" == *'"dimensions"'*1024* ]]
-}
-
-probe_qdrant_health() {
-  local node="$1"
-  local account="$2"
-  local url="$3"
-  local response
-
-  valid_account "$account" && valid_http_url "$url" || return 1
-  response="$(capture_on_node "$node" "sudo -n -u ${account} -H curl --fail --silent '${url}'")" || return 1
-  [[ "$response" == "healthz check passed" ]]
-}
-
-probe_mcp_health() {
-  local node="$1"
-  local account="$2"
-  local url="$3"
-  local response
-
-  valid_account "$account" && valid_http_url "$url" || return 1
-  response="$(capture_on_node "$node" "sudo -n -u ${account} -H curl --fail --silent '${url}'")" || return 1
-  [[ "$response" == *'"status"'*'"ok"'* && "$response" == *'"collection"'*'"personal_cha"'* ]]
 }
 
 # The deploy checkout is a one-way mirror of origin/main. This probe runs LOCALLY:
@@ -275,6 +195,7 @@ run_check() {
     release_helper_drift) probe_release_helper_drift "$node" "$account" "$target" ;;
     skill_mounts_current) probe_skill_mounts_current "$node" "$account" "$target" ;;
     release_store_usage) probe_release_store_usage "$node" "$account" "$target" ;;
+    release_fully_deployed) probe_release_fully_deployed "$node" "$account" "$target" ;;
     agent_selfskill_root_topology) probe_selfskill_root_topology "$node" "$account" "$target" ;;
 watcher_wrappers_current) probe_watcher_wrappers_current "$node" "$account" "$target" ;; primary_runtime_packages_current) probe_primary_runtime_packages_current "$node" "$account" "$target" ;; rag_stack_current) probe_rag_stack_current "$node" "$account" "$target" ;;
 healthcheck_wrapper_current) probe_healthcheck_wrapper_current "$node" "$account" "$target" ;;
@@ -309,7 +230,7 @@ main() {
   for definition in "${checks[@]}"; do
     IFS='|' read -r check_name probe_type _ <<< "$definition"
     [[ " $LOCAL_PROBES " == *" $probe_type "* ]] || remote_total=$(( remote_total + 1 ))
-    if run_check "$definition"; then
+    if healthcheck_run_check_with_evidence "$definition"; then
       log "PASS ${check_name}"
     else
       log "FAIL ${check_name}"

@@ -24,7 +24,7 @@ _origin_snapshot_prune_stale() { # <mirror_checkout>
   local mirror="$1" lock="${TMPDIR:-/tmp}/autophagy-origin-snapshot.lock"
   (
     flock -x 9
-    local listing candidate snapshot line registered
+    local listing candidate snapshot line registered status head_sha
     listing="$(git -C "$mirror" worktree list --porcelain 2>/dev/null)" || return 0
     while IFS= read -r -d '' candidate; do
       snapshot="$candidate/tree"
@@ -35,8 +35,20 @@ _origin_snapshot_prune_stale() { # <mirror_checkout>
           break
         fi
       done <<<"$listing"
-      (( registered == 1 )) || rm -rf -- "$candidate"
+      if (( registered == 0 )); then
+        rm -rf -- "$candidate"
+        continue
+      fi
+      status="$(git -C "$snapshot" status --porcelain 2>/dev/null)" || continue
+      [[ -z "$status" ]] || continue
+      head_sha="$(git -C "$snapshot" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" \
+        || continue
+      git -C "$mirror" merge-base --is-ancestor "$head_sha" refs/remotes/origin/main \
+        || continue
+      git -C "$mirror" worktree remove --force -- "$snapshot" || continue
+      rm -rf -- "$candidate"
     done < <(
+      # Six hours is longer than a normal deploy but bounds abandoned snapshots.
       find "${TMPDIR:-/tmp}" -mindepth 1 -maxdepth 1 -type d \
         -name 'autophagy-snapshot.*' -mmin +360 -print0
     )

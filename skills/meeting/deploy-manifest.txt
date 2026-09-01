@@ -1,0 +1,8 @@
+# 야간 배치 워처(cron meeting-pending-transcript-watch, 0 0 * * * = KST 자정).
+agent|skills/meeting/scripts/meeting_pending_transcript_watch.py|.hermes/scripts/meeting_pending_transcript_watch.py|required
+# 게이트웨이 플러그인 — 워처가 아니지만 성질이 같다(릴리스 수렴도 스킬 마운트도 닿지 않는
+# 계정 홈). `00-` 접두사는 hook 순서에 load-bearing 이라 목적지 이름을 바꾸면 안 되고,
+# 플러그인은 게이트웨이 **프로세스 시작 시** 로드되므로 파일이 맞아도 재시동 전까지는
+# 도는 코드가 다를 수 있다 — 배포와 반영은 별개다(2026-08-28 5일 침묵 실측).
+agent|skills/meeting/plugin/__init__.py|.hermes/plugins/00-meeting-gate/__init__.py|required
+agent|skills/meeting/plugin/plugin.yaml|.hermes/plugins/00-meeting-gate/plugin.yaml|required

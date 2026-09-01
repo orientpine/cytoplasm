@@ -19,20 +19,28 @@ _REPO = Path(__file__).resolve().parents[2]
 _SCRIPTS = _REPO / "skills" / "todo" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 _OWNER = "owner-e2e"
-_CHANNEL = "1526487935975952385"
+_AGENT_CHAT_CHANNEL = "1526487935975952390"
+_CHANNEL = "1526487935975952391"
 _TITLE = "통합 승인 과제"
 
 
 @dataclass(slots=True)
 class FakeDirectory:
     def owner_dm(self) -> str:
-        return _CHANNEL
+        raise AssertionError
 
     def skill_approvals(self) -> str:
         raise AssertionError
 
+    def agent_chat(self) -> str:
+        return _AGENT_CHAT_CHANNEL
+
+    def agent_chat_thread(self, kind: ApprovalKind) -> str:
+        assert kind is ApprovalKind.TODO
+        return _CHANNEL
+
     def describe(self, channel_id: str) -> ChannelFacts:
-        return ChannelFacts(1, "", (_OWNER,))
+        return ChannelFacts(11, "승인-todo", (), _AGENT_CHAT_CHANNEL)
 
 
 @dataclass(slots=True)
@@ -109,7 +117,10 @@ def test_command_chain_replay_and_second_generation_cycle(
         store=store, owner_id=_OWNER, transport=transport, directory=directory,
         approval_log=log, lease=lease, now=now,
     )
-    assert todo.main(["create", "--title", _TITLE]) == 0
+    # The tick that consumed the ✅ also performed the write it authorized, so the manual
+    # create path is now a refusal rather than the step that makes the task exist. Repair
+    # ticket t_e3243dc5 recorded the old behaviour as occurrences 2 and 4.
+    assert fake_gws.calls == ["insert", "get"]
     assert todo.main(["create", "--title", _TITLE]) == 4
     assert fake_gws.calls == ["insert", "get"]
 
@@ -120,8 +131,8 @@ def test_command_chain_replay_and_second_generation_cycle(
         store=store, owner_id=_OWNER, transport=transport, directory=directory,
         approval_log=log, lease=lease, now=now,
     )
-    assert todo.main(["create", "--title", _TITLE]) == 0
     assert fake_gws.calls == ["insert", "get", "insert", "get"]
+    assert todo.main(["create", "--title", _TITLE]) == 4
 
 
 def test_offline_scenario_reports_full_approval_matrix(tmp_path: Path) -> None:

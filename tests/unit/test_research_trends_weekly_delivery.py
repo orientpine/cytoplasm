@@ -68,11 +68,6 @@ def _stub_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Runs:
     return runs
 
 
-def _iso_week_of(moment: datetime) -> str:
-    calendar = moment.isocalendar()
-    return f"{calendar.year}-W{calendar.week:02d}"
-
-
 def test_second_invocation_in_the_same_iso_week_does_not_send_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -91,8 +86,7 @@ def test_second_invocation_in_the_same_iso_week_does_not_send_again(
     assert len(runs.sent) == 1
     assert len(runs.generated) == 1
     assert runs.ingested == 1
-    expected_week = _iso_week_of(datetime.fromisoformat("2026-08-18T23:16:00+09:00"))
-    assert f"WEEKLY-ALREADY-DELIVERED {expected_week}" in capsys.readouterr().out
+    assert capsys.readouterr().out == ""
 
 
 def test_next_iso_week_sends_the_report_again(

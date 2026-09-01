@@ -21,16 +21,11 @@ approvals-channel resolver definitions (0 — ``DiscordChannelDirectory``'s
 ``peer_attest`` is handed the channel its deploy request already resolved):
   (none)
 
-owner-DM openers, i.e. sites naming ``/users/@me/channels`` (8 — the central
-directory plus the seven DM senders it deliberately does NOT own; not one of the
-seven is an approval path):
-  skills/procurement/scripts/procure_review.py:67       send_review
-  automation/cost-report/send_cost_report.py:176        send_dm
-  automation/interop/gate_driver.py:83                  main
-  automation/interop/hermes_plugin/__init__.py:189      _send_direct_result
-  automation/reminder_poller/poll_reminders.py:165      DmSender.send
-  automation/research_trends/research_trends.py:254     _send_dm
-  automation/memory_curator/effects.py:71               alert_owner  (near-cap notice, not an approval)
+owner-DM openers, i.e. sites naming ``/users/@me/channels`` (1 — ON-2, 2026-08-30,
+migrated every notice sender onto the ``automation/owner_notice.py`` facade, which
+resolves its DM through the central directory; the facade owns the destination —
+configured ``owner_notice_channel_id`` or owner DM — so a NEW opener anywhere in
+the deployed tree is a conformance failure (ON-3), not an inventory update):
   automation/interop/approval_directory.py:27           <module>  (AS-1.2 central directory)
 
 ``*_APPROVALS_CHANNEL_ID`` env overrides (0 — AS-3.2 retired every one; the
@@ -54,17 +49,14 @@ _DIRECTORY: Final = "automation/interop/approval_directory.py"
 # if a flow re-introduces a channel-id resolver of its own.
 _KNOWN_RESOLVERS: Final = frozenset()
 
+# ON-3 conformance (2026-08-30): this set IS the registered-exception list. A new
+# `/users/@me/channels` site anywhere in the deployed tree fails the lock below —
+# notices go through `automation.owner_notice` (destination: configured
+# `owner_notice_channel_id`, else owner DM), never through a fresh DM opener.
 _KNOWN_DM_OPENERS: Final = frozenset({
-    "skills/procurement/scripts/procure_review.py::send_review",
-    "automation/cost-report/send_cost_report.py::send_dm",
-    "automation/interop/gate_driver.py::main",
-    "automation/interop/hermes_plugin/__init__.py::_send_direct_result",
-    "automation/reminder_poller/poll_reminders.py::DmSender.send",
-    "automation/research_trends/research_trends.py::_send_dm",
-    "automation/memory_curator/effects.py::alert_owner",
-    # The central directory (AS-1.2). Every flow resolves through it, so this is
-    # the one opener the migration was meant to add — and the only one left that
-    # an approval can reach.
+    # The central directory (AS-1.2). Every flow — including the owner_notice
+    # facade's DM fallback — resolves through it, so this is the only opener an
+    # approval or a notice can reach.
     f"{_DIRECTORY}::<module>",
 })
 
@@ -144,14 +136,14 @@ def test_owner_dm_openers_are_only_the_directory_and_non_approval_senders_today(
     # Given / When: every function naming the DM-open REST path.
     _, openers, _ = _scan()
 
-    # Then: SI-2 has collapsed every approval flow into that one directory. What is
-    # left is the directory plus seven DM senders it deliberately does NOT own — a
-    # procurement review, a cost report, the gate driver, the plugin's direct
-    # result, the reminder poller, the trends digest, the curator near-cap notice —
-    # none of them an approval, and none able to become one without failing this lock.
+    # Then: SI-2 collapsed every approval flow into that one directory, and ON-2
+    # (2026-08-30) collapsed every notice sender into the owner_notice facade,
+    # which resolves its DM through the directory. What is left is the directory
+    # facade — a NEW opener anywhere is an ON-3 conformance failure, not an
+    # inventory update.
     assert openers == _KNOWN_DM_OPENERS
     assert f"{_DIRECTORY}::<module>" in openers
-    assert len(openers) == 8
+    assert len(openers) == 1
 
 
 def test_no_flow_reads_an_approvals_channel_env_override_after_r3() -> None:

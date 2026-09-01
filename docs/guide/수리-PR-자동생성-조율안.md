@@ -131,3 +131,11 @@ systemctl show autophagy-repair-approval-watch.service -p EnvironmentFiles
 - `docs/follow-ups.md`「배포 가드 보강(DG-7) 작업 중 발견한 후속 과제」
 - 읽기 전용 확인 지점: `automation/repair/repair_ops_cli.py:163`, `automation/repair/repair_ops_reaction_watch.py:74-86,143-157,214-230`, `automation/repair/repair_ops_work_clone.py:38,64-65`, `automation/repair/systemd/autophagy-repair-{agent,approval-watch}.service`, `automation/systemd/autophagy-deploy-reconcile.service:14`, `automation/owner_notice.py:10`
 - 이 문서는 코드·유닛·시크릿을 하나도 만들지 않았다. 외부효과 없음.
+
+## 개정 (2026-08-30, SC-2)
+
+PR 본문 계약에 **공개 적합성 항목**이 추가됐다: 본문은 티켓 id·수정 요약·검증 증적에
+더해 "이 패치에 채널 id·과제명·개인 경로 하드코딩이 없다"를 확인란으로 싣는다
+(AGENTS.md 「개인화 코드 금지 규칙」). repair 패치는 PR→main→다음 릴리스에서
+cytoplasm 으로 나가고, 시크릿과 달리 개인 맞춤 로직은 기계가 못 잡기 때문이다.
+이 요구는 사람이 만드는 PR(현행)과 이 조율안의 자동 생성 PR(장래)에 동일하게 적용된다.

@@ -26,6 +26,8 @@
 
 스킬 릴리스는 같은 mirror를 쓰지만 별도 tag→sequence→chain→quarantine 경로를 그대로 따른다.
 roster 갱신은 스킬을 활성화하지 않으며, 관리형 스킬 MOUNT에는 계속 구독자 본인의 ✅가 필요하다.
+Hermes no-agent 런타임이 Python 3.11인 설치에서도 `typing.override` 같은 타입 전용
+데코레이터가 import를 막지 않도록 공유 `automation.typing_compat` 경계를 사용한다.
 
 ### 실패·거부 경로
 
@@ -42,6 +44,7 @@ roster 갱신은 스킬을 활성화하지 않으며, 관리형 스킬 MOUNT에�
 - archive·검증·원자 교체: `automation/group_roster/fetch.py`
 - ordinary tick adapter: `automation/managed_sync/roster_tick.py`, `automation/managed_sync/cli.py`
 - 공유 SSH 검증기: `automation/git_tag_signature.py`
+- Python 런타임 호환: `automation/typing_compat.py`
 - 스키마 경계: `automation/group_roster/parser.py`, `validator.py`
 - 회귀: `tests/unit/test_group_roster_fetch.py`, `tests/unit/test_managed_roster_tick.py`,
   `tests/unit/test_managed_fetch.py`, `tests/unit/test_managed_fetch_roster_isolation.py`

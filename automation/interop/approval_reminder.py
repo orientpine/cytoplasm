@@ -340,6 +340,8 @@ class ReminderContext:
     deliver: Callable[[str, str], None]
     clock: Callable[[], datetime]
     guild_id: str | None = None
+    guild_id_for: Callable[[str], str] | None = None
+    source_channel_id_for: Callable[[ApprovalRequest], str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,13 +366,23 @@ class _PointerSender:
 
     def send(self, request: ApprovalRequest, slot: int, due_at: datetime) -> None:
         del slot, due_at
+        source_channel_id = (
+            self.context.source_channel_id_for(request)
+            if self.context.source_channel_id_for is not None
+            else request.channel_id
+        )
+        guild_id = (
+            self.context.guild_id_for(source_channel_id)
+            if self.context.guild_id_for is not None
+            else self.context.guild_id
+        )
         link = discord_message_link(
-            DiscordSource(request.channel_id, request.message_id, self.context.guild_id)
+            DiscordSource(source_channel_id, request.message_id, guild_id)
         )
         if link.status is not LinkStatus.AVAILABLE or link.url is None:
             raise ReminderBoundaryError("original approval link is unavailable")
-        target = DeliveryTarget(request.channel_id, DeliveryRoute.ORIGINAL)
-        scope = DeliveryScope(request.channel_id, request.channel_id)
+        target = DeliveryTarget(source_channel_id, DeliveryRoute.ORIGINAL)
+        scope = DeliveryScope(source_channel_id, source_channel_id)
         if not authorize_delivery(scope, target):
             raise ReminderBoundaryError("reminder target is outside the approval surface")
         elapsed = self.context.clock().astimezone(UTC) - _parse_posted_at(request.created_at)

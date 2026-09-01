@@ -10,6 +10,22 @@ readonly RELEASE_TAG_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z][0-9A-Za-z
 log() { printf '[public-export] %s\n' "$*" >&2; }
 block() { log "PUBLIC-EXPORT-BLOCK: $*"; exit 1; }
 
+cleanup_non_venv_pycache() {
+  local scan_root="$1" cache_dir
+  [[ -d "$scan_root" ]] || block "scan root is not a directory: $scan_root"
+  scan_root="$(realpath -- "$scan_root")" || block "cannot resolve scan root: $scan_root"
+  while IFS= read -r -d '' cache_dir; do
+    log "removing non-venv Python bytecode cache: $cache_dir"
+    rm -rf -- "$cache_dir"
+  done < <(
+    find "$scan_root" \
+      \( -type d \( -name .venv -o -name venv -o -exec test -f '{}/pyvenv.cfg' \; \) -prune \) -o \
+      \( -type d -name __pycache__ -print0 \)
+  )
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
+
 usage() {
   cat <<'EOF'
 Usage: automation/public_export.sh \
@@ -72,7 +88,7 @@ reject_control_characters "--remote" "$remote"
 # where a newline would append a second, attacker-chosen git config line.
 reject_control_characters "--signing-key" "$signing_key"
 
-for tool in git gitleaks grep python3 pytest ssh-keygen tar cp mktemp realpath; do
+for tool in find git gitleaks grep python3 pytest ssh-keygen tar cp mktemp realpath; do
   command -v "$tool" >/dev/null 2>&1 || block "required tool is unavailable: $tool"
 done
 
@@ -244,6 +260,7 @@ done <"$manifest"
 ((has_omo == 1 && has_qa == 1)) \
   || block "manifest must explicitly exclude both .omo/ and docs/qa/"
 
+cleanup_non_venv_pycache "$source_root"
 log "scanning private working tree and all private refs"
 verify_scanner_reaches "$source_root"
 scan_directory "$source_root" || block "working-tree secret scan failed"

@@ -38,6 +38,7 @@ import pytest
 # Load-bearing import order: the fixtures module puts ``skills/mail/scripts`` on
 # ``sys.path``, which is what makes the bare ``triage_*`` imports below resolve.
 from approval_characterization_fixtures import (
+    AGENT_CHAT_THREAD_ID,
     BOUND_APPROVALS_CHANNEL_ID,
     OWNER_DM_CHANNEL_ID,
     OWNER_ID,
@@ -73,8 +74,8 @@ from automation.repair import repair_ops_binding
 @pytest.mark.parametrize(
     ("kind", "surface", "channel_id"),
     (
-        ("reply", "owner-dm", OWNER_DM_CHANNEL_ID),
-        ("compose", "owner-dm", OWNER_DM_CHANNEL_ID),
+        ("reply", "agent-chat-thread", AGENT_CHAT_THREAD_ID),
+        ("compose", "agent-chat-thread", AGENT_CHAT_THREAD_ID),
     ),
     ids=("reply", "compose"),
 )
@@ -93,9 +94,7 @@ def test_mail_draft_resolves_its_surface_once_and_persists_the_binding(
     assert intent.channel_id == channel_id
     assert channel_id.isdigit() and channel_id not in {"", "dm", "approvals"}
     # ...resolved exactly once on the mandated surface and fact-checked before it is trusted...
-    assert (directory.dm_calls, directory.approvals_calls) == (
-        (1, 0) if surface == "owner-dm" else (0, 1)
-    )
+    assert (directory.dm_calls, directory.approvals_calls, directory.thread_calls) == (0, 0, 1)
     assert directory.described == [channel_id]
     # ...and the WHOLE binding is persisted, so no later read re-resolves it.
     assert [
@@ -104,9 +103,9 @@ def test_mail_draft_resolves_its_surface_once_and_persists_the_binding(
 
 
 @pytest.mark.parametrize(
-    ("record", "expected", "dm_calls"),
+    ("record", "expected", "thread_calls"),
     (
-        ({"kind": "reply"}, OWNER_DM_CHANNEL_ID, 1),
+        ({"kind": "reply"}, AGENT_CHAT_THREAD_ID, 1),
         (
             {"kind": "reply", "surface": "skill-approvals",
              "channel_id": BOUND_APPROVALS_CHANNEL_ID, "policy_version": 1},
@@ -117,7 +116,7 @@ def test_mail_draft_resolves_its_surface_once_and_persists_the_binding(
     ids=("unbound-record-is-resolved-not-inherited", "bound-record-wins"),
 )
 def test_mail_gate_reads_a_pending_record_channel_from_its_binding(
-    record: dict, expected: str, dm_calls: int,
+    record: dict, expected: str, thread_calls: int,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a fake directory with both approval surfaces and a stored v1 guild record.
@@ -129,7 +128,8 @@ def test_mail_gate_reads_a_pending_record_channel_from_its_binding(
     # Then: a stored binding wins outright; an unbound record resolves through the
     # shared directory and is fact-checked fail-closed.
     assert channel_id == expected
-    assert directory.dm_calls == dm_calls
+    assert directory.thread_calls == thread_calls
+    assert directory.dm_calls == 0
     assert directory.described == [expected]
 
 
@@ -218,13 +218,14 @@ def test_repair_resolves_a_concrete_binding_instead_of_a_channel_literal() -> No
     # When: the one place repair decides where an approval request may live.
     binding = repair_ops_binding.new_binding(directory, OWNER_ID)
 
-    # Then: a concrete snowflake on the owner-DM surface, resolved exactly once and
-    # fact-checked before it is trusted...
+    # Then: a concrete snowflake on the agent-chat thread surface (v8, §10-7 —
+    # the Ops bot is invited, the last DM approval surface is gone), resolved
+    # exactly once and fact-checked before it is trusted...
     assert (binding.kind, binding.surface, binding.channel_id, binding.policy_version) == (
-        "repair", "owner-dm", OWNER_DM_CHANNEL_ID, POLICY_VERSION,
+        "repair", "agent-chat-thread", AGENT_CHAT_THREAD_ID, POLICY_VERSION,
     )
-    assert (directory.dm_calls, directory.approvals_calls) == (1, 0)
-    assert directory.described == [OWNER_DM_CHANNEL_ID]
+    assert (directory.thread_calls, directory.approvals_calls, directory.dm_calls) == (1, 0, 0)
+    assert directory.described == [AGENT_CHAT_THREAD_ID]
     # ...and the `APPROVALS_CHANNEL: Final = "approvals"` constant the gate used to
     # post with is gone, with no string left anywhere in the repair package that
     # could stand in for a channel id — so the ops bot opens its own owner DM rather

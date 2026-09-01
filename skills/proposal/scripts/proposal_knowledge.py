@@ -3,27 +3,36 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
+import re
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import date
 from pathlib import Path
-from collections.abc import Callable
 from types import ModuleType
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, cast
 
 if TYPE_CHECKING:
-    from automation.knowledge.pack import EvidencePack, KnowledgeQuery
+    from automation.knowledge.pack import EvidencePack as FacadeEvidencePack
+    from automation.knowledge.pack import KnowledgeQuery
+
+
+_FACADE_SOURCES = frozenset({"rag", "wiki", "twin"})
 
 
 class _QueryFactory(Protocol):
     def __call__(
-        self, text: str, *, purpose: str, limit: int, caller: str
+        self, text: str, *, purpose: str,
+        sources: frozenset[str] = _FACADE_SOURCES,
+        limit: int, caller: str,
     ) -> KnowledgeQuery: ...
 
 
 class _Facade(Protocol):
     KnowledgeQuery: _QueryFactory
-    collect_evidence: Callable[[KnowledgeQuery], EvidencePack]
+
+    def collect_evidence(self, query: KnowledgeQuery) -> FacadeEvidencePack: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +55,81 @@ class _UnavailablePack:
     notes: tuple[str, ...]
 
 
+Bucket = Literal["rag", "wiki-twin", "obsidian", "research-trends"]
+Sensitivity = Literal["public", "owner-private", "patent-sensitive"]
+_BUCKETS: tuple[Bucket, ...] = ("rag", "wiki-twin", "obsidian", "research-trends")
+_TREND_DATE = re.compile(r"(?:^|/)research-trends-(20\d{6})(?:\.md)?(?:$|#)")
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceItem:
+    source_key: str
+    bucket: Bucket
+    summary: str
+    sensitivity: Sensitivity
+    score: float | None
+    week: str | None
+    doc_date: str | None = None
+    date_basis: str | None = None
+    source_sha256: str | None = None
+    content: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidencePack:
+    goal: str
+    items: tuple[EvidenceItem, ...]
+    unavailable: tuple[str, ...]
+    notes: tuple[str, ...]
+
+    def by_bucket(self) -> dict[str, tuple[EvidenceItem, ...]]:
+        return {
+            bucket: tuple(item for item in self.items if item.bucket == bucket)
+            for bucket in _BUCKETS
+        }
+
+    def has_evidence(self) -> bool:
+        return bool(self.items)
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeFacadeItem:
+    store: str
+    source_type: str
+    ref: str
+    content: str
+    sensitivity: str | None = None
+    score: float | None = 0.9
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeFacadePack:
+    items: tuple[_FakeFacadeItem, ...]
+    layers: dict[str, str]
+
+
+class _BuiltInFakeFacade:
+    KnowledgeQuery: ClassVar[type[_UnavailableQuery]] = _UnavailableQuery
+
+    @staticmethod
+    def collect_evidence(query: _UnavailableQuery) -> _FakeFacadePack:
+        if query.sources == frozenset({"rag"}):
+            items = (
+                _FakeFacadeItem("rag", "note", "FAKE/personal.md", "FAKE 개인 RAG 근거"),
+                _FakeFacadeItem("obsidian", "obsidian", "FAKE/demo.md", "FAKE Obsidian 근거"),
+                _FakeFacadeItem(
+                    "rag", "note", "research-trends/research-trends-20260818.md",
+                    "FAKE 주간 연구동향 근거",
+                ),
+            )
+            return _FakeFacadePack(items, {"rag": "hit", "wiki": "skipped", "twin": "skipped"})
+        items = (_FakeFacadeItem("wiki", "twin", "FAKE/decision", "FAKE wiki 트윈 판단"),)
+        return _FakeFacadePack(items, {"rag": "skipped", "wiki": "hit", "twin": "hit"})
+
+
 def _repo_root() -> Path:
     override = os.environ.get("AUTOPHAGY_REPO_ROOT")
     if override:
@@ -65,7 +149,7 @@ def module(name: str) -> ModuleType:
     return importlib.import_module(name)
 
 
-def collect(section_title: str, brief: str, proposal_title: str, *, limit: int = 8) -> EvidencePack | _UnavailablePack:
+def collect(section_title: str, brief: str, proposal_title: str, *, limit: int = 8) -> FacadeEvidencePack | _UnavailablePack:
     """Build the bounded proposal query and collect exactly one facade pack."""
     text = "\n".join((section_title.strip(), brief.strip(), proposal_title.strip()))
     try:
@@ -78,3 +162,149 @@ def collect(section_title: str, brief: str, proposal_title: str, *, limit: int =
         return _UnavailablePack(
             "knowledge-v1", query, "unavailable", (), layers, ("knowledge facade import unavailable",)
         )
+
+
+def _source_key(item: object) -> str:
+    ref = str(getattr(item, "ref", "") or "")
+    store = str(getattr(item, "store", "") or "")
+    source_type = str(getattr(item, "source_type", "") or "")
+    if ref.startswith(("obsidian:", "wiki:", "note:")):
+        return ref
+    if store == "obsidian":
+        return f"obsidian:{ref}"
+    if store == "wiki" or source_type in {"twin", "decision", "principle"}:
+        return f"wiki:{ref}"
+    if source_type and source_type != "rag":
+        return f"{source_type}:{ref}"
+    return ref
+
+
+def _bucket(source_key: str, item: object) -> Bucket:
+    if source_key.startswith("note:research-trends/"):
+        return "research-trends"
+    if source_key.startswith("obsidian:"):
+        return "obsidian"
+    if source_key.startswith("wiki:") or str(getattr(item, "source_type", "")) in {
+        "twin", "decision", "principle",
+    }:
+        return "wiki-twin"
+    return "rag"
+
+
+def _sensitivity(item: object) -> Sensitivity:
+    value = getattr(item, "sensitivity", None)
+    if value == "patent-sensitive":
+        return "patent-sensitive"
+    if value in {"owner-private", "private"}:
+        return "owner-private"
+    return "public" if value in {None, "", "public"} else "owner-private"
+
+
+def _week(source_key: str) -> str | None:
+    match = _TREND_DATE.search(source_key)
+    if match is None:
+        return None
+    raw = match.group(1)
+    try:
+        year, week, _ = date(int(raw[:4]), int(raw[4:6]), int(raw[6:])).isocalendar()
+    except ValueError:
+        return None
+    return f"{year:04d}-W{week:02d}"
+
+
+def _normalize(items: object) -> tuple[EvidenceItem, ...]:
+    if not isinstance(items, (list, tuple)):
+        return ()
+    normalized: list[EvidenceItem] = []
+    for item in cast(list[object] | tuple[object, ...], items):
+        source_key = _source_key(item)
+        bucket = _bucket(source_key, item)
+        score = getattr(item, "score", None)
+        content = cast(object | None, getattr(item, "content", None))
+        summary = cast(object | None, getattr(item, "summary", None))
+        doc_date = cast(object | None, getattr(item, "doc_date", None))
+        date_basis = cast(object | None, getattr(item, "date_basis", None))
+        source_sha256 = cast(object | None, getattr(item, "sha256", None))
+        normalized.append(EvidenceItem(
+            source_key=source_key,
+            bucket=bucket,
+            summary=str(summary if summary is not None else content or ""),
+            sensitivity=_sensitivity(item),
+            score=float(score) if isinstance(score, (int, float)) else None,
+            week=_week(source_key) if bucket == "research-trends" else None,
+            doc_date=str(doc_date) if doc_date is not None else None,
+            date_basis=str(date_basis) if date_basis is not None else None,
+            source_sha256=(
+                str(source_sha256) if source_sha256 is not None else None
+            ),
+            content=str(content) if content is not None else None,
+        ))
+    return tuple(normalized)
+
+
+def _latest_trends(items: tuple[EvidenceItem, ...], weeks: int) -> tuple[EvidenceItem, ...]:
+    trend_weeks = sorted({item.week for item in items if item.week is not None}, reverse=True)
+    retained = set(trend_weeks[:max(weeks, 0)])
+    trends = sorted(
+        (item for item in items if item.bucket == "research-trends" and item.week in retained),
+        key=lambda item: item.week or "",
+        reverse=True,
+    )
+    trend_index = iter(trends)
+    return tuple(
+        next(trend_index) if item.bucket == "research-trends" and item.week in retained else item
+        for item in items
+        if item.bucket != "research-trends" or item.week in retained
+    )
+
+
+def gather_owner_evidence(
+    goal: str, *, section: str | None = None, limit: int = 8, trends_weeks: int = 4,
+    knowledge: object | None = None,
+) -> EvidencePack:
+    """Gather owner evidence only through the shared read-only knowledge facade."""
+    text = "\n".join(part for part in (goal.strip(), (section or "").strip()) if part)
+    if not text:
+        raise ValueError("goal must not be empty")
+    unavailable: list[str] = []
+    notes: list[str] = []
+    items: list[EvidenceItem] = []
+    try:
+        raw_facade = (
+            _BuiltInFakeFacade()
+            if os.environ.get("KNOWLEDGE_FAKE_PACK") == "1"
+            else knowledge or module("automation.knowledge.facade")
+        )
+        facade = cast(_Facade, raw_facade)
+    except (ImportError, OSError):
+        facade = None
+
+    queries = (
+        (("rag", "obsidian", "research-trends"), "synthesize", frozenset({"rag"})),
+        (("wiki-twin",), "judgment", frozenset({"wiki", "twin"})),
+    )
+    for affected, purpose, sources in queries:
+        if facade is None:
+            failed = True
+        else:
+            try:
+                query = facade.KnowledgeQuery(
+                    text, purpose=purpose, sources=sources,
+                    limit=max(1, min(limit, 8)), caller="proposal",
+                )
+                result = facade.collect_evidence(query)
+                failed = any(result.layers.get(source) == "unavailable" for source in sources)
+                items.extend(_normalize(result.items))
+            except Exception:  # Facade is the fail-closed system boundary; never search directly.
+                failed = True
+        if failed:
+            for bucket in affected:
+                unavailable.append(bucket)
+                notes.append(f"근거 수집 불가: {bucket}")
+
+    selected = _latest_trends(tuple(items), trends_weeks)
+    if not selected:
+        notes.append("근거 없음")
+    return EvidencePack(
+        goal.strip(), selected, tuple(dict.fromkeys(unavailable)), tuple(dict.fromkeys(notes)),
+    )

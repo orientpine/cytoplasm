@@ -9,7 +9,7 @@ import sys
 from collections.abc import Sequence
 from typing import Final
 
-from automation import skill_gate
+from automation import skill_gate, skill_gate_approval
 
 PEER_ATTESTATION_REFRESH_EXIT: Final = 7
 
@@ -36,7 +36,10 @@ def refresh_required(args: argparse.Namespace) -> int:
     channel_id = execution.request.channel_id
     if not skill_gate._owner_approval_present(args, owner_id, channel_id):
         return 1
-    if not gate.valid_approval(execution, skill_gate.APPROVAL_LOG):
+    approval = gate.approval_outcome(execution, skill_gate.APPROVAL_LOG)
+    if not approval.approved():
+        # The refused record is superseded by the next run; copy it aside while it exists.
+        _ = skill_gate_approval.preserve_rejected(gate, approval.cause)
         print("REJECTED: owner approval binding invalid", file=sys.stderr)
         return 1
     if skill_gate._peer_attestation_present(args, channel_id):

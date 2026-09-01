@@ -36,6 +36,7 @@ COORDINATION_LINE = (
     '{"correlation":"coord-123","created":"2026-07-17T09:30:00Z",'
     '"dm_channel_id":"dm-1","dm_message_id":"msg-1","draft_id":"abc123",'
     '"duration_min":30,"key":"coord:2026-07-18T09:00:00+09:00",'
+    '"origin_channel_id":"","origin_message_id":"",'
     '"sha256":"sha-123","slot":"2026-07-18T09:00:00+09:00",'
     '"summary":"피어 미팅"}'
 )
@@ -146,11 +147,13 @@ def test_calendar_draft_record_has_exact_field_set(tmp_path: Path, monkeypatch) 
         start="", end="", channel_id="dm",
     )
 
-    # Then the persisted draft carries exactly these keys
+    # Then the persisted draft carries exactly these keys, origin binding included
     assert sorted(record.keys()) == [
         "action", "argv", "calendar_id", "channel_id", "created", "end",
-        "event_id", "id", "sha256", "start", "status", "summary",
+        "event_id", "id", "origin_channel_id", "origin_message_id",
+        "sha256", "start", "status", "summary",
     ]
+    assert (record["origin_channel_id"], record["origin_message_id"]) == ("", "")
 
 
 # --- calendar: lookup contract -----------------------------------------------

@@ -12,18 +12,25 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from typing import Sequence
 
 import meeting_gate
+import meeting_minutes
+import meeting_template
 from meeting_llm import ActionItem, Extraction
+from meeting_milestones import _emit_milestones as _emit_milestones
+from meeting_milestones import _parse_milestones as _parse_milestones
+from meeting_milestones import _yaml_str as _yaml_str
+from meeting_milestones import update_milestones as update_milestones
 
 _TITLE_MAX = 80
 
 
 @dataclass(frozen=True, slots=True)
 class PlannedCard:
-    """One Kanban card ready to be created (argv form, secrets-free)."""
+    """One owner-action Kanban card and its required dispatcher guard."""
 
     title: str
     body: str
@@ -41,6 +48,13 @@ class PlannedCard:
             "--idempotency-key",
             self.idempotency_key,
             "--json",
+        ]
+
+    def argv_sequence(self, card_id: str) -> tuple[list[str], list[str]]:
+        """Create the card, then block it for the owner before any worker can claim it."""
+        return self.argv(), [
+            "kanban", "block", "--kind", "needs_input", card_id,
+            "Needs human owner action; do not dispatch an LLM worker.",
         ]
 
 
@@ -67,6 +81,7 @@ def sanitize_card(
     note_name: str,
     ref: str,
     rules: tuple[meeting_gate.TagRule, ...] | None = None,
+    project: str = "",
 ) -> PlannedCard:
     """Card for MY item. Sensitive -> generic title, pointer-only body — unless
     the item's public strings pass an item-level recheck against the same
@@ -87,7 +102,7 @@ def sanitize_card(
         deadline = f" (마감 {item.deadline})" if item.deadline else ""
         title = _clip(f"{item.title}{deadline}")
         body = _clip(f"근거: {item.basis}") if item.basis else "회의록 추출 항목"
-        body += f"\n출처: ~/notes/meetings/{note_name}"
+        body += meeting_minutes.source_block(note_name, project)
     return PlannedCard(
         title=title, body=body, idempotency_key=f"meeting:{ref}:todo:{seq}"
     )
@@ -100,108 +115,30 @@ def plan_cards(
     note_name: str,
     ref: str,
     rules: tuple[meeting_gate.TagRule, ...] | None = None,
+    project: str = "",
 ) -> tuple[PlannedCard, ...]:
-    """Plan one unassigned card per MY todo (dispatcher skips unassigned)."""
+    """Plan one owner-action card per MY todo, blocked from LLM dispatch."""
     return tuple(
         sanitize_card(
-            item, sensitive=sensitive, seq=seq, note_name=note_name, ref=ref, rules=rules
+            item, sensitive=sensitive, seq=seq, note_name=note_name, ref=ref,
+            rules=rules, project=project,
         )
         for seq, item in enumerate(extraction.todos, start=1)
     )
 
 
-def _yaml_str(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
-
-
-def _emit_milestones(entries: list[dict]) -> str:
-    lines = [
-        "# Managed by the meeting skill (W2-3). Consumed by W3 reminders.",
-        "milestones:",
-    ]
-    for entry in entries:
-        lines.append(f"  - title: {_yaml_str(entry['title'])}")
-        lines.append(f"    deadline: {_yaml_str(entry['deadline'])}")
-        lines.append(f"    basis: {_yaml_str(entry['basis'])}")
-        lines.append(f"    source: {_yaml_str(entry['source'])}")
-        lines.append(f"    added: {_yaml_str(entry['added'])}")
-    return "\n".join(lines) + "\n"
-
-
-def _parse_milestones(raw: str) -> list[dict]:
+def note_date(extraction: Extraction, *, now: datetime) -> date:
+    """The meeting's own date when it parses, else the processing date."""
     try:
-        import yaml  # noqa: PLC0415
-
-        data = yaml.safe_load(raw)
-        entries = data.get("milestones") if isinstance(data, dict) else None
-        return [dict(entry) for entry in entries or [] if isinstance(entry, dict)]
-    except ModuleNotFoundError:
-        entries = []
-        current: dict | None = None
-        for line in raw.splitlines():
-            matched = re.match(r"^  - title: (.+)$", line)
-            if matched:
-                current = {"title": json.loads(matched.group(1))}
-                entries.append(current)
-            elif current is not None:
-                keyed = re.match(r"^    (deadline|basis|source|added): (.+)$", line)
-                if keyed:
-                    current[keyed.group(1)] = json.loads(keyed.group(2))
-        return entries
+        return date.fromisoformat(extraction.meeting.date or "")
+    except ValueError:
+        return now.date()
 
 
-def update_milestones(
-    state_file: Path,
-    milestones: tuple[ActionItem, ...],
-    *,
-    sensitive: bool,
-    note_name: str,
-    ref: str,
-    now: datetime,
-) -> int:
-    """Merge new milestones into milestones.yaml, deduped on (title, deadline)."""
-    existing = (
-        _parse_milestones(state_file.read_text(encoding="utf-8"))
-        if state_file.exists()
-        else []
-    )
-    seen = {(entry.get("title"), entry.get("deadline")) for entry in existing}
-    added = 0
-    for seq, item in enumerate(milestones, start=1):
-        title = (
-            f"[민감] 회의 마일스톤 {seq} — 상세: ~/notes/meetings/{note_name}"
-            if sensitive
-            else item.title
-        )
-        deadline = item.deadline or "미정"
-        if (title, deadline) in seen:
-            continue
-        existing.append(
-            {
-                "title": title,
-                "deadline": deadline,
-                "basis": "로컬 노트 참조" if sensitive else (item.basis or ""),
-                "source": f"meeting:{note_name}",
-                "added": now.isoformat(timespec="seconds"),
-            }
-        )
-        seen.add((title, deadline))
-        added += 1
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(_emit_milestones(existing), encoding="utf-8")
-    return added
-
-
-def _items_block(header: str, items: tuple[ActionItem, ...]) -> list[str]:
-    lines = [f"## {header}", ""]
-    if not items:
-        lines.append("- (없음)")
-    for item in items:
-        owner = f"[{item.owner}] " if item.owner else ""
-        deadline = item.deadline or "미정"
-        lines.append(f"- {owner}{item.title} — 마감: {deadline} — 근거: {item.basis}")
-    lines.append("")
-    return lines
+def note_name(extraction: Extraction, *, ref: str, now: datetime) -> str:
+    """The note's file name. Merging the action tables needs it BEFORE the note is
+    rendered, so the name has exactly one definition and both callers read it here."""
+    return f"{note_date(extraction, now=now).isoformat()}-meeting-{ref}.md"
 
 
 def write_note(
@@ -215,36 +152,31 @@ def write_note(
     ref: str,
     now: datetime,
     evidence_footer: str = "",
+    slide_notes: tuple[str, ...] = (),
+    reference_notes: tuple[str, ...] = (),
+    action_sections: Sequence[str] = (),
+    template: meeting_template.Template | None = None,
 ) -> Path:
-    """Write the full-detail meeting note (W2-4 frontmatter-compatible)."""
-    note_name = f"{now.strftime('%Y-%m-%d')}-meeting-{ref}.md"
-    tags = ["meeting", "w2-3"] + (["patent-sensitive"] if sensitive else [])
-    stamp = now.isoformat(timespec="seconds")
-    lines = [
-        "---",
-        f"title: {_yaml_str(f'회의: {label}')}",
-        f"tags: [{', '.join(tags)}]",
-        f"created: {stamp}",
-        f"updated: {stamp}",
-        "links: []",
-        "---",
-        "",
-        f"# 회의 요약 ({kind}, {now.strftime('%Y-%m-%d')})",
-        "",
-        "## 결정사항",
-        "",
-    ]
-    lines += [f"- {decision}" for decision in extraction.decisions] or ["- (없음)"]
-    lines.append("")
-    lines += _items_block("내 액션아이템", extraction.todos)
-    lines += _items_block("마일스톤", extraction.milestones)
-    lines += _items_block("타인 액션아이템", extraction.others)
-    lines += ["## 원문", "", "```", original_text.rstrip(), "```", ""]
-    if evidence_footer:
-        lines += ["## 선행 근거", "", evidence_footer, ""]
+    """Persist one owner-only note; missing or invalid meeting dates use processing date."""
+    note_path = notes_dir / note_name(extraction, ref=ref, now=now)
     notes_dir.mkdir(parents=True, exist_ok=True)
-    note_path = notes_dir / note_name
-    note_path.write_text("\n".join(lines), encoding="utf-8")
+    note_path.write_text(
+        meeting_minutes.render(
+            label=label,
+            kind=kind,
+            extraction=extraction,
+            original_text=original_text,
+            sensitive=sensitive,
+            ref=ref,
+            now=now,
+            evidence_footer=evidence_footer,
+            slide_notes=slide_notes,
+            reference_notes=reference_notes,
+            action_sections=action_sections,
+            template=template,
+        ),
+        encoding="utf-8",
+    )
     note_path.chmod(0o600)
     return note_path
 
@@ -282,15 +214,26 @@ def format_notify(
     others: int,
     note_name: str,
     team_posted: bool,
+    project: str = "",
+    action_id_exhausted: bool = False,
 ) -> str:
     """Sanitized completion notice for the originating DM/channel."""
     lines = [f"회의록 처리 완료: {label}" if not sensitive else "회의록 처리 완료 (민감 문서)"]
     lines.append(f"- 내 액션아이템 카드: {cards}건 (Kanban)")
     lines.append(f"- 마일스톤 갱신: {milestones_added}건 (milestones.yaml)")
+    if action_id_exhausted:
+        lines.append("- 관리번호 소진 안내: 신규 Action Item은 관리번호 없이 회의록에 기록했습니다")
     if sensitive:
         lines.append("- 민감 태그 문서: 비-GLM 모델로 처리, 상세는 로컬 노트에만 보관")
         lines.append(f"- 타인 항목 {others}건은 공유 채널에 게시하지 않음 (로컬 노트 참조)")
     elif team_posted:
         lines.append(f"- 타인 액션아이템 {others}건 → #team 규약 게시 완료")
+    if not sensitive:
+        lines.append(
+            f"- 과제: {project} — action item 원장 갱신"
+            if project
+            else "- 과제 미지정 — 관리번호 없이 표만 그렸습니다(원장 미갱신). "
+            "`--project <과제명>` 을 주거나 파일명에 과제명을 넣으세요."
+        )
     lines.append(f"- 노트: ~/notes/meetings/{note_name}")
     return "\n".join(lines)

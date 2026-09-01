@@ -2,7 +2,13 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-host="${DEPLOY_SSH_HOST:-<primary-node>}"
+eval "$(python3 "$repo_root/automation/node_config_sh.py" --print-env)"
+host="${DEPLOY_SSH_HOST:-${NODE_DEPLOY_SSH_HOST:-}}"
+if [ -z "$host" ]; then
+  echo "DEPLOY-BLOCK: DEPLOY_SSH_HOST is unset. Export it (or configure ~/.hermes/node.toml)" >&2
+  echo "              and re-run; refusing to ssh to an unresolvable placeholder." >&2
+  exit 3
+fi
 
 run_agent() {
   local script="$1"

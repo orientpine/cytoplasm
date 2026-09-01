@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -16,10 +15,14 @@ if TYPE_CHECKING:
 
 _SCRIPT_DIR = Path(__file__).absolute().parent
 if __package__ in (None, ""):
+    sys.path.insert(0, str(_SCRIPT_DIR.parents[2]))
     sys.path.insert(0, str(_SCRIPT_DIR.parents[1]))
     __package__ = "proposal.scripts"
 
-from . import drive_publish, proposal_assembly, proposal_core, proposal_dm, proposal_kanban, proposal_knowledge, proposal_llm, proposal_sensitivity  # noqa: E402
+from . import proposal_assembly, proposal_core, proposal_dm, proposal_kanban, proposal_knowledge, proposal_llm, proposal_preflight, proposal_prompts, proposal_sensitivity  # noqa: E402
+from . import proposal_env, proposal_images  # noqa: E402
+from .proposal_corpus import command as corpus_command  # noqa: E402
+from .proposal_research import command as research_command  # noqa: E402
 from .proposal_storage import ProposalError, ProposalPaths, Section, load_proposal  # noqa: E402
 
 
@@ -156,19 +159,18 @@ def _draft(
 
 
 def _evidence(args: argparse.Namespace) -> int:
-    paths = _paths()
-    proposal = load_proposal(paths, args.slug)
-    section = proposal_core.read_section(paths, args.slug, args.section)
     brief = Path(args.brief_file).read_text(encoding="utf-8")
-    pack = proposal_knowledge.collect(section.title, brief, proposal.title)
+    goal = args.goal or next((line.strip() for line in brief.splitlines() if line.strip()), "")
+    if not goal:
+        raise ProposalError("evidence goal is empty")
+    pack = proposal_knowledge.gather_owner_evidence(goal, section=args.section)
     if args.json:
-        print(json.dumps({"evidence_count": len(pack.items), "layers": pack.layers}, ensure_ascii=False, sort_keys=True))
+        print(pack.to_json())
     else:
-        print(f"EVIDENCE verdict={pack.verdict} count={len(pack.items)}")
-        try:
-            print(_rendering().render_citations(pack, "sources"))
-        except ImportError:
-            print("근거 수집 불가")
+        buckets = ",".join(bucket for bucket, items in pack.by_bucket().items() if items) or "none"
+        print(f"EVIDENCE count={len(pack.items)} buckets={buckets}")
+        for note in pack.notes:
+            print(note)
     return 0
 
 
@@ -182,8 +184,27 @@ def _contribute(args: argparse.Namespace) -> int:
 
 
 def _assemble(args: argparse.Namespace) -> int:
+    companions = tuple(Path(value) for value in args.companion)
+    for companion in companions:
+        if not companion.is_file():
+            print(f"COMPANION-MISSING {companion}", file=sys.stderr)
+            return 1
+
     assembled = proposal_assembly.assemble(_paths(), args.slug)
-    link = drive_publish.publish_best_effort(assembled.path, "proposal")
+    link = ""
+    try:
+        from automation.drive_outputs import publish_best_effort
+    except ImportError:
+        print("DRIVE-PUBLISH-SKIP reason=ImportError", file=sys.stderr)
+    else:
+        result = publish_best_effort(
+            "proposal",
+            args.slug,
+            [(assembled.path, args.slug)],
+            companions=companions,
+        )
+        if result is not None and result.links:
+            link = result.links[0]
     missing = ",".join(assembled.missing_sections) or "none"
     print(f"PROPOSAL-ASSEMBLED path={assembled.path} drive={link} missing={missing}")
     if assembled.reminder:
@@ -214,14 +235,137 @@ def _review(args: argparse.Namespace) -> int:
 
 
 def _status(args: argparse.Namespace) -> int:
-    proposal = load_proposal(_paths(), args.slug)
-    print(proposal.status_path.read_text(encoding="utf-8"), end="")
+    import json
+
+    from .proposal_version import VersionStore
+
+    store = VersionStore.from_environment()
+    slug_dir = store.resolve_slug_dir(args.slug)
+    head_path = slug_dir / "HEAD"
+    if not head_path.is_file() or head_path.is_symlink():
+        print(f"PROPOSAL-STATUS-ERROR proposal slug is missing: {args.slug}", file=sys.stderr)
+        return 1
+    version = head_path.read_text(encoding="utf-8").strip()
+    version_dir = slug_dir / "versions" / version
+    if not version_dir.is_dir() or version_dir.is_symlink():
+        raise ProposalError(f"proposal HEAD is invalid: {args.slug}")
+    receipt = version_dir / "publish-receipt.json"
+    state = "published" if receipt.is_file() and not receipt.is_symlink() else (
+        "rendered" if (version_dir / "out" / "proposal.hwpx").is_file() else "staged"
+    )
+    payload = {"slug": args.slug, "state": state, "version": version}
+    if args.json:
+        print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    else:
+        print(f"PROPOSAL-STATUS slug={args.slug} state={state} version={version}")
     return 0
+
+
+def _prompt_preview(args: argparse.Namespace) -> int:
+    pack = proposal_knowledge.gather_owner_evidence(args.slug, section=args.section)
+    print(proposal_prompts.assemble_section_prompt(args.section, pack))
+    return 0
+
+
+def _images(args: argparse.Namespace) -> int:
+    argv = ["--slug", args.slug]
+    if args.json:
+        argv.append("--json")
+    return proposal_images.main(argv)
+
+
+def _preflight(args: argparse.Namespace) -> int:
+    argv: list[str] = []
+    for name in args.require:
+        argv.extend(("--require", name))
+    if args.json:
+        argv.append("--json")
+    if args.stage:
+        argv.extend(("--stage", args.stage))
+    return proposal_preflight.main(argv)
+
+
+def _version(args: argparse.Namespace) -> int:
+    from .proposal_improve_cmd import version_command
+
+    return version_command(args)
+
+
+def _improve(args: argparse.Namespace) -> int:
+    from .proposal_improve_cmd import improve_command
+
+    return improve_command(args)
+
+
+def _delta(args: argparse.Namespace) -> int:
+    import hashlib
+    import importlib
+    import json
+    import shutil
+    import tempfile
+
+    from . import proposal_version
+
+    try:
+        delta_module = importlib.import_module(".proposal_delta", package=__package__)
+        store = proposal_version.VersionStore.from_environment()
+        slug_root = store.resolve_slug_dir(args.slug)
+        store.head(args.slug)
+        scratch = Path(tempfile.mkdtemp(prefix=".delta-", dir=slug_root / "staging"))
+        report = delta_module.collect_deltas(
+            args.slug, since_version=args.since, dest_dir=scratch
+        )
+        run_material = json.dumps(
+            sorted(item.sha256 for item in report.collected), separators=(",", ":")
+        ).encode("utf-8")
+        run_key = hashlib.sha256(run_material).hexdigest()
+        staged = store.begin(args.slug, run_key)
+        if isinstance(staged, proposal_version.Reused):
+            shutil.rmtree(scratch)
+            destination = staged.path
+        else:
+            target = staged.path / "delta"
+            if target.exists():
+                shutil.rmtree(target)
+            os.replace(scratch / "delta", target)
+            scratch.rmdir()
+            destination = staged.path
+        payload = report.payload()
+        payload["destination"] = str(destination)
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print(
+                f"PROPOSAL-DELTA collected={report.collected_count} "
+                f"counts={report.counts} sha256={payload['sha256']}"
+            )
+            for skip in report.skipped:
+                print(f"DELTA-SKIP source={skip.source_key} reason={skip.reason}")
+        return 0
+    except (RuntimeError, OSError) as error:
+        print(f"PROPOSAL-DELTA-ERROR {error}", file=sys.stderr)
+        return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="proposal")
     commands = parser.add_subparsers(dest="command", required=True)
+    version = commands.add_parser("version")
+    version.add_argument("--slug", required=True)
+    version.add_argument("--json", action="store_true")
+    version.set_defaults(func=_version)
+    improve = commands.add_parser("improve")
+    improve.add_argument("--slug", required=True)
+    improve.add_argument("--since", required=True)
+    improve.add_argument("--resolve", action="append", default=[])
+    improve.add_argument("--profile", choices=("30-page", "10-page"))
+    improve.add_argument("--json", action="store_true")
+    improve.set_defaults(func=_improve)
+    delta = commands.add_parser("delta")
+    delta.add_argument("--slug", required=True)
+    delta.add_argument("--since", required=True)
+    delta.add_argument("--json", action="store_true")
+    delta.set_defaults(func=_delta)
     create = commands.add_parser("create")
     create.add_argument("--slug", required=True)
     create.add_argument("--title", required=True)
@@ -248,8 +392,19 @@ def build_parser() -> argparse.ArgumentParser:
     evidence.add_argument("--slug", required=True)
     evidence.add_argument("--section", required=True)
     evidence.add_argument("--brief-file", required=True)
+    evidence.add_argument("--goal")
     evidence.add_argument("--json", action="store_true")
     evidence.set_defaults(func=_evidence)
+    research = commands.add_parser("research")
+    research.add_argument("--slug", required=True)
+    research.add_argument("--goal")
+    research.add_argument("--validate-only", action="store_true")
+    research.add_argument("--json", action="store_true")
+    research.set_defaults(func=research_command)
+    corpus = commands.add_parser("corpus")
+    corpus.add_argument("--slug", required=True)
+    corpus.add_argument("--json", action="store_true")
+    corpus.set_defaults(func=corpus_command)
     contribute = commands.add_parser("contribute")
     contribute.add_argument("--slug", required=True)
     contribute.add_argument("--section", required=True)
@@ -260,19 +415,68 @@ def build_parser() -> argparse.ArgumentParser:
     contribute.set_defaults(func=_contribute)
     assemble = commands.add_parser("assemble")
     assemble.add_argument("--slug", required=True)
+    assemble.add_argument("--companion", action="append", default=[])
     assemble.set_defaults(func=_assemble)
     review = commands.add_parser("review")
     review.add_argument("--slug", required=True)
     review.add_argument("--dm-target", default="")
     review.add_argument("--response-file", default="")
     review.set_defaults(func=_review)
-    status = commands.add_parser("status")
+    status = commands.add_parser(
+        "status", help="report staged, rendered, or published HEAD state (receipt marks published)"
+    )
     status.add_argument("--slug", required=True)
+    status.add_argument("--json", action="store_true")
     status.set_defaults(func=_status)
+    prompt_preview = commands.add_parser("prompt-preview")
+    prompt_preview.add_argument("--slug", required=True)
+    prompt_preview.add_argument("--section", required=True)
+    prompt_preview.set_defaults(func=_prompt_preview)
+    images = commands.add_parser("images")
+    images.add_argument("--slug", required=True)
+    images.add_argument("--json", action="store_true")
+    images.set_defaults(func=_images)
+    from .proposal_render import command as render_command
+
+    render = commands.add_parser("render")
+    render.add_argument("--slug", required=True)
+    render.add_argument("--mode", choices=("replay", "live"), default="replay")
+    render.add_argument("--profile", choices=("30-page", "10-page"))
+    render.add_argument("--allow-missing-figures", action="store_true")
+    render.add_argument("--json", action="store_true")
+    render.set_defaults(func=render_command)
+    from .proposal_visual_review import command as visual_review_command
+
+    visual_review = commands.add_parser(
+        "visual-review",
+        help="render the current HWPX into page images for direct visual inspection",
+    )
+    visual_review.add_argument("--slug", required=True)
+    visual_review.add_argument("--json", action="store_true")
+    visual_review.set_defaults(func=visual_review_command)
+    from .proposal_refine import command as refine_command
+
+    refine = commands.add_parser("refine")
+    refine.add_argument("--slug", required=True)
+    refine.add_argument("--json", action="store_true")
+    refine.set_defaults(func=refine_command)
+    from .proposal_publish import command as publish_command
+
+    publish = commands.add_parser("publish")
+    publish.add_argument("--slug", required=True)
+    publish.add_argument("--version", required=True)
+    publish.add_argument("--json", action="store_true")
+    publish.set_defaults(func=publish_command)
+    preflight = commands.add_parser("preflight")
+    preflight.add_argument("--json", action="store_true")
+    preflight.add_argument("--require", action="append", default=[])
+    preflight.add_argument("--stage")
+    preflight.set_defaults(func=_preflight)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    proposal_env.load_env_secrets()
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))

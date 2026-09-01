@@ -162,6 +162,10 @@ def build_parser() -> argparse.ArgumentParser:
     request.add_argument("--calendar", default="primary")
     request.add_argument("--timeout-s", type=float, default=600.0,
                          help="무응답 데드락 타임아웃 (프로덕션 600s=10분)")
+    request.add_argument("--origin-channel-id", default="",
+                         help="지시가 온 채널 id (결과를 그 채널 스레드로 통지)")
+    request.add_argument("--origin-message-id", default="",
+                         help="지시 메시지 id (결과 스레드를 그 메시지에 건다)")
     request.add_argument("--e2e-confirm", action="store_true")
     request.add_argument("--peer-decline", action="store_true")
     request.set_defaults(func=cmd_request)

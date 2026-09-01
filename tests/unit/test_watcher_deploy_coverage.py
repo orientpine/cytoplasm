@@ -27,7 +27,10 @@ import re
 import stat
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_AUTOMATION = _REPO_ROOT / "automation"
 _SKILLS = _REPO_ROOT / "skills"
 
 _MAIN_GUARD = re.compile(r"^if __name__ == ['\"]__main__['\"]:", re.M)
@@ -127,6 +130,18 @@ def test_every_skill_watcher_is_carried_by_its_deploy_script() -> None:
     )
     assert not unused_exemptions, f"stale _KNOWN_UNDEPLOYED entries: {sorted(unused_exemptions)}"
 
+    # budget-watch is the skill-side adopter in this delivery cycle. Keep this in the
+    # existing replay-gated node so historical FS3 RED evidence remains reproducible.
+    budget_deploy = (_SKILLS / "budget" / "deploy.sh").read_text(encoding="utf-8")
+    budget_lines = [
+        line
+        for line in budget_deploy.splitlines()
+        if "budget-watch" in line and "hermes cron" in line
+    ]
+    assert budget_lines and all("--deliver discord" in line for line in budget_lines)
+    assert all("--deliver local" not in line for line in budget_lines)
+    assert 'hermes cron edit "$job_id"' in budget_deploy
+
 
 def test_mail_approval_loop_watcher_is_deployed() -> None:
     """메일 승인/발송 루프는 특히 못박는다 — 죽으면 소유자 ✅ 가 무효가 된다."""
@@ -143,6 +158,51 @@ def test_mail_approval_loop_watcher_is_deployed() -> None:
         "mail_triage_watch.py must be inside deploy_provenance_check so it is "
         "compared against origin/main like every other deployed file"
     )
+
+
+@pytest.mark.parametrize(
+    ("watch_name", "deploy", "weekday_schedule"),
+    (
+        (
+            "research-trends",
+            _AUTOMATION / "research_trends" / "deploy.sh",
+            "0 9 * * 1-5",
+        ),
+        (
+            "notes-weekly-organize",
+            _AUTOMATION / "notes_organize" / "deploy.sh",
+            "0 8 * * 1-5",
+        ),
+    ),
+)
+def test_weekly_helper_adopters_ship_the_helper_and_reconcile_weekday_schedule(
+    watch_name: str, deploy: Path, weekday_schedule: str
+) -> None:
+    """Weekly wrappers must ship their shared helper and converge catch-up schedules."""
+    deploy_text = deploy.read_text(encoding="utf-8")
+    helper = "skills/mail/scripts/watch_failure_streak.py"
+    guard_block = deploy_text.split("deploy_provenance_check", 1)
+
+    assert helper in _pushed_script_sources(deploy_text), (
+        f"{watch_name} deploy must push the shared failure-streak helper"
+    )
+    assert len(guard_block) == 2, "deploy_provenance_check call not found"
+    assert helper in guard_block[1].split("|| exit", 1)[0], (
+        f"{watch_name} helper must be covered by deploy_provenance_check"
+    )
+    assert weekday_schedule in deploy_text, (
+        f"{watch_name} deploy must set its weekday catch-up schedule"
+    )
+    assert "hermes cron edit" in deploy_text, (
+        f"{watch_name} deploy must reconcile an existing cron schedule"
+    )
+    registrations = [
+        line for line in deploy_text.splitlines() if watch_name in line and "hermes cron" in line
+    ]
+    assert registrations, f"{watch_name} cron registration is missing"
+    assert all("--deliver discord" in line for line in registrations)
+    assert all("--deliver local" not in line for line in registrations)
+    assert 'hermes cron edit "$job_id"' in deploy_text
 
 
 def test_watchers_do_not_probe_the_self_skill_root() -> None:

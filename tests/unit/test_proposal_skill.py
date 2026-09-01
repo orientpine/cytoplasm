@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import sys
 from pathlib import Path
 
@@ -8,7 +9,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from skills.proposal.scripts import proposal_assembly, proposal_core, proposal_llm, proposal_sensitivity  # noqa: E402
+from automation import drive_outputs  # noqa: E402
+from skills.proposal.scripts import proposal_assembly, proposal_cli, proposal_core, proposal_llm, proposal_sensitivity  # noqa: E402
 from skills.proposal.scripts.proposal_storage import ProposalPaths, SectionState  # noqa: E402
 
 
@@ -97,6 +99,126 @@ def test_assembly_contains_every_completed_section(tmp_path: Path) -> None:
     assert "## Approach" in assembled.document
     assert assembled.path.is_file()
     assert (assembled.path.stat().st_mode & 0o777) == 0o600
+
+
+def _ready_proposal(paths: ProposalPaths, slug: str = "renewal-plan") -> None:
+    _ = proposal_core.create_proposal(paths, slug, "Renewal plan", (("need", "Need"),))
+    _ = proposal_core.write_draft(paths, slug, "need", "Need draft.")
+
+
+def test_assemble_cli_publishes_via_facade_without_discovering_sidecars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _paths(tmp_path)
+    _ready_proposal(paths)
+    (paths.workspace_root / "renewal-plan" / "image-prompt.txt").write_text(
+        "not explicit", encoding="utf-8"
+    )
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(proposal_cli, "_paths", lambda: paths)
+
+    def publish(kind: str, title: str, artifacts: object, *, companions: object) -> drive_outputs.PublishResult:
+        calls.append((kind, title, artifacts, companions))
+        return drive_outputs.PublishResult(("https://drive.invalid/proposal",), "created", "folder")
+
+    monkeypatch.setattr(drive_outputs, "publish_best_effort", publish)
+
+    assert proposal_cli.main(["assemble", "--slug", "renewal-plan"]) == 0
+
+    assembled = paths.workspace_root / "renewal-plan" / "assembled.md"
+    assert calls == [("proposal", "renewal-plan", [(assembled, "renewal-plan")], ())]
+    assert "drive=https://drive.invalid/proposal" in capsys.readouterr().out
+
+
+def test_assemble_cli_passes_every_explicit_companion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    _ready_proposal(paths)
+    first = tmp_path / "image-prompt.txt"
+    second = tmp_path / "source-notes.json"
+    first.write_text("prompt", encoding="utf-8")
+    second.write_text("{}", encoding="utf-8")
+    calls: list[tuple[Path, ...]] = []
+    monkeypatch.setattr(proposal_cli, "_paths", lambda: paths)
+    monkeypatch.setattr(
+        drive_outputs,
+        "publish_best_effort",
+        lambda kind, title, artifacts, *, companions: calls.append(tuple(companions)),
+    )
+
+    assert proposal_cli.main([
+        "assemble", "--slug", "renewal-plan",
+        "--companion", str(first), "--companion", str(second),
+    ]) == 0
+
+    assert calls == [(first, second)]
+
+
+def test_assemble_cli_rejects_missing_companion_before_drive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _paths(tmp_path)
+    _ready_proposal(paths)
+    missing = tmp_path / "does-not-exist.txt"
+    drive_calls = 0
+    monkeypatch.setattr(proposal_cli, "_paths", lambda: paths)
+
+    def publish(*args: object, **kwargs: object) -> None:
+        nonlocal drive_calls
+        drive_calls += 1
+
+    monkeypatch.setattr(drive_outputs, "publish_best_effort", publish)
+
+    assert proposal_cli.main([
+        "assemble", "--slug", "renewal-plan", "--companion", str(missing)
+    ]) != 0
+    assert capsys.readouterr().err == f"COMPANION-MISSING {missing}\n"
+    assert drive_calls == 0
+
+
+def test_assemble_cli_skips_lazy_facade_import_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _paths(tmp_path)
+    _ready_proposal(paths)
+    monkeypatch.setattr(proposal_cli, "_paths", lambda: paths)
+    real_import = builtins.__import__
+
+    def blocked_import(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "automation.drive_outputs":
+            raise ImportError("facade unavailable")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    assert proposal_cli.main(["assemble", "--slug", "renewal-plan"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == "DRIVE-PUBLISH-SKIP reason=ImportError\n"
+    assert "PROPOSAL-ASSEMBLED" in captured.out
+
+
+def test_assemble_cli_rejects_weird_slug_before_drive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    drive_calls = 0
+    monkeypatch.setattr(proposal_cli, "_paths", lambda: paths)
+
+    def publish(*args: object, **kwargs: object) -> None:
+        nonlocal drive_calls
+        drive_calls += 1
+
+    monkeypatch.setattr(drive_outputs, "publish_best_effort", publish)
+
+    assert proposal_cli.main(["assemble", "--slug", "../bad slug!"]) != 0
+    assert drive_calls == 0
 
 
 def test_assembly_marks_missing_sections_and_returns_reminder(tmp_path: Path) -> None:

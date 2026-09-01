@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -10,7 +11,7 @@ from dataclasses import replace
 from importlib import import_module
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -30,8 +31,21 @@ sys.path.insert(0, str(_runtime_root()))
 sys.path.insert(0, str(Path.home() / ".hermes" / "research_trends_runtime"))
 core = import_module("research_trends_core")
 
+# The helper is deployed flat beside this watcher (~/.hermes/scripts/). In the
+# checkout it remains owned by the mail skill, so pytest needs that source path too.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    watch_failure_streak = import_module("watch_failure_streak")
+except ImportError:  # pragma: no cover - the first import is the deployed layout
+    sys.path.insert(0, str(_runtime_root() / "skills" / "mail" / "scripts"))
+    try:
+        watch_failure_streak = import_module("watch_failure_streak")
+    except ImportError:  # pragma: no cover - only reachable on a half-deployed node
+        watch_failure_streak = None
+
 from automation.entity_preflight.audit import DEFAULT_OPERATIONAL_ROOT  # noqa: E402
 from automation.entity_preflight.gate_metrics import weekly_quality_section  # noqa: E402
+from automation.skill_mount import skill_scripts  # noqa: E402
 try:
     from automation.research_trends.topics_import import (  # noqa: E402
         topics_import_location as _topics_import_location,
@@ -61,13 +75,16 @@ ARXIV_USER_AGENT = (
     "Autophagy-Agents/Research-Trends "
     "(+https://github.com/orientpine/autophagy-agents)"
 )
-_LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/topics/scripts"
-SCRIPTS_DIR = Path(os.environ.get("TOPICS_SCRIPTS", _LIVE_SCRIPTS)).expanduser()
-INTEROP_CONFIG = Path.home() / ".hermes" / "interop" / "config.json"
+# 마운트 판정은 governed live 정의 하나(automation/skill_mount.py)에서만 온다.
+SCRIPTS_DIR = skill_scripts("topics", env_var="TOPICS_SCRIPTS")
 SECRETS = Path.home() / ".env.secrets"
 RAG_WATCH = Path.home() / ".hermes" / "scripts" / "rag_ingest_watch.py"
 PROMPT_PATH = Path.home() / ".hermes" / "research-trends" / "research-trends-v1.md"
 ENTITY_PREFLIGHT_OPERATIONAL_ROOT = Path(DEFAULT_OPERATIONAL_ROOT).expanduser()
+WATCH_NAME = "research-trends"
+FAILURE_NOTICE_THRESHOLD = 1
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_LONG_DIGITS = re.compile(r"\d{5,}")
 
 # Package name is positional: <root>/<a>/<b>/scripts -> "a.b.scripts".
 _TOPICS_PKG, _TOPICS_IMPORT_ROOT = _topics_import_location(SCRIPTS_DIR)
@@ -88,6 +105,40 @@ class OwnerDmDeliveryError(RuntimeError):
 
 def _state_dir() -> Path:
     return Path(os.environ.get("RESEARCH_TRENDS_STATE_DIR", "~/.hermes/research-trends")).expanduser()
+
+
+def _redact(text: str) -> str:
+    return _LONG_DIGITS.sub("[MASKED-NUM]", _EMAIL.sub("[MASKED-EMAIL]", text))
+
+
+def _announce(*, ok: bool, detail: str = "") -> bool:
+    """Speak only when the helper opens or closes this watcher's incident.
+
+    Returns True when the streak recorded the tick — only then may a failing tick
+    exit 0. Under ``--deliver discord`` the scheduler posts its own failure banner
+    for ANY non-zero exit regardless of stdout (2026-08-24 budget-watch
+    measurement), so a recorded expected failure must exit 0 to stay silent, while
+    an unrecorded one keeps exit 1 so the banner remains the last line of defence.
+    """
+    try:
+        if watch_failure_streak is None:
+            if not ok:
+                print(f"{WATCH_NAME} error: {detail}"[:300])
+            return False
+        notice = watch_failure_streak.record(
+            WATCH_NAME, ok=ok, detail=detail, threshold=FAILURE_NOTICE_THRESHOLD
+        )
+    except Exception:  # noqa: BLE001 - an auxiliary notice cannot change the tick verdict
+        return False
+    unpersisted = notice is not None and notice == getattr(
+        watch_failure_streak, "PERSISTENCE_FAILURE", None
+    )
+    try:
+        if notice is not None:
+            print(notice[:300])
+    except Exception:  # noqa: BLE001 - a closed sink loses the line, not the record
+        pass
+    return not unpersisted
 
 
 def _append_log(name: str, record: dict[str, str]) -> None:
@@ -290,46 +341,17 @@ def _litellm_key() -> str:
     raise LlmInvocationError("LITELLM_AGENT_KEY is unavailable")
 
 
-def _post(token: str, path: str, payload: dict[str, str]) -> dict[str, str]:
-    request = Request(
-        f"https://discord.com/api/v10{path}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type": "application/json",
-            "User-Agent": "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)",
-        },
-        method="POST",
-    )
-    with urlopen(request, timeout=30) as response:  # noqa: S310
-        body = json.loads(response.read().decode("utf-8"))
-    if not isinstance(body, dict):
-        raise OwnerDmDeliveryError("Discord response is invalid")
-    return {str(key): str(value) for key, value in body.items()}
-
-
-def _chunks(body: str) -> tuple[str, ...]:
-    parts: list[str] = []
-    remaining = body
-    while len(remaining) > 1900:
-        boundary = remaining.rfind("\n", 0, 1900)
-        split_at = boundary if boundary > 0 else 1900
-        parts.append(remaining[:split_at])
-        remaining = remaining[split_at:].lstrip("\n")
-    return (*parts, remaining)
-
-
 def _send_dm(report: str) -> None:
-    token = _bot_token()
-    config = json.loads(INTEROP_CONFIG.read_text(encoding="utf-8"))
-    if not isinstance(config, dict) or not isinstance(config.get("owner_id"), str):
-        raise OwnerDmDeliveryError("owner DM configuration is invalid")
-    channel = _post(token, "/users/@me/channels", {"recipient_id": str(config["owner_id"])})
-    channel_id = channel.get("id", "")
-    if not channel_id:
-        raise OwnerDmDeliveryError("owner DM channel is missing")
-    for chunk in _chunks(report):
-        _post(token, f"/channels/{channel_id}/messages", {"content": chunk})
+    """ON-2: 목적지(지정 통지 채널/DM)·청킹은 owner_notice 파사드가 소유한다.
+
+    agent-chat 직송(2026-08-24)은 §10-6 확정으로 대체됐다 — 정기 통지 트래픽은
+    `#notifications`(`owner_notice_channel_id`) 로 분리한다. 마스킹은 여기 그대로.
+    """
+    os.environ.setdefault("DISCORD_BOT_TOKEN", _bot_token())
+    from automation.owner_notice import notify_owner
+
+    if not notify_owner(report):
+        raise OwnerDmDeliveryError("owner notice delivery failed")
 
 
 def _write_report(report: str, day: str) -> Path:
@@ -371,7 +393,6 @@ def run() -> int:
     week = _iso_week(now)
     dry_run = os.environ.get("RESEARCH_TRENDS_DRY_RUN") == "1"
     if not dry_run and _delivered_week() == week:
-        print(f"research-trends: WEEKLY-ALREADY-DELIVERED {week}")
         return 0
     day = now.date().isoformat()
     pack = topics_knowledge.collect(topics)
@@ -404,9 +425,26 @@ def run() -> int:
     return 0
 
 
+def main() -> int:
+    try:
+        result = run()
+    except (OSError, RuntimeError) as error:
+        detail = _redact(" ".join(str(error).split()))
+        recorded = _announce(
+            ok=False,
+            detail=f"{error.__class__.__name__}: {detail}" if detail else error.__class__.__name__,
+        )
+        return 0 if recorded else 1
+    _announce(ok=True)
+    return result
+
+
 if __name__ == "__main__":
     try:
-        sys.exit(run())
-    except (OSError, RuntimeError) as error:
-        print(f"research-trends error: {error.__class__.__name__}")
+        sys.exit(main())
+    except Exception as error:  # noqa: BLE001 - cron crash path: immediate masked line
+        try:
+            print(f"research-trends error: {_redact(str(error))}"[:300])
+        except BrokenPipeError:
+            pass
         sys.exit(1)

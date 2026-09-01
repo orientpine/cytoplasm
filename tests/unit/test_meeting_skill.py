@@ -23,6 +23,7 @@ import meeting_cli  # noqa: E402
 import meeting_extract  # noqa: E402
 import meeting_gate  # noqa: E402
 import meeting_llm  # noqa: E402
+import meeting_minutes  # noqa: E402
 
 NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
 RULES = meeting_gate.load_rules(REPO / "configs" / "sensitivity-rules.yaml")
@@ -138,7 +139,7 @@ def test_gate_english_patterns():
 def test_rules_and_prompt_copies_in_sync():
     for canonical, copy in [
         ("configs/sensitivity-rules.yaml", "skills/meeting/configs/sensitivity-rules.yaml"),
-        ("prompts/meeting-extraction-v3.md", "skills/meeting/prompts/meeting-extraction-v3.md"),
+        ("prompts/meeting-extraction-v4.md", "skills/meeting/prompts/meeting-extraction-v4.md"),
     ]:
         assert (REPO / canonical).read_bytes() == (REPO / copy).read_bytes()
 
@@ -148,7 +149,7 @@ def test_prompt_template_excludes_doc_header():
     Regression: substring split leaked header text ("변경 시 버전 파일명을
     올린다") into the LLM prompt and codex created v3/v4 template files.
     """
-    template = meeting_llm.load_prompt_template(REPO / "prompts/meeting-extraction-v3.md")
+    template = meeting_llm.load_prompt_template(REPO / "prompts/meeting-extraction-v4.md")
     assert template.startswith("아래 회의록을 읽어라.")
     prompt = meeting_llm.build_prompt(template, meeting_text="본문", my_names="cha")
     assert "버전 파일명" not in prompt and "치환해" not in prompt
@@ -315,6 +316,73 @@ def test_plan_cards_mixed_items_and_passthrough():
     ]
 
 
+def test_note_filename_uses_the_extracted_meeting_date(tmp_path):
+    extraction = meeting_llm.Extraction(
+        meeting=meeting_llm.MeetingHeader(date="2026-07-01")
+    )
+
+    note = meeting_actions.write_note(
+        tmp_path, label="회의", kind="md", original_text="원문", extraction=extraction,
+        sensitive=False, ref="deadbeef", now=NOW,
+    )
+
+    assert note.name == "2026-07-01-meeting-deadbeef.md"
+
+
+@pytest.mark.parametrize("meeting_date", [None, "not-a-date"])
+def test_note_filename_falls_back_to_processing_date_without_meeting_date(
+    tmp_path, meeting_date
+):
+    extraction = meeting_llm.Extraction(
+        meeting=meeting_llm.MeetingHeader(date=meeting_date)
+    )
+    note = meeting_actions.write_note(
+        tmp_path, label="회의", kind="md", original_text="원문", extraction=extraction,
+        sensitive=False, ref="deadbeef", now=NOW,
+    )
+
+    assert note.name == "2026-07-15-meeting-deadbeef.md"
+
+
+def test_rerunning_a_meeting_ref_updates_one_canonical_note(tmp_path):
+    extraction = meeting_llm.Extraction(
+        meeting=meeting_llm.MeetingHeader(date="2026-07-01")
+    )
+    first = meeting_actions.write_note(
+        tmp_path, label="회의", kind="md", original_text="첫 원문", extraction=extraction,
+        sensitive=False, ref="deadbeef", now=NOW,
+    )
+    second = meeting_actions.write_note(
+        tmp_path, label="회의", kind="md", original_text="갱신 원문", extraction=extraction,
+        sensitive=False, ref="deadbeef", now=NOW.replace(day=16),
+    )
+
+    assert first == second
+    assert [path.name for path in tmp_path.iterdir()] == [first.name]
+
+
+def test_owner_action_card_plan_blocks_dispatch_after_creation():
+    card = meeting_actions.sanitize_card(
+        _todo("참석자 단체 채팅방 만들기", None, "담당자 미정"),
+        sensitive=False,
+        seq=1,
+        note_name="n.md",
+        ref="deadbeef",
+    )
+
+    assert card.argv_sequence("t_created") == (
+        card.argv(),
+        [
+            "kanban",
+            "block",
+            "--kind",
+            "needs_input",
+            "t_created",
+            "Needs human owner action; do not dispatch an LLM worker.",
+        ],
+    )
+
+
 def test_note_keeps_original_detail(tmp_path):
     raw = (FIXTURES / "recorded-patent.json").read_text(encoding="utf-8")
     extraction = meeting_llm.parse_extraction(raw)
@@ -335,7 +403,7 @@ def test_parse_extraction_with_fences_and_junk():
     raw = 'chatter\n```json\n{"todos": [{"title": "t", "deadline": "2026-01-02", "basis": "b"}], "milestones": [], "others": [], "decisions": ["d"]}\n```\ntrailing'
     extraction = meeting_llm.parse_extraction(raw)
     assert extraction.todos[0].deadline == "2026-01-02"
-    assert extraction.decisions == ("d",)
+    assert extraction.decisions == (meeting_llm.Decision("d", ""),)
 
 
 def test_parse_extraction_rejects_garbage():
@@ -703,3 +771,439 @@ def test_plugin_fail_closed_after_trigger(monkeypatch):
         media_types=["application/pdf"],
     )
     assert plugin.pre_gateway_dispatch(event, None, None)["action"] == "skip"
+
+
+# --- origin-thread result notices (owner instruction 2026-08-23) ----------------
+# The `!meeting` instruction message anchors a thread; the plugin ACK and the CLI
+# completion notice both land there (thread id == message id), the channel itself
+# stays clean. No anchor → exact legacy behaviour (channel posts).
+
+
+def _meeting_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
+    monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
+    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
+    monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
+    monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
+    monkeypatch.setenv("MEETING_CONFIG", str(tmp_path / "absent.json"))
+
+
+def test_plugin_trigger_captures_the_instruction_message_id(monkeypatch):
+    # Given: an owner !meeting message whose adapter exposes the message id
+    plugin, launches, _posts = _plugin_spies(monkeypatch)
+    event = _Event(text="!meeting 합성 회의 본문")
+    event.message_id = "M1"
+    # When: the gate intercepts it
+    assert plugin.pre_gateway_dispatch(event, None, None)["action"] == "skip"
+    # Then: the trigger carries the anchor
+    [trigger] = launches
+    assert trigger.message_id == "M1"
+
+
+def test_plugin_trigger_without_message_id_keeps_empty_anchor(monkeypatch):
+    # Given: an adapter that exposes no message id
+    plugin, launches, _posts = _plugin_spies(monkeypatch)
+    event = _Event(text="!meeting 합성 회의 본문")
+    # When: the gate intercepts it
+    assert plugin.pre_gateway_dispatch(event, None, None)["action"] == "skip"
+    # Then: the anchor is empty, never guessed
+    [trigger] = launches
+    assert trigger.message_id == ""
+
+
+def test_plugin_launch_passes_the_anchor_to_the_cli(monkeypatch, tmp_path):
+    # Given: a trigger with an anchor and a spied spawner
+    plugin = _load_plugin()
+    monkeypatch.setattr(plugin, "_INBOX", tmp_path / "inbox")
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(plugin, "_spawn", lambda argv: spawned.append(argv))
+    # When: the CLI is launched
+    plugin._launch(
+        plugin.Trigger(chat_id="C1", doc_paths=(), body="본문", message_id="M1"), "python3"
+    )
+    # Then: both the channel and the anchor reach the CLI
+    [argv] = spawned
+    assert argv[argv.index("--notify-channel") + 1] == "C1"
+    assert argv[argv.index("--notify-message-id") + 1] == "M1"
+
+
+def test_plugin_acks_into_the_anchored_thread(monkeypatch):
+    # Given: thread resolution succeeds for the anchor
+    plugin, _launches, posts = _plugin_spies(monkeypatch)
+    monkeypatch.setattr(plugin, "_thread_for", lambda chat_id, message_id: f"thread-of-{message_id}")
+    event = _Event(text="!meeting 합성 회의 본문")
+    event.message_id = "M1"
+    # When: the gate intercepts it
+    assert plugin.pre_gateway_dispatch(event, None, None)["action"] == "skip"
+    # Then: the ACK lands in the thread, not the channel
+    assert posts == [("thread-of-M1", plugin.ACK_MESSAGE)]
+
+
+def test_plugin_ack_falls_back_to_the_channel_when_thread_fails(monkeypatch):
+    # Given: thread resolution blows up
+    plugin, _launches, posts = _plugin_spies(monkeypatch)
+
+    def boom(chat_id, message_id):
+        raise RuntimeError("thread api down")
+
+    monkeypatch.setattr(plugin, "_thread_for", boom)
+    event = _Event(text="!meeting 합성 회의 본문")
+    event.message_id = "M1"
+    # When: the gate intercepts it
+    assert plugin.pre_gateway_dispatch(event, None, None)["action"] == "skip"
+    # Then: the ACK still reaches the owner in the channel
+    assert posts == [("C1", plugin.ACK_MESSAGE)]
+
+
+class _SentChunk:
+    def __init__(self, message_id: str) -> None:
+        self.message_id = message_id
+
+
+def test_cli_notify_routes_to_the_origin_thread_when_anchored(monkeypatch):
+    # Given: an anchor, a thread-creating api and a spied transport
+    calls: list[tuple[str, str]] = []
+    posts: list[tuple[str, str]] = []
+
+    def api(method, path, payload=None):
+        calls.append((method, path))
+        return {"id": "T1"}
+
+    class _Transport:
+        def __init__(self, channel_id):
+            self.channel_id = channel_id
+
+        def send(self, body):
+            posts.append((self.channel_id, body))
+            return (_SentChunk("p1"),)
+
+    monkeypatch.setattr(meeting_cli, "_discord_api", api)
+    monkeypatch.setattr(meeting_cli, "_transport", _Transport)
+    # When: the notice is delivered live
+    meeting_cli._notify("C1", "회의록 처리 완료: x", offline_dir=None, message_id="M1")
+    # Then: the thread is anchored on the instruction and the notice lands inside it
+    assert calls == [("POST", "/channels/C1/messages/M1/threads")]
+    assert posts == [("T1", "회의록 처리 완료: x")]
+
+
+def test_cli_notify_without_anchor_posts_to_the_channel(monkeypatch):
+    # Given: no anchor and an api that must stay silent
+    posts: list[tuple[str, str]] = []
+
+    class _Transport:
+        def __init__(self, channel_id):
+            self.channel_id = channel_id
+
+        def send(self, body):
+            posts.append((self.channel_id, body))
+            return (_SentChunk("p1"),)
+
+    monkeypatch.setattr(meeting_cli, "_transport", _Transport)
+    monkeypatch.setattr(
+        meeting_cli, "_discord_api", lambda *a, **k: pytest.fail("no thread api without anchor")
+    )
+    # When: the notice is delivered live
+    meeting_cli._notify("C1", "msg", offline_dir=None)
+    # Then: legacy channel post
+    assert posts == [("C1", "msg")]
+
+
+def test_ingest_offline_records_the_thread_anchor(tmp_path, monkeypatch, capsys):
+    # Given: an offline ingest instructed with an anchor
+    _meeting_env(tmp_path, monkeypatch)
+    body_file = tmp_path / "m.txt"
+    body_file.write_text("합성 주간회의 기록입니다\n- 차: 다음 주까지 보고서 작성", encoding="utf-8")
+    # When: the CLI runs offline with the anchor
+    assert meeting_cli.main([
+        "ingest", "--body-file", str(body_file), "--label", "합성",
+        "--recorded-response", str(FIXTURES / "recorded-clean.json"),
+        "--offline", "--notify-channel", "C1", "--notify-message-id", "M1",
+    ]) == 0
+    # Then: the offline notify artifact keeps the legacy head and records the anchor
+    text = (tmp_path / "plan" / "notify.txt").read_text(encoding="utf-8")
+    assert text.startswith("C1\n")
+    assert "회의록 처리 완료" in text
+    assert "thread-anchor=M1" in text
+
+
+def test_cli_notify_falls_back_to_the_channel_when_helper_is_unavailable(monkeypatch, capsys):
+    # Given: an anchor but an interop runtime without origin_notice
+    posts: list[tuple[str, str]] = []
+
+    class _Transport:
+        def __init__(self, channel_id):
+            self.channel_id = channel_id
+
+        def send(self, body):
+            posts.append((self.channel_id, body))
+            return (_SentChunk("p1"),)
+
+    def missing():
+        raise ImportError("No module named 'automation'")
+
+    monkeypatch.setattr(meeting_cli, "_transport", _Transport)
+    monkeypatch.setattr(meeting_cli, "_origin_notice", missing)
+    # When: the notice is delivered live with an anchor
+    meeting_cli._notify("C1", "회의록 처리 완료: x", offline_dir=None, message_id="M1")
+    # Then: the legacy channel post still happens, with a marker
+    assert posts == [("C1", "회의록 처리 완료: x")]
+    assert "NOTIFY-HELPER-MISSING" in capsys.readouterr().err
+
+
+# --- todo 8 Drive publication regressions ------------------------------------
+
+
+def _run_meeting_ingest(tmp_path, monkeypatch, fixture, response, *, publish=None):
+    monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
+    monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
+    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
+    monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
+    monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
+    monkeypatch.setenv("MEETING_CONFIG", str(tmp_path / "absent.json"))
+    monkeypatch.setenv("DRIVE_PUBLISH_ENABLED", "1")
+    if publish is not None:
+        import automation.drive_outputs as drive_outputs
+        monkeypatch.setattr(drive_outputs, "publish_best_effort", publish)
+    return meeting_cli.main([
+        "ingest", "--file", str(FIXTURES / fixture),
+        "--recorded-response", str(FIXTURES / response), "--offline",
+    ])
+
+
+def test_meeting_drive_publish_uses_note_date_and_label(tmp_path, monkeypatch):
+    """The title carries the meeting's name, which is what SKILL.md always documented.
+
+    It used to carry `note_path`'s 8-hex content ref — unfindable in a Drive folder,
+    and the one thing the owner would never search for. Changed together with the fix
+    that made the publication happen at all (the import had never worked from the mount).
+    """
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 20, 12, tzinfo=tz)
+
+    monkeypatch.setattr(meeting_cli, "datetime", FixedDateTime)
+    calls = []
+
+    def publish(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    assert _run_meeting_ingest(tmp_path, monkeypatch, "meeting-clean.md", "recorded-clean.json", publish=publish) == 0
+    args, kwargs = calls[0]
+    assert args[0] == "meeting"
+    assert args[1] == "회의록-meeting-clean"
+    assert kwargs["on"].isoformat() == "2026-07-15"
+    assert args[2][0][1] == args[1]
+
+
+def test_meeting_drive_publish_disabled_makes_zero_runner_calls(tmp_path, monkeypatch):
+    from automation.drive_client import DriveClient
+    import automation.drive_outputs as drive_outputs
+
+    artifact = tmp_path / "2026-08-20-meeting-x.md"
+    artifact.write_text("note", encoding="utf-8")
+    calls = []
+
+    def runner(argv):
+        calls.append(argv)
+        return {}
+
+    client = DriveClient("fake-gws", tmp_path / "folders.json", runner=runner)
+    monkeypatch.delenv("DRIVE_PUBLISH_ENABLED", raising=False)
+    assert drive_outputs.publish_best_effort(
+        "meeting", "회의록-x", [(artifact, "회의록-x")], client=client
+    ) is None
+    assert calls == []
+
+
+def test_sensitive_meeting_skips_drive_publish(tmp_path, monkeypatch, capsys):
+    calls = []
+    assert _run_meeting_ingest(
+        tmp_path, monkeypatch, "meeting-patent.md", "recorded-patent.json",
+        publish=lambda *args, **kwargs: calls.append((args, kwargs)),
+    ) == 0
+    assert calls == []
+    assert capsys.readouterr().out.count("DRIVE-PUBLISH-SKIP reason=sensitive") == 1
+
+
+def test_drive_facade_import_failure_does_not_block_local_save(tmp_path, monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, "automation.drive_outputs", None)
+    assert _run_meeting_ingest(tmp_path, monkeypatch, "meeting-clean.md", "recorded-clean.json") == 0
+    assert list((tmp_path / "notes").glob("*.md"))
+    assert "DRIVE-PUBLISH-SKIP reason=ImportError" in capsys.readouterr().out
+
+
+# --- the note reaches Drive only if `automation` is importable from the mount ---
+
+
+def test_runtime_root_resolves_from_the_mounted_scripts_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """This file runs from /srv/autophagy-skills/live/meeting/scripts, where `automation`
+    is not a sibling — so the plain import had failed on every production run."""
+    monkeypatch.delenv("AUTOPHAGY_RUNTIME_ROOT", raising=False)
+    monkeypatch.delenv("AUTOPHAGY_REPO_ROOT", raising=False)
+    mounted = tmp_path / "live" / "meeting" / "scripts" / "meeting_cli.py"
+    mounted.parent.mkdir(parents=True)
+    mounted.write_text("", encoding="utf-8")
+    release = tmp_path / "release"
+    (release / "automation").mkdir(parents=True)
+    (release / "automation" / "drive_outputs.py").write_text("", encoding="utf-8")
+
+    resolved = meeting_cli.runtime_root(mounted, current=release, mirror=tmp_path / "absent")
+
+    assert resolved == release
+
+
+def test_runtime_root_prefers_the_checkout_that_carries_automation(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPHAGY_RUNTIME_ROOT", raising=False)
+    monkeypatch.delenv("AUTOPHAGY_REPO_ROOT", raising=False)
+    assert meeting_cli.runtime_root() == REPO
+
+
+def test_note_is_published_under_the_meeting_label(tmp_path: Path, monkeypatch) -> None:
+    """`회의록-3efbec52` is a content hash; the owner looks for the meeting by name."""
+    from datetime import date
+
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from automation import drive_outputs
+
+    calls: list[tuple[str, str, object]] = []
+    monkeypatch.setattr(
+        drive_outputs, "publish_best_effort",
+        lambda kind, title, artifacts, **kwargs: calls.append((kind, title, kwargs.get("on"))),
+    )
+    note = tmp_path / "2026-08-26-meeting-3efbec52.md"
+    note.write_text("# 회의 요약\n", encoding="utf-8")
+
+    meeting_cli._publish_note(note, label="킥오프 회의", sensitive=False, on=date(2026, 8, 26))
+
+    assert calls == [("meeting", "회의록-킥오프 회의", date(2026, 8, 26))]
+
+
+def test_sensitive_meeting_is_never_published(tmp_path: Path, monkeypatch, capsys) -> None:
+    from datetime import date
+
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from automation import drive_outputs
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a sensitive meeting must never reach Drive")
+
+    monkeypatch.setattr(drive_outputs, "publish_best_effort", explode)
+    note = tmp_path / "2026-08-26-meeting-aaaaaaaa.md"
+    note.write_text("# 회의 요약\n", encoding="utf-8")
+
+    meeting_cli._publish_note(note, label="특허 회의", sensitive=True, on=date(2026, 8, 26))
+
+    assert "DRIVE-PUBLISH-SKIP reason=sensitive" in capsys.readouterr().out
+
+
+def test_note_is_published_under_its_project(tmp_path: Path, monkeypatch) -> None:
+    """Minutes live beside the transcript and the glossary of the same project."""
+    from datetime import date
+
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from automation import drive_outputs
+
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        drive_outputs, "publish_best_effort",
+        lambda kind, title, artifacts, **kw: calls.append((title, kw.get("project"))),
+    )
+    note = tmp_path / "2026-08-26-meeting-99678d3a.md"
+    note.write_text("# 회의 요약\n", encoding="utf-8")
+
+    meeting_cli._publish_note(
+        note, label="킥오프", sensitive=False, on=date(2026, 8, 26), project="해양고신뢰성"
+    )
+
+    assert calls == [("회의록-킥오프", "해양고신뢰성")]
+
+
+# --- 산출물 출처는 정본 회의록이다 (2026-08-26 소유자 지시) -----------------------
+
+
+def _rendered_note(original_text: str) -> str:
+    """A rendered note carrying a transcript sentence we can look for."""
+    extraction = meeting_llm.parse_extraction(
+        (FIXTURES / "recorded-clean.json").read_text(encoding="utf-8")
+    )
+    return meeting_minutes.render(
+        label="출처 규약", kind="md", extraction=extraction,
+        original_text=original_text, sensitive=False, ref="deadbeef", now=NOW,
+    )
+
+
+def test_finalized_view_drops_the_transcript_appendix():
+    """산출물 작성자는 부록 위만 봐야 한다 — 경계를 렌더러가 한 곳에서 소유한다.
+
+    전사본은 음성 인식 결과라 고유명사가 틀린다. 실제로 2026-08-26 에 전사본의 '한정기술'
+    (정본은 한국전력기술)이 외부 배포용 공정표 템플릿에 그대로 실렸다.
+    """
+    marker = "전사본에만있는고유명사오기"
+    text = _rendered_note(marker)
+    view = meeting_minutes.finalized_view(text)
+
+    assert marker in text, "픽스처 전제: 전사본이 노트에 들어가 있어야 한다"
+    assert marker not in view
+    assert meeting_minutes.APPENDIX_HEADING not in view
+    assert "## 결정사항" in view
+
+
+def test_transcript_section_forbids_authoring_from_it():
+    """`### C. 원문 전사본` 바로 아래에 산출물 작성 금지가 적혀 있어야 한다."""
+    text = _rendered_note("원문 한 줄")
+    heading = text.index("### C. 원문 전사본")
+    fence = text.index("```", heading)
+    between = text[heading:fence]
+
+    assert "산출물" in between
+    assert "출처로 쓰지" in between
+
+
+def test_card_points_at_the_finalized_minutes_first():
+    """카드의 출처는 Drive 정본을 먼저 가리켜야 한다 — 로컬 노트는 전사본을 안고 있다."""
+    card = meeting_actions.sanitize_card(
+        _todo("공정표 템플릿 작성", "2026-09-02", "템플릿을 잡아 드리겠다"),
+        sensitive=False, seq=1, note_name="n.md", ref="deadbeef",
+        project="해양고신뢰성",
+    )
+
+    assert "회의록/해양고신뢰성" in card.body
+    assert "정본" in card.body
+    assert "~/notes/meetings/n.md" in card.body
+    assert card.body.index("회의록/해양고신뢰성") < card.body.index("~/notes/meetings")
+
+
+def test_card_without_project_keeps_the_existing_body():
+    """과제명을 모르면 기존 본문 그대로 — 없는 경로를 지어내지 않는다."""
+    item = _todo("공정표 템플릿 작성", "2026-09-02", "템플릿을 잡아 드리겠다")
+    with_default = meeting_actions.sanitize_card(
+        item, sensitive=False, seq=1, note_name="n.md", ref="deadbeef"
+    )
+    explicit_empty = meeting_actions.sanitize_card(
+        item, sensitive=False, seq=1, note_name="n.md", ref="deadbeef", project=""
+    )
+
+    assert with_default == explicit_empty
+    assert "정본" not in with_default.body
+    assert "출처: ~/notes/meetings/n.md" in with_default.body
+
+
+def test_plan_cards_forwards_the_project_to_every_card():
+    extraction = meeting_llm.Extraction(
+        todos=(_todo("가", None, "나"), _todo("다", None, "라"))
+    )
+    cards = meeting_actions.plan_cards(
+        extraction, sensitive=False, note_name="n.md", ref="deadbeef",
+        project="해양고신뢰성",
+    )
+
+    assert len(cards) == 2
+    assert all("회의록/해양고신뢰성" in card.body for card in cards)

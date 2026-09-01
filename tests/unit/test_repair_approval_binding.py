@@ -32,6 +32,8 @@ APPROVALS_CHANNEL_ID = "1528936606856122421"
 OTHER_CHANNEL_ID = "1528936606856122422"
 OPS_OWNER_DM_CHANNEL_ID = "1528936606856122423"
 AGENT_OWNER_DM_CHANNEL_ID = "1528936606856122424"
+AGENT_CHAT_CHANNEL_ID = "1528936606856122430"
+OPS_THREAD_ID = "1528936606856122431"
 NOW = datetime(2026, 7, 26, 9, 0, tzinfo=UTC)
 BINDING = ApprovalBinding(
     ApprovalKind.REPAIR,
@@ -72,23 +74,29 @@ class _Directory:
 
 @dataclass(frozen=True, slots=True)
 class _OpsDirectory:
-    owner_dm_channel_id: str
-    owner_dm_facts: ChannelFacts | None
-    owner_dm_calls: list[str] = field(default_factory=list)
+    thread_id: str
+    thread_facts: ChannelFacts | None
+    thread_calls: list[str] = field(default_factory=list)
 
     def owner_dm(self) -> str:
-        self.owner_dm_calls.append(self.owner_dm_channel_id)
-        return self.owner_dm_channel_id
+        raise AssertionError("v8: a new repair binding must not resolve the owner DM")
 
     def skill_approvals(self) -> str:
         return APPROVALS_CHANNEL_ID
 
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_CHANNEL_ID
+
+    def agent_chat_thread(self, kind: ApprovalKind) -> str:
+        self.thread_calls.append(self.thread_id)
+        return self.thread_id
+
     def describe(self, channel_id: str) -> ChannelFacts:
         if channel_id == APPROVALS_CHANNEL_ID:
             return ChannelFacts(0, "approvals", ())
-        if channel_id == self.owner_dm_channel_id and self.owner_dm_facts is not None:
-            return self.owner_dm_facts
-        raise approval_surface.ApprovalSurfaceError("repair credential cannot describe this DM")
+        if channel_id == self.thread_id and self.thread_facts is not None:
+            return self.thread_facts
+        raise approval_surface.ApprovalSurfaceError("repair credential cannot describe this channel")
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,11 +231,12 @@ def test_assert_surface_accepts_the_guild_approvals_channel_and_refuses_a_mismat
         mismatched.assert_surface(BINDING)
 
 
-def test_repair_request_posts_to_its_own_bot_dm(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: the repair bot can open and describe its own DM with the owner.
+def test_repair_request_posts_to_its_own_agent_chat_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: v8 (§10-7) — the Ops bot is invited, so its own credential resolves
+    # the 승인-repair thread under the personal guild's agent-chat channel.
     directory = _OpsDirectory(
-        OPS_OWNER_DM_CHANNEL_ID,
-        ChannelFacts(1, "", (OWNER_ID,)),
+        OPS_THREAD_ID,
+        ChannelFacts(11, "승인-repair", (), AGENT_CHAT_CHANNEL_ID),
     )
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "credential")
     monkeypatch.setenv("AUTOPHAGY_OWNER_ID", OWNER_ID)
@@ -236,12 +245,13 @@ def test_repair_request_posts_to_its_own_bot_dm(monkeypatch: pytest.MonkeyPatch)
     # When: repair resolves the transport for a new owner approval request.
     discord = repair_ops_discord.configured_discord()
 
-    # Then: every post is bound to the DM opened by the repair bot itself.
-    assert directory.owner_dm_calls == [OPS_OWNER_DM_CHANNEL_ID]
+    # Then: every post is bound to the thread resolved by the repair bot itself,
+    # and older policy versions keep their historical meaning.
+    assert directory.thread_calls == [OPS_THREAD_ID]
     assert discord.binding == ApprovalBinding(
         ApprovalKind.REPAIR,
-        ApprovalSurface.OWNER_DM,
-        OPS_OWNER_DM_CHANNEL_ID,
+        ApprovalSurface.AGENT_CHAT_THREAD,
+        OPS_THREAD_ID,
         approval_surface.POLICY_VERSION,
     )
     assert all(
@@ -249,15 +259,17 @@ def test_repair_request_posts_to_its_own_bot_dm(monkeypatch: pytest.MonkeyPatch)
         is ApprovalSurface.SKILL_APPROVALS
         for version in range(5)
     )
+    assert approval_surface.surface_at_policy(ApprovalKind.REPAIR, 7) is ApprovalSurface.OWNER_DM
 
 
-def test_repair_refuses_a_dm_id_opened_by_another_bot(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: another bot's owner DM cannot be described with the repair credential.
+def test_repair_refuses_a_thread_its_credential_cannot_describe(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: the resolved thread cannot be described with the repair credential
+    # (예: 초대 전 — 게시 불가로 fail-closed, ON-4 롤아웃 전제).
     directory = _OpsDirectory(AGENT_OWNER_DM_CHANNEL_ID, None)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "credential")
     monkeypatch.setenv("AUTOPHAGY_OWNER_ID", OWNER_ID)
     monkeypatch.setattr(repair_ops_discord, "directory_for_ops", lambda token, owner: directory)
 
-    # When / Then: repair fails closed instead of reusing the other bot's DM id.
+    # When / Then: repair fails closed instead of posting anywhere else.
     with pytest.raises(RepairDiscordError, match="surface cannot be resolved"):
         _ = repair_ops_discord.configured_discord()

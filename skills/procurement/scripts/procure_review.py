@@ -6,16 +6,16 @@ own Drive (gws CLI) and the DM carries the link. Submission is ALWAYS human —
 this module has no mail/submit code path at all.
 
 Sandbox hooks: PROCURE_DISCORD_STUB=<dir> records the would-be DM as JSON
-instead of calling Discord; PROCURE_GWS_BIN overrides the gws binary.
+instead of calling Discord. Drive upload goes through automation.drive_outputs
+(opt-in via DRIVE_PUBLISH_ENABLED; unset means zero Drive calls, empty link).
 """
 from __future__ import annotations
 
 import json
 import os
 import secrets
-import subprocess
+import sys
 import uuid
-from datetime import datetime
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -29,15 +29,24 @@ class ReviewError(RuntimeError):
     """Review DM could not be delivered (exit 6)."""
 
 
-def owner_id() -> str:
-    config = Path(os.environ.get("INTEROP_CONFIG", "~/.hermes/interop/config.json")).expanduser()
+def _notice_channel() -> str:
+    """ON-2: 검토 요청이 갈 채널 — 해석(지정 채널/DM 오픈)은 owner_notice 파사드만 한다."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
+    release = Path("/srv/autophagy-agent-current")
+    root = override or str(release if release.is_dir() else Path("/srv/autophagy-agents"))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from automation.owner_notice import resolve_notice_target
+
     try:
-        owner = json.loads(config.read_text(encoding="utf-8")).get("owner_id")
-    except OSError:
-        raise ReviewError(f"interop config 읽기 실패: {config}") from None
-    if not isinstance(owner, str) or not owner:
-        raise ReviewError("interop config에 owner_id가 없습니다")
-    return owner
+        target = resolve_notice_target(_token())
+    except ReviewError:
+        raise
+    except Exception as error:  # noqa: BLE001 - 원인 유형만 남기고 exit 6 계약 유지
+        raise ReviewError(f"통지 채널 해석 실패: {type(error).__name__}") from None
+    if not target:
+        raise ReviewError("통지 대상 미해석 — interop config owner_id/owner_notice_channel_id 확인")
+    return target
 
 
 def max_bytes() -> int:
@@ -56,7 +65,16 @@ def send_review(file: Path, note: str) -> str:
     """Returns 'REVIEW-DM-SENT message=<id> mode=<mode> size=<bytes>'."""
     size = file.stat().st_size
     mode = review_mode(size, max_bytes())
-    link = _drive_upload(file) if mode == "drive-link" else ""
+    link = ""
+    if mode == "drive-link":
+        try:
+            from automation.drive_outputs import publish_best_effort
+
+            result = publish_best_effort("procurement", file.stem, [(file, file.stem)])
+            if result is not None and result.links:
+                link = result.links[0]
+        except ImportError:
+            link = ""
     content = review_note(file, mode, note, link)
     stub = os.environ.get("PROCURE_DISCORD_STUB", "")
     if stub:
@@ -64,75 +82,13 @@ def send_review(file: Path, note: str) -> str:
         out = Path(stub) / f"dm-{uuid.uuid4().hex[:8]}.json"
         out.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
         return f"REVIEW-DM-SENT message=stub:{out.name} mode={mode} size={size}"
-    channel = _api("POST", "/users/@me/channels", {"recipient_id": owner_id()})
+    channel_id = _notice_channel()
     if mode == "attach":
-        message = _post_attachment(str(channel["id"]), file, content)
+        message = _post_attachment(channel_id, file, content)
     else:
-        message = _api("POST", f"/channels/{channel['id']}/messages", {"content": content})
+        message = _api("POST", f"/channels/{channel_id}/messages", {"content": content})
     return f"REVIEW-DM-SENT message={message['id']} mode={mode} size={size}"
 
-
-_FOLDER_MIME = "application/vnd.google-apps.folder"
-
-
-def _drive_root_name() -> str:
-    return os.environ.get("PROCURE_DRIVE_ROOT", "Autophagy 산출물")
-
-
-def _drive_period() -> str:
-    return os.environ.get("PROCURE_DRIVE_PERIOD") or datetime.now().strftime("%Y-%m")
-
-
-def _q_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("'", "\\'")
-
-
-def _ensure_folder(gws: str, parts: list[str]) -> str:
-    """Find-or-create each folder in ``parts`` under My Drive root; return leaf id."""
-    parent = "root"
-    for name in parts:
-        query = (
-            f"name = '{_q_escape(name)}' and '{parent}' in parents "
-            f"and mimeType = '{_FOLDER_MIME}' and trashed = false"
-        )
-        listed = _run_json(
-            [gws, "drive", "files", "list", "--params",
-             json.dumps({"q": query, "fields": "files(id)", "pageSize": 1})]
-        )
-        found = listed.get("files")
-        if isinstance(found, list) and found:
-            parent = str(found[0].get("id", ""))
-        else:
-            created = _run_json(
-                [gws, "drive", "files", "create", "--json",
-                 json.dumps({"name": name, "mimeType": _FOLDER_MIME, "parents": [parent]})]
-            )
-            parent = str(created.get("id", ""))
-        if not parent:
-            raise ReviewError(f"drive 폴더 확보 실패: {name}")
-    return parent
-
-
-def _drive_upload(file: Path) -> str:
-    gws = os.environ.get("PROCURE_GWS_BIN", "gws")
-    parent = _ensure_folder(gws, [_drive_root_name(), "procurement", _drive_period()])
-    created = _run_json([gws, "drive", "+upload", str(file), "--parent", parent])
-    file_id = str(created.get("id", ""))
-    if not file_id:
-        raise ReviewError(f"drive 업로드 응답에 id 없음: {created}")
-    meta = _run_json(
-        [gws, "drive", "files", "get",
-         "--params", json.dumps({"fileId": file_id, "fields": "webViewLink"})]
-    )
-    return str(meta.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view")
-
-
-def _run_json(argv: list[str]) -> dict:
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=600)
-    if proc.returncode != 0:
-        raise ReviewError(f"{argv[0]} {argv[1] if len(argv) > 1 else ''} 실패 rc={proc.returncode}")
-    decoded, _ = json.JSONDecoder().raw_decode(proc.stdout.strip() or "{}")
-    return decoded if isinstance(decoded, dict) else {}
 
 
 def _token() -> str:

@@ -64,6 +64,10 @@ def approval_draft(snapshot: GmailApprovalSnapshot, *, draft_id: str, created_at
         "attachment_manifest_sha256": snapshot.attachment_manifest_sha256,
         "body": snapshot.body,
         "category": "gmail",
+        # The Cc lives in the frozen argv; the draft must ship it as a field too, or the
+        # pre-send normalizer reads an absent Cc as an empty one and rewrites ``--cc``
+        # away — moving the draft hash off the one the owner approved (t_0c46c0ad).
+        "cc": _option(snapshot.argv, "--cc") or "",
         "channel_id": "",
         "created": created_at,
         "flags": [],

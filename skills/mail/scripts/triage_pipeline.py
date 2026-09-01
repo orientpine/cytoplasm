@@ -7,6 +7,7 @@ import secrets
 import sys
 from dataclasses import replace
 
+import mail_quote
 import triage_approval
 import triage_core
 import triage_gate
@@ -39,10 +40,17 @@ def compose_and_post(
     attachments: tuple[str, ...] = (),
     cc: str = "",
     evidence_pack: object | None = None,
+    origin_channel_id: str = "",
+    origin_message_id: str = "",
+    quote: str = "",
 ) -> dict:
     rules = triage_sensitivity.load_rules(_rules_path())
     evidence_text = mail_evidence.evidence_text(evidence_pack) if evidence_pack is not None else ""
-    gate = triage_sensitivity.evaluate("\n".join((subject, to, cc, body, evidence_text)), rules)
+    # The quoted mail is sent too, so the gate must see it (a patent line in the
+    # answered mail makes the follow-up sensitive).
+    gate = triage_sensitivity.evaluate(
+        "\n".join((subject, to, cc, body, evidence_text, quote)), rules
+    )
     recipient_body = (
         mail_evidence.sanitize_draft_body(body, evidence_pack)
         if evidence_pack is not None else body
@@ -53,6 +61,8 @@ def compose_and_post(
         tags=gate.tags, category="compose", flags=(),
         kind="compose",
         attachment_paths=attachments,
+        origin_channel_id=origin_channel_id, origin_message_id=origin_message_id,
+        quote=quote,
     )
     recipients = ", ".join(item for item in (to, cc) if item)
     gap = triage_recipient.related_recipient_gap(
@@ -81,11 +91,17 @@ def compose_and_post(
 def _draft_and_post(
     detail: dict, gate, cls, *, post: bool, instruction: str = "",
     attachments: tuple[str, ...] = (), evidence_pack: object | None = None,
+    reply_all: bool = False,
 ) -> list[str]:
     actions: list[str] = []
     to = triage_core.extract_reply_address(detail.get("sender") or "")
     if not to:
         return ["reply-no-address"]
+    original = mail_quote.parse_original(detail)
+    cc = (
+        mail_quote.reply_all_cc(original, to=to, owner=triage_recipient.owner_address())
+        if reply_all else ""
+    )
     subject, body, _provider = triage_llm.draft_reply(
         subject=detail.get("subject") or "", sender=detail.get("sender") or "",
         body=detail.get("body") or "", sensitive=gate.sensitive,
@@ -100,7 +116,7 @@ def _draft_and_post(
         uid=detail["uid"], sender=detail.get("sender") or "",
         mail_subject=detail.get("subject") or "", to=to, subject=subject, body=body,
         sensitive=gate.sensitive, tags=gate.tags, category=cls.category, flags=cls.flags(),
-        attachment_paths=attachments,
+        attachment_paths=attachments, cc=cc, quote=mail_quote.render_quote(original),
     )
     actions.append(f"draft:{draft['id']}")
     if post:

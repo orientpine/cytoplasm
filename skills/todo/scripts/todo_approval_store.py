@@ -63,6 +63,30 @@ class TodoApprovalStore:
             records.append(record)
         return tuple(records)
 
+    def latest_archives(self) -> tuple[TodoApprovalRecord, ...]:
+        """Newest archived generation per key — the execution reconciler's candidates.
+
+        Only the newest generation can still be unexecuted: an older one was either
+        superseded or already written, and ``ApprovalClaimStore`` keys its receipt by
+        generation, so replaying an older row could never match the ledger anyway.
+        """
+        directory = self.root / "archive"
+        if not directory.is_dir():
+            return ()
+        records: list[TodoApprovalRecord] = []
+        for key_directory in sorted(directory.iterdir()):
+            if not key_directory.is_dir():
+                continue
+            generations = sorted(key_directory.glob("*.json"), key=_generation_from_path)
+            if not generations:
+                continue
+            path = generations[-1]
+            try:
+                records.append(_io.decode(path.read_text(encoding="utf-8")))
+            except OSError as error:
+                raise TodoApprovalStoreError(f"archived approval is unreadable: {path}") from error
+        return tuple(records)
+
     def outstanding(self, key: str) -> tuple[TodoApprovalRecord, ...]:
         record = self.active(key)
         if record is None or record.state is not ApprovalState.PENDING or record.message_id is None:
@@ -108,6 +132,12 @@ class TodoApprovalStore:
             surface=spec.surface,
             channel_id=spec.channel_id,
             policy_version=spec.policy_version,
+            origin_channel_id=spec.origin_channel_id,
+            origin_message_id=spec.origin_message_id,
+            tasklist=spec.tasklist,
+            title=spec.title,
+            notes=spec.notes,
+            due=spec.due,
         )
         _io.atomic_write(self.pending_path(spec.key), record)
         return record

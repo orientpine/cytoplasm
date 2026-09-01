@@ -1,0 +1,1 @@
+agent|automation/memory_curator/cron/memory_curator_watch.py|.hermes/scripts/memory_curator_watch.py|required

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import override
 
-from automation.drive_client import DriveClientError, DriveClient
+from automation.drive_client import DriveClient
 from automation.interop.external_effect_gate import ApprovalContext
 from automation.obsidian_write import (
     ObsidianWriteConfig,
@@ -19,8 +19,6 @@ from automation.obsidian_write import (
 from skills.doctype.scripts import doctype_extract
 from skills.doctype.scripts.doctype_routing import SaveRoute
 
-_DEFAULT_DRIVE_CACHE = Path.home() / ".hermes" / "doctype" / "drive-folders.json"
-_DEFAULT_DRIVE_ROOT = "Autophagy 산출물"
 _OBSIDIAN_CONFIG_ENV = "OBSIDIAN_WRITE_CONFIG"
 
 
@@ -40,16 +38,14 @@ GitRunner = Callable[..., subprocess.CompletedProcess[str]]
 @dataclass(frozen=True, slots=True)
 class SaveAdapters:
     obsidian_config: ObsidianWriteConfig | None
-    drive_client: DriveClient | None
-    drive_folder_parts: tuple[str, ...]
+    drive_client: DriveClient | None = None
     git_runner: GitRunner = subprocess.run
     approval_context: ApprovalContext | None = None
 
 
 def adapters_from_environment(route: SaveRoute) -> SaveAdapters:
     obsidian_config = _obsidian_config() if "obsidian" in route.destinations else None
-    drive_client = _drive_client() if "drive" in route.destinations else None
-    return SaveAdapters(obsidian_config, drive_client, _drive_folder_parts())
+    return SaveAdapters(obsidian_config)
 
 
 def save_from_environment(artifact: Path, route: SaveRoute) -> None:
@@ -67,19 +63,6 @@ def save_artifact(artifact: Path, route: SaveRoute, adapters: SaveAdapters) -> N
 def _obsidian_config() -> ObsidianWriteConfig:
     configured_path = os.environ.get(_OBSIDIAN_CONFIG_ENV)
     return load_config(Path(configured_path).expanduser()) if configured_path else load_config()
-
-
-def _drive_client() -> DriveClient:
-    cache_value = os.environ.get("DRIVE_DOCTYPE_CACHE")
-    cache_path = Path(cache_value).expanduser() if cache_value else _DEFAULT_DRIVE_CACHE
-    return DriveClient(os.environ.get("DRIVE_GWS_BIN", "gws"), cache_path)
-
-
-def _drive_folder_parts() -> tuple[str, ...]:
-    root = os.environ.get("DRIVE_DOCTYPE_ROOT", _DEFAULT_DRIVE_ROOT).strip()
-    if not root:
-        raise DocumentSaveError("drive", "DRIVE_DOCTYPE_ROOT is empty")
-    return (root, "doctype")
 
 
 def _save_to_obsidian(artifact: Path, adapters: SaveAdapters) -> None:
@@ -100,13 +83,15 @@ def _save_to_obsidian(artifact: Path, adapters: SaveAdapters) -> None:
 
 
 def _save_to_drive(artifact: Path, adapters: SaveAdapters) -> None:
-    drive = adapters.drive_client
-    if drive is None:
-        raise DocumentSaveError("drive", "adapter configuration is missing")
+    """Strictly publish a routing-selected Drive document through the facade."""
     try:
-        parent_id = drive.ensure_folder_path(adapters.drive_folder_parts)
-        result = drive.upsert_file(artifact, artifact.name, parent_id)
-        drive.verify_owner_only(result["id"])
-        _ = drive.download_and_verify(result["id"], artifact)
-    except (DriveClientError, OSError) as error:
+        from automation.drive_outputs import publish
+
+        if adapters.drive_client is None:
+            _ = publish("doctype", artifact.stem, [(artifact, artifact.stem)])
+        else:
+            _ = publish(
+                "doctype", artifact.stem, [(artifact, artifact.stem)], client=adapters.drive_client
+            )
+    except Exception as error:
         raise DocumentSaveError("drive", str(error)) from error

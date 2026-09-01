@@ -98,7 +98,9 @@ def test_discard_without_finalize_when_owner_has_cancel_reaction(tmp_path: Path)
     # When / Then
     assert commands.finalized == []
     assert commands.discarded == ["abc123"]
-    assert discord.sent_messages == ["취소됨"]
+    assert discord.sent_messages == [
+        "⛔ 일정 조율 취소 (draft abc123) — 소유자 ⛔ 리액션으로 취소되었습니다."
+    ]
     assert store.load() == ()
 
 
@@ -143,7 +145,9 @@ def test_expired_entry_is_discarded_and_removed(tmp_path: Path) -> None:
     # When / Then
     assert commands.finalized == []
     assert commands.discarded == ["abc123"]
-    assert discord.sent_messages == ["확정 시간이 지나 취소되었습니다"]
+    assert discord.sent_messages == [
+        "⌛ 일정 조율 만료 취소 (draft abc123) — 확정 시간이 지나 취소되었습니다."
+    ]
     assert store.load() == ()
 
 

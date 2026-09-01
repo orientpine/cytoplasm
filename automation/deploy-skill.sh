@@ -22,7 +22,7 @@
 #                invoke smoke against the live store run.
 #
 # Usage:
-#   deploy-skill.sh <skill> [--request-only] [--approve-only] [--fresh] [--sandbox-only] [--remove]
+#   deploy-skill.sh <skill> [--request-only] [--approve-only] [--fresh] [--sandbox-only] [--remove] [--release-approval]
 #                           [--activate-managed <quarantine-dir>]
 #   deploy-skill.sh --personal <name> [--request-only] [--approve-only] [--fresh] [--sandbox-only]
 #   --approve-only          verify approval only; do not mount the skill
@@ -407,6 +407,38 @@ check_with_attestation_refresh() {
   return "$approved"
 }
 
+gate_release_authorize() { # gate_release_authorize <digest> — stdout: <message_id>:<release_nonce>
+  case "$NODE_PEER_ATTEST_MODE" in
+    discord)
+      gate "" release-authorize --skill "$SKILL" --hash "$1" --peer-attest-mode discord
+      ;;
+    signed)
+      printf '%s\n' "$PEER_ATTEST_BLOB" \
+        | gate "" release-authorize --skill "$SKILL" --hash "$1" --peer-attest-mode signed \
+            --peer-attest-public-key "$PEER_ATTEST_PUBLIC_KEY" --peer-attestation-stdin
+      ;;
+    *)
+      die "PEER-ATTEST-BLOCK: peer_attest_mode must be discord or signed"
+      ;;
+  esac
+}
+
+release_authorize_with_refresh() { # VA-2: 릴리스 ✅ + 이 digest 커버리지 + peer 증명
+  local digest="$1" approved=0
+  gate_release_authorize "$digest" >/dev/null || approved=$?
+  if [[ "$approved" == 7 ]]; then
+    PEER_ATTEST_BLOB="$(peer_attest "$SKILL" "$DIGEST" "$MESSAGE_ID" "$DEPLOY_NONCE" "$DEPLOY_APPROVALS_CHANNEL_ID" --refresh)" \
+      || die "PEER-ATTEST-BLOCK: independent peer refresh failed" 5
+    if [[ "$NODE_PEER_ATTEST_MODE" == "discord" ]]; then
+      printf '%s\n' "$PEER_ATTEST_BLOB" >&2
+      PEER_ATTEST_BLOB=""
+    fi
+    approved=0
+    gate_release_authorize "$digest" >/dev/null || approved=$?
+  fi
+  return "$approved"
+}
+
 sync_ops_checkout_for_peer_attest() { # fail-closed ops-checkout refresh so peer_attest runs current code
   # DG-4: when the immutable release runtime exists, converge it so the peer verifier
   # and the execution lease run from a sealed tree instead of the mutable mirror, whose
@@ -417,6 +449,22 @@ sync_ops_checkout_for_peer_attest() { # fail-closed ops-checkout refresh so peer
     || die "SYNC-BLOCK: release runtime probe failed (ops sudo/permission denied)"
   case "$release_state" in
     "present")
+      if [[ "$PERSONAL" == 0 ]]; then
+        local local_release_sha current_release_sha
+        local_release_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)" \
+          || die "SYNC-BLOCK: cannot resolve local release HEAD"
+        current_release_sha="$(
+          run_as "$NODE_OPS_ACCOUNT" \
+            "basename \"\$(readlink -f $RELEASE_CURRENT)\""
+        )" || die "SYNC-BLOCK: cannot resolve current release SHA"
+        [[ "$current_release_sha" =~ ^[0-9a-f]{40}$ ]] \
+          || die "SYNC-BLOCK: current release target is not a canonical SHA"
+        if [[ "$current_release_sha" == "$local_release_sha" ]]; then
+          log "release runtime already matches local HEAD; skipping origin/main convergence"
+          scan_live_skill_abi
+          return 0
+        fi
+      fi
       log "converging release runtime $RELEASE_CURRENT (signed release install + flip)"
       # Through the SAME argument-free privileged helper the reconciler uses, never the
       # by-value converger: that one defaults to whatever `origin/main` is right now, with
@@ -527,13 +575,14 @@ else
 fi
 [[ -n "$SKILL" ]] || die "usage: deploy-skill.sh <skill> [...] | deploy-skill.sh --personal <name> [...]"
 [[ "$SKILL" =~ ^[a-z0-9][a-z0-9-]{1,40}$ ]] || die "invalid skill name: $SKILL"
-REQUEST_ONLY=0 APPROVE_ONLY=0 FRESH=0 SANDBOX_ONLY=0 REMOVE=0
+REQUEST_ONLY=0 APPROVE_ONLY=0 FRESH=0 SANDBOX_ONLY=0 REMOVE=0 RELEASE_APPROVAL=0
 ACTIVATE_MANAGED=0
 QUARANTINE_DIR=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --request-only) REQUEST_ONLY=1 ;;
     --approve-only) APPROVE_ONLY=1 ;;
+    --release-approval) RELEASE_APPROVAL=1 ;;
     --fresh) FRESH=1 ;;
     --sandbox-only) SANDBOX_ONLY=1 ;;
     --remove) REMOVE=1 ;;
@@ -687,8 +736,8 @@ push_skill peer "$SRC_DIR" "$SKILL"
 # automation/interop/ resolve as PEP 420 namespace packages on the node, so no
 # __init__.py needs staging.
 GATE_HELPERS=(skill_gate.py skill_gate_refresh.py skill_gate_review.py
-              git_tag_signature.py peer_attestation.py peer_signed_attestation.py peer_attest_runtime.py skill_gate_e2e.py
-              skill_gate_specs.py skill_gate_approval.py skill_gate_request.py
+              typing_compat.py git_tag_signature.py peer_attestation.py peer_signed_attestation.py peer_attest_runtime.py skill_gate_e2e.py
+              skill_gate_specs.py release_spec.py skill_gate_approval.py skill_gate_request.py
               skill_gate_retire.py skill_gate_surface.py)
 GATE_INTEROP_HELPERS=(interop/approval_lease.py interop/approval_lifecycle.py
                       interop/approval_reminder.py interop/approval_reminder_config.py
@@ -862,7 +911,38 @@ if [[ -n "$PROVENANCE_FILE" ]]; then
   PROVENANCE_REQUEST_ARGS=(--provenance-file "$PROVENANCE_REMOTE")
 fi
 
-if [[ -n "${APPROVAL_MESSAGE_ID:-}" ]]; then
+if [[ "$RELEASE_APPROVAL" == 1 ]]; then
+  # VA-2: per-skill ✅ 만 릴리스 승인으로 대체한다 — SANDBOX·REVIEW·peer attestation 은
+  # 위·아래 단계 그대로다. 인가 판정은 staged gate 의 release-authorize 가 소유한다.
+  [[ "$PERSONAL" == 0 && "$ACTIVATE_MANAGED" == 0 ]] \
+    || die "--release-approval applies to repository skill deploys only" 2
+  [[ "${E2E_TEST_MODE:-}" != "1" ]] \
+    || die "--release-approval has no injected-approval variant" 2
+  AUTH_RC=0
+  AUTH_OUT="$(gate "" release-authorize --skill "$SKILL" --hash "$DIGEST")" || AUTH_RC=$?
+  case "$AUTH_RC" in
+    0) ;;
+    8)
+      cleanup_peer_staging
+      cleanup_review_staging "$SKILL"
+      log "owner CANCELLED the release — NOT deploying $SKILL"
+      exit 9
+      ;;
+    4) die "RELEASE-APPROVAL-BLOCK: the release approval does not cover $SKILL@$DIGEST — 릴리스 이후 바뀐 스킬은 옆 승인으로 못 탄다" 4 ;;
+    2) die "RELEASE-APPROVAL-BLOCK: no usable release approval record — run automation/release.sh first" 4 ;;
+    *)
+      cleanup_peer_staging
+      cleanup_review_staging "$SKILL"
+      log "release approval pending or unverifiable — NOT deploying (rc=$AUTH_RC)"
+      exit 1
+      ;;
+  esac
+  MESSAGE_ID="${AUTH_OUT%%:*}"
+  DEPLOY_NONCE="${AUTH_OUT##*:}"
+  [[ "$DEPLOY_NONCE" =~ ^[0-9a-f]{32}$ ]] \
+    || die "RELEASE-APPROVAL-BLOCK: release record carries no usable nonce"
+  log "release approval covers $SKILL@${DIGEST:0:12} — per-skill owner ✅ replaced (VA-2)"
+elif [[ -n "${APPROVAL_MESSAGE_ID:-}" ]]; then
   MESSAGE_ID="$APPROVAL_MESSAGE_ID"
   DEPLOY_NONCE="${DEPLOY_NONCE:-}"
   [[ "$DEPLOY_NONCE" =~ ^[0-9a-f]{32}$ ]] || die "APPROVAL_MESSAGE_ID requires a valid DEPLOY_NONCE"
@@ -900,7 +980,11 @@ if [[ "${E2E_TEST_MODE:-}" == "1" ]]; then
     --out "\$HOME/.hermes/skill-gate/injected-approval.json" >&2
 fi
 APPROVED=0
-check_with_attestation_refresh "$DIGEST" || APPROVED=$?
+if [[ "$RELEASE_APPROVAL" == 1 ]]; then
+  release_authorize_with_refresh "$DIGEST" || APPROVED=$?
+else
+  check_with_attestation_refresh "$DIGEST" || APPROVED=$?
+fi
 
 # The owner answered, and the answer was no. Tested before the generic case so a
 # cancellation is never reported as a missing reply: exit 8 comes from the gate's
@@ -962,7 +1046,11 @@ if [[ "$REVIEW_CURRENT" != 0 ]]; then
   die "REVIEW-BLOCK: PASS verdict missing for current skill hash" 5
 fi
 MOUNT_APPROVED=0
-check_with_attestation_refresh "$CURRENT_DIGEST" || MOUNT_APPROVED=$?
+if [[ "$RELEASE_APPROVAL" == 1 ]]; then
+  release_authorize_with_refresh "$CURRENT_DIGEST" || MOUNT_APPROVED=$?
+else
+  check_with_attestation_refresh "$CURRENT_DIGEST" || MOUNT_APPROVED=$?
+fi
 if [[ "$MOUNT_APPROVED" == 2 ]]; then
   cleanup_peer_staging
   cleanup_review_staging "$SKILL"
@@ -987,9 +1075,13 @@ fi
 # binds this (skill, hash, message id) is left alone. A failure here is LOUD but
 # NEVER fatal — the reviewed artifact is already live, so rolling the mount back
 # over leftover bookkeeping would be the worse outcome.
-CONSUMED=0
-gate "" consume --skill "$SKILL" --hash "$DIGEST" --message-id "$MESSAGE_ID" >&2 || CONSUMED=$?
-[[ "$CONSUMED" == 0 ]] || log "CONSUME-WARN: pending approval record NOT retired for $SKILL (rc=$CONSUMED); mount stands. Retire it with: skill_gate.py abandon --skill $SKILL --hash $DIGEST --message-id $MESSAGE_ID --reason <text>"
+if [[ "$RELEASE_APPROVAL" == 1 ]]; then
+  log "release-approval deploy: no per-skill pending record to retire — 릴리스 레코드는 스킬별로 소진되지 않는다"
+else
+  CONSUMED=0
+  gate "" consume --skill "$SKILL" --hash "$DIGEST" --message-id "$MESSAGE_ID" >&2 || CONSUMED=$?
+  [[ "$CONSUMED" == 0 ]] || log "CONSUME-WARN: pending approval record NOT retired for $SKILL (rc=$CONSUMED); mount stands. Retire it with: skill_gate.py abandon --skill $SKILL --hash $DIGEST --message-id $MESSAGE_ID --reason <text>"
+fi
 hermes_lists_skill agent "$SKILL" || die "mounted but hermes skills list does not show $SKILL on agent"
 INVOKE_OUT="$(run_as "$NODE_AGENT_ACCOUNT" "REAL_HOME=\"\$HOME\"; IR=\"\$REAL_HOME/.hermes/interop_runtime\"; [ -d \"\$IR\" ] || { echo 'SANDBOX-HOME-BLOCK interop runtime missing' >&2; exit 90; }; SH=\$(mktemp -d) || exit 91; chmod 700 \"\$SH\" || { rm -rf \"\$SH\"; exit 91; }; trap 'rm -rf \"\$SH\"' EXIT; env -i HOME=\"\$SH\" PATH=/usr/bin:/bin INTEROP_RUNTIME=\"\$IR\" AUTOPHAGY_DEMO_SECRET=DUMMY-w18-agent-invoke bash \"$STORE_ROOT/live/$SKILL/scripts/scenario.sh\"")" \
   || die "post-mount invoke smoke failed on agent"

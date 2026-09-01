@@ -65,6 +65,56 @@ def test_matching_recursive_python_tree_passes(tmp_path: Path) -> None:
     assert "RUNTIME-PACKAGE-PASS" in result.stderr
 
 
+def test_deployed_file_list_filters_only_release_files(tmp_path: Path) -> None:
+    """A flat partial deploy must not report its intentionally unshipped files absent."""
+    listed = (
+        "agent|automation/pkg|.hermes/pkg_runtime|required|default|python|"
+        "first.py,second.py"
+    )
+    release, runtime = _fixture(tmp_path, listed)
+    for relative in ("first.py", "second.py", "third.py", "fourth.py"):
+        _put(release, relative, f"{relative}\n")
+    for relative in ("first.py", "second.py"):
+        _put(runtime, relative, f"{relative}\n")
+
+    filtered = _run(tmp_path, tmp_path / "manifest.txt")
+    unfiltered = _manifest(
+        tmp_path, "agent|automation/pkg|.hermes/pkg_runtime|required|default|python"
+    )
+    unfiltered_result = _run(tmp_path, unfiltered)
+
+    assert filtered.returncode == 0, filtered.stdout + filtered.stderr
+    assert "RUNTIME-PACKAGE-PASS" in filtered.stderr
+    assert unfiltered_result.returncode != 0
+    assert "ABSENT third.py" in unfiltered_result.stderr
+
+
+def test_local_snapshot_ignores_an_inaccessible_inherited_working_directory(
+    tmp_path: Path,
+) -> None:
+    # Given: the probe inherited a directory it can no longer traverse, as ops does over SSH.
+    release, _runtime = _fixture(tmp_path)
+    _put(release, "item.py")
+    inherited = tmp_path / "operator-home"
+    inherited.mkdir()
+    script = f'''
+cd "{inherited}"
+chmod 000 "{inherited}"
+source "{_PROBE}"
+runtime_package_local_snapshot "{release}" python
+status=$?
+chmod 700 "{inherited}"
+exit "$status"
+'''
+
+    # When: the release snapshot reads its absolute source root.
+    result = subprocess.run(("bash", "-c", script), capture_output=True, text=True, check=False)
+
+    # Then: the unrelated inherited cwd cannot turn a readable release into UNKNOWN.
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("SNAPSHOT-V1\n")
+
+
 def test_diff_fails_and_names_deployer(tmp_path: Path) -> None:
     release, runtime = _fixture(tmp_path)
     _put(release, "sources/item.py", "NEW = 1\n")
@@ -201,12 +251,14 @@ def test_manifest_parser_accepts_comments_and_blank_lines() -> None:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         fields = line.split("|")
-        assert len(fields) in (4, 6), line
+        assert len(fields) in (4, 6, 7), line
         rows.append(tuple(fields))
 
     assert rows == [
         ("agent", "automation/rag_ingest", ".hermes/rag_ingest_runtime/rag_ingest", "required"),
         ("agent", "automation/memory_curator", ".hermes/memory_curator_runtime/memory_curator", "required"),
+        ("agent", "automation/regression_bank", ".hermes/regression_bank_runtime", "required", "default", "python", "bank_state.py,weekly_bank.py"),
+        ("agent", "automation/research_trends", ".hermes/research_trends_runtime", "required", "default", "python", "research_trends.py,research_trends_core.py,topics_import.py"),
         ("ops", "configs/rag", "personal-rag", "required", "rag", "tree"),
     ]
 

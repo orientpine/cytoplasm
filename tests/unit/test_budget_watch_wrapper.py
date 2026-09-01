@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 
 import os
 import subprocess
@@ -37,9 +38,35 @@ def test_wrapper_ignores_the_self_skill_root(tmp_path: Path) -> None:
     # When: the wrapper resolves its governed budget CLI.
     result = _run_wrapper(tmp_path)
 
-    # Then: the self-authored skill is ignored rather than executed.
-    assert result.returncode != 0
-    assert result.stdout.strip() == "budget-watch error: budget skill is not mounted"
+    # Then: the self-authored skill is ignored; the miss is RECORDED in the streak
+    # and the tick exits 0 — with --deliver discord any non-zero exit makes the
+    # scheduler post its own failure banner every tick (2026-08-24 measured).
+    assert result.returncode == 0
+    assert result.stdout == ""
+    state = json.loads(
+        (tmp_path / ".hermes" / "watch-failure" / "budget-watch.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state == {"consecutive_failures": 1, "incident_open": False}
+
+
+def test_pre_main_crash_prints_one_masked_line_on_the_first_tick(tmp_path: Path) -> None:
+    # Given: secret loading crashes before main reaches the expected child-rc path.
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / ".env.secrets").write_bytes(b"\xffowner@example.com-152648282079")
+
+    # When: the first cron tick runs with no prior streak state.
+    result = _run_wrapper(tmp_path)
+
+    # Then: an exceptional wrapper crash is immediate, singular, masked, and exit 1.
+    assert result.returncode == 1
+    lines = result.stdout.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("budget-watch error: ")
+    assert "owner@example.com" not in lines[0]
+    assert "152648282079" not in lines[0]
+    assert len(lines[0]) <= 300
 
 
 def test_wrapper_honors_the_scripts_env_override(tmp_path: Path) -> None:

@@ -59,6 +59,8 @@ class CoordinationApprovalPayload:
     correlation: str
     duration_min: int
     content: str
+    origin_channel_id: str = ""
+    origin_message_id: str = ""
 
 
 def confirm_intent(
@@ -215,6 +217,8 @@ class CoordinationApprovalGate:
                 surface=str(binding.surface),
                 channel_id=binding.channel_id,
                 policy_version=binding.policy_version,
+                origin_channel_id=self.payload.origin_channel_id,
+                origin_message_id=self.payload.origin_message_id,
             )
         )
 

@@ -38,6 +38,7 @@ import triage_digest
 import triage_gate
 import triage_llm
 import triage_mode
+import mail_quote
 import triage_pipeline
 import mail_preflight
 import triage_sensitivity
@@ -95,6 +96,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
         post=not args.no_post, instruction=args.instruction,
         attachments=tuple(getattr(args, "attachment", ()) or ()),
         evidence_pack=pack,
+        reply_all=bool(getattr(args, "reply_all", False)),
     )
     if "reply-no-address" in actions:
         raise triage_gate.GateError("회신 주소를 찾을 수 없음 — 초안 생성 불가", 2)
@@ -123,10 +125,18 @@ def cmd_compose(args: argparse.Namespace) -> int:
             },
             args.to, args.subject, args.body,
         )
+    in_reply_to = str(getattr(args, "in_reply_to", "") or "")
+    quote = (
+        mail_quote.render_quote(mail_quote.parse_original(_get_mail(in_reply_to)))
+        if in_reply_to else ""
+    )
     draft = triage_pipeline.compose_and_post(
         args.to, args.subject, args.body, post=not args.no_post,
         attachments=tuple(getattr(args, "attachment", ()) or ()), cc=cc,
         evidence_pack=pack,
+        origin_channel_id=str(getattr(args, "origin_channel_id", "") or ""),
+        origin_message_id=str(getattr(args, "origin_message_id", "") or ""),
+        quote=quote,
     )
     if pack is not None:
         mail_evidence.write_sidecar(triage_gate.gate_dir(), str(draft["id"]), pack)
@@ -203,9 +213,9 @@ def _notify_sent(draft: dict, method: str) -> None:
     등록되기 전까지 알림 없음). scenario.sh는 조작된 owner id로 서명 주입 승인을 만들어
     배포 노드의 진짜 봇 토큰으로 실제 DM 채널을 열게 했다.
 
-    The guard lives here, NOT in triage_confirm.dm_owner: the cancel notice in
-    cmd_watch (`dm_owner("메일 발송 취소됨")`) is a legitimate caller that carries no
-    provenance — gating the transport itself would mute it too.
+    The guard lives here, NOT in triage_confirm.notify_result: the cancel notice
+    (`_notify_cancelled`) is a legitimate caller that carries no provenance —
+    gating the transport itself would mute it too.
 
     The send is already executed; NO failure here may fail the tick or make a
     committed draft look unsent — hence the broad catch (repo precedent
@@ -215,8 +225,29 @@ def _notify_sent(draft: dict, method: str) -> None:
         print(f"NOTIFY-SKIP draft={draft['id']} reason={method}", file=sys.stderr)
         return
     try:
-        triage_confirm.dm_owner(
-            f"✉️ 발송 완료: {draft['subject']} → {draft['to']} (draft {draft['id']})")
+        triage_confirm.notify_result(
+            draft,
+            f"✉️ 발송 완료: {draft['subject']} → {draft['to']} (draft {draft['id']})\n"
+            "소유자 ✅ 승인으로 발송되었습니다.",
+        )
+    except Exception as error:  # noqa: BLE001 — notification must never break the tick
+        print(f"NOTIFY-FAIL draft={draft['id']} "
+              f"err={triage_core.redact(str(error))[:120]}", file=sys.stderr)
+
+
+def _notify_cancelled(draft: dict) -> None:
+    """Best-effort cancel notice — the discard is already committed.
+
+    _notify_sent와 같은 규칙: 통지 실패가 tick을 죽여서는 안 된다(기존 dm_owner
+    직호출은 try 밖이라 전송 실패 시 tick 전체가 죽는 잠재 결함 — 2026-08-22 수리).
+    취소 통지는 승인 provenance를 갖지 않는 정당한 호출자다.
+    """
+    try:
+        triage_confirm.notify_result(
+            draft,
+            f"⛔ 발송 취소: {draft['subject']} → {draft['to']} (draft {draft['id']})\n"
+            "소유자 ⛔ 리액션으로 취소되어 메일은 발송되지 않았습니다.",
+        )
     except Exception as error:  # noqa: BLE001 — notification must never break the tick
         print(f"NOTIFY-FAIL draft={draft['id']} "
               f"err={triage_core.redact(str(error))[:120]}", file=sys.stderr)
@@ -234,6 +265,14 @@ def cmd_watch(_args: argparse.Namespace) -> int:
     for draft in triage_gate.list_drafts():
         if draft.get("status") != "pending":
             continue
+        try:
+            if triage_approval.expire_retired_approval(draft):
+                print(f"EXPIRED draft={draft['id']} reason=approval-surface-retired")
+                continue
+        except triage_gate.GateError as error:
+            if error.exit_code != 1:
+                raise
+            continue
         if not draft.get("message_id"):
             draft = {**draft, "message_id": triage_pipeline._post_draft_for_approval(draft)}
             print(f"REPOSTED draft={draft['id']} message={draft['message_id']}")
@@ -250,7 +289,7 @@ def cmd_watch(_args: argparse.Namespace) -> int:
             continue
         if action == triage_confirm.CANCEL_EMOJI:
             triage_gate.discard_draft(draft["id"])
-            triage_confirm.dm_owner("메일 발송 취소됨")
+            _notify_cancelled(draft)
             print(f"CANCELLED draft={draft['id']} method=manual_reaction")
             continue
         if action != triage_confirm.APPROVE_EMOJI:
@@ -337,6 +376,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     draft.add_argument("--no-post", action="store_true", help="초안만 만들고 승인 메시지 게시 생략")
     draft.add_argument("--with-evidence", action="store_true", help="상대·주제 관련 개인 근거 사용")
+    draft.add_argument(
+        "--reply-all", action="store_true",
+        help="전체회신 — 원문의 받는 사람·참조 전원을 Cc 에 넣는다 (소유자·발신자 제외)",
+    )
     draft.set_defaults(func=cmd_draft)
 
     compose = sub.add_parser(
@@ -355,6 +398,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compose.add_argument("--no-post", action="store_true", help="초안만 만들고 승인 메시지 게시 생략")
     compose.add_argument("--with-evidence", action="store_true", help="상대·주제 관련 개인 근거 사용")
+    compose.add_argument(
+        "--origin-channel-id", default="",
+        help="발신 지시를 받은 원 채널 id — 발송/취소 결과를 이 채널의 스레드로 통지",
+    )
+    compose.add_argument(
+        "--origin-message-id", default="",
+        help="원 채널의 지시 메시지 id — 있으면 그 메시지에 결과 스레드를 앵커",
+    )
+    compose.add_argument(
+        "--in-reply-to", default="", metavar="UID",
+        help="후속 메일 — 이 uid 메일의 원문(헤더+본문)을 발송 본문 하단에 인용",
+    )
     compose.set_defaults(func=cmd_compose)
 
     evidence = sub.add_parser("evidence", help="상대·주제 관련 근거 미리보기")

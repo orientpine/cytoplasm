@@ -1,0 +1,1 @@
+agent|automation/research_trends/research_trends.py|.hermes/scripts/research_trends.py|required

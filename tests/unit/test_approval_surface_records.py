@@ -93,7 +93,8 @@ def test_records_that_persist_a_resolved_binding(
             "skills/coordination/scripts/coordination_pending.py",
             "skills/coordination/scripts/coordination_approval.py",
             ("draft_id", "sha256", "dm_channel_id", "dm_message_id", "slot", "summary",
-             "correlation", "duration_min", "created", "key",
+             "correlation", "duration_min", "created",
+             "origin_channel_id", "origin_message_id", "key",
              "kind", "surface", "channel_id", "policy_version"),
         ),
     ),
@@ -104,8 +105,13 @@ def test_pending_confirm_records_make_the_binding_the_only_channel_source(
 ) -> None:
     # Given / When: the persisted field set, and every channel its writer sets.
     persisted = _annotated_fields(relative, "PendingConfirm")
+    # `origin_channel_id` is a result-notice routing fact (2026-08-23), NOT another
+    # source of the approval channel — the SI-5 invariant below governs only where
+    # the approval message lives, so the origin binding is excluded from the scan.
     written = frozenset(
-        source for name, source in _keyword_bindings(approval, "commit") if "channel" in name
+        source
+        for name, source in _keyword_bindings(approval, "commit")
+        if "channel" in name and not name.startswith("origin_")
     )
 
     # Then: the record now ends in the whole binding, and the older `dm_channel_id`

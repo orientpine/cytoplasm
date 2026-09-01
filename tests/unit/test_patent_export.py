@@ -16,6 +16,8 @@ from scripts.patent_storage import PatentPaths, private_directory, write_private
 OWNER = "123456789"
 APPROVALS_CHANNEL = "1528936606856122421"  # digit-only: bindings refuse a placeholder id
 OWNER_DM_CHANNEL = "1526487935975952385"
+AGENT_CHAT_CHANNEL = "1526487935975952390"
+AGENT_CHAT_THREAD = "1526487935975952391"
 APPROVE = "\u2705"
 CANCEL = "\u26d4"
 MARKER = "SYNTH-BODY-MARKER-DO-NOT-LEAK"
@@ -49,11 +51,27 @@ class FakeDiscord:
             return {"id": OWNER_DM_CHANNEL}
         if method == "GET" and path.startswith("/channels/") and path.count("/") == 2:
             return self.describe(path.rsplit("/", 1)[-1])
+        if method == "GET" and path == "/guilds/guild/threads/active":
+            return {"threads": [{
+                "id": AGENT_CHAT_THREAD,
+                "type": 11,
+                "name": "승인-patent-export",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }]}
         return {"id": "x"}
 
     def describe(self, channel_id):
         if channel_id == OWNER_DM_CHANNEL:
             return {"id": channel_id, "type": 1, "recipients": [{"id": OWNER}]}
+        if channel_id == AGENT_CHAT_CHANNEL:
+            return {"id": channel_id, "type": 0, "name": "agent-chat", "guild_id": "guild"}
+        if channel_id == AGENT_CHAT_THREAD:
+            return {
+                "id": channel_id,
+                "type": 11,
+                "name": "승인-patent-export",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }
         return {"id": channel_id, "type": 0, "name": "approvals"}
 
     def approve(self, user_id=OWNER, bot=False):
@@ -80,7 +98,11 @@ def env(tmp_path, monkeypatch):
     ssh.write_text("ssh-ed25519 AAAAtest test\n", encoding="utf-8")
     interop = tmp_path / "interop.json"
     interop.write_text(
-        json.dumps({"owner_id": OWNER, "personal_approvals_channel_id": APPROVALS_CHANNEL}),
+        json.dumps({
+            "owner_id": OWNER,
+            "personal_approvals_channel_id": APPROVALS_CHANNEL,
+            "agent_chat_channel_id": AGENT_CHAT_CHANNEL,
+        }),
         encoding="utf-8",
     )
     perms = tmp_path / "perms.json"

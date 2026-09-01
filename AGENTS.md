@@ -1,4 +1,6 @@
 # AGENTS.md — autophagy-agents repo, orchestrator/agent instructions
+> **Tool-call encoding**: Always write Korean (and other non-ASCII) strings in tool-call parameters as literal UTF-8; never as `\uXXXX` unicode escapes.
+
 
 **Generated:** 2026-07-20 · **Updated:** 2026-07-30 · **Commit:** 157dbd1 · **Branch:** main
 
@@ -8,7 +10,7 @@ cha의 개인 Hermes 에이전트 시스템. Discord로 타 연구자 에이전�
 ## STRUCTURE
 ```
 autophagy/
-├── skills/       # 17개 스킬 디렉터리 (16 기능 + hello-autophagy 데모). 각 <name>/{SKILL.md, scripts/*_cli.py, scripts/*watch.py, deploy.sh}. 에이전트가 스스로 만든 자가 스킬은 이 트리에 없다(각 계정의 `~/.hermes/skills`)
+├── skills/       # 18개 스킬 디렉터리 (17 기능 + hello-autophagy 데모). 각 <name>/{SKILL.md, scripts/*_cli.py, scripts/*watch.py, deploy.sh}. 에이전트가 스스로 만든 자가 스킬은 이 트리에 없다(각 계정의 `~/.hermes/skills`)
 ├── automation/   # 오케스트레이션·게이트·워처·배치 코어 (interop, repair, rag_ingest, report_hub, skill_generation, selfskill_audit, twin_distill, twin_observe, managed_skills, managed_sync ...)
 ├── configs/      # routing-policy.md, peers.example.yaml, sensitivity-rules.yaml, external-effect-tools.yaml, rag/, litellm-staging/
 ├── prompts/      # 버전형 LLM 프롬프트 자산
@@ -25,11 +27,14 @@ autophagy/
 | 외부효과 승인 게이트 | `automation/interop/external_effect_gate.py` | fail-closed, 해시 바인딩 |
 | 인터롭 규약(보고/질의/조율) | `docs/guide/interop-규약.md`, `automation/interop/` | 단일 진실 |
 | 워처/cron 설계 규칙 | `docs/guide/watcher-cron-설계규약.md` | no-agent cron 필수 규약 |
+| 음성 녹취 → 회의록 | `skills/speechtotext/` | Drive 감시 폴더 → 전사본(.md) → meeting 체인. 전사는 기본 로컬(whisper.cpp) — 민감도 게이트는 텍스트만 보므로 외부 API는 원음을 게이트 **전에** 내보낸다 |
 | 기능 현황·웨이브 맵 | `docs/features.md` → `.omo/plans/autophagy-agents.md` | 계획 문서가 단일 진실 |
 | 의사결정 트윈 스키마 | `docs/guide/decision-twin-스키마.md` | 트윈 키·판단 근거 규약 |
 | 라우팅·모델·예산 정책 | `configs/routing-policy.md`, `configs/*.yaml` | 주=gpt-5.6-sol, glm-main=폴백·배치, `<monthly-soft-cap>`/`<monthly-hard-cap>`, patent-sensitive=GLM 403 |
+| 참고자료(근거) 조회 | `automation/drive_reference.py`, `skills/recall/scripts/recall_reference.py` | 소유자가 Drive 에 모아 둔 참고자료에서 근거 구절을 찾는 **읽기 전용** 경로. 루트는 `DRIVE_REFERENCE_ROOT`(기본 `KIMM`)이며 산출물 루트(`autophagy/`)와 **다른 트리**다 — 그 폴더는 소유자의 보관함이라 폴더를 만들지 않는다(`ensure_folder_path` 금지, `find_folder_path` 사용). 회의록은 참고자료를 발표자료와 같은 `Deck` 경로로 받아 민감도 게이트에 함께 합산하며, 질의는 회의 라벨·과제명에 **전사 본문 상위 낱말**을 더해 만든다. 읽을 수 없는 형식과 크기는 `reference_rank.refusal` 이 **내려받기 전에** 판정한다 |
+| Drive 산출물 발행 | `automation/drive_outputs.py`, `docs/guide/drive-publish.md` | 스킬 산출물은 단일 루트 `autophagy/`에 파사드로만 발행 — 규약은 guide가 단독 소유. `project=` 를 주면 카테고리와 연도 사이에 **과제 한 단**이 들어가고(전사본·회의록), 주지 않으면 경로는 예전과 동일해 나머지 스킬은 무영향 |
 | QA 증적 | `docs/qa/<wave-id>/` | 마스킹된 증적 (원시는 ops 전용) |
-| Discord 2-서버·승인 채널 구조 | `docs/guide/discord-server-architecture.md`, `automation/interop/approval_surface.py` | **소유자 전용 승인=행위 봇의 오너 DM / 스킬 공급망 승인=개인 서버 `#approvals`**(배포·peer attest·발행·managed 활성화 — 2차 주체인 peer 봇이 같은 채널을 봐야 하므로). 893da68은 승인을 공유 Lab이 아닌 **개인 서버**로 옮긴 결정이며 공급망에 한정된다. 표면은 `approval_surface.py`가 단일 결정하고 conformance 테스트가 강제한다 — 산문이 아니라 코드가 진실. 이관 진행 중(AS): calendar·coordination·wiki·mail compose는 이미 DM, 나머지는 계획 `.omo/plans/approval-surface-ssot.md` 순서대로 전환 |
+| Discord 2-서버·승인 채널 구조 | `docs/guide/discord-server-architecture.md`, `automation/interop/approval_surface.py` | **소유자 전용 승인=개인 서버 `#agent-chat`의 kind별 스레드(v8, 2026-08-30 — repair 포함·Ops 봇 초대 전제, 초대 전 릴리스 금지; v7은 repair만 오너 DM 잔류였다) / 스킬 공급망 승인=개인 서버 `#approvals`**(배포·peer attest·발행·managed 활성화 — 2차 주체인 peer 봇이 같은 채널을 봐야 하므로). 893da68은 승인을 공유 Lab이 아닌 **개인 서버**로 옮긴 결정이며 공급망에 한정된다. 표면은 `approval_surface.py`가 단일 결정하고 conformance 테스트가 강제한다 — 산문이 아니라 코드가 진실. 해석 키는 `~/.hermes/interop/config.json`의 `agent_chat_channel_id`(미설정=fail-closed). 정기 통지(일일 지출·주간 동향·아침 감사·헬스체크·리마인더)는 별도 `#notifications` — `owner_notice_channel_id`(미설정=DM), 발신은 `automation/owner_notice.py` 파사드 단일 경로(ON-2 이관, ON-3 conformance: 파사드 밖 DM 오픈 신설=RED) |
 | 장애 대응·운영 제약 | `docs/guide/incident-response.md`, `docs/guide/operations.md` | 원인 확인 전 재시작/설정변경/키 재발급 금지 |
 | 관리형 스킬 발행 | `automation/managed_skills/`, `docs/guide/managed-skill-channel.md`, `docs/guide/manual-group-admin.md` | 발행자(cha) 전용. 대상 repo = 그룹 스킬 채널 `orientpine/ribosome`(private) — 코드 repo도, 공개 배포본도 아니다(「세 저장소 구분 규칙」) |
 | 개인→그룹 스킬 제출 | `automation/managed_skills/submission_*.py` | personal provenance 재사용, 그룹 `#approvals` 검토, 자동 import 없음 |
@@ -42,9 +47,10 @@ autophagy/
 |--------|------|----------|------|
 | `evaluate_tool_call` | fn | `automation/interop/external_effect_gate.py` | 외부효과 denylist 게이트 — 읽기 허용, mutation은 소유자 승인 레코드 필요 |
 | `DiscordTransport` | class | `automation/interop/discord_transport.py` | 순차 청킹 전송 + 429 Retry-After 백오프 (8 callers) |
+| `origin_notice` | module | `automation/interop/origin_notice.py` | 승인 **결과** 통지의 원 채널 스레드 배달(주입 전용: api·transport_factory·fallback; 앵커 스레드 우선, 400=재사용, 실패 시 `NOTIFY-THREAD-FAIL`+폴백) — 전 스킬 공유 단일 구현, 사본 금지(「결과 통지 원채널 스레드 규칙」) |
 | coordination | module | `automation/interop/coordination.py` | 에이전트간 일정 조율 순수 상태머신 (deadlock/재협상 규칙) |
 | `skill_gate` | module | `automation/skill_gate.py` | 스킬 배포 승인 게이트 (✅ 리액션, `GATE_DIR`, `APPROVAL_LOG`) |
-| `deploy-skill.sh` | script | `automation/deploy-skill.sh` | 배포 4단계: SANDBOX→REVIEW→owner ✅→MOUNT. 요청만 올리면(`--request-only`) **✅ 한 번으로 2분 내 자동 마운트** — `supply_chain_plan.SUPPORTED_KINDS`가 스킬 이름이 아니라 종류(`skill-deploy`) 기준이라 **신규 스킬도 등록 없이 포함**된다. 재개가 실패하면 그 요청은 유예되지만 영구가 아니다 — 실패 지문이 `릴리스 sha:사유`라 **원인을 고쳐 랜딩해 릴리스가 바뀌면 다음 tick에 자동 재시도**되고, 대기 중에도 매 tick `backoff (attempt N, retry in Ns)` 한 줄이 남아 사라진 것과 구분된다(`docs/guide/스킬-제작.md` §2) |
+| `deploy-skill.sh` | script | `automation/deploy-skill.sh` | 배포 4단계: SANDBOX→REVIEW→owner ✅→MOUNT. 요청만 올리면(`--request-only`) **✅ 한 번으로 2분 내 자동 마운트**. **`--release-approval`(VA-2)**은 per-skill ✅를 릴리스 승인으로 대체하되 SANDBOX·REVIEW·peer attestation을 유지한다. release plan은 매번 전체 governed skill digest를 담아 늦게 발견한 stale mount도 같은 release ✅로 수렴 가능하다. stage 3에서 node current의 canonical SHA가 로컬 HEAD와 같으면 이미 sealed release이므로 unsigned origin/main 재수렴을 생략하고, 다를 때만 기존 서명 수렴을 호출한다. 단독 수동 배포는 기존 per-skill 승인 그대로(§10-3 핫픽스 경로) |
 | `repair_capability` | module | `automation/repair/repair_capability.py` | repair 티켓·occurrence HMAC capability의 경쟁 안전 발급·게시·검증·소급 보정 |
 | `repair_report_queue` | module | `automation/repair/repair_report_queue.py` | capability-bound enum-only 보고 요청 큐 + 엄격 파서 + 신원 대조 영수증 기반 compact |
 | `repair_report_send` | module | `automation/repair/repair_report_send.py` | repair lifecycle 보고 직접 전송 + watermark 범위 정확 조회 |
@@ -52,6 +58,7 @@ autophagy/
 | `repair_report_reconcile` | module | `automation/repair/repair_report_reconcile.py` | ops 종결 lifecycle에서 누락된 보고 요청을 멱등 복구하는 보정기 |
 | `repair_report_consume_watch` | cron | `automation/repair/cron/repair_report_consume_watch.py` | Discord 수신 없이 agent 소유 런타임의 repair 보고 큐를 실행하는 no-agent 래퍼 |
 | `rag_ingest` | pkg | `automation/rag_ingest/` | 개인 RAG 인제스트 (content-hash 멱등, patent-sensitive 태깅) |
+| `mail_quote` | module | `skills/mail/scripts/mail_quote.py` | 기관메일 회신·후속메일의 **원문 인용** 순수 로직 — wrapper `get --body` 의 mailon markdown 을 파싱해 `-----원본 메시지-----` 헤더+본문을 발송 argv 하단에 붙인다(vendor 에 답장 명령이 없어 새 compose 로 나가므로). draft `body` 는 검토용 회신문만, `quote` 는 인용, 둘 다 승인 해시에 바인딩. `reply_all_cc` 가 To∪Cc−소유자−발신자를 Cc 로 만든다 |
 | `recall` | module | `skills/recall/scripts/recall_cli.py` | RAG 검색 (v2: patent-sensitive는 주 모델 non-GLM 기계검증 시만 센티널 부착 포함, 그 외 제외 — GLM 폴백은 LiteLLM 센티널 403이 차단) |
 | `obsidian` | module | `automation/rag_ingest/sources/obsidian.py` | Obsidian RAG 소스 (read-only git 미러, 민감 태깅) |
 | `wiki_store` | module | `skills/wiki/scripts/wiki_store.py` | 위키 저장소 (5필수 + 트윈 키 스키마 v1) |
@@ -67,18 +74,50 @@ autophagy/
 | `managed_sync_watch` | cron | `automation/managed_sync/cron/managed_sync_watch.py` | 구독자 틱 **단일 구현** — Hermes cron(`deploy.sh`)과 systemd 타이머(`systemd/`, 설치기 opt-in)가 둘 다 이것을 돌린다. 겹친 틱=`FileKeyLease`로 무음 exit 0, 자식 env에 자격증명+두 runtime root 명시 전파, skill tag sync 성공 뒤 같은 mirror의 roster ref를 **별도 fetch**(부재/거부가 skill rc를 바꾸지 않음), staged 릴리스가 생긴 틱에만 기존 `owner_notice`로 best-effort 알림 1건(거부는 저널에만 — 매 틱 반복되므로 DM 홍수 방지) |
 | `OPT_IN_COMPONENTS` | registry | `automation/install/components.py` | 설치기 opt-in 컴포넌트 단일 레지스트리. **이름을 대지 않으면 파일도 타이머도 생기지 않는다**(disabled가 아니라 absent). 멱등성은 기존 `build_plan`의 digest·활성타이머 대조에서 그대로 온다 |
 | `install-managed` | verb | `automation/skill_store.py` | 관리형 스킬 전용 루트 설치 헬퍼 |
+| `drive_taxonomy` | module | `automation/drive_taxonomy.py` | Drive 산출물 이름·배치 순수 로직 — 카테고리 레지스트리(단일 출처), 기간 키(ISO주/월/최초생성일), depth 5 상한, gate_only(patent) 거부 |
+| `drive_outputs` | module | `automation/drive_outputs.py` | 산출물 발행 **단일 파사드** — (이름,부모) upsert로 사본 1개 유지, owner-only + 재다운로드 sha256 검증, 번들/companion 처리. `publish_best_effort`는 `DRIVE_PUBLISH_ENABLED=1` 옵트인. 사본 금지, `tests/unit/test_drive_outputs_conformance.py`가 강제 ([규약](docs/guide/drive-publish.md)) |
+| `drive_migrate_outputs` | module | `automation/drive_migrate_outputs.py` | 레거시 Drive 배치 → 새 트리 1회성 마이그레이션 CLI — dry-run 기본, mutation은 `--apply`에만, 삭제 없이 trash만 |
+| `drive_reference` | module | `automation/drive_reference.py` | 소유자 참고자료 폴더 **읽기 전용** 조회 — 옵트인(`DRIVE_PUBLISH_ENABLED=1`) 없으면 클라이언트도 만들지 않고, 루트가 없으면 **만들지 않고** `REFERENCE-ROOT-MISSING`. 깊이 4·폴더 60·파일 400 상한의 결정적 walk → 랭킹 → 상위 N건만 내려받아 근거 구절. **형식·크기는 내려받기 전에 판정**하므로 설문·구형 hwp·64MiB(`MAX_REFERENCE_BYTES`) 초과는 자리를 차지하지 않는다. 랭킹은 `reference_rank` 가, 본문은 `document_text` 가 소유하고 여기는 Drive I/O 와 오케스트레이션만 남는다 |
+| `reference_rank` | module | `automation/reference_rank.py` | 참고자료 후보 줄 세우기 **순수 로직**(Drive 미의존) — `refusal()` 이 메타데이터만으로 거부 사유를 내고 그것이 정렬의 첫 열쇠라 **읽을 수 없는 파일이 fetch 슬롯을 못 먹는다**. 결과 순서는 `coverage`(맞은 낱말 **가짓수**) 우선 — 전사 본문에서 뽑은 질의어에는 아무 문서에나 있는 낱말이 섞이므로 횟수만 세면 엉뚱한 문서가 올라온다 |
+| `document_text` | module | `automation/document_text.py` | 파일 → 순서 있는 단위별 본문 **단일 정의**(pdf·pptx·docx·hwpx·xlsx·md·txt·csv). raise 하지 않고 `Extracted.status` 로 사유를 돌려주며, 구형 바이너리 `.hwp` 는 **행동 가능한 안내**("hwpx 나 pdf 로 저장해 주세요")로 거부한다(hwpx-core 스킬도 같은 규칙). `meeting_slides` 는 이제 사본을 갖지 않고 여기에 위임해 `[슬라이드 N]` 라벨만 붙인다 |
+| `drive_publish_cli` | module | `automation/drive_publish_cli.py` | 세션이 손으로 산출물을 발행하는 **유일한 명령** — 인자만 파싱해 `drive_outputs.publish` 에 넘긴다(업로드 로직 0, 그래서 conformance 가 그대로 성립). 모르는 kind·gate-only kind·**스킬이 소유한 kind(`meeting`·`transcript`)**·없는 파일은 Drive 를 건드리기 전에 거부(exit 2)하고 — 회의록을 손으로 써서 발행하면 원장을 거치지 않아 관리번호가 존재할 수 없다(2026-08-27 실측) —, `DRIVE_PUBLISH_ENABLED` 미설정이면 조용히 넘기지 않고 `DRIVE-PUBLISH-DISABLED` 로 실패한다(exit 3) — 손으로 돌리는 사람이 침묵을 성공으로 읽으면 안 된다 |
 | `classify_save_request` | fn | `skills/doctype/scripts/doctype_routing.py` | 문서 저장 목적지 결정론 라우터 — 개인노트=Obsidian 단독 / 목적지 미지정=Drive 비공개 / 모호=clarify(fail-closed). `doctype_cli`가 mutation 직전에 강제(RTS-A) |
 | `obsidian_write` | pkg | `automation/obsidian_write/` | Obsidian 승인형 쓰기 — RAG 미러와 **분리된 클론** + `-rw` 키, PARA 결정적 upsert → commit → push → 원격 read-back 해시 검증. 외부효과 게이트 바인딩(SI-5 개정) |
 | `memory_routing` | pkg | `automation/memory_routing/` | ‘기억해’ 저장 분류·단일 흐름 — canonical=위키 노트(기존 wiki_gate 재사용), 짧고 안정적 사실만 MEMORY.md 병기, 임시 상태는 비영속, 모호하면 보수적 기본값 |
 | `entity_preflight` | pkg | `automation/entity_preflight/` | 외부 쓰기 전 개인 고유명사 해석 — 관계 기반 질의 재작성 + 로컬 RAG·주소록 대조, 고신뢰 단일 후보만 자동 정규화, 모호하면 `ENTITY-CLARIFY`(승인 게이트 아님) |
-| `todo` | skill | `skills/todo/scripts/todo_cli.py` | Google Tasks 쓰기의 리포측 소유자 — `gws_tasks_mutation` denylist 규칙로 게이트 경유, 등록 후 `tasks get` 재조회 검증. 쓰기는 **오너-DM ✅ 사이클**을 먼저 거친다 — `todo_approval*.py`(삹인 파사드 producer, `ApprovalKind.TODO`) · `todo_confirm_reaction_watch.py`(owner-only 리액션만 폴링) · `todo_execution_claim.py`(`O_EXCL` 일회 claim; `write_started` 잔존 시 exit 7로 자동 재삽입·거짓보고 모두 거부). 상세 [소개](docs/기능소개/todo-소유자-DM-승인-경로.md) |
+| `todo` | skill | `skills/todo/scripts/todo_cli.py` | Google Tasks 쓰기의 리포측 소유자 — `gws_tasks_mutation` denylist 규칙로 게이트 경유, 등록 후 `tasks get` 재조회 검증. 쓰기는 **소유자 ✅ 사이클**을 먼저 거치며, 승인 표면은 산문이 아니라 `approval_surface`가 정한다 — 정책 v7에서 `ApprovalKind.TODO`는 `#agent-chat`의 `승인-todo` 스레드다(오너 DM 아님). `todo_approval*.py`(승인 파사드 producer; `request`가 동결한 tasklist·제목·notes·due를 레코드에 함께 적는다 — 마스킹된 `argv_summary`만으로는 무엇을 쓸지 복원할 수 없다) · `todo_confirm_reaction_watch.py`(owner-only 리액션 폴링 **+ 같은 틱에서 승인된 등록까지 수행**: `execute_approved_writes()`가 (archive된 approved 세대 × claim receipt)로 매 틱 유도하는 멱등 리컨실러라 상태를 따로 저장하지 않고, 중간에 죽어도 다음 틱이 이어받되 두 번 쓰지 않는다) · `todo_execution_claim.py`(`O_EXCL` 일회 claim; `write_started` 잔존 시 exit 7로 자동 재삽입·거짓보고 모두 거부). 상세 [소개](docs/기능소개/todo-승인-후-자동-등록.md) |
 | `provision-skill-roots.sh` | script | `automation/provision-skill-roots.sh` | 스킬 루트 토폴로지 **반전** 프로비저너(멱등, root 실행) — 레거시 read-only bind 해제와 fstab 2행 제거, agent 1차 루트를 0700 agent 소유로, `.hub` 상태를 taps.json sha256 readback과 함께 이관, config에 `external_dirs`+`guard_agent_created` 패치(기존 `skills:` 블록은 넘겨짚지 않고 `SKILLS-BLOCK-BLOCK`으로 멈춤), 끝에 `hermes skills list`로 external 발견 선검증. peer arm은 잔여 사본을 3중 조건(이름·author 마커·repo 존재)으로만 정리하고 현역 자가 스킬 2개를 pin |
-| `selfskill_audit` | pkg | `automation/selfskill_audit/` | 자가 스킬 사후 감사 — `ledger.audit()`가 계정 스킬 루트와 `.archive`를 스캔해 콘텐츠 해시(`skill_review.skill_digest`) 기준 델타(created/edited/archived/restored/removed — 아카이브 없이 사라진 것도 보고)를 append-only `ledger.jsonl`에 적재, `report.run_once()`가 미보고분만 마스킹 요약으로 소유자 DM한 뒤 watermark를 전진시킨다(전송 실패시 전진 없음). cron `selfskill_audit_watch.py`(agent·peer 각 09:00 no-agent) |
+| `speechtotext` | skill | `skills/speechtotext/scripts/speechtotext_cli.py` | 음성 → 전사본(.md) → **meeting CLI 자식 호출**로 회의록. 회의록 도메인(민감도 게이트·칸반·통지·Drive 발행)은 meeting 이 그대로 소유하고 여기서 재구현하지 않는다. 전사 백엔드는 `auto`(로컬 whisper.cpp 우선)·`local`(도구 없으면 exit 4, **네트워크 폴백 금지**)·`api`(OpenAI 호환, 25MiB 초과 시 15분 창+10초 겹침 분할). Drive 감시 폴더는 `speechtotext_drive_watch.py`(no-agent cron, 폴더 미설정=무동작·소유자 단독 소유만·성공 후 마킹) |
+| `stt_polish` | module | `skills/speechtotext/scripts/stt_polish.py` | 전사본을 **읽을 수 있게** 다듬는다(요약 아님) — 문장·문단 분할, 연속 완전중복만 접기, 용어집 치환. 같은 용어집이 전사 전 `--prompt` 힌트와 전사 후 치환에 함께 쓰인다. 해석(결정사항·액션아이템)은 meeting 이 소유하고 이 모듈은 그 경계를 넘지 않는다 |
+| `stt_coverage` | module | `skills/speechtotext/scripts/stt_coverage.py` | 장시간 녹취의 **조용한 잘림** 탐지 — 구간 타임스탬프 합집합 vs `ffprobe` 실제 길이. 침묵은 결함이 아니므로 커버리지 비율로 판정하지 않고 설명되지 않는 앞/뒤·내부 공백만 문제 삼으며, 길이를 모르면 완결을 주장하지 않는다(불충분하면 exit 8) |
+| `meeting_minutes` | module | `skills/meeting/scripts/meeting_minutes.py` | 회의록 문서 서식의 **단일 정의** — 메타 헤더→한눈에 보기→결정사항→액션 표→마일스톤→논의→미결→다음 회의→부록 순서, 빈 조건부 섹션 생략, 그리고 **근거 하단 규칙**(본문엔 `[근n]` 마커만, 근거 원문·`[E1]` 출처·원문 전사본은 `## 부록 · 근거와 원문` 아래). `[^1]` 각주 문법은 쓰지 않는다 — 지원 렌더러가 정의를 문서 끝으로 옮겨 우리 제목을 비우고 Drive 프리뷰 지원도 미확인이다. `meeting_actions.write_note`는 이 렌더러에 위임만 하며 사본 금지(고정: `tests/unit/test_meeting_minutes.py`). `--project` 가 있으면 이 순서 대신 **과제 회의록 양식의 절 순서**(`meeting_template`)로 배치하고, 어느 경로든 문서 끝은 미결·신규 **Action Item 표**다 |
+| `meeting_template` | module | `skills/meeting/scripts/meeting_template.py` | 과제 회의록 양식(.md/.markdown/.txt)의 절 번호·제목·순서를 파싱해 회의록 블록을 그 자리에 넣는다 — 절 제목을 슬롯으로 분류(`classify`), 하위 절이 이미 채우는 상위 절은 제목만 찍고(`_covered`), 회의가 채울 것 없는 절은 `- (해당 없음)`. 양식이 없거나 못 읽으면 호출부가 내장 골격으로 되돌아간다 |
+| `meeting_action_db` | module | `skills/meeting/scripts/meeting_action_db.py` | 과제별 action item 원장(`action-items.csv`) 의 **단일 정의** — 로드/덤프, 미결·신규·완료 병합(`merge`; 완료 행은 삭제하지 않고 status만 전환), 그리고 `관리번호 \| 내용 \| 조치기한 \| 담당기관` 표 렌더. `render_sections` 와 `split_sections` 는 서로의 역이라 같은 모듈에 둔다 |
+| `meeting_action_id` | module | `skills/meeting/scripts/meeting_action_id.py` | 관리번호 10자(`<영문4><연도2><일련4>`, 예 `HOGS260015`) 의 발급·파싱 — 한글 초성 로마자화로 후보 코드를 만들고, `project-codes.csv` 레지스트리와 대조해 **전 과제에 걸쳐 유일한** 코드만 배정한다(충돌 시 마지막 글자를 민다). 일련번호는 같은 코드·연도 중 최대치 +1 이고 과제·연도당 10,000건이 한도다. **번호는 발급 시점에 정해져 바뀌지 않는다** — 미결/신규는 번호의 속성이 아니라 상태이며, 한도 소진은 `ActionIdError` 로 fail-closed 하고 CLI 가 그것을 받아 회의록을 잃지 않는다 |
+| `pipeline_lock` | module | `automation/pipeline_lock.py` | 녹음→전사본→회의록 파이프라인의 **단일 lock**. `speechtotext_drive_watch` 와 `meeting_pending_transcript_watch` 가 같은 파일을 잡는다 — 전사본 발행과 회의록 생성 사이(실측 258.9초)가 야간 워처의 미처리 판정 조건과 정확히 겹치고, `*/5` 는 `:00` 에도 돌아 자정에 둘이 동시에 시작하기 때문이다. 워처마다 자기 lock 을 두면 자기 겹침만 막고 서로는 모른다. 잡지 못하면 rc 0 양보(다음 틱), lock 을 열지도 못하면 진행하지 않는다(fail-closed). 규약 (n), 회귀 `tests/unit/test_pipeline_lock.py` |
+| `meeting_pending_transcript_watch` | cron | `skills/meeting/scripts/meeting_pending_transcript_watch.py` | 매일 **00:00 KST** 미처리 전사본을 회의록으로 만드는 no-agent 워처. Drive 만 폴링해 실시간 에이전트와 경쟁하지 않고, `~/.env.secrets` 를 자가 로드해 `DRIVE_PUBLISH_ENABLED` 까지 자식 env 에 명시 전파한다(그게 빠지면 원장 없는 회의록이 조용히 나온다). 마운트는 `automation/skill_mount.py` 가 단독 판정하고 못 찾으면 자식을 띄우지 않는다. **stdout 이 곧 통지**라 만들 것이 없는 밤은 침묵한다. 다건은 상한까지 순차 처리 — 대화형 `!meeting` 의 "고르지 않고 멈춤"을 야간에 그대로 쓰면 매일 밤 같은 이유로 선다. cron 표현식은 노드 TZ(UTC)가 아니라 **스케줄러의 +09:00** 으로 해석된다 |
+| `meeting_runtime` | module | `skills/meeting/scripts/meeting_runtime.py` | 마운트된 스킬이 `automation` 을 찾는 **단일 정의**. 갈라져 있던 동안 `meeting_project._repo` 만 `parents[3]` 깊이 추측을 들고 있었고, 라이브 마운트 실경로(`/srv/autophagy-skills/releases/meeting/<digest>/scripts`)에 repo 가 없어 `ModuleNotFoundError` 로 죽었다 — 그 실패가 `BOARD-FETCH-FAIL` 로 삼켜져 양식·원장·미처리 전사본 조회가 전부 조용히 무력했다(2026-08-28 실측). 회귀는 마운트와 같은 깊이에서 별도 프로세스로 import 하는 `tests/unit/test_meeting_runtime_root.py` 가 고정한다 |
+| `meeting_project` | module | `skills/meeting/scripts/meeting_project.py` | 과제 폴더의 Drive 상태(양식·원장·레지스트리)를 읽고 쓰는 **best-effort 경계** — 실패는 `BOARD-FETCH-FAIL`/`BOARD-SAVE-FAIL` 한 줄로 축약되어 회의록 생성을 절대 막지 않고, 읽을 수 없는 양식(.hwp/.docx)은 추측 대신 `TEMPLATE-UNREADABLE`. 과제 없음·민감 회의·`DRIVE_PUBLISH_ENABLED≠1` 이면 Drive 를 아예 건드리지 않는다. `pending_transcripts` 는 `전사본/<과제>/<연도>/` 를 훑어 회의록 폴더에 `회의록-<전사본 파일명>` 이 없는 것만 고른다 — 이름 대조이지 내용 해시가 아니다(전사본이 다시 다듬어져 발행되면 지문은 바뀌지만 같은 회의다). `detect_project` 는 `--project` 도 전사본 경로도 없을 때 라벨을 **이미 있는 과제 폴더 이름**과 대조해 과제를 찾는다 — 지어내지 않으므로 없는 폴더를 만들지 않고, 중첩 이름은 최장 일치, 무관한 두 이름이 함께 걸리면 아무것도 고르지 않는다(엉뚱한 과제에 원장을 쓰는 것이 과제 없이 가는 것보다 나쁘다) |
+| `meeting_types` | module | `skills/meeting/scripts/meeting_types.py` | 추출 결과의 **모양**(데이터클래스)과 인용 정리 변환 하나. `meeting_schema`(LLM JSON 을 어디까지 봐줄 것인가)와 갈라져 있고 파서를 import 하지 않는다(순환 없음) — `meeting_schema` 가 전부 재수출하므로 기존 호출부는 그대로. `ResolvedAction.id` 는 생성 산문이 아니라 원장 키라 정리 대상에서 제외한다 |
+| `meeting_slides` | module | `skills/meeting/scripts/meeting_slides.py` | 발표자료(pdf/pptx/md/txt) 텍스트 추출 — 대명사·모호 지시어 교정 재료. **fail-soft**(스캔본·미지원·부재는 예외가 아니라 `Deck.status`로 돌아오고 ingest는 계속) + **fail-closed**(`gate_text()`로 회의 본문과 함께 민감도 게이트에 합산 — 빠뜨리면 특허 슬라이드가 GLM으로 샌다) |
+| `selfskill_audit` | pkg | `automation/selfskill_audit/` | 자가 스킬 사후 감사 — `ledger.audit()`가 계정 스킬 루트와 `.archive`를 스캔해 콘텐츠 해시(`skill_review.skill_digest`) 기준 델타(created/edited/archived/restored/removed — 아카이브 없이 사라진 것도 보고)를 append-only `ledger.jsonl`에 적재, `report.run_once()`가 미보고분만 마스킹 요약으로 소유자 DM한 뒤 watermark를 전진시킨다(전송 실패시 전진 없음). 아침 보고에는 기능 겹침 advisory(SC-4, `overlap.py` — 다른 이름·같은 기능 자가 스킬을 description·tags 토큰 containment ≥0.5·겹침 ≥5 로 `OVERLAPS-GOVERNED:<skill>` 보고, 오탐 상한은 governed 18개 상호 대조 0건으로 회귀 고정)가 함께 실린다. cron `selfskill_audit_watch.py`(agent·peer 각 09:00 no-agent) |
+| `state_backup` | pkg | `automation/state_backup/` | 주 1회 암호화 상태 백업(SC-3) — `~/.hermes` allowlist tar → 로컬 키(`~/.hermes/backup/backup.key`, 부재/노출 권한=fail-closed, 키 미업로드) openssl 암호화 → 기존 `DriveClient`로 전용 루트 `autophagy-backups/<계정>/` 업로드(owner-only+read-back) → 8세대 밖 trash. 매일 03:15 cron + 배달 주간 워터마크(검증 후에만 전진)로 주 1회·실패 주 재시도. 백업은 산출물이 아니라 taxonomy 비적용, Drive I/O 는 저수준 클라이언트 재사용이라 conformance 성립. [소개](docs/기능소개/로컬-상태-주간-암호화-백업.md) |
 
+| `deploy_all` | script | `automation/deploy_all.sh` | origin/main **전량 수렴** 오케스트레이터(RC-3/4) — 판정은 노드 릴리스 트리의 `deploy_all_probe.py`(관측)+`deploy_all.py`(순수 판정)가 자기 세대 코드로 내고, 실행은 기존 배포기 호출뿐(사본 0). 스킬 action은 반드시 `deploy-skill.sh <skill> --release-approval`로 릴리스 ✅ 하나를 재사용한다(단독 핫픽스는 기존 per-skill 경로). `--plan` 판정 / `--verify` 전량 일치 시 영수증(`/srv/autophagy-private/deploy-all/receipt.json`) / `--apply` 배포기 실행→플러그인 변경 시 agent+peer 재시동→**전량 재판정이 하드 게이트**. 영수증은 clean 에만 서명되고(코드가 거부) `release_fully_deployed` 로컬 프로브가 현재 릴리스와 상시 대조 — 없음·불일치·판독불가 전부 FAIL. ⑤root·⑥RAG 는 상시 프로브 위임(`delegated` 필드) |
+| `release.sh` | script | `automation/release.sh` | 릴리스 버전 승인→서명 태그 컷(VA-1, **워크스테이션 전용**) — 새 본문은 사람이 이해할 bundle 이름·커밋 설명·전체 action hash를 우선한다. **renderer는 append-only 버전형**: 필드 없는 기존 레코드=v1 동결 문구, 신규=`render_version=2`; 게시된 문구를 같은 버전에서 바꾸면 과거 ✅가 무효가 되므로 금지. 승인은 노드 agent가 게시·판정하고, 다음 요청 전 `retire --head <latest-signed-head>`가 저장 HEAD 일치+Discord APPROVED를 재검증한 이전 레코드만 byte-exact 0600 `release-history/`로 원자 이동한다. 기본은 결정까지 무기한 대기해 ✅ 즉시 태그를 자른다. 낡은 pending 요청은 감사형 abandon 후 1회 재요청하며 결정 레코드는 불변이다. 전량 반영·영수증은 `deploy_all.sh --apply`가 완성한다 |
+| `provision-healthcheck-probe.sh` | script | `automation/provision-healthcheck-probe.sh` | healthcheck SSH 강제명령 래퍼의 owner-run 멱등 설치기(RC-2) — 기존 관측 생성기 `healthcheck_probe_wrapper.sh --print`만 호출해 bash 문법검사→동일 바이트+0755 무동작→같은 디렉터리 원자 교체→sha256 read-back. `healthcheck_allowlist_manifest.sh --probe-hashes`·래퍼·입력 지문이 생성기의 같은 `sha256<TAB>command`를 공유하며, 기존 생성기 `--install`도 여기로 위임(설치 사본 0). 실행은 노드 소유자 작업이라 세션은 안내만 남긴다 |
+| `watcher_manifest` | module | `automation/watcher_manifest.py` | 계정 홈 배포물 선언의 **단일 정의**(RC-1) — 선언은 각 배포기 옆 `deploy-manifest.txt`, 중앙 `configs/watcher-deploy-manifest.txt` 는 `emit` 서브커맨드의 파생물(손 편집 금지). 파생 일치·선언 누락·소유 정합·목적지 유일성은 `tests/unit/test_watcher_manifest_declarations.py` 가 강제하고, 홈 배포물 모양(`scripts/`·`plugins/`)은 `HOME_DEPLOYED_PATTERN` 이 단일 정의한다 |
+| `skill_mount` | module | `automation/skill_mount.py` | governed live 마운트 경로의 **단일 정의** — 다섯 no-agent cron 래퍼(budget·report·coordination·calendar·research-trends)가 여기서만 판정한다. 해결할 수 없으면 미마운트로 fail-closed 하며 자가 스킬 루트(`~/.hermes/skills`)로 **폴백하지 않는다**(그 루트는 배포본을 담지 않는다). 드리프트는 `tests/unit/test_skill_mount_definition.py` 가 잡는다 |
+| `gateway_runtime_probe` | module | `automation/hermes_compat/gateway_runtime_probe.py` | 게이트웨이 무재시동 드리프트(기동 시각 < 벤더 소스 mtime)와 agent·peer 소스 지문 갈라짐을 판정하는 **탐지 전용** 프로브. `patch_state.py` 와 같은 계약 — 벤더 CLI·원격 셸·유닛 관리자를 부르지 않고, unknown(2)이 실패(1)보다 높다 |
+| `approvals_send_log_audit` | module | `automation/final/approvals_send_log_audit.py` | F4 승인-전송 대조를 `approval-missing`·`send-log-row-missing`·`method-not-matched` 로 사유별 분류(분류는 면제가 아니라 설명 — 셋 다 unmatched 로 세고 exit 1). `f4_scope.sh` 가 노드 stdin 으로 흘려보내므로 stdlib 전용·부수효과 없음 |
+| `healthcheck_probe_evidence` | script | `automation/healthcheck_probe_evidence.sh` | 프로브별 rc·소요 ms·transport/service 경계를 비밀 없이 기록(명령 출력·URL·계정·SSH 대상 미포함). 기록 실패가 프로브 판정·종료코드를 바꾸지 않는다 |
+| `release_floor` | fn | `automation/update_trust_state.py` | 롤백 방지 앵커는 root 소유 `/var/lib/autophagy/update-trust/release-floor.json`. ops 사전게이트 `advance_release_floor` 는 읽고 비교만 하고, root 헬퍼 `privileged_advance_release_floor` 만 서명 재검증 뒤 단조 전진시킨다 — 부모 디렉터리가 root 0755 라 ops 는 앵커를 지울 수 없다 |
+| `local_ci` | script | `automation/local_ci.sh` | PR 전 검증 단일 진입점 — 워크플로와 같은 세트(lint · `pytest tests/unit` · 빈 `python:3.12-slim` 컨테이너의 설치기 dry-run)를 돌리고 **전 단계 통과 시에만** tree 키 영수증(`~/.hermes/local-ci/<tree>.json`, 0700/0600)을 발급한다. `verify <sha>` 는 `automation/hooks/pre-push` 가 부르며 영수증 없는 브랜치 push 는 거부된다 — 브랜치 보호가 403 이라 push 가 유일하게 구속력 있는 길목이다 |
+| `merge-pr.sh` | script | `automation/merge-pr.sh` | PR 머지의 **유일한 경로** — OPEN·base main·모든 체크 완료+성공일 때만 머지한다. 체크 0건은 PENDING 이지 통과가 아니다(PR #269 의 구멍). **태그는 자르지 않는다**(VA-3: 머지=축적, 태그·배포 인가는 `release.sh`). 탈출구 `MERGE_PR_ALLOW_UNCHECKED=1` 은 체크가 **나오지 않을 때만**이고 실패한 체크는 덮지 못한다 |
 ## CONVENTIONS (repo 고유)
 - **stdlib 전용 지향.** `from __future__ import annotations` + `@dataclass(frozen=True, slots=True)` + 엄격 타입(`TypeAlias`/`Protocol`). 외부 의존은 함수 내부 lazy import + fail-closed 가드(참조 procurement `_import()`).
 - **모든 외부효과(메일·캘린더·예산·배포·위키)는 소유자 승인 게이트 경유** — 직접 실행 금지. 승인 이모지 ✅/⛔ (아래 Owner-confirm 규칙).
-- **"커밋됨 ≠ 배포됨".** 배포 판정은 `readlink /srv/autophagy-skills/live/<skill>` 해시.
+- **"커밋됨 ≠ 배포됨".** 배포 표면은 **셋이고 서로 닿지 않는다**: ① 릴리스 트리 `/srv/autophagy-agent-current` — 2분 리컨실러가 서명 태그를 보고 자동 수렴. ② 스킬 마운트 — 판정은 `readlink /srv/autophagy-skills/live/<skill>` 해시, 갱신은 소유자 ✅. ③ **계정 홈**(`~/.hermes/scripts/`·`~/.hermes/plugins/`) — 사람이 그 스킬의 `deploy.sh` 를 돌려야만 갱신되고, 낡아도 ①②는 멀쩡해 보인다. ③의 드리프트는 `configs/watcher-deploy-manifest.txt` + healthcheck 프로브가 유일한 탐지 수단이다 — **등록 지점은 각 배포기 옆 `<package>/deploy-manifest.txt`**(RC-1, 2026-08-28)이고 중앙 표는 `python3 -m automation.watcher_manifest emit` 의 파생물이다(손 편집 금지). 손 편집·emit 누락·선언 없는 배포기는 전부 `tests/unit/test_watcher_manifest_declarations.py` 가 RED 로 막는다. 게이트웨이 플러그인은 여기에 더해 **프로세스 시작 시 로드**되므로 파일이 맞아도 재시동 전까지 도는 코드가 다르다 — 배포와 반영이 별개인 유일한 표면이다(2026-08-28: 홈 플러그인이 5일 낡아 `!meeting` 이 이미 없어진 규칙으로 거부됐고, 매니페스트 정규식이 `scripts/` 만 봐서 사각지대였다).
 - **상태 마킹은 성공 이후** — claim → 작업 → 성공 시에만 processed 기록, 실패 시 release.
 - `fail-closed`가 반복 원칙 — 설정/권한/확인 불가 시 실행하지 않는다.
 - `configs/rag/*` 하위 서비스는 `uv` + Ruff `ALL`(line-length 100) + basedpyright `all`. 메인 트리는 위 코드 스타일을 관찰로 강제(루트 매니페스트 없음).
@@ -88,7 +127,7 @@ autophagy/
 - **충돌 시 우선순위 없음.** 일반 스킬과 관리형 스킬 이름 충돌 시 양방향 fail-closed 차단 — 소유자가 하나를 제거(`--remove`)해야 한다.
 - **자가 스킬 루트는 통제 공간이 아니다.** 각 계정의 `~/.hermes/skills`는 그 계정이 소유한 쓰기 가능 1차 루트이며, 에이전트가 만든 스킬은 승인 게이트를 거치지 않고 그대로 착지한다. 관리자 배포본은 그 루트에 마운트되지 않고 `/srv/autophagy-skills/live`(root 소유 read-only)에서 `skills.external_dirs`로 발견된다 — 즉 `~/.hermes/skills` 아래에 있는 것을 관리자 배포본으로 읽으면 안 된다(반전 전에는 그 경로가 live의 read-only bind였다).
 
-**자가 스킬 이름 충돌은 한쪽만 막힌다 — 반대쪽은 탐지로 메운다(2026-08-16 정정).** self→governed 방향(자가 스킬이 배포 스킬 이름을 선점)은 **Hermes가 막지 못한다**: `skill_manage(create)`의 충돌 검사 `_find_skill`은 `rglob("SKILL.md")`로 훑는데 우리 governed 루트 `/srv/autophagy-skills/live`는 릴리스로 가는 **심링크 팜**이고 파이썬 `rglob`은 디렉터리 심링크를 따라가지 않는다 — 실측으로 `_find_skill("recall")`·`_find_skill("mail")`이 모두 `None`이었고, 에이전트가 `recall` 이름의 자가 스킬을 실제로 만들었다(즉시 제거). 1차 루트가 발견에서 이기므로 그런 자가 스킬은 **승인 게이트를 강제하는 배포본을 가린다**. 벤더 쪽을 고칠 수 없으므로 `selfskill_audit`이 자기 루트와 live 이름을 대조해 `SHADOWS-GOVERNED`로 소유자에게 즉시 알린다(델타가 없어도 보고). governed→self 방향(배포가 자가 저작물을 덮어씀)은 `deploy-skill.sh`가 막는다 — agent 루트와 peer 루트를 각각 분류해 자가 저작물이면 `SELF-SKILL-COLLISION-BLOCK`(exit 4)으로 멈추고, 읽거나 분류할 수 없어도 같은 코드로 멈춘다(fail-closed). 관리형 스킬 충돌과 같은 원칙이다 — 우선순위는 없고, 소유자가 한쪽을 치워야(`hermes curator archive <name>` 또는 해당 계정 `~/.hermes/skills`에서 디렉터리 제거) 배포가 재개된다.
+**자가 스킬 이름 충돌은 한쪽만 막힌다 — 반대쪽은 탐지로 메운다(2026-08-16 정정).** self→governed 방향(자가 스킬이 배포 스킬 이름을 선점)은 **Hermes가 막지 못한다**: `skill_manage(create)`의 충돌 검사 `_find_skill`은 `rglob("SKILL.md")`로 훑는데 우리 governed 루트 `/srv/autophagy-skills/live`는 릴리스로 가는 **심링크 팜**이고 파이썬 `rglob`은 디렉터리 심링크를 따라가지 않는다 — 실측으로 `_find_skill("recall")`·`_find_skill("mail")`이 모두 `None`이었고, 에이전트가 `recall` 이름의 자가 스킬을 실제로 만들었다(즉시 제거). 1차 루트가 발견에서 이기므로 그런 자가 스킬은 **승인 게이트를 강제하는 배포본을 가린다**. 벤더 쪽을 고칠 수 없으므로 `selfskill_audit`이 자기 루트와 live 이름을 대조해 `SHADOWS-GOVERNED`로 소유자에게 알린다(델타가 없어도 보고). **SC-1(2026-08-30)로 이 탐지는 일 1회에서 2분으로 당겨졌다** — `automation/supply_chain_shadow_watch.py`가 같은 walk(`scan._skill_dirs`)의 이름 대조만을 기존 `supply_chain_watch` 2분 틱에 편입해 새 그림자에 통지 1건(전송 실패 시 다음 틱 재시도), 지속 중 저널 한 줄, 해소 후 재발은 새 사건으로 재통지한다(fail-soft — 탐지 실패가 승인 재개 틱을 세우지 않는다). governed→self 방향(배포가 자가 저작물을 덮어씀)은 `deploy-skill.sh`가 막는다 — agent 루트와 peer 루트를 각각 분류해 자가 저작물이면 `SELF-SKILL-COLLISION-BLOCK`(exit 4)으로 멈추고, 읽거나 분류할 수 없어도 같은 코드로 멈춘다(fail-closed). 관리형 스킬 충돌과 같은 원칙이다 — 우선순위는 없고, 소유자가 한쪽을 치워야(`hermes curator archive <name>` 또는 해당 계정 `~/.hermes/skills`에서 디렉터리 제거) 배포가 재개된다.
 
 ## ANTI-PATTERNS (금지)
 - cron 워처가 Discord **메시지/첨부를 폴링** — 실시간 에이전트와 경쟁 소비자. 워처는 **리액션만** 폴링.
@@ -103,6 +142,9 @@ autophagy/
 pytest tests/unit                     # 단위 테스트 (루트에서 실행, .pytest_cache)
 ruff check .                          # 린트
 automation/deploy-skill.sh <skill>    # 스킬 배포 (4단계 게이트; --sandbox-only / --request-only / --remove)
+automation/local_ci.sh run            # PR 전 로컬 CI (통과 시 push 게이트 영수증 발급)
+automation/merge-pr.sh <pr>           # 체크 green 확인 → 머지 → 릴리스 태그
+automation/deploy_all.sh --plan       # 전 표면 전량 수렴 판정 (--verify 영수증 / --apply 수렴)
 automation/healthcheck.sh             # 양 노드 read-only 헬스체크
 python3 -m automation.rag_ingest      # 개인 RAG 인제스트
 ```
@@ -213,15 +255,38 @@ python3 -m automation.rag_ingest      # 개인 RAG 인제스트
 - 소유자 승인이 필요한 배포는 승인 요청 게시까지 진행하고, cha의 ✅ 이후 남은 단계(MOUNT·검증·kanban 종결)도 같은 세션에서 마무리한다.
 - 다른 세션의 미커밋 작업·로컬 전용 커밋은 절대 함께 커밋하지 않는다. 로컬 브랜치가 갈라져 있으면 `origin/main` 기반 worktree에서 **내 변경만** 커밋·푸시한다(선례 2026-07-25).
 
+## 릴리스 패치노트 작성 규칙 (cha 지시, 2026-08-30)
+
+**릴리스 승인 메시지는 소유자와 다른 참여자가 무엇을 받아들이는지 이해할 수 있어야
+한다. 해시 목록은 패치노트가 아니다.**
+
+- 패치노트는 **무엇이 바뀌는지 → 왜 필요한지 → 사용자·운영 영향**이 드러나는
+  제목으로 쓴다. 티켓 번호·내부 파일명·`fix` 같은 분류만 있는 제목은 불충분하다.
+- `release.sh`는 직전 릴리스 이후의 커밋 제목을 패치노트 원문으로 쓴다. 따라서 logical
+  commit 제목 자체가 위 기준을 만족해야 한다. 릴리스 직전에 이해 불가능한 제목을
+  발견하면 승인 메시지를 억지로 줄이지 말고 해당 변경 설명을 보강한 뒤 다시 계획한다.
+- 승인 본문에는 version·HEAD, **변경 표면 이름**, 사람이 읽는 변경 설명, 전체
+  `action_hash`를 싣는다. `release_nonce`와 표면별 64자 digest는 기계 바인딩
+  레코드에만 보관한다 — 원시 해시가 설명 공간을 밀어내면 승인자가 내용을 검토할 수
+  없다.
+- Discord 한도 때문에 자동 생성 설명을 줄일 때는 완전한 줄 단위로만 줄이고 생략 줄
+  수를 명시한다. 중요 변경이 생략 구간에만 남는 릴리스는 승인 요청을 게시하지 말고
+  커밋 설명을 정리하거나 릴리스 범위를 나눈다.
+- ✅ 이후 별도 수동 재개를 요구하지 않는다. 워크스테이션의 `release.sh`는 기본적으로
+  결정을 계속 기다리고, 소유자 ✅를 감지하면 곧바로 서명 태그를 자른다. deadline은
+  테스트·의도적 제한 운영에서만 명시한다.
+
 ## 릴리스 태그 규칙 (cha 지시, 2026-08-20)
 
-**PR 을 main 에 머지했으면 곧바로 `automation/release-tag.sh` 를 실행한다 — 그 태그가 없으면 프로덕션은 전진하지 않는다.**
+**서명 릴리스 태그가 없으면 프로덕션은 전진하지 않는다. 태그는 릴리스 승인(`automation/release.sh`, 소유자 ✅ 1회)이 자른다 — 머지는 축적이다(VA-3, 2026-08-30 개정: `merge-pr.sh` 의 태그 자동 호출 제거).**
 
-- **왜**: 2분 리컨실러가 부르는 `converge_origin_main.sh` 는 **인자를 받지 않는 것이 계약**이다(MD-1). 자동 트리거가 설치될 sha 를 고를 수 있으면 "PR 머지 = sudo 임의 코드 실행"이 되기 때문이고, 그래서 무엇을 설치할지는 **서명만이** 정한다 — `origin/main` HEAD 가 annotated 서명 태그의 peel 대상일 때만 수렴한다. 태그가 없으면 매 틱 `UPDATE-TRUST-BLOCK` 으로 서는데 **rc 0 으로 끝나 알람이 없다**.
+- **왜**: 2분 리컨실러가 부르는 `converge_origin_main.sh` 는 **인자를 받지 않는 것이 계약**이다(MD-1). 자동 트리거가 설치될 sha 를 고를 수 있으면 "PR 머지 = sudo 임의 코드 실행"이 되기 때문이고, 그래서 무엇을 설치할지는 **서명만이** 정한다 — `origin/main` HEAD 가 annotated 서명 태그의 peel 대상일 때만 수렴한다. 태그가 없으면 매 틱 `UPDATE-TRUST-BLOCK` 으로 서고 rc 0 으로 안전하게 건너뛴다.
 - **왜 지금 규칙이 되었나**: 태그를 자르는 코드는 `land.sh` 안에만 있었고, 「세션 워크트리 규칙」대로 브랜치 작업은 land 가 아니라 **PR 머지**로 main 에 도달한다 — 즉 우리가 실제로 쓰는 경로에는 그 단계가 아예 없었다. 2026-08-20 실측: PR 6건이 태그 없이 들어가 리컨실러가 **132회 연속 실패**했고 프로덕션이 2커밋 뒤에 얼어 있었다. 그동안 프로덕션을 밀어올린 것은 사람이 `land.sh` 를 돌릴 때뿐이었다.
 - **머지 직후에 실행한다**: 태그는 **HEAD 를 정확히 맞혀야** 한다. 병렬 세션이 그 사이 머지하면 태그는 이전 커밋에 남고 노드는 계속 선다(2026-08-16 에 main 이 세 번 전진하며 실제로 그랬다). 그래서 `release-tag.sh` 는 자른 뒤 HEAD 가 아직 그 sha 인지 다시 확인하고, 어긋났으면 성공으로 끝내지 않는다 — **조치는 재실행**이며 멱등이라 안전하다.
 - **묶음 단위도 괜찮다**: 매 머지마다 자를 필요는 없다. 연속 머지 후 마지막에 한 번이면 프로덕션이 그 지점으로 간다 — 태그를 자르는 순간이 곧 "여기까지를 프로덕션에 올린다"는 선언이다.
 - **키는 로컬에만 둔다**: `UPDATE_TRUST_SIGNING_KEY`(기본 `~/.ssh/autophagy_update_trust.pub`)는 어떤 저장소에도 커밋하지 않고 노드·CI 에 두지 않는다(「공개 릴리스 규칙」 D8 과 같은 키). **CI 가 서명하게 만들면 MD-1 이 막으려던 그 escalation 이 그대로 되살아난다** — 자동화하려면 서명 주체가 아니라 실행 시점만 자동화한다.
+- **서명 없는 head 는 사고가 아니라 릴리스 백로그다(VA-3 재설계)**: 릴리스 사이의 unsigned `origin/main` 은 정상 상태이므로 sha별 즉시 통지를 보내지 않는다. 리컨실러는 백로그 에피소드(마지막 릴리스 이후 첫 unsigned tick)의 나이를 재서 **3일 임계를 넘긴 기간마다 1건**의 다이제스트("미배포 커밋 N건 · X일 경과 · `automation/release.sh` 안내")를 보내고, 릴리스가 착지하면 리셋한다. sha 가 전진해도 나이는 이어진다 — sha별로 리셋하면 활발히 머지할수록 다이제스트가 오지 않는다. 커밋 수는 미러 `rev-list --count` 로 읽되 관측 불가면 "수 미상"으로 말한다(추측 금지). raw SHA는 통지 전용이며 설치 대상은 계속 서명 검증 결과만 쓴다([소개](docs/기능소개/반복-수렴-스킵-알림.md)).
+- **✅ 뒤는 사람 손이 아니다(2026-08-31, cha 지시)**: 릴리스 승인이 스킬별 ✅를 대체해도(VA-2) 실행은 자동이 아니었다 — `release.sh` 의 폴링은 세션과 함께 죽고, 태그 뒤 마운트는 `deploy_all.sh --apply` 를 누군가 따로 돌려야 했다(v1.0.140: 태그 뒤 스킬 6개 stale). 이제 `release.sh` 는 태그 뒤 **스스로** 노드 수렴을 기다려 `deploy_all.sh --apply --wait-converge` 까지 잇고(옵트아웃 `--no-deploy`, 실패는 exit 10 — 태그는 되돌리지 않는다), 워크스테이션 `systemd --user` 타이머(`automation/release_complete_install.sh`, 2분)가 **이미 ✅된 요청만** 완결한다 — `request`/`retire`/`plan` 은 절대 부르지 않고(회귀가 subcommand 를 대조), sha 별 3회 상한으로 지속 결함의 매 틱 전량 재배포를 막는다. 완결 주체가 워크스테이션인 이유는 위 「키는 로컬에만 둔다」 그대로다. 설치는 **메인 체크아웃**에서 한다(세션 워크트리는 `finish` 때 사라진다). 상세: [소개](docs/기능소개/릴리스-승인-자동-완결.md)
 - 구현은 `automation/release_tag_lib.sh` 하나이고 `land.sh` 와 `release-tag.sh` 가 공유한다(회귀 고정: `tests/unit/test_release_tag.py`). 사본을 다시 만들지 않는다 — 갈라지면 두 경로가 서로 다른 태그를 자른다.
 - 이 규칙은 **private repo 의 태그**를 다룬다. 공개 배포본(`cytoplasm`)의 릴리스 컷은 「공개 릴리스 규칙」·`public_export.sh` 가 따로 소유한다 — 「세 저장소 구분 규칙」 참조.
 
@@ -234,12 +299,23 @@ python3 -m automation.rag_ingest      # 개인 RAG 인제스트
 - **강제**: 산문만으로는 부족하다(이 문서의 원칙: 「mutating 경로에 결정론적 코드 가드 필수」). `tests/unit/test_approval_lifecycle_conformance.py`가 승인 producer 인벤토리를 들고 파사드 경유 여부를 기계적으로 검증한다. 예외는 소스 주석이 아니라 테스트 내 `_EXEMPT` 맵에 사유와 함께 등록해야 한다.
 - **참조**: 상세 규약은 `docs/guide/watcher-cron-설계규약.md §(j)`, 구현 불변식과 금지사항은 `automation/interop/AGENTS.md`에 있다.
 - **배경(사후 반영)**: 2026-07-25 drive-archive digest 중복 게시 및 message_id 덮어쓰기로 인해 소유자의 승인 ✅가 실종된 결함을 수리하며 도입되었습니다.
+## 결과 통지 원채널 스레드 규칙 (cha 지시, 2026-08-22/23)
+
+**승인 게이트를 가진 모든 스킬은 실행/취소/만료 결과를 지시가 시작된 채널의 스레드로 통지한다 — 승인(✅/⛔) 요청 자체는 v7부터 `#agent-chat`의 `승인-<kind>` 스레드에 게시된다(v8부터 repair 포함 — Ops 봇 초대 전제). 구현은 `automation/interop/origin_notice.py` 하나뿐이고, 앞으로 만드는 스킬도 예외가 아니다.**
+
+- **왜**: 2026-08-22 agent-chat에서 시작한 메일 발송의 결과가 "메일 발송 취소됨" 한 줄로 DM에 흩어졌다. 지시가 온 곳으로 결과가 돌아가야 대화가 이어지고, DM에는 승인 버튼만 남아야 소유자가 무엇을 눌러야 하는지 분명하다. 같은 날 mail에 적용했고 2026-08-23 소유자 지시로 전 스킬(budget·calendar·coordination·todo·meeting)에 일반화했다([소개](docs/기능소개/결과-통지-원채널-스레드-전스킬.md)).
+- **새 스킬이 지켜야 할 것**: ① mutating CLI에 `--origin-channel-id`/`--origin-message-id`(선택)를 받아 레코드에 `origin_channel_id`/`origin_message_id`로 저장하되 **승인 해시 바인딩 밖**에 둔다(레거시 레코드는 필드 부재 허용). ② 결과 통지는 `origin_notice.deliver(api=…, transport_factory=…, record=…, thread_name=…, content=…, fallback=…)` 경유 — 스레드 해석(지시 메시지 앵커 우선, 400=기존 스레드 재사용, 없으면 채널 스레드)·`NOTIFY-THREAD-FAIL` 마커·폴백 의미는 헬퍼가 소유한다. **자체 스레드 생성 코드 금지**(사본 증식은 「승인 메시지 단일성 규칙」이 막으려던 것과 같은 문제). ③ 문구는 대상·id·사유를 담는다("…됨" 무맥락 고정문구 금지). ④ 통지는 best-effort — 어떤 실패도 tick·exit code·영수증·원장을 바꾸지 않고 `NOTIFY-FAIL`로 남긴다. E2E·주입 승인은 `NOTIFY-SKIP`으로 실제 통지를 열지 않는다. ⑤ 승인 요청·리마인더·게이트 경로는 건드리지 않는다 — 이 규칙은 결과 통지의 목적지만 정한다.
+- **민감도 규칙이 우선한다**: 스킬의 기존 마스킹 규칙(캘린더 내용·금액·위키 본문·특허)은 스레드 문구에도 그대로 적용된다. 채널에 내보낼 수 없는 정보는 마스킹(calendar: action 종류·draft id만)하거나 통지 자체를 제외(wiki·patent-prep)하고, 그 사유를 conformance 예외 맵에 적는다.
+- **강제**: `tests/unit/test_origin_notice_adoption_conformance.py` — 승인 producer를 가진 모든 스킬(`approval_conformance_inventory.APPROVAL_PRODUCERS`)은 스크립트가 `origin_notice`를 참조해야 하고, 아니면 `_RESULT_NOTICE_EXEMPT`에 사유와 함께 등록되어야 한다. 스레드 생성 API 호출은 헬퍼 밖에서 금지(`_THREAD_API_ALLOWED` 예외: meeting 게이트웨이 플러그인 — INTEROP_RUNTIME 경로를 보장받지 못함). 산문이 아니라 코드가 진실이다.
+- **배포 주의**: 헬퍼는 interop 런타임(`INTEROP_RUNTIME`)에 실려야 한다 — 스킬만 재배포하고 런타임이 낡으면 통지가 `NOTIFY-FAIL`로 남는다(실행 자체는 영향 없음).
+
 ## 후속 과제 기록 규칙 (cha 지시, 2026-07-26)
 
 **작업 중 발견했으나 이번 범위에서 처리하지 않은 사항은, 요청 사항을 마무리한 뒤 `docs/features.md`에 후속 과제로 기록한다 — 기록까지 마쳐야 작업이 종결된다.**
 
 - **왜**: 후속 과제는 작업 과정에서만 발견된다. 제때 기록하지 않으면 QA 증적이나 세션 로그 속에 묻혀 사라지며, 세션 종료 후에는 그 맥락을 아는 주체도 없어진다.
 - **어디에**: **`docs/follow-ups.md`** (2026-08-03 분리 — features.md가 103KB까지 부풀어 무엇이 남았는지 안 보였다. 현황판에는 묶음별 잔량 요약표만 둔다)(2026-07-29 분리 — PLAN의 "신규 아이디어"는 이제 진짜 새 기능 아이디어 전용이다). 기능/작업 단위로 **묶음 항목 1개 + 하위 불릿**으로 작성하고, 상세 증적 경로(`docs/qa/<wave-id>/...`)는 묶음 끝에 한 번만 병기한다. 계획 문서에 이미 반영된 건은 wave ID를 병기하여 PLAN "개발 예정"으로 옮긴다(features.md 사용법 규칙 준수).
+- **손댈 수 없는 것은 별도 문서로 옮긴다 (cha 지시, 2026-08-26)**: 소유자·노드에서만 닫히는 것(OWNER), 동결·벤더·외부에 막힌 것(BLOCKED), 조건이 성립하기 전에는 조치하지 않는 것(OBSERVE), 이미 닫힌 것(해소)은 **`docs/follow-ups-deferred.md`**로 옮긴다. `follow-ups.md`에는 **지금 이 저장소가 손댈 수 있는 열린 작업만** 남는다. 이것은 **삭제가 아니라 이동**이며 원 `##` 헤딩을 양쪽에서 그대로 유지해야 한다 — 회계 가드 `tests/unit/test_features_board_conformance.py` A9가 두 문서를 합쳐 읽어 이동과 삭제를 가르기 때문이다(헤딩이나 불릿 첫 줄을 고치면 삭제로 읽힌다). 배경: 그 가드가 FS3 baseline 불릿을 고정하고 있어 「계속 개선하라」는 지시에도 문서가 줄지 않았다 — 129건 중 73건이 물리적으로 삭제 불가였다.
 - **무엇을 적나**: 각 불릿은 **"무엇이 문제인지 → 어떻게 조치할지"** 형태로 작성하며, **영향 범위와 심각도**를 명시한다(예: "보안 문제 아님 — 라이브 readlink가 권위 소스", "검증 메시지 오류일 뿐 마운트 로직과 무관"). 판단 근거를 남기지 않으면 다음 작업자가 처음부터 다시 조사해야 하는 낭비가 발생한다.
 - **즉시 수정 vs 후속 과제**: 요청 범위를 벗어나거나, 안전 불변식을 위반하거나, 프로덕션 동작을 저해하는 결함은 **후속으로 미루지 않고 즉시 수정한다**. 후속 과제로 남기는 것은 (a) 동작은 정상이나 개선 여지가 있는 사항, (b) 범위 밖의 인접 결함, (c) 설계 판단이 필요하여 별도 논의가 필요한 사항에 한한다.
 - **없으면 적지 않는다**: 형식을 채우기 위해 빈 항목이나 억지스러운 항목을 만들지 않는다.
@@ -266,9 +342,9 @@ python3 -m automation.rag_ingest      # 개인 RAG 인제스트
 **수리 에이전트는 배포 체크아웃에서 커밋하지 않는다. 전용 작업 클론에서 작업해 `repair/t_<ticket>` 브랜치로 push하고, 그 브랜치→main PR까지 에이전트가 생성한다. main 머지는 cha가 GitHub에서 한다.**
 
 - **작업 위치**: 수리의 apply·commit·패치문서·회귀시나리오 등록은 전용 작업 클론에서만 수행한다. 배포 체크아웃(`/srv/autophagy-agents`)은 「ops 체크아웃 단방향 규칙」그대로 `git fetch`/`git pull --ff-only`만 허용된다. 샌드박스 단계는 이미 `git clone --shared`로 격리돼 있으므로(`repair_ops_adapters.py`) 그대로 둔다.
-- **자격증명**: 저장소 **한정** write deploy key를 사용한다(fine-grained PAT 아님 — 범위가 더 좁기 때문). 배포 체크아웃의 ops 키는 **계속 read-only**로 둠 — 두 키를 섞지 않는다. 키는 `/srv/autophagy-private/repair_push_key`(ops:600)에 둔다 — **홈에 두면 안 된다**: 두 수리 유닛이 `ProtectHome=yes`라 `/home`이 서비스에게 빈 디렉터리로 보이고, 파일이 디스크에 멀쩡히 있는데도 런타임에만 "키 없음"으로 실패한다(회귀 고정: `tests/unit/test_repair_push_key_sandbox.py` — 유닛 파일에서 제약을 역산하므로 `ProtectHome`이 바뀌면 테스트도 따라 바뀐다). 호스트 키도 같은 이유로 `/srv/autophagy-private/repair_known_hosts`에 **고정**한다 — ssh는 `~/.ssh/known_hosts`를 passwd 엔트리로 해석하므로 `ProtectHome`이 가리고, 노드에 `/etc/ssh/ssh_known_hosts`도 ssh_config 전역 설정도 없어 유닛 안에서는 검증할 DB가 아예 없다(실증: 호스트 키 DB를 끊으면 `ls-remote`가 실패). `accept-new`로 우회하지 않는다 — write 자격증명이 오가는 유일한 경로에서 아무 키나 신뢰하게 되기 때문이며, 파일이 없으면 역시 exit 4다. 경로는 `REPAIR_PUSH_KEY`로 덮어쓸 수 있고, 키가 없으면 **push를 시도하지 않고 exit 4로 실패**한다 — 조용히 ops read-only 키로 폴백하면 진짜 원인에서 먼 곳에서 실패하기 때문.
+- **자격증명**: 저장소 **한정** write deploy key를 사용한다(fine-grained PAT 아님 — 범위가 더 좁기 때문). 배포 체크아웃의 ops 키는 **계속 read-only**로 둠 — 두 키를 섞지 않는다. 키는 `/srv/autophagy-private/repair_push_key`(ops:600)에 둔다 — **홈에 두면 안 된다**: 두 수리 유닛이 `ProtectHome=yes`라 `/home`이 서비스에게 빈 디렉터리로 보이고, 파일이 디스크에 멀쩡히 있는데도 런타임에만 "키 없음"으로 실패한다(회귀 고정: `tests/unit/test_repair_push_key_sandbox.py` — 유닛 파일에서 제약을 역산하므로 `ProtectHome`이 바뀌면 테스트도 따라 바뀐다). 호스트 키도 같은 이유로 `/srv/autophagy-private/repair_known_hosts`에 **고정**한다 — ssh는 `~/.ssh/known_hosts`를 passwd 엔트리로 해석하므로 `ProtectHome`이 가리고, 노드에 `/etc/ssh/ssh_known_hosts`도 ssh_config 전역 설정도 없어 유닛 안에서는 검증할 DB가 아예 없다(실증: 호스트 키 DB를 끊으면 `ls-remote`가 실패). `accept-new`로 우회하지 않는다 — write 자격증명이 오가는 유일한 경로에서 아무 키나 신뢰하게 되기 때문이며, 파일이 없으면 역시 exit 4다. **같은 덫이 2026-08-21에 다시 걸렸다(2026-08-26 수리)**: `approval_reminder_config` 의 폴백이 `~/.hermes/config.yaml` 을 `Path.is_file()` 로 찔렀는데 CPython 이 EACCES 를 삼키지 않아 예외가 났고, 그 raise 가 `except (ImportError, ModuleNotFoundError)` 절 **안에서** 일어나 형제 `except Exception` 이 잡지 못해 그대로 탈출했다 — repair 승인 워처가 5일간 매분(5,329회) 기동 즉시 죽어 ✅ 를 아무도 소비하지 않았다. 교훈: `ProtectHome` 유닛에서 홈을 찌르는 코드는 **답해야지 던지면 안 된다**. 보이지 않는 설정은 없는 설정과 같다(`9e1b7ad0`). 경로는 `REPAIR_PUSH_KEY`로 덮어쓸 수 있고, 키가 없으면 **push를 시도하지 않고 exit 4로 실패**한다 — 조용히 ops read-only 키로 폴백하면 진짜 원인에서 먼 곳에서 실패하기 때문.
 - **push 대상은 브랜치뿐**: `repair/t_<ticket>` 패턴으로만 push한다. **`main` 직접 push 금지**, 자동 ff-머지도 금지.
-- **PR 생성까지가 에이전트 종착점 (cha 지시, 2026-07-31)**: 브랜치를 push했으면 에이전트가 곧바로 `repair/t_<ticket>`→`main` PR을 `gh pr create --base main --head repair/t_<ticket>`로 생성한다(제목·본문은 커밋 스타일; 본문에 티켓 id·수정 요약·검증 증적, 실수신자/본문 등 민감정보 마스킹). **push만 하고 멈추지 않는다** — cha에게는 GitHub에서 브랜치 diff를 눈으로 확인해 Merge 버튼을 누르는 트리거가 필요하고, PR이 없으면 그 트리거 자체가 없다(2026-07-31 선례: 브랜치만 push되고 PR이 없어 cha가 머지할 방법이 없었다). 이미 열린 PR이 있으면 새로 만들지 않고 그 PR을 재사용한다(push만으로 헤드가 갱신됨). `gh` 미설치·미인증이면 설치·인증 후 진행하고, 그래도 불가하면 PR을 만들 수 없음을 명시해 cha에게 알린다.
+- **PR 생성까지가 에이전트 종착점 (cha 지시, 2026-07-31)**: 브랜치를 push했으면 에이전트가 곧바로 `repair/t_<ticket>`→`main` PR을 `gh pr create --base main --head repair/t_<ticket>`로 생성한다(제목·본문은 커밋 스타일; 본문에 티켓 id·수정 요약·검증 증적·**공개 적합성 항목**(채널 id·과제명·개인 경로 하드코딩 없음 확인 — 「개인화 코드 금지 규칙」), 실수신자/본문 등 민감정보 마스킹). **push만 하고 멈추지 않는다** — cha에게는 GitHub에서 브랜치 diff를 눈으로 확인해 Merge 버튼을 누르는 트리거가 필요하고, PR이 없으면 그 트리거 자체가 없다(2026-07-31 선례: 브랜치만 push되고 PR이 없어 cha가 머지할 방법이 없었다). 이미 열린 PR이 있으면 새로 만들지 않고 그 PR을 재사용한다(push만으로 헤드가 갱신됨). `gh` 미설치·미인증이면 설치·인증 후 진행하고, 그래도 불가하면 PR을 만들 수 없음을 명시해 cha에게 알린다.
 - **main 머지 주체 = cha**: cha가 GitHub PR에서 diff를 확인하고 Merge 버튼으로 머지한다. 이것이 자동화의 의도된 종착점이다 — PR까지 자동이면 급한 불은 이미 꺼지고, main 반영만 사람 눈을 거친다. **에이전트는 main에 직접 머지·push하지 않는다.** 머지 후 노드는 평소대로 `pull --ff-only`로 받고, 에이전트는 반영을 확인한 뒤 kanban 티켓 완료 처리까지 이어간다.
 - **승인은 패치 내용에 바인딩된다 (완료, 2026-07-29)**: `action_hash`는 `sha256:<canonical(ticket_id, patch_name, 패치 바이트 sha256, 변경파일·라인증감 요약)>`이고, 승인 DM은 변경 파일 목록·라인 증감·`patch_sha256`을 실는다. 패치 본문은 여전히 Discord에 노출하지 않고 `/srv/autophagy-private/`의 경로만 안내한다. 적용 게이트는 적용 직전 디스크의 패치로 해시를 재계산해 소유자가 실제로 승인한 해시와 대조하므로, **승인 뒤 `patch.diff`가 바뀌면 적용되지 않는다**. 불일치는 `False`가 아니라 **예외**로 표면화한다 — `_run`은 `AWAITING_APPROVAL`에도 exit 0을 돌려주고(`repair_ops_cli.py:174`) 워처는 자식이 0이면 레코드를 회수한 뒤 approvals 로그에 `approved`를 남기기 때문에, `False`로 거부하면 아무것도 적용하지 않은 채 감사 기록만 생긴다. 구스키마(이름만 해싱) 레코드는 읽힐 수는 있으나 **인가하지 못한다**; 소유자가 반응하지 않은 것은 새 요청이 교체하고, 이미 누른 것은 파괴하지 않고 24h TTL로 정리된다. 승인 메시지 렌더러 **v1은 동결**이다 — 이미 게시된 메시지는 저장 레코드의 재렌더와 정확히 일치해야 하며, 문구를 바꾸려면 v3을 만든다(2026-07-29 `5ef869d` 선례). 구현 `automation/repair/repair_patch_{diff,binding}.py`·`repair_approval_render.py`, 상세 [소개](docs/기능소개/수리-승인-내용-바인딩.md), 증적 `docs/qa/RTS-4/r2-content-binding.txt`.
 - **롤아웃 순서(완료, 2026-07-29)**: ① apply 대상을 작업 클론으로 이관(`08a221d`) → ② systemd `ReadWritePaths`에서 `/srv/autophagy-agents` 제거(`7ea6a8c`) → ③ 브랜치 push 추가(`b86e1df`, 키 경로 수정 `d30b4a1`) → ④ 배포 체크아웃 커밋 거부 훅 롤아웃(노드 설치 완료). 순서를 바꾸면 훅이 수리 apply 경로를 깨뜨리므로, 재구축 시에도 이 순서를 지킨다. ④ 증적: 배포 체크아웃에서 `git commit --allow-empty`가 exit 1로 거부되고 HEAD 불변, `git fetch`·`git pull --ff-only`는 정상 동작.
@@ -300,6 +376,31 @@ automation/worktree.sh finish <이름>                          # 세션 종료
 
 **원격 브랜치는 자동으로 지우지 않는다** — 공유 영향이라 사람이 판단한다(회귀로 고정: `tests/unit/test_session_worktree.py`).
 
+## PR 전 검증 규칙 (cha 지시, 2026-08-25)
+
+**브랜치 push 는 그 트리의 로컬 CI 영수증이 있어야 나간다 — 「PR 전에 CI 를 돌려라」는 산문이 아니라 `automation/hooks/pre-push` 가 강제한다.**
+
+- **왜 훅인가**: 이 저장소는 브랜치 보호를 쓸 수 없다 — private + Free 조합이라 `gh api repos/.../branches/main/protection` 이 **403** 이다. 즉 GitHub CI 는 머지를 막을 권한이 없는 **권고**였고, 2026-08-25 에 실제로 빨간 CI(결제 실패로 잡이 시작조차 못 한 것) 위에서 머지가 이뤄졌다. 지침으로 적으면 그 문장을 읽는 주체가 지키는 만큼만 작동한다 — 「배포 provenance 규칙」의 가드와 「ops 체크아웃 단방향 규칙」의 커밋 거부 훅이 산문에서 코드로 옮겨간 것과 같은 이유다.
+- **순서는 커밋 → `automation/local_ci.sh run` → push** 다. `run` 은 워크플로와 같은 세트(lint · `pytest tests/unit` · 빈 `python:3.12-slim` 컨테이너의 설치기 dry-run + 서드파티 경계 테스트)를 돌리고 **전 단계 통과 시에만** 영수증을 `~/.hermes/local-ci/<tree>.json`(0700/0600, 체크아웃 밖)에 쓴다. 어느 단계든 실패하면 영수증은 만들어지지 않는다.
+- **영수증은 commit 이 아니라 tree 에 묶인다.** 문구만 고쳐 amend·rebase 하면 그대로 유효하고, 내용이 한 글자라도 바뀌면 무효다. 워크플로 자신의 sha256 도 담기므로 `.github/workflows/ci.yml` 이 바뀌면 그 전 영수증은 무효가 된다. 더러운 트리에서는 발급하지 않는다 — 검사한 것과 push 하는 것이 달라지면 영수증이 거짓말이 되기 때문이며, 유일한 예외는 `.omo/senpi-task/`(하네스가 매 턴 다시 쓰는 세션 장부, 어떤 검사도 읽지 않는다)다.
+- **범위는 `refs/heads/*` 중 main 이 아닌 것**이다 — **태그 push 는 대상이 아니다**. 릴리스 태그는 이미 착지한 커밋을 가리키므로 거기서 막으면 보호되는 것 없이 리컨실러만 선다(「릴리스 태그 규칙」이 경고한 132회 연속 실패가 정확히 그 모양이다). 2026-08-25 실측: 범위를 `main 이 아닌 ref`로 쓴 첫 판본은 실제로 태그 push 를 거부했다. main 착지는 `automation/land.sh` 가 자기 가드로 소유하고, 세션 워크트리의 main 직접 push 거부는 그대로다. 게이트가 생기기 전에 딴 브랜치는 리포 안에 구제 수단이 없으므로 **경고 후 통과**시킨다 — 판정 불가는 위반이 아니다(`runtime_package_probe` 의 UNKNOWN 과 같은 취급). 그 브랜치도 main 에 rebase 하는 순간 게이트에 든다.
+- **로컬 세트가 CI 에서 갈라지지 않는다**: `tests/unit/test_local_ci_push_gate.py` 가 `.github/workflows/ci.yml` 의 `run:` 명령을 뽑아 `local_ci.sh` 와 **기계 대조**한다. 로컬에서 실행하면 안 되는 명령(개발자 환경을 변형시키는 `pip install -r requirements-dev.txt`)은 스크립트 주석이 아니라 그 파일의 `_LOCAL_ONLY` 에 사유와 함께 등록한다 — 주석에 적으면 grep 은 통과하고 동작은 없는 상태가 조용히 만들어진다. 예외가 낡는 것도 테스트가 잡는다.
+- **탈출구는 `LOCAL_CI_ALLOW_UNVERIFIED=1` 하나뿐이고 샌드박스/실험 전용이다.** 통과시키려고 상습적으로 쓰면 가드가 무의미해진다(`DEPLOY_ALLOW_UNPUSHED` 와 같은 성격). 쓰면 매 push 마다 stderr 에 남는다.
+- **비용 결정(옵션 A)**: `.github/workflows/ci.yml` 에서 **main push 트리거를 제거**했다. PR 에서 이미 통과시킨 트리를 머지 직후 다시 돌리는 중복이었고 최근 100 회 실행 중 **48 회**가 그것이었다(2026-08-25 실측). `pull_request` 실행은 남긴다 — 깨끗한 러너에서의 독립 검증은 로컬 영수증이 대신하지 못한다. 월 3,890~4,862 분 → 약 2,000 분(Free 포함분 이내).
+- **한계**: 영수증은 "이 트리가 **이 기계에서** 통과했다"를 증명하지 "깨끗한 호스트에서 통과한다"를 증명하지 않는다. 그 간극은 clean-host 컨테이너 단계가 메우고 완전히는 못 메운다. 훅은 `automation/worktree.sh start` 가 설치하므로 훅을 설치한 적 없는 clone 에는 게이트가 없다 — gitleaks pre-commit 과 같은 성질이다. 상세: [소개](docs/기능소개/push-게이트-로컬-CI-영수증.md)
+
+## 머지 규칙 (cha 지시, 2026-08-26)
+
+**PR 머지는 `automation/merge-pr.sh <pr>` 로만 한다 — `gh pr merge` 를 직접 부르지 않는다.**
+
+- **왜 명령에 두나**: 브랜치 보호를 쓸 수 없다(private + Free = 403). 켤 수 있어도 에이전트 토큰이 `admin` 이라 기본 설정은 그를 통과시키고, 관리자까지 묶으면 `automation/land.sh:189` 의 main 직접 착지가 서버에서 거부된다. 그래서 판정을 서버가 아니라 머지 명령 자체에 둔다. 2026-08-25 에 두 번 뚫렸다 — #267 은 빨간 CI 위에서, #269 는 체크가 큐잉되기도 전에 머지됐다(둘 다 에이전트).
+- **무엇을 판정하나**: PR 이 OPEN 이고 base 가 main 이며, `.github/workflows/ci.yml` 이 선언한 잡이 **전부 보고**했고 그 전부가 완료·성공일 때만 머지한다. 진행 중이면 기다리고(기본 900초), 마감을 넘기면 거부한다. **체크 0건도, 일부만 올라온 상태도 통과가 아니라 PENDING** 이다 — 2026-08-26 첫 실사용에서 그 순간 올라와 있던 체크 1건(GitGuardian)만 보고 통과시킨 적이 있다. 기다릴 잡 이름은 워크플로에서 **파생**하며 하드코딩하지 않는다. 머지 불가(`CONFLICTING`)는 `gh` 가 실패한 뒤가 아니라 판정 단계에서 거부하고 해소 절차를 안내한다.
+- **태그는 더 이상 여기서 자르지 않는다(VA-3, 2026-08-30)**: 머지는 축적이고, 서명 태그는 릴리스 승인(`automation/release.sh`, VA-1)이 소유자 ✅ 1회를 받아 자른다. 머지마다 태그를 자르면 그 릴리스 승인이 있으나 마나가 된다. 태그 없는 창의 리컨실러 통지는 sha별 사고가 아니라 3일 임계의 릴리스 백로그 다이제스트다(「릴리스 태그 규칙」 참조).
+- **PR 체크는 로컬 영수증과 다른 것을 덮는다**: GitHub `pull_request` 실행은 **머지 결과 트리**를, `automation/local_ci.sh` 의 영수증은 **브랜치 트리**를 검사한다. 2026-08-25 에 실제로 갈렸다(머지 결과 `43c50a44` vs 영수증 `57081383`). 둘 다 필요하다.
+- **탈출구는 `MERGE_PR_ALLOW_UNCHECKED=1` 하나**이고 **체크가 아예 나오지 않을 때만**을 위한 것이다(예: Actions 결제 중단). **실패한 체크는 이것으로도 통과하지 못한다.** 쓰면 매번 stderr 에 남는다.
+- **강제**: `tests/unit/test_merge_pr_gate.py` 가 `automation/`·`skills/`·`tests/` 의 `*.sh`·`*.py` 에서 래퍼 밖 `gh pr merge` 호출을 금지한다 — 주석에 적으면 grep 은 통과하고 동작은 없다.
+- **한계(알고 쓸 것)**: 머지는 GitHub 서버에서 일어나므로 push 훅 같은 **구조적** 강제가 원리적으로 불가능하다. 이 게이트는 명령을 쓰는 주체에게만 구속력을 갖는다. 서버측 강제를 원하면 GitHub Pro 의 브랜치 보호가 유일한 길이고, 그때는 `land.sh` 를 PR 경유로 바꾸는 것이 선행 조건이다. 상세: [소개](docs/기능소개/머지-체크-게이트.md)
+
 ## 커밋 전 diff 확인 규칙 (cha 지시, 2026-07-29)
 
 **`git add` 전에 반드시 `git diff --stat`(필요시 `git diff`)로 의도한 파일만, 의도한 방향으로 바뀌었는지 확인한다. 설명되지 않는 삭제나 내가 만들지 않은 변경이 섞여 있으면 그대로 커밋하지 않는다.**
@@ -322,6 +423,16 @@ automation/worktree.sh finish <이름>                          # 세션 종료
 - 전체 절차(사전조건·매니페스트 원장·실행·릴리스 노트·신뢰키 회전·나쁜 릴리스 대응)는 [docs/guide/manual-maintainer.md](docs/guide/manual-maintainer.md)가 단독으로 소유한다. 이 절은 불변식만 들고 있고 절차를 복사하지 않는다 — 같은 절차를 두 문서가 설명하면 반드시 한쪽이 낡는다.
 - **배경(사후 반영)**: 2026-08-15 W-F5-A로 실제 공개 repo `orientpine/cytoplasm`이 생기고 `v1.0.0`이 서명·push되자마자 소유자가 "이제 공개 repo에서 작업하는가"를 물었다. 이 저장소는 2026-07-21에 이미 같은 계열의 사고를 겪었다 — 확정된 설계에 대한 오해가 세션을 넘어 전달돼 배포가 404로 실패했다. 답을 산문으로만 두면 같은 일이 반복되므로 불변식을 여기에 박아 둔다.
 - 세 저장소(private 개발 origin·공개 배포본·그룹 스킬 채널)의 구분은 아래 「세 저장소 구분 규칙」이 소유한다 — 이 절은 private↔public 방향만 다룬다.
+
+## 개인화 코드 금지 규칙 (SC-2, 2026-08-30)
+
+**개인 맞춤값(채널·메시지 id 상수, 과제명·기관명, 개인 경로·이름)은 코드에 하드코딩하지 않는다 — 자리는 `configs/*.example` 시드와 `~/.hermes/…`·`/srv/autophagy-private/…` 런타임 설정뿐이다.**
+
+- **왜**: 이 저장소의 모든 코드는 PR→main→다음 릴리스에서 `public_export.sh`로 공개 배포본(`cytoplasm`)에 나간다. 시크릿은 gitleaks·`public_export_redaction`이 잡지만 **개인 맞춤 로직은 기계가 못 잡는다** — snowflake 상수 하나, 과제명 분기 하나가 그대로 공개된다. 특히 **수리(repair) 패치**는 프로덕션 관찰에서 태어나므로 개인화가 스며들기 가장 쉬운 경로다.
+- **어떻게**: 설치별 값은 `configs/node.example.toml`·`configs/*.example`(파서 유효한 자리표시자) + 런타임 override(`~/.hermes/node.toml`, `/etc/autophagy/…`)의 기존 패턴을 따른다. 채널은 `approval_surface`/`approval_directory`·config 키로만 해석한다(기존 불변식 그대로). 테스트의 실측 예시 값(id·이름)은 허용된다 — 배포되는 코드가 아니다.
+- **수리 PR 은 본문에 공개 적합성 항목을 싣는다**: "이 패치에 채널 id·과제명·개인 경로 하드코딩이 없다"를 확인란으로 명시한다(「수리 반영 경로 규칙」의 PR 본문 요구에 포함). PR 을 사람이 만들든 자동화(`docs/guide/수리-PR-자동생성-조율안.md`)가 만들든 같다.
+- **repair 유래 파일이 `configs/`·`docs/` 에 새로 생기면** `configs/public-export-review.txt` 의 검토 절차(파일 헤더)를 따른다 — 공개/제외를 결정하기 전에 개인화 여부를 먼저 본다.
+- **배경**: `.omo/plans/release-convergence-and-versioned-approval.md` §5.2 SC-2. `public_export.sh` 는 `git archive <commit>` 으로 스냅샷을 재물화하므로(2026-08-30 실측, A3 검증) 추적된 코드만 나간다 — 그래서 막을 곳은 정확히 "추적되는 코드 안의 개인화"다.
 
 ## 세 저장소 구분 규칙 (cha 지시, 2026-08-16)
 
@@ -347,3 +458,25 @@ automation/worktree.sh finish <이름>                          # 세션 종료
 - **그룹이 언제 필요한가**(소유자가 실제로 물은 판단 기준): 팀원이 각자 자기 에이전트만 쓴다 → 그룹 **불필요**, 각자 `cytoplasm`에서 설치하면 끝. 에이전트끼리 Discord로 보고·조율한다 → **roster는 필요**(발신자 신원 대조, W-F2.5-B)하지만 repo는 선택이며 `~/.hermes/roster.yaml`을 손으로 배치해도 동작한다. 팀 공통 스킬을 배포한다 → 그룹 스킬 repo **필요**.
 - 절차는 여기에 복사하지 않는다 — 릴리스 컷은 [manual-maintainer.md](docs/guide/manual-maintainer.md), 발행·roster는 [manual-group-admin.md](docs/guide/manual-group-admin.md)·[managed-skill-channel.md](docs/guide/managed-skill-channel.md), 설치는 [install.md](docs/guide/install.md)가 단독으로 소유한다.
 - **배경(사후 반영)**: 2026-08-16 그룹 스킬 채널 repo `orientpine/ribosome`이 생기자마자 소유자가 세 저장소의 관계를 이해하지 못해 "내가 이해할 수 있게 도와줘"라고 물었다. 전날에도 같은 계열의 질문(공개 repo가 private를 대체하는가)이 나왔고, 2026-07-21에는 확정 설계에 대한 오해가 세션을 넘어 전달돼 배포가 404로 실패한 전례가 있다. 한 번 나온 혼동은 다음 사람도 겪으므로 채팅으로 한 번 답하지 않고 불변식으로 박아 둔다.
+
+## 산출물 출처 규칙 (cha 지시, 2026-08-26)
+
+**공정표·계획서·보고서 등 회의에서 파생되는 산출물은 완성 회의록에서만 작성한다 — 음성 전사본은 출처가 아니다.**
+
+- **완성 회의록이 있는 곳**: Drive `autophagy/회의록/<과제명>/<연도>/`. `meeting_cli ingest --project <과제명>` 이 그 자리에 발행하고, 경로 규칙은 `automation/drive_taxonomy.py` 의 `meeting` 카테고리가 소유한다. 산출물을 만들기 전에 **거기부터 읽는다**. 읽기는 승인 게이트 대상이 아니다(denylist 는 `gws drive files create|+upload` 만 건다). `.md` 는 Google Docs 가 아니므로 `files export` 가 아니라 `files get --params {fileId, alt:media}` 이며, `gws` 는 cwd 밖 `--output` 을 거부하므로 목적지에서 실행한다.
+- **로컬 노트(`~/notes/meetings/*.md`)는 정본이 아니다.** 그 파일은 `meeting_minutes.APPENDIX_HEADING`(`## 부록 · 근거와 원문`) 아래에 **원문 전사본을 통째로 안고 있다**. 부록 위만 회의가 결론 낸 것이고, 아래는 재료다. 파일을 통째로 읽으면 음성 인식 결과를 사실로 읽게 된다.
+- **경계는 코드가 소유한다.** `meeting_minutes.finalized_view(text)` 가 부록 위만 돌려준다. 그 상수 옆에 붙어 있으므로 사본을 만들면 갈라진다 — 새로 자르지 말고 그 함수를 쓴다. 전사본 절은 렌더러가 `TRANSCRIPT_WARNING` 을 바로 아래에 찍어 금지를 유혹이 있는 자리에 둔다(회귀 고정: `tests/unit/test_meeting_skill.py`).
+- **회의 상태 파일 두 개도 같은 트리에 있다.** 과제의 미결·완료 action item 원장(`회의록/<과제>/action-items.csv`)과 관리번호 코드 레지스트리(`회의록/project-codes.csv`)는 날짜 없는 상태 파일이며, 규약과 진입점(`drive_outputs.publish_state_file` / `fetch_state_file`)은 [drive-publish.md](docs/guide/drive-publish.md) 가 단독으로 소유한다.
+- **카드도 정본을 먼저 가리킨다.** `--project` 를 준 인제스트의 카드 본문은 `출처(정본): Drive 회의록/<과제명>/` 을 먼저 적고 로컬 사본을 뒤에 적는다. 과제명을 모르면 없는 경로를 지어내지 않고 기존 로컬 경로만 적는다. 민감 회의의 마스킹 카드에는 과제명을 싣지 않는다(과제명은 항목 문자열 규칙 재검사를 거치지 않았다).
+- **배경(사후 반영)**: 2026-08-26, 전사본에서 만든 공정표 템플릿이 기관명을 틀렸다 — `한정기술`(정본은 **한국전력기술**, 다른 회사), `현대중공업 서부기계`(정본 **현대중공업터보기계**), 열교환기 `대통`(정본 **계통**) 열수력. 마감일도 `2028-02-01/04-01`(정본 **02-29/04-30**)로 어긋났고, 회의록이 규정한 열 위치(B2=기관명, B~E=대·중·소분류, H~I=시작·종료일, N=결과물)를 무시한 간트 격자를 지어냈다. 그 파일은 8개 참여기관에 배포될 것이었다. 완성 회의록에는 「용어·명칭 교정 기준」 표가 있어 이 오기들이 이미 교정돼 있었다 — 읽을 곳을 안 읽은 것이 유일한 원인이다.
+## 산출물은 Drive에 둔다 (cha 지시, 2026-08-26)
+
+**에이전트가 cha에게 내놓는 산출물(문서·표·보고서)은 로컬 경로에 남기지 않고 Drive 표준 트리에 발행한다.**
+
+- **발행 경로는 하나다** — `automation/drive_outputs.py` 파사드. 세션에서 손으로 올릴 때는 `python3 -m automation.drive_publish_cli --kind <종류> --title <제목> [--project <과제>] <파일>` 을 쓴다. `gws drive` 를 직접 부르거나 헬퍼를 vendoring 하는 것은 금지이며 `tests/unit/test_drive_outputs_conformance.py` 가 막는다. 그 CLI 는 업로드 로직을 갖지 않고 인자만 파싱해 파사드에 넘긴다 — 두 번째 발행 경로를 만들지 않기 위해서다.
+- **카테고리는 `automation/drive_taxonomy.CATEGORIES` 가 유일한 출처다.** 일반 문서 산출물은 `doctype`(문서). `meeting`(회의록) 은 회의록이 사는 곳이므로 회의에서 **파생된** 산출물을 거기 넣지 않는다 — 넣는 순간 그 폴더가 "회의가 결론 낸 것"을 뜻하지 않게 된다.
+- **과제가 있으면 `--project <과제명>`** 으로 한 단을 넣어 같은 과제의 전사본·회의록과 묶는다. 과제를 쓰면 파일이 정확히 depth 5 에 놓이므로 그 발행의 산출물은 1개여야 한다(2개 이상은 번들이 되어 depth 6, `TaxonomyError` 로 거부된다).
+- **워크스테이션에서 만든 파일은 그대로 올라가지 않는다.** `gws` 는 노드 `agent` 계정에만 있다. 노드로 옮긴 뒤 배포 런타임(`/srv/autophagy-agent-current`)을 `PYTHONPATH` 에 두고 발행하고, 노드의 임시 사본은 발행 직후 지운다.
+- **발행했다고 말하기 전에 Drive 를 다시 조회한다.** 파사드가 sha256 재다운로드로 내용은 검증하지만, **사본이 늘지 않았는지는 별도 조회로만 보인다**. 대상 폴더에 파일이 정확히 1개인지 확인하고 그 출력을 증적으로 남긴다.
+- 절차·경로·환경변수의 단독 정본은 [docs/guide/drive-publish.md](docs/guide/drive-publish.md) 다. 이 절은 불변식만 들고 있고 절차를 복사하지 않는다 — 같은 절차를 두 문서가 설명하면 반드시 한쪽이 낡는다.
+- **배경(사후 반영)**: 2026-08-26, 8개 참여기관에 배포될 용역공정표 템플릿을 만들어 `~/Documents` 에 두었다. 규약은 이미 Drive 를 말하고 있었지만 파사드를 부르는 것은 스킬 코드뿐이었고 세션이 쓸 명령이 없었다. **명령 없는 규칙은 지켜지지 않는다** — 그래서 규칙과 진입점을 같은 사이클에 함께 넣는다.

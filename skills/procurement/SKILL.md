@@ -1,7 +1,7 @@
 ---
 name: procurement
 description: "이미 등록된 구매/용역 템플릿에 품목·금액·업체를 채워 초안 파일을 생성하고 cha에게만 검토 요청을 보낸다. 새 문서의 등록·스킬화·문서 종류 저장·개선은 doctype 소유이며, 이 스킬은 새로 받은 문서를 템플릿으로 저장하지 않는다."
-version: 1.2.0
+version: 1.2.1
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -83,7 +83,7 @@ set -a; . ~/.env.secrets; set +a
 $PY …/procure_cli.py review --file <생성파일> --note "<한 줄 요약>"
 ```
 
-25MiB 이하는 파일 첨부, 초과는 cha 본인 Drive의 `Autophagy Project Archive/procurement/<YYYY-MM>/` 폴더에 업로드 후 링크를 DM한다(최상위 루트 아님). 루트명은 `PROCURE_DRIVE_ROOT`로 조정 가능.
+25MiB 이하는 파일 첨부, 초과는 공용 파사드 `automation.drive_outputs`로 `autophagy/구매/<YYYY>/<YYYY-MM-DD>_<파일명>`에 업로드한 뒤 링크를 DM한다(`DRIVE_PUBLISH_ENABLED=1`일 때만; 날짜는 최초 발행일 고정이라 재발행해도 사본이 늘지 않는다). 상세: `docs/guide/drive-publish.md`.
 DM 말미의 "제출은 cha가 직접" 문구를 지우지 마라.
 
 ## Sandbox scenario

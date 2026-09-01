@@ -126,6 +126,25 @@ def stored_binding(draft: dict) -> object:
         raise triage_gate.GateError(f"승인 바인딩을 확인할 수 없음 — {error}", 3) from error
 
 
+def is_retired_binding(draft: dict) -> bool:
+    """Whether persisted metadata names a surface no longer used for its kind."""
+    surface_module = _repo_module("approval_surface")
+    kind = approval_kind(draft)
+    raw_surface = draft.get("surface")
+    policy_version = draft.get("policy_version")
+    if isinstance(raw_surface, str) and type(policy_version) is int:
+        surface = surface_module.ApprovalSurface(raw_surface)
+        stamped = surface_module.surface_at_policy(kind, policy_version)
+        if surface is not stamped:
+            raise triage_gate.GateError("저장된 승인 표면과 정책 버전이 모순됨 — 거부", 3)
+        return surface is not surface_module.required_surface(kind)
+    if raw_surface is not None or policy_version is not None:
+        raise triage_gate.GateError("저장된 승인 바인딩이 불완전함 — 승인 거부", 3)
+    if draft.get("kind") is None or persisted_channel_id(draft) is not None:
+        return surface_module.surface_at_policy(kind, 0) is not surface_module.required_surface(kind)
+    return False
+
+
 def reaction_instruction(draft: dict, *, name_surface: bool = False) -> str:
     surface_module = _repo_module("approval_surface")
     kind = approval_kind(draft)

@@ -11,6 +11,8 @@ from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 
+from automation.interop.approval_surface import POLICY_VERSION
+
 _REPO = Path(__file__).resolve().parents[2]
 _SCRIPTS = _REPO / "skills" / "calendar" / "scripts"
 os.environ["CALENDAR_SCRIPTS"] = str(_SCRIPTS)
@@ -23,6 +25,9 @@ _pending = import_module("calendar_pending")
 PendingConfirm = _pending.PendingConfirm
 PendingConfirmStore = _pending.PendingConfirmStore
 OWNER_DM_CHANNEL_ID = "1526487935975952385"
+AGENT_CHAT_CHANNEL_ID = "1526487935975952390"
+AGENT_CHAT_THREAD_ID = "1526487935975952391"
+AGENT_CHAT_GUILD_ID = "1526487935975952392"
 
 
 def _load_watch_module():
@@ -94,6 +99,7 @@ def _run(
     content: str = "calendar confirmation sha256:sha-123",
     draft_hash: str = "sha-123",
     notify_error: bool = False,
+    record: dict | None = None,
 ) -> tuple[PendingConfirmStore, FakeDiscord, FakeCommands]:
     store = PendingConfirmStore(tmp_path / "pending-confirms.jsonl")
     store.append(_entry(created=created))
@@ -105,6 +111,7 @@ def _run(
         discord=discord,
         commands=commands,
         draft_sha256=lambda _draft_id: draft_hash,
+        draft_record=lambda _draft_id: {"action": "delete", "id": "abc123"} if record is None else record,
         now=datetime(2026, 7, 17, 12, 0, tzinfo=UTC),
     )
     return store, discord, commands
@@ -127,7 +134,10 @@ def test_discard_without_confirm_when_owner_has_cancel_reaction(tmp_path: Path) 
     # When / Then
     assert commands.confirmed == []
     assert commands.discarded == ["abc123"]
-    assert discord.sent_messages == ["취소됨"]
+    [notice] = discord.sent_messages
+    assert "캘린더 삭제 취소" in notice
+    assert "abc123" in notice
+    assert "소유자 ⛔ 리액션으로 취소되었습니다" in notice
     assert store.load() == ()
 
 
@@ -174,7 +184,10 @@ def test_discard_when_confirmation_expires(tmp_path: Path) -> None:
     # Then
     assert commands.confirmed == []
     assert commands.discarded == ["abc123"]
-    assert discord.sent_messages == ["확정 시간이 지나 취소되었습니다"]
+    [notice] = discord.sent_messages
+    assert "캘린더 삭제 만료 취소" in notice
+    assert "abc123" in notice
+    assert "확정 시간이 지나 취소되었습니다" in notice
     assert store.load() == ()
 
 
@@ -209,6 +222,9 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
     # Given
     monkeypatch.setenv("CALENDAR_GATE_DIR", str(tmp_path / "gate"))
     monkeypatch.setenv("CALENDAR_PENDING_CONFIRMS", str(tmp_path / "pending-confirms.jsonl"))
+    config = tmp_path / "interop.json"
+    config.write_text(json.dumps({"agent_chat_channel_id": AGENT_CHAT_CHANNEL_ID}), encoding="utf-8")
+    monkeypatch.setenv("INTEROP_CONFIG", str(config))
     draft = calendar_gate.create_draft(
         action="delete", argv=("gws", "calendar", "events", "delete"), calendar_id="primary",
         event_id="evt1", summary="private", start="", end="", channel_id="dm",
@@ -221,7 +237,13 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
             return {"id": OWNER_DM_CHANNEL_ID}
         if path == f"/channels/{OWNER_DM_CHANNEL_ID}":
             return {"id": OWNER_DM_CHANNEL_ID, "name": "", "recipients": [{"id": "cha-owner"}], "type": 1}
-        if path == f"/channels/{OWNER_DM_CHANNEL_ID}/messages":
+        if path == f"/channels/{AGENT_CHAT_CHANNEL_ID}":
+            return {"id": AGENT_CHAT_CHANNEL_ID, "guild_id": AGENT_CHAT_GUILD_ID, "name": "agent-chat", "type": 0}
+        if path == f"/guilds/{AGENT_CHAT_GUILD_ID}/threads/active":
+            return {"threads": [{"id": AGENT_CHAT_THREAD_ID, "name": "승인-calendar", "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}]}
+        if path == f"/channels/{AGENT_CHAT_THREAD_ID}":
+            return {"id": AGENT_CHAT_THREAD_ID, "name": "승인-calendar", "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}
+        if path == f"/channels/{AGENT_CHAT_THREAD_ID}/messages":
             return {"id": "msg-1"}
         return None
 
@@ -236,13 +258,16 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
     entry = PendingConfirmStore().load()
     assert entry == (
         PendingConfirm(
-            draft_id=draft["id"], sha256=draft["sha256"], dm_channel_id=OWNER_DM_CHANNEL_ID,
+            draft_id=draft["id"], sha256=draft["sha256"], dm_channel_id=AGENT_CHAT_THREAD_ID,
             dm_message_id="msg-1", created=entry[0].created,
         ),
     )
+    assert entry[0].channel_id == AGENT_CHAT_THREAD_ID
+    assert entry[0].surface == "agent-chat-thread"
+    assert entry[0].policy_version == POLICY_VERSION
     assert [call for call in calls if call[0] == "PUT"] == [
-            ("PUT", f"/channels/{OWNER_DM_CHANNEL_ID}/messages/msg-1/reactions/%E2%9C%85/@me", None),
-            ("PUT", f"/channels/{OWNER_DM_CHANNEL_ID}/messages/msg-1/reactions/%E2%9B%94/@me", None),
+            ("PUT", f"/channels/{AGENT_CHAT_THREAD_ID}/messages/msg-1/reactions/%E2%9C%85/@me", None),
+            ("PUT", f"/channels/{AGENT_CHAT_THREAD_ID}/messages/msg-1/reactions/%E2%9B%94/@me", None),
     ]
 
 
@@ -479,3 +504,283 @@ def test_forged_or_cross_message_watcher_authorization_never_executes(
 
     assert other_draft["id"] != draft["id"]
     assert executions == []
+
+
+# ------------------------------------------- origin-channel thread result routing
+
+ORIGIN_CHANNEL = "200000000000000009"
+ORIGIN_MESSAGE = "410000000000000009"
+THREAD_ID = "300000000000000009"
+SECRET_SUMMARY = "비공개 진료 예약"
+SECRET_EVENT_ID = "evt-secret-9"
+SECRET_START = "2026-07-18T15:00:00+09:00"
+SECRET_END = "2026-07-18T16:00:00+09:00"
+SECRET_CALENDAR = "secret-calendar@group.calendar.google.com"
+
+
+def _origin_record(**overrides: str) -> dict:
+    """A pending draft carrying both the origin binding and calendar content."""
+    return {
+        "action": "create",
+        "argv": ["gws", "calendar", "events", "insert"],
+        "calendar_id": SECRET_CALENDAR,
+        "channel_id": "dm",
+        "created": "2026-07-17T00:00:00Z",
+        "end": SECRET_END,
+        "event_id": SECRET_EVENT_ID,
+        "id": "abc123",
+        "origin_channel_id": ORIGIN_CHANNEL,
+        "origin_message_id": ORIGIN_MESSAGE,
+        "sha256": "sha-123",
+        "start": SECRET_START,
+        "status": "pending",
+        "summary": SECRET_SUMMARY,
+        **overrides,
+    }
+
+
+def _assert_calendar_content_masked(text: str) -> None:
+    """캘린더 내용은 cha DM 밖으로 나가지 않는다 — 스레드 문구/이름 공통 규칙."""
+    for secret in (SECRET_SUMMARY, SECRET_START, SECRET_END, SECRET_EVENT_ID, SECRET_CALENDAR):
+        assert secret not in text
+
+
+class _SentChunk:
+    def __init__(self, message_id: str) -> None:
+        self.message_id = message_id
+
+
+def _run_origin(
+    tmp_path: Path,
+    monkeypatch,
+    reactions: dict[str, tuple[dict[str, str | bool], ...]],
+    *,
+    record: dict,
+    thread_fail: bool = False,
+    created: datetime | None = None,
+) -> SimpleNamespace:
+    thread_names: list[str] = []
+    thread_posts: list[tuple[str, str]] = []
+    dm_notices: list[tuple[str, str]] = []
+    threads_path = f"/channels/{ORIGIN_CHANNEL}/messages/{ORIGIN_MESSAGE}/threads"
+
+    def api(method: str, path: str, payload: dict[str, str] | None = None):
+        if method == "POST" and path == threads_path:
+            if thread_fail:
+                raise RuntimeError("thread API down")
+            thread_names.append(str((payload or {})["name"]))
+            return {"id": THREAD_ID}
+        raise AssertionError(f"unexpected Discord call: {method} {path}")
+
+    class _ThreadTransport:
+        def __init__(self, channel_id: str) -> None:
+            self.channel_id = channel_id
+
+        def send(self, content: str) -> tuple[_SentChunk, ...]:
+            thread_posts.append((self.channel_id, content))
+            return (_SentChunk("thread-post-1"),)
+
+    monkeypatch.setattr(calendar_confirm, "owner_id", lambda: "cha-owner")
+    monkeypatch.setattr(calendar_confirm, "_api", api)
+    monkeypatch.setattr(calendar_confirm, "_thread_transport", _ThreadTransport)
+    monkeypatch.setattr(
+        calendar_confirm, "send_owner_dm",
+        lambda owner, content: dm_notices.append((owner, content)),
+    )
+    store = PendingConfirmStore(tmp_path / "pending-confirms.jsonl")
+    store.append(_entry(created=created))
+    discord = FakeDiscord(reactions, f"calendar confirmation sha256:{record['sha256']}")
+    commands = FakeCommands()
+    watch.run_once(
+        store=store,
+        owner_id="cha-owner",
+        discord=discord,
+        commands=commands,
+        draft_sha256=lambda _draft_id: str(record["sha256"]),
+        draft_record=lambda _draft_id: record,
+        now=datetime(2026, 7, 17, 12, 0, tzinfo=UTC),
+    )
+    return SimpleNamespace(
+        store=store, discord=discord, commands=commands,
+        thread_names=thread_names, thread_posts=thread_posts, dm_notices=dm_notices,
+    )
+
+
+def test_origin_bound_approval_posts_masked_result_to_the_origin_thread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Given an origin-bound draft the owner approves with ✅
+    record = _origin_record()
+
+    # When the watcher tick resolves the approval
+    result = _run_origin(
+        tmp_path, monkeypatch, {"✅": ({"id": "cha-owner", "bot": False},)}, record=record
+    )
+
+    # Then the masked result lands in the origin thread, not in a DM
+    assert [entry.draft_id for entry in result.commands.confirmed] == ["abc123"]
+    assert result.discord.sent_messages == []
+    assert result.dm_notices == []
+    assert result.thread_names == ["캘린더 확정 (draft abc123)"]
+    assert [channel for channel, _content in result.thread_posts] == [THREAD_ID]
+    content = result.thread_posts[0][1]
+    assert "캘린더 등록 실행 완료" in content
+    assert "abc123" in content
+    _assert_calendar_content_masked(content)
+    _assert_calendar_content_masked(result.thread_names[0])
+
+
+def test_origin_bound_cancellation_posts_masked_result_to_the_origin_thread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Given an origin-bound deletion draft the owner cancels with ⛔
+    record = _origin_record(action="delete")
+
+    # When the watcher tick resolves the cancellation
+    result = _run_origin(
+        tmp_path, monkeypatch, {"⛔": ({"id": "cha-owner", "bot": False},)}, record=record
+    )
+
+    # Then the masked cancel result lands in the origin thread, not in a DM
+    assert result.commands.confirmed == []
+    assert result.commands.discarded == ["abc123"]
+    assert result.discord.sent_messages == []
+    assert result.dm_notices == []
+    assert [channel for channel, _content in result.thread_posts] == [THREAD_ID]
+    content = result.thread_posts[0][1]
+    assert "캘린더 삭제 취소" in content
+    assert "abc123" in content
+    _assert_calendar_content_masked(content)
+
+
+def test_origin_thread_failure_falls_back_to_the_owner_dm_path(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # Given an origin-bound approved draft whose thread creation fails
+    record = _origin_record()
+
+    # When the watcher tick reports the committed execution
+    result = _run_origin(
+        tmp_path, monkeypatch, {"✅": ({"id": "cha-owner", "bot": False},)},
+        record=record, thread_fail=True,
+    )
+
+    # Then the confirmed execution survives and the notice falls back to the DM path
+    assert [entry.draft_id for entry in result.commands.confirmed] == ["abc123"]
+    assert result.thread_posts == []
+    [(owner, content)] = result.dm_notices
+    assert owner == "cha-owner"
+    assert "캘린더 등록 실행 완료" in content
+    _assert_calendar_content_masked(content)
+    assert "NOTIFY-THREAD-FAIL" in capsys.readouterr().err
+    assert result.store.load() == ()
+
+
+def test_create_draft_persists_origin_binding_without_changing_the_draft_hash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Given the same mutation drafted with and without an origin binding
+    monkeypatch.setenv("CALENDAR_GATE_DIR", str(tmp_path / "gate"))
+    fields = {
+        "action": "delete", "argv": ("gws", "calendar", "events", "delete"),
+        "calendar_id": "primary", "event_id": "evt1", "summary": "private",
+        "start": "", "end": "", "channel_id": "dm",
+    }
+    legacy = calendar_gate.create_draft(**fields)
+
+    # When the origin-bound draft is created
+    record = calendar_gate.create_draft(
+        **fields, origin_channel_id=ORIGIN_CHANNEL, origin_message_id=ORIGIN_MESSAGE
+    )
+
+    # Then the binding is persisted and the legacy content hash is unchanged
+    stored = json.loads(
+        (tmp_path / "gate" / "drafts" / f"{record['id']}.json").read_text(encoding="utf-8")
+    )
+    assert stored["origin_channel_id"] == ORIGIN_CHANNEL
+    assert stored["origin_message_id"] == ORIGIN_MESSAGE
+    assert stored["sha256"] == legacy["sha256"]
+
+
+def test_draft_subcommands_thread_origin_into_the_record(tmp_path: Path, monkeypatch) -> None:
+    # Given channel-initiated draft instructions carrying their origin refs
+    monkeypatch.setenv("CALENDAR_GATE_DIR", str(tmp_path / "gate"))
+    peers = tmp_path / "peers.yaml"
+    _ = peers.write_text(
+        'version: 1\npeers:\n  agent-cha:\n    bot_user_id: "111111111111111111"\n'
+        "    bot_name: Owner-Agent\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CALENDAR_PEERS_CONFIG", str(peers))
+    origin = {"origin_channel_id": ORIGIN_CHANNEL, "origin_message_id": ORIGIN_MESSAGE}
+
+    # When each draft-creating subcommand runs
+    assert calendar_cli.cmd_draft_create(
+        SimpleNamespace(text="내일 오후 3시 실험 미팅", summary="", calendar="primary",
+                        channel_id="dm", **origin)
+    ) == 0
+    assert calendar_cli.cmd_draft_update(
+        SimpleNamespace(text="", summary="새 제목", calendar="primary", channel_id="dm",
+                        event_id="evt1", **origin)
+    ) == 0
+    assert calendar_cli.cmd_draft_delete(
+        SimpleNamespace(label="private", calendar="primary", channel_id="dm",
+                        event_id="evt1", **origin)
+    ) == 0
+
+    # Then every stored draft carries the origin binding for result routing
+    stored = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (tmp_path / "gate" / "drafts").glob("*.json")
+    ]
+    assert len(stored) == 3
+    assert {record["origin_channel_id"] for record in stored} == {ORIGIN_CHANNEL}
+    assert {record["origin_message_id"] for record in stored} == {ORIGIN_MESSAGE}
+
+
+def test_draft_subcommand_parsers_accept_origin_flags() -> None:
+    # Given/When the three draft subcommands are parsed with origin flags
+    parser = calendar_cli.build_parser()
+    parsed = [
+        parser.parse_args([
+            "draft-create", "--text", "내일 오후 3시 미팅",
+            "--origin-channel-id", ORIGIN_CHANNEL, "--origin-message-id", ORIGIN_MESSAGE,
+        ]),
+        parser.parse_args([
+            "draft-update", "--event-id", "evt1", "--summary", "새 제목",
+            "--origin-channel-id", ORIGIN_CHANNEL, "--origin-message-id", ORIGIN_MESSAGE,
+        ]),
+        parser.parse_args([
+            "draft-delete", "--event-id", "evt1",
+            "--origin-channel-id", ORIGIN_CHANNEL, "--origin-message-id", ORIGIN_MESSAGE,
+        ]),
+    ]
+
+    # Then each namespace carries them for create_draft
+    for args in parsed:
+        assert args.origin_channel_id == ORIGIN_CHANNEL
+        assert args.origin_message_id == ORIGIN_MESSAGE
+
+
+def test_notify_result_falls_back_to_owner_when_helper_is_unavailable(monkeypatch, capsys):
+    # Given: the interop runtime lacks origin_notice (stale runtime / sandbox)
+    import calendar_confirm
+
+    notices: list[tuple[str, str]] = []
+    monkeypatch.setattr(calendar_confirm, "owner_id", lambda: "owner-1")
+    monkeypatch.setattr(
+        calendar_confirm, "send_owner_dm", lambda owner, content: notices.append((owner, content))
+    )
+
+    def missing():
+        raise ImportError("No module named 'automation'")
+
+    monkeypatch.setattr(calendar_confirm, "_origin_notice", missing)
+    # When: an origin-bound result is delivered
+    calendar_confirm.notify_result(
+        {"id": "abc123", "origin_channel_id": "200000000000000001", "origin_message_id": "m-1"},
+        "⛔ 캘린더 등록 취소 (draft abc123)",
+    )
+    # Then: the owner still gets it through the legacy path, with a marker
+    assert notices == [("owner-1", "⛔ 캘린더 등록 취소 (draft abc123)")]
+    assert "NOTIFY-HELPER-MISSING" in capsys.readouterr().err

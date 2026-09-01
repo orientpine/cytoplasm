@@ -7,12 +7,18 @@
 # package and the missing deployer made a month of fixes silently unreachable.
 # memory_curator is the measured control (same=34, diff=0) and uses the same layout.
 #
-# Format: <account>|<release-subpath>|<home-relative-runtime-path>|<policy>[|<node>|<profile>]
+# Format: <account>|<release-subpath>|<home-relative-runtime-path>|<policy>[|<selector>|<profile>[|<deployed-python-files>]]
 # Four fields remain backward-compatible: the check's primary node and recursive Python
 # snapshot are defaults. `rag|tree` selects NODE_RAG_NODE_NAME and hashes the complete
 # managed tree because Dockerfiles, Compose, pyproject/locks, service/env examples, and
 # dockerignore files can change deployment/build behavior. Node-only .env.secrets and
-# cache directories are always excluded. Only verified like-for-like layouts belong here.
+# cache directories are always excluded. `deployed-python-files` is a comma-separated,
+# deployer-derived list relative to the release subpath: it narrows the release snapshot
+# only, so a stale extra runtime file still fails. Only verified layouts belong here.
+# interop_runtime: reason=deploy-skill.sh stages only its GATE_HELPERS and GATE_INTEROP_HELPERS into automation/ without pruning retained files, so a recursive source snapshot reports intentional omissions and extras; alternative=hash each helper named by those two deploy-skill.sh allowlists after staging.
+# reminder_poller_runtime: reason=no automation deployer declares its payload and poll_reminders.py loads only flat fallback modules while the wrapper is separately deployed, so a recursive source snapshot has no verified boundary and miscounts the wrapper; alternative=judge the two flat imports poller_core.py and reminder_store.py with an isolated runtime import smoke until a deployer adds per-file read-back.
 agent|automation/rag_ingest|.hermes/rag_ingest_runtime/rag_ingest|required
 agent|automation/memory_curator|.hermes/memory_curator_runtime/memory_curator|required
+agent|automation/regression_bank|.hermes/regression_bank_runtime|required|default|python|bank_state.py,weekly_bank.py
+agent|automation/research_trends|.hermes/research_trends_runtime|required|default|python|research_trends.py,research_trends_core.py,topics_import.py
 ops|configs/rag|personal-rag|required|rag|tree

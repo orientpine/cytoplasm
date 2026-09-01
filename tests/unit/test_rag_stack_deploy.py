@@ -12,7 +12,14 @@ def test_rag_stack_deployer_has_provenance_target_and_lock_contract() -> None:
     text = _DEPLOY.read_text(encoding="utf-8")
 
     assert 'deploy_provenance_check "$repo_root" "$repo_root/configs/rag" || exit 4' in text
-    assert 'host="${RAG_STACK_SSH_HOST:-$NODE_RAG_NODE_NAME}"' in text
+    assert (
+        'host="${RAG_STACK_SSH_HOST:-$NODE_RAG_NODE_NAME}"\n'
+        'if [ -z "$host" ]; then\n'
+        '  echo "DEPLOY-BLOCK: RAG_STACK_SSH_HOST is unset and node config gave no RAG node name. Set it (or configure ~/.hermes/node.toml)" >&2\n'
+        '  echo "              and re-run; refusing to ssh to an unresolvable placeholder." >&2\n'
+        '  exit 3\n'
+        "fi"
+    ) in text
     assert "sudo -n -u ops -H" in text
     assert "flock -w 300" in text
 

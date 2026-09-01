@@ -7,9 +7,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import ModuleType
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final
 from urllib.error import HTTPError
 
+from todo_approval_ports import DirectoryLike, TransportLike
 from todo_approval_store import (
     ApprovalState,
     TodoApprovalRecord,
@@ -39,37 +40,6 @@ class TodoApprovalError(RuntimeError):
     """Approval production failed closed before a valid lifecycle result."""
 
 
-class DirectoryLike(Protocol):
-    def owner_dm(self) -> str: ...
-
-    def skill_approvals(self) -> str: ...
-
-    def describe(self, channel_id: str) -> ChannelFactsLike: ...
-
-
-class ChannelFactsLike(Protocol):
-    channel_type: int
-    name: str
-    recipient_ids: tuple[str, ...]
-
-
-class TransportLike(Protocol):
-    def post_message(self, channel_id: str, content: str) -> str: ...
-
-    def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None: ...
-
-    def get_message(self, channel_id: str, message_id: str) -> str | None: ...
-
-    def get_reaction_users(
-        self,
-        channel_id: str,
-        message_id: str,
-        emoji: str,
-    ) -> tuple[tuple[str, bool], ...]: ...
-
-    def delete_message(self, channel_id: str, message_id: str) -> None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class TodoApprovalIntent:
     action_hash: str
@@ -77,6 +47,10 @@ class TodoApprovalIntent:
     argv_summary: str
     title: str
     due: str | None
+    origin_channel_id: str = ""
+    origin_message_id: str = ""
+    tasklist: str = ""
+    notes: str | None = None
 
     @property
     def key(self) -> str:
@@ -230,6 +204,12 @@ class TodoApprovalGate:
             str(binding.surface),
             binding.channel_id,
             binding.policy_version,
+            origin_channel_id=self.intent.origin_channel_id,
+            origin_message_id=self.intent.origin_message_id,
+            tasklist=self.intent.tasklist,
+            title=self.intent.title,
+            notes=self.intent.notes,
+            due=self.intent.due,
         )
 
     def _record(self, request: ApprovalRequest) -> TodoApprovalRecord | None:

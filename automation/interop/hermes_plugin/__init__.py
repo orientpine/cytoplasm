@@ -9,7 +9,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Final
-from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from automation import group_roster
@@ -217,24 +216,11 @@ def _send_to_channel(*, channel_id: str, content: str) -> None:
 
 
 def _send_direct_result(correlation_id: str) -> None:
-    """Create the owner DM channel and deliver a deterministic result marker."""
-    config = _config()
-    request = Request(
-        "https://discord.com/api/v10/users/@me/channels",
-        data=json.dumps({"recipient_id": config["owner_id"]}).encode("utf-8"),
-        headers={
-            "Authorization": f"Bot {os.environ['DISCORD_BOT_TOKEN']}",
-            "Content-Type": "application/json",
-            "User-Agent": "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)",
-        },
-        method="POST",
-    )
-    with urlopen(request, timeout=30) as response:  # noqa: S310
-        channel = json.loads(response.read().decode("utf-8"))
-    channel_id = channel["id"]
-    if not isinstance(channel_id, str):
-        raise ValueError("Discord DM response missing channel id")
-    _transport(channel_id).send(f"Interop delegation result: {correlation_id}")
+    """Deliver the delegation result marker through the owner-notice facade (ON-2)."""
+    from automation.owner_notice import notify_owner
+
+    if not notify_owner(f"Interop delegation result: {correlation_id}"):
+        raise RuntimeError("delegation result notice delivery failed")
 
 
 def _transport(channel_id: str) -> DiscordTransport:

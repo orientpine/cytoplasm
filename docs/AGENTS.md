@@ -13,8 +13,11 @@
 
 ## 상위 문서
 - `features.md` — 기능 현황판(요약 뷰 + 신규 아이디어 + 후속 과제 요약표). 계획 문서의 파생.
-- `follow-ups.md` — 후속 과제 전문(묶음별 `##` 헤딩). · `done.md` — 완료 기능 전문.
-  세 파일은 `tests/unit/test_features_board_conformance.py`가 함께 검사한다 — 한 파일만 읽으면 DONE이 빈 껍데기로 보여 검사가 공허해진다.
+- `follow-ups.md` — 후속 과제 전문(묶음별 `##` 헤딩) — **이 저장소가 지금 손댈 수 있는 열린 작업만**.
+- `follow-ups-deferred.md` — 보류·인계(2026-08-26 분리): OWNER(소유자·노드) · BLOCKED(동결·벤더) · OBSERVE(관측 대기) · 해소 기록.
+  **삭제가 아니라 이동**이고 원 `##` 헤딩을 양쪽에서 유지해야 한다 — 회계 가드 A9가 두 문서를 합쳐 읽어 이동과 삭제를 가른다.
+- `done.md` — 완료 기능 전문.
+  네 파일은 `tests/unit/test_features_board_conformance.py`가 함께 검사한다 — 한 파일만 읽으면 DONE이 빈 껍데기로 보여 검사가 공허해진다.
 - `hardware-infra-openclaw.md` · `spark-활용-검토.md` — 하드웨어/노드 검토.
 
 ## 규칙

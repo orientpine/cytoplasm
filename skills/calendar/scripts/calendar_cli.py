@@ -40,6 +40,11 @@ ROUTING_REJECT_EXIT_CODE = 4
 _print_draft = calendar_output.print_draft
 
 
+def _origin_of(args: argparse.Namespace) -> dict[str, str]:
+    """Where the instruction came from, so the result returns to that channel's thread."""
+    return {name: str(getattr(args, name, "") or "") for name in ("origin_channel_id", "origin_message_id")}
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     now = datetime.now(calendar_core.KST)
     params = {
@@ -107,7 +112,7 @@ def cmd_draft_create(args: argparse.Namespace) -> int:
         action="create", argv=calendar_core.build_create_argv(args.calendar, request),
         calendar_id=args.calendar, event_id="", summary=summary,
         start=request.start.isoformat(), end=request.end.isoformat(),
-        channel_id=args.channel_id,
+        channel_id=args.channel_id, **_origin_of(args),
     )
     _print_draft(record)
     return 0
@@ -126,7 +131,7 @@ def cmd_draft_update(args: argparse.Namespace) -> int:
         summary=args.summary or (request.summary if request else ""),
         start=request.start.isoformat() if request else "",
         end=request.end.isoformat() if request else "",
-        channel_id=args.channel_id,
+        channel_id=args.channel_id, **_origin_of(args),
     )
     _print_draft(record)
     return 0
@@ -136,7 +141,7 @@ def cmd_draft_delete(args: argparse.Namespace) -> int:
     record = calendar_gate.create_draft(
         action="delete", argv=calendar_core.build_delete_argv(args.calendar, args.event_id),
         calendar_id=args.calendar, event_id=args.event_id, summary=args.label,
-        start="", end="", channel_id=args.channel_id,
+        start="", end="", channel_id=args.channel_id, **_origin_of(args),
     )
     _print_draft(record)
     return 0
@@ -211,6 +216,10 @@ def cmd_sign(args: argparse.Namespace) -> int:
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--calendar", default="primary")
     parser.add_argument("--channel-id", default="dm")
+    # 지시가 시작된 채널/메시지 — 결과 통지를 그 스레드로 돌려보내기 위한 것뿐이며,
+    # 승인 표면(확인 메시지)에도 초안 해시에도 영향을 주지 않는다.
+    parser.add_argument("--origin-channel-id", default="")
+    parser.add_argument("--origin-message-id", default="")
 
 
 def build_parser() -> argparse.ArgumentParser:

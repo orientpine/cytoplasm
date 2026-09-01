@@ -15,12 +15,17 @@
 # Env (test seams; default to the real node paths):
 #   HELPER_PATH                  default /usr/local/libexec/autophagy-converge-origin-main
 #   HELPER_LIBDIR                default /usr/local/libexec/autophagy-converge.d
+#   RELEASE_FLOOR_PATH           default /var/lib/autophagy/update-trust/release-floor.json
+#   LEGACY_RELEASE_FLOOR         default <private_root>/deploy-reconcile/release-floor.json
 #   DEPLOY_CONVERGE_ASSUME_ROOT  override the root check for hermetic tests
 set -euo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+eval "$(python3 "$REPO_ROOT/automation/node_config_sh.py" --print-env)"
 readonly HELPER_PATH="${HELPER_PATH:-/usr/local/libexec/autophagy-converge-origin-main}"
 readonly HELPER_LIBDIR="${HELPER_LIBDIR:-/usr/local/libexec/autophagy-converge.d}"
+readonly RELEASE_FLOOR_PATH="${RELEASE_FLOOR_PATH:-/var/lib/autophagy/update-trust/release-floor.json}"
+readonly LEGACY_RELEASE_FLOOR="${LEGACY_RELEASE_FLOOR:-$NODE_PRIVATE_ROOT/deploy-reconcile/release-floor.json}"
 readonly RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$RENDER_DIR"' EXIT
 
@@ -70,6 +75,24 @@ install -m 0755 -o root -g root "$UPDATE_TRUST_SRC" "$HELPER_LIBDIR/automation/u
 install -m 0644 -o root -g root "$UPDATE_TRUST_STATE_SRC" "$HELPER_LIBDIR/automation/update_trust_state.py"
 install -m 0644 -o root -g root "$NODE_CONFIG_SRC" "$HELPER_LIBDIR/automation/node_config.py"
 install -m 0644 -o root -g root "$NODE_SEED_SRC" "$HELPER_LIBDIR/automation/node.example.toml"
+
+# Move the old ops-owned anchor by exact copy. Never delete the source and never replace
+# an existing authoritative floor: either action could lower a value during reprovision.
+install -d -m 0755 -o root -g root "$(dirname "$RELEASE_FLOOR_PATH")"
+if [[ ! -e "$RELEASE_FLOOR_PATH" ]] && [[ -e "$LEGACY_RELEASE_FLOOR" ]]; then
+  python3 -I - "$HELPER_LIBDIR" "$LEGACY_RELEASE_FLOOR" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from automation.update_trust_state import load_release_floor
+
+if load_release_floor(Path(sys.argv[2])) is None:
+    raise SystemExit("legacy release floor is absent")
+PY
+  install -m 0644 -o root -g root "$LEGACY_RELEASE_FLOOR" "$RELEASE_FLOOR_PATH"
+  log "MIGRATED release floor without deleting $LEGACY_RELEASE_FLOOR"
+fi
 
 # The shared convergence lock lives here rather than /tmp: root (this helper) and ops
 # (the deploy-side converger) must open the SAME file, and fs.protected_regular=2

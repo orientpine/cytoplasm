@@ -1,7 +1,7 @@
 ---
 name: coordination
 description: "에이전트간 일정 조율 스킬 (W3-3). cha가 'OO님과 미팅 잡아줘'라고 하면 상대 에이전트에 §2 가용시간 질의 → 교집합 후보 ≤3개를 조회한다. 공개 v1에서는 상대 소유자 승인 경로가 없어 자동 합의·캘린더 등록을 하지 않으며, 실제 양측 승인 흐름은 W-F2.5-D(v2) 범위다. §2 조율 봉투(envelope)는 #autophagy-agents(인터롭 채널)에서 오가며, #team에는 간결한 확정 통지만 게시된다. 10분 무응답/후보 0개는 에스컬레이션 DM 후 종료(캘린더 쓰기 0건). 거절은 재협상 1회 후 종료. 조율은 피어+시간 범위(예: '오전') 요청 전용 — 피어가 명시돼도 '정확한 단일 시각'이면 본인 단독 일정이므로 request 진입 즉시 ROUTING-REJECT(exit 2)로 calendar로 되돌린다(피어 질의 전 차단). 상대 미지정 요청은 calendar 소유."
-version: 1.1.0
+version: 1.2.0
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -21,7 +21,7 @@ cha의 "OO님과 미팅 잡아줘" 요청을 인터롭 규약 §2.3(조율 프�
 1. **양측 승인 전 캘린더 변경 금지**: 캘린더 쓰기는 오직 W3-1 calendar 스킬의
    confirm 게이트를 통해서만 일어난다. `gws calendar events …` 직접 실행 금지
    (pre_tool_call 외부효과 게이트가 차단).
-2. **#team에는 간결한 확정 통지만**: §2 조율 봉투(envelope)는 #autophagy-agents(인터롭 채널)에서 교환하며, #team에는 액션 아이템/지시/멘션/질문을 게시하지 마라(봇 캐스케이드 위험 — W2-3 사고). 상세 결과는 cha DM으로.
+2. **#team에는 간결한 확정 통지만**: §2 조율 봉투(envelope)는 #autophagy-agents(인터롭 채널)에서 교환하며, #team에는 액션 아이템/지시/멘션/질문을 게시하지 마라(봇 캐스케이드 위험 — W2-3 사고). 상세 결과는 지시가 온 채널의 스레드로 돌려보낸다(6번 규칙).
 3. **일정 제목 등 캘린더 내용은 공개 채널에 게시하지 않는다** (§2 봉투 payload에도
    제목을 넣지 않는다 — slot 시각만).
 4. **Deadlock 규칙**: 상대 무응답 10분(기본 600s) 또는 공통 후보 0개 → cha에게
@@ -33,6 +33,14 @@ cha의 "OO님과 미팅 잡아줘" 요청을 인터롭 규약 §2.3(조율 프�
    없이 단일 슬롯이면 exit 2 `ROUTING-REJECT`로 calendar 스킬을 안내하고 종료한다 —
    피어 네트워크 I/O 전에 차단(선례 사고 2026-07-20: `오전 10시` 고정 요청이 07-29 09:00
    조율로 표류). 캘린더 쓰기 0건.
+6. **결과는 지시가 온 채널의 스레드로**(2026-08-23 소유자 지시): 승인 표면(✅/⛔)은
+   승인 전용으로 남고, 완료·취소·만료 **결과**는 `request`에 넘긴
+   `--origin-channel-id`/`--origin-message-id`(pending 레코드에 저장됨)가 있으면 그
+   메시지의 스레드로, 없으면 기존 소유자 통지 경로로 간다. 그 스레드는 cha의 지시가
+   이미 놓인 자리이므로 완료 통지는 전문 그대로 보낸다 — 3번 규칙(#team·§2 봉투에는
+   제목 금지)은 그대로다. 스레드 게시 실패는 `NOTIFY-THREAD-FAIL`을 남기고 소유자
+   통지로 폴백하며, 결과 통지 실패가 CLI 종료코드나 watcher tick을 바꾸지 않는다
+   (라우팅은 `automation.interop.origin_notice.deliver` 공유 구현이 소유).
 
 ## 사용 (CLI = `python3 ~/.hermes/skills/coordination/scripts/coordinate_cli.py …`)
 
@@ -46,8 +54,13 @@ cha의 "OO님과 미팅 잡아줘" 요청을 인터롭 규약 §2.3(조율 프�
 python3 ~/.hermes/skills/coordination/scripts/coordinate_cli.py request \
   --peer peer-test --summary "피어 미팅" \
   --when "내일 오후" \
-  --duration-min 30
+  --duration-min 30 \
+  --origin-channel-id <지시가 온 채널 id> --origin-message-id <지시 메시지 id>
 ```
+
+`--origin-*`는 cha의 지시가 온 채널/메시지를 그대로 넘긴다 — 결과(완료·취소·만료)가
+그 메시지의 스레드로 돌아간다. 채널에서 시작된 지시라면 항상 넘겨라. 생략하면 결과는
+기존 소유자 통지로 간다.
 
 `--when`은 calendar 스킬의 KST 날짜 해석으로 결정론적으로 범위로 바뀐다
 (오전 09:00–12:00, 오후 12:00–18:00, 저녁 18:00–21:00, 종일/미지정
@@ -72,7 +85,9 @@ python3 ~/.hermes/skills/coordination/scripts/coordinate_cli.py request \
   cha의 비봇 반응을 다시 바인딩한 뒤 finalize를 실행한다.
 - ⛔ (`\u26d4`, `:no_entry:`): 취소. ⛔가 ✅보다 우선하며 `calendar_cli.py discard --draft`
   로 초안을 폐기한다.
-- 24시간이 지나면 watcher가 초안을 폐기하고 cha에게 만료를 DM으로 알린다.
+- 24시간이 지나면 watcher가 초안을 폐기하고 만료를 알린다.
+- ✅/⛔ 처리 결과와 만료 통지는 저장된 origin이 있으면 원 채널 스레드로,
+  없으면 소유자 통지로 간다. 확정 요청 메시지 자체(승인 표면)는 그대로 둔다.
 
 ### 3) 텍스트 fallback: cha가 `실행 <draft-id>` 라고 DM 답장한 뒤에만
 

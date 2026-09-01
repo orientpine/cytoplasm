@@ -3,9 +3,9 @@
 drive-archive mirrored git-tracked developer docs (.omo/plans, notepads,
 docs/features·qa·patch) to Drive — pure redundancy with GitHub, so the owner
 retired it. This guard is the RED→GREEN gate for the removal: it fails while any
-drive-archive code path survives and passes once the subsystem is gone, WITHOUT
-touching the separate ``drive_publish`` output-publishing system or the shared
-``DriveClient`` the doctype skill still uses.
+drive-archive code path survives and passes once the subsystem is gone. The
+shared ``DriveClient`` remains, while the former vendored output publishers were
+subsequently retired in favor of ``automation.drive_outputs``.
 
 Scope is code paths only (automation/, skills/, configs/, tests/). Docs keep
 legitimate historical mentions (past-incident citations, discord-arch history);
@@ -92,21 +92,18 @@ def test_shared_drive_client_survives_relocated() -> None:
     assert spec is not None
 
 
-def test_drive_publish_is_untouched() -> None:
-    hashes = {
-        (_REPO / "skills" / skill / "scripts" / "drive_publish.py").read_bytes()
-        for skill in ("doctype", "proposal", "report")
-    }
-    assert len(hashes) == 1  # all three byte-identical
+def test_drive_outputs_facade_survives_vendored_publisher_retirement() -> None:
+    assert (_REPO / "automation" / "drive_outputs.py").exists()
+    assert not list((_REPO / "skills").glob("**/scripts/drive_publish.py"))
 
 
-def test_doctype_save_still_chains_the_drive_upload() -> None:
+def test_doctype_save_strictly_delegates_drive_upload_to_the_facade() -> None:
     text = (_REPO / "skills" / "doctype" / "scripts" / "doctype_save.py").read_text(
         encoding="utf-8"
     )
-    assert "from automation.drive_client import" in text
-    for call in ("ensure_folder_path", "upsert_file", "verify_owner_only", "download_and_verify"):
-        assert call in text
+    assert "from automation.drive_outputs import publish" in text
+    assert 'publish("doctype", artifact.stem, [(artifact, artifact.stem)])' in text
+    assert 'DocumentSaveError("drive", str(error))' in text
 
 
 if __name__ == "__main__":

@@ -1,22 +1,24 @@
-"""Entity-preflight adapter for the single mail draft execution boundary."""
+"""Entity-preflight adapter for the single mail draft execution boundary.
+
+Runtime resolution lives in ``mail_runtime`` and prefers ``/srv/autophagy-agent-current``
+before ``/srv/autophagy-agents``.
+"""
 
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
-import os
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING
 
 import gmail_approval_gate
 import mail_gmail_send
+import mail_runtime
 import triage_core
 import triage_gate
+from mail_runtime import MailPreflightError, _contracts, _gate, _repo_module
 
 if TYPE_CHECKING:
     from automation.entity_preflight.contracts import (
@@ -28,73 +30,8 @@ if TYPE_CHECKING:
 
 
 def repo_root() -> Path:
-    """The checkout that actually carries ``automation``.
-
-    A mounted release runs from ``/srv/autophagy-skills/releases/<skill>/<hash>/scripts``,
-    so the ``parents[3]`` depth guess lands on ``.../releases`` — no automation package
-    there, and the guard would fail closed on every send. Probe the candidates and take
-    the first that really holds the package; fall back to the node's ops checkout.
-    """
-    override = os.environ.get("AUTOPHAGY_REPO_ROOT")
-    if override:
-        return Path(override).expanduser()
-    here = Path(__file__).resolve()
-    candidates = [*here.parents[2:6], Path("/srv/autophagy-agent-current"), Path("/srv/autophagy-agents")]
-    for candidate in candidates:
-        if (candidate / "automation" / "entity_preflight").is_dir():
-            return candidate
-    # No candidate carries the package. Return the ops checkout so the failure names a
-    # real, diagnosable location instead of the meaningless depth guess (.../releases).
-    current = Path("/srv/autophagy-agent-current")
-    return current if (current / "automation").is_dir() else Path("/srv/autophagy-agents")
-
-
-def _repo_module(name: str) -> ModuleType:
-    """Lazily import an entity_preflight module; refuse the send if it is unreachable.
-
-    Deployed skills run isolated from the repo, so ``automation`` is only reachable
-    through ``AUTOPHAGY_REPO_ROOT``. Importing at module top level crashes the skill
-    on load in the deploy sandbox; a missing repo must fail closed, never proceed
-    unguarded (skills/AGENTS.md).
-    """
-    root = repo_root()
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    # The deployed runtime may bind a PARTIAL 'automation' regular package first
-    # (interop_runtime has __init__.py + interop only). A regular package's
-    # __path__ does not extend when sys.path changes, so entity_preflight would
-    # stay unresolvable. Extend the bound package's __path__ to the repo's
-    # automation dir so the real submodules resolve.
-    bound = sys.modules.get("automation")
-    repo_automation = str(root / "automation")
-    if bound is not None and hasattr(bound, "__path__") and repo_automation not in bound.__path__:
-        bound.__path__.append(repo_automation)
-    try:
-        return importlib.import_module(f"automation.entity_preflight.{name}")
-    except ImportError:
-        raise MailPreflightError(
-            f"개인 고유명사 preflight 모듈 불가 (AUTOPHAGY_REPO_ROOT={root}) — 발송 거부", 3
-        ) from None
-
-
-def _contracts() -> ModuleType:
-    return _repo_module("contracts")
-
-
-def _gate() -> ModuleType:
-    return _repo_module("gate")
-
-
-@dataclass(frozen=True, slots=True)
-class MailPreflightError(RuntimeError):
-    """Mail execution stopped before the existing approval-gated sender."""
-
-    message: str
-    exit_code: int
-    should_render: bool = False
-
-    def __str__(self) -> str:
-        return self.message
+    """Resolve relative to this module for the deployed-import compatibility surface."""
+    return mail_runtime.repo_root(Path(__file__))
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,11 +64,9 @@ def mail_guard_request(draft: Mapping[str, JsonValue]) -> GuardRequest:
 
     contracts = _contracts()
     gate = _gate()
-    cc_value = draft.get("cc")
-    cc = cc_value if isinstance(cc_value, str) else ""
     payload = {
         "to": _text(draft, "to"),
-        "cc": cc,
+        "cc": _draft_cc(draft),
         "subject": _text(draft, "subject"),
         "body": _text(draft, "body"),
     }
@@ -206,16 +141,15 @@ def _draft_with_payload(draft: Mapping[str, JsonValue], payload: Mapping[str, Js
     updated = dict(draft)
     to = _payload_text(payload, "to")
     cc_value = payload.get("cc")
-    if isinstance(cc_value, str):
-        cc = cc_value
-    else:
-        draft_cc = draft.get("cc")
-        cc = draft_cc if isinstance(draft_cc, str) else ""
+    cc = cc_value if isinstance(cc_value, str) else _draft_cc(draft)
     subject = _payload_text(payload, "subject")
     body = _payload_text(payload, "body")
     updated["argv"] = list(_argv_with_payload(_argv(draft), to, cc, subject, body))
     updated["to"] = to
-    if "cc" in draft or cc:
+    # Only a draft that already ships a ``cc`` field gets one back: adding the key to a
+    # record persisted without it would change its sha256 out from under the approval
+    # message that pinned it, and the Cc itself already rides in the argv above.
+    if "cc" in draft:
         updated["cc"] = cc
     updated["subject"] = subject
     updated["body"] = body
@@ -280,6 +214,27 @@ def _argv(draft: Mapping[str, JsonValue]) -> tuple[str, ...]:
     if len(argv) != len(value):
         raise MailPreflightError("드래프트 argv 형식이 올바르지 않습니다", 3)
     return argv
+
+
+def _draft_cc(draft: Mapping[str, JsonValue]) -> str:
+    """The Cc this draft ships: its own field, else the one frozen into its argv.
+
+    A Gmail approval draft persisted before the record carried ``cc`` keeps the Cc only
+    in the approved argv. Reading an absent field as an empty Cc rewrote ``--cc`` to
+    nothing, so the post-approval draft hash no longer matched the action hash the owner
+    approved and the send was refused (repair t_0c46c0ad).
+    """
+    value = draft.get("cc")
+    if isinstance(value, str):
+        return value
+    argv = draft.get("argv")
+    if not isinstance(argv, list):
+        return ""
+    for index, item in enumerate(argv[:-1]):
+        following = argv[index + 1]
+        if item == "--cc" and isinstance(following, str):
+            return following
+    return ""
 
 
 def _payload_text(payload: Mapping[str, JsonValue], field: str) -> str:

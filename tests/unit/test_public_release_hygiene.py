@@ -15,7 +15,10 @@ import pytest
 from automation import peer_attestation, skill_gate
 
 _REPO: Final = Path(__file__).resolve().parents[2]
-_DISCORD_SNOWFLAKE: Final = re.compile(rb"[0-9]{17,19}")
+# A snowflake is a standalone decimal id. Without the boundaries this also matched
+# any 17-digit run inside a longer token — a 40-character git object name reaches
+# that length often enough that pinning an engine revision failed the gate.
+_DISCORD_SNOWFLAKE: Final = re.compile(rb"(?<![0-9A-Za-z])[0-9]{17,19}(?![0-9A-Za-z])")
 _KOREAN_PERSON_NAME: Final = re.compile(
     r"(?:안녕하세요[,.]?\s*|이름(?:은)?\s+|\")([가-힣]{2,4})(?:입니다|\s+올림|이라면)"
 )

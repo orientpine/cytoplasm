@@ -135,12 +135,17 @@ chmod +x gws-stub
 cli generate --template "fx/대형-용역요청서-샘플.hwpx" \
   --fields-json '{"품목":"대형 테스트","금액":"999,000원","업체":"합성벤더"}' \
   --out out/large.hwpx | grep -q VERIFIED || fail "large hwpx generate"
-small_line="$(PROCURE_DISCORD_STUB="$work/stub" PROCURE_GWS_BIN="$work/gws-stub" \
+small_line="$(PROCURE_DISCORD_STUB="$work/stub" DRIVE_GWS_BIN="$work/gws-stub" \
   cli review --file out/draft.hwpx --note "합성")"
 grep -q 'mode=attach' <<<"$small_line" || fail "small file did not take the attach branch"
-large_line="$(PROCURE_DISCORD_STUB="$work/stub" PROCURE_GWS_BIN="$work/gws-stub" \
+large_line="$(PROCURE_DISCORD_STUB="$work/stub" DRIVE_GWS_BIN="$work/gws-stub" \
   cli review --file out/large.hwpx --note "합성 대형")"
 grep -q 'mode=drive-link' <<<"$large_line" || fail "26MiB file did not take the drive-link branch"
-grep -q 'drive +upload' gws-calls.log || fail "drive upload argv missing from stub log"
+# facade contract (drive_outputs): DRIVE_PUBLISH_ENABLED is unset in the sandbox,
+# so the drive-link branch must make ZERO gws calls (link stays empty). The stub
+# bin above is a canary: if the opt-in guard regressed, its call log would exist.
+if [ -e gws-calls.log ] && grep -q 'drive' gws-calls.log; then
+  fail "drive argv recorded despite DRIVE_PUBLISH_ENABLED unset (opt-in contract broken)"
+fi
 
 printf 'SCENARIO-PASS leg=%s secret_len=%s account=%s\n' "$leg" "${#secret}" "$(whoami)"

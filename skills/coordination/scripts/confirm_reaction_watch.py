@@ -15,8 +15,20 @@ from typing import Final, Protocol, assert_never
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 
-_LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/coordination/scripts"
 _ENV_SECRETS: Final = Path.home() / ".env.secrets"
+
+# 마운트 판정은 governed live 정의 하나(automation/skill_mount.py)에서만 온다. 노드에서
+# 이 워처는 ~/.hermes/scripts/ 에 평평하게 배포되므로 코드 루트를 값으로 되짚는다 —
+# 체크아웃 → 릴리스 current → 미러 (test_skill_runtime_root_fallback.py 와 같은 관용구).
+for _root in (
+    *Path(__file__).resolve().parents,
+    Path(os.environ.get("AUTOPHAGY_RUNTIME_ROOT") or "/srv/autophagy-agent-current"),
+    Path("/srv/autophagy-agents"),
+):
+    if (_root / "automation" / "skill_mount.py").is_file():
+        sys.path.insert(0, str(_root))
+        break
+from automation.skill_mount import skill_scripts  # noqa: E402 — 코드 루트 확정 뒤에만 가능하다
 
 
 # WHY (규약 (b)): this watcher reads Discord reactions in-process and spawns
@@ -41,7 +53,7 @@ def _load_env_secrets(path: Path = _ENV_SECRETS) -> None:
 
 
 _load_env_secrets()
-_SCRIPTS = Path(os.environ.get("COORDINATION_SCRIPTS", _LIVE_SCRIPTS)).expanduser()
+_SCRIPTS = skill_scripts("coordination", env_var="COORDINATION_SCRIPTS")
 if _SCRIPTS.exists() and str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
@@ -181,7 +193,11 @@ class OwnerDecision:
                 self.commands.finalize(self.entry)
             case state.CANCELLED:
                 self.commands.discard(self.entry.draft_id)
-                _notify_owner(self.discord, "취소됨")
+                _notify_result(
+                    self.discord, self.entry,
+                    f"⛔ 일정 조율 취소 (draft {self.entry.draft_id}) — "
+                    "소유자 ⛔ 리액션으로 취소되었습니다.",
+                )
             case unreachable:
                 assert_never(unreachable)
 
@@ -223,7 +239,11 @@ def _process_entries(
                         continue
                     decision.probe(coordination_approval.request_of(entry))
                     commands.discard(entry.draft_id)
-                    _notify_owner(discord, "확정 시간이 지나 취소되었습니다")
+                    _notify_result(
+                        discord, entry,
+                        f"⌛ 일정 조율 만료 취소 (draft {entry.draft_id}) — "
+                        "확정 시간이 지나 취소되었습니다.",
+                    )
                     decision.drop(coordination_approval.request_of(entry))
             else:
                 verdict = coordination_approval.lifecycle().resolve_owner_decision(
@@ -245,11 +265,21 @@ def _process_entries(
     return tuple(retained)
 
 
-def _notify_owner(discord: DiscordClient, content: str) -> None:
-    """Best-effort owner notification — a completed discard must never be retained."""
+def _notify_result(discord: DiscordClient, entry: PendingConfirm, content: str) -> None:
+    """Best-effort result notice — a completed discard must never be retained.
+
+    라우팅은 CLI와 같은 `coordination_lifecycle.notify_result`가 소유한다(원 채널
+    스레드 우선, 이 워처의 소유자 표면이 폴백). 임포트는 지연시킨다: lifecycle이
+    이 모듈을 임포트하므로 모듈 최상단에서 부르면 순환이 된다. 스레드 게시에
+    필요한 자격증명은 모듈 로드 시 `_load_env_secrets()`가 os.environ에 올려둔다
+    (규약 (b): cron은 아무것도 넘겨주지 않는다).
+    """
     try:
-        discord.send_owner_dm(content)
-    except ConfirmWatchError as error:
+        lifecycle = import_module("coordination_lifecycle")
+        lifecycle.notify_result(
+            entry.origin_record(), content, fallback=discord.send_owner_dm
+        )
+    except Exception as error:  # noqa: BLE001 — notification must never break the tick
         print(f"coordination-confirm-watch notify failed: {_redact(str(error))}", file=sys.stderr)
 
 
@@ -293,7 +323,7 @@ def _redact(text: str) -> str:
 def main() -> int:
     try:
         config = io.interop_config()
-        scripts = Path(os.environ.get("COORDINATION_SCRIPTS", _SCRIPTS)).expanduser()
+        scripts = skill_scripts("coordination", env_var="COORDINATION_SCRIPTS")
         calendar_scripts = io.calendar_scripts()
         run_once(
             store=PendingConfirmStore(), owner_id=config["owner_id"], discord=DiscordApi(config["owner_id"]),

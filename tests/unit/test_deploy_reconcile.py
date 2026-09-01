@@ -20,6 +20,7 @@ _MODULE = Path(__file__).resolve().parents[2] / "automation" / "deploy_reconcile
 
 _A = "a" * 40
 _B = "b" * 40
+_C = "c" * 40
 
 
 class _Converge:

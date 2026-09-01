@@ -378,7 +378,7 @@ def _peer_attestation_evidence(
     expectation = AttestationExpectation(channel_id, args.message_id, args.deploy_nonce, args.skill, args.hash, requested_at)
     match mode:
         case "discord":
-            bot_ids = load_bot_ids(OPS_PEERS_CONFIG)
+            bot_ids = _load_ops_bot_ids()
             if bot_ids is None:
                 raise _PeerTrustRootUnavailable
             if author.get("id") != bot_ids.agent_bot_id or author.get("bot") is not True:
@@ -604,7 +604,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     if decision != "approved":
         _report_rejection(decision, args)
         return decision_exit_code(decision)
-    if not gate.valid_approval(execution, APPROVAL_LOG):
+    approval = gate.approval_outcome(execution, APPROVAL_LOG)
+    if not approval.approved():
+        _ = skill_gate_approval.preserve_rejected(gate, approval.cause)
         print("REJECTED: owner approval binding invalid", file=sys.stderr)
         return 1
     _log_approval(args, "manual_reaction", execution)
@@ -621,6 +623,139 @@ def cmd_sign(args: argparse.Namespace) -> int:
         _mask,
     )
     return sign(args, bindings)
+
+
+#: The live release approval does not cover this exact (skill, digest). Fail-closed and
+#: distinct from 1/8: a skill changed after the release cut must not ride an adjacent ✅.
+RELEASE_NOT_COVERED_EXIT = 4
+
+
+def _load_ops_bot_ids() -> object:
+    """The ONE configured attestation trust root — hygiene guard counts this call site."""
+    return load_bot_ids(OPS_PEERS_CONFIG)
+
+
+def _release_attestation_present(
+    args: argparse.Namespace,
+    channel_id: str,
+    message_id: str,
+    nonce: str,
+    mode: PeerAttestMode,
+) -> bool:
+    """Peer attestation bound to the RELEASE approval message, not a per-skill request.
+
+    The expectation carries this skill's own digest — the peer attests each skill
+    beside the one release message — and the release nonce the owner's ✅ displayed.
+    """
+    message = _api("GET", f"/channels/{channel_id}/messages/{message_id}")
+    timestamp = message.get("timestamp") if isinstance(message, dict) else None
+    requested_at = _parse_timestamp(timestamp) if isinstance(timestamp, str) else None
+    if requested_at is None:
+        return False
+    expectation = AttestationExpectation(
+        channel_id, message_id, nonce, args.skill, args.hash, requested_at
+    )
+    match mode:
+        case "discord":
+            bot_ids = _load_ops_bot_ids()
+            if bot_ids is None:
+                raise _PeerTrustRootUnavailable
+            messages = _api(
+                "GET", f"/channels/{channel_id}/messages?after={message_id}&limit=100"
+            )
+            return isinstance(messages, list) and valid_peer_attestation(
+                messages, expectation, bot_ids, _now()
+            )
+        case "signed":
+            verifier = _signed_verifier(args)
+            return verifier is not None and valid_signed_attestation(
+                _signed_blob(args), expectation, verifier, _now()
+            )
+        case unreachable:
+            assert_never(unreachable)
+
+
+def cmd_release_authorize(args: argparse.Namespace) -> int:
+    """VA-2: one owner ✅ on a release authorizes exactly the digests it displayed.
+
+    Exit: 0 authorized (stdout ``<message_id>:<release_nonce>``) · 8 owner ⛔ ·
+    1 pending/absent/unverifiable · 4 digest not covered · 2 no usable release record.
+    Membership is checked BEFORE any Discord round-trip — a request that can never be
+    authorized must not spend one.
+    """
+    from automation.release_spec import ReleaseSpecError, spec_from_record
+
+    record_path = GATE_DIR / "pending" / "release.json"
+    try:
+        decoded = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("RELEASE-AUTHORIZE: no live release approval record", file=sys.stderr)
+        return 2
+    if not isinstance(decoded, dict):
+        print("RELEASE-AUTHORIZE: release record is not an object", file=sys.stderr)
+        return 2
+    record = {str(name): str(value) for name, value in decoded.items()}
+    try:
+        spec = spec_from_record(record)
+    except (ReleaseSpecError, ValueError):
+        print("RELEASE-AUTHORIZE: release record is malformed", file=sys.stderr)
+        return 2
+    if (f"skill:{args.skill}", args.hash) not in spec.surface_digests:
+        print(
+            f"RELEASE-AUTHORIZE-BLOCK: release {spec.version} does not cover"
+            f" skill:{args.skill}@{args.hash[:12]} — 릴리스 이후 바뀐 스킬은 옆 승인으로 못 탄다",
+            file=sys.stderr,
+        )
+        return RELEASE_NOT_COVERED_EXIT
+    surface = skill_gate_approval.GateSurface(
+        _api,
+        GATE_DIR,
+        _owner_id,
+        lambda: skill_gate_surface.surface_for(ApprovalKind.RELEASE, _identity()),
+    )
+    gate = skill_gate_approval.SkillApprovalGate(surface, spec)
+    try:
+        outstanding = gate.outstanding("release")
+        decision = gate.probe(outstanding[0]) if outstanding else None
+    except (ApprovalRecordsError, LifecycleSurfaceError):
+        decision = None
+    if decision is Probe.APPROVED:
+        mode = _peer_attest_mode(args)
+        if mode is not None:
+            try:
+                attested = _release_attestation_present(
+                    args,
+                    gate.channel_id(),
+                    record.get("message_id", ""),
+                    record.get("release_nonce", ""),
+                    mode,
+                )
+            except _PeerTrustRootUnavailable:
+                print(
+                    f"FATAL: Discord peer trust root unavailable: {OPS_PEERS_CONFIG}",
+                    file=sys.stderr,
+                )
+                return 2
+            if not attested:
+                print(
+                    "RELEASE-AUTHORIZE: peer attestation absent or expired — refresh it",
+                    file=sys.stderr,
+                )
+                return 7
+        print(f"RELEASE-AUTHORIZED: {spec.version} covers skill:{args.skill}", file=sys.stderr)
+        print(f"{record.get('message_id', '')}:{record.get('release_nonce', '')}")
+        return 0
+    if decision is Probe.CANCELLED:
+        print(
+            f"RELEASE-AUTHORIZE-BLOCK: owner {CANCEL_EMOJI} on release {spec.version}",
+            file=sys.stderr,
+        )
+        return DENIED_EXIT
+    print(
+        "RELEASE-AUTHORIZE: release approval is pending or unverifiable — NOT authorized",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def cmd_consume(args: argparse.Namespace) -> int:
@@ -671,6 +806,13 @@ def main() -> int:
             cmd.add_argument("--out", required=True)
             cmd.add_argument("--user-id", default="")
             cmd.add_argument("--forge-signature", action="store_true")
+    release_cmd = sub.add_parser("release-authorize")
+    release_cmd.add_argument("--skill", required=True)
+    release_cmd.add_argument("--hash", required=True)
+    release_cmd.add_argument("--peer-attest-mode", choices=("discord", "signed"), default="")
+    release_cmd.add_argument("--peer-attest-public-key", default="")
+    release_cmd.add_argument("--peer-attestation-stdin", action="store_true")
+    release_cmd.set_defaults(func=cmd_release_authorize)
     try:  # publish subcommands only resolve on the workstation (full repo); the staged agent gate omits skill_gate_publish
         publish_module = importlib.import_module("automation.skill_gate_publish")
     except ModuleNotFoundError:

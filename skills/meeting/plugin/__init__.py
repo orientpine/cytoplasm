@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, TypedDict
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 LOGGER: Final = logging.getLogger("autophagy.meeting_gate")
@@ -47,10 +48,6 @@ ERROR_MESSAGE: Final = (
 )
 
 
-class EmptyMeetingTriggerError(ValueError):
-    pass
-
-
 class UnsupportedPythonError(RuntimeError):
     pass
 
@@ -62,6 +59,7 @@ class Trigger:
     chat_id: str
     doc_paths: tuple[str, ...]
     body: str | None
+    message_id: str = ""
 
 
 class MeetingConfig(TypedDict, total=False):
@@ -113,6 +111,19 @@ def _normalized_mime(value: object) -> str:
     return str(value or "").partition(";")[0].strip().lower()
 
 
+def _origin_message_id(event) -> str:
+    """Discord id of the instruction message — anchors the result thread; "" when unexposed."""
+    direct = getattr(event, "message_id", None)
+    if direct:
+        return str(direct)
+    raw_message = getattr(event, "raw_message", None)
+    if isinstance(raw_message, dict):
+        return str(raw_message.get("id") or "")
+    if raw_message is not None:
+        return str(getattr(raw_message, "id", "") or "")
+    return ""
+
+
 def _decide(event, owner_id: str) -> Trigger | None:
     source = event.source
     if bool(getattr(source, "is_bot", False)):
@@ -140,7 +151,12 @@ def _decide(event, owner_id: str) -> Trigger | None:
     body = None
     if not docs:
         body = text[command.end() :].strip() if command is not None else text.strip()
-    return Trigger(chat_id=str(getattr(source, "chat_id", "")), doc_paths=docs, body=body)
+    return Trigger(
+        chat_id=str(getattr(source, "chat_id", "")),
+        doc_paths=docs,
+        body=body,
+        message_id=_origin_message_id(event),
+    )
 
 
 def _label_for(path: str) -> str:
@@ -179,27 +195,30 @@ def _spawn(argv: list[str]) -> None:
 
 def _launch(trigger: Trigger, python_bin: str) -> None:
     base = [python_bin, str(_CLI_PATH), "ingest", "--notify-channel", trigger.chat_id]
+    if trigger.message_id:
+        base += ["--notify-message-id", trigger.message_id]
     if trigger.doc_paths:
         for doc in trigger.doc_paths:
             _spawn([*base, "--file", doc, "--label", _label_for(doc)])
         return
-    if trigger.body:
+    if trigger.body and trigger.body.strip():
         _INBOX.mkdir(parents=True, exist_ok=True)
         body_file = _INBOX / f"body-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}.txt"
         body_file.write_text(trigger.body, encoding="utf-8")
         body_file.chmod(0o600)
         _spawn([*base, "--body-file", str(body_file), "--label", "!meeting 본문"])
         return
-    raise EmptyMeetingTriggerError("empty meeting trigger (!meeting without body or document)")
+    # `!meeting` 만 온 것은 오류가 아니다 — 아직 회의록이 없는 전사본을 처리하라는 요청이다.
+    _spawn([*base, "--from-pending-transcript"])
 
 
-def _post(chat_id: str, content: str) -> None:
+def _discord_post(path: str, payload: dict) -> object:
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
-    if not token or not chat_id:
-        return
+    if not token:
+        return None
     request = Request(
-        f"https://discord.com/api/v10/channels/{chat_id}/messages",
-        data=json.dumps({"content": content}).encode("utf-8"),
+        f"https://discord.com/api/v10{path}",
+        data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bot {token}",
             "Content-Type": "application/json",
@@ -208,7 +227,45 @@ def _post(chat_id: str, content: str) -> None:
         method="POST",
     )
     with urlopen(request, timeout=15) as response:  # noqa: S310
-        response.read()
+        body = response.read().decode("utf-8")
+    return json.loads(body) if body else None
+
+
+def _post(chat_id: str, content: str) -> None:
+    if not chat_id:
+        return
+    _discord_post(f"/channels/{chat_id}/messages", {"content": content})
+
+
+def _thread_for(chat_id: str, message_id: str) -> str:
+    """Thread anchored on the instruction message; 400 means it already exists (id == message id).
+
+    게이트웨이 플러그인 프로세스는 INTEROP_RUNTIME 경로를 보장받지 못하므로
+    `automation.interop.origin_notice`의 앵커 규칙(메시지 스레드 우선, 400=재사용)을
+    여기서 같은 의미로 적용한다 — 이름은 민감도 판정 전이므로 내용 없는 고정값.
+    """
+    try:
+        thread = _discord_post(
+            f"/channels/{chat_id}/messages/{message_id}/threads", {"name": "회의록 처리"}
+        )
+    except HTTPError as error:
+        if error.code != 400:
+            raise
+        return message_id
+    if not isinstance(thread, dict) or not thread.get("id"):
+        return message_id
+    return str(thread["id"])
+
+
+def _ack_target(trigger: Trigger) -> str:
+    """Where the ACK goes: the anchored thread when resolvable, else the channel (best-effort)."""
+    if not trigger.message_id:
+        return trigger.chat_id
+    try:
+        return _thread_for(trigger.chat_id, trigger.message_id)
+    except Exception:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK — ACK routing must never block the intercept
+        LOGGER.warning("meeting gate thread anchor failed; acking in channel")
+        return trigger.chat_id
 
 
 def pre_gateway_dispatch(event, gateway, session_store, **kwargs):
@@ -230,7 +287,7 @@ def pre_gateway_dispatch(event, gateway, session_store, **kwargs):
     # Triggered: fail CLOSED from here — content must not reach glm-main.
     try:
         _launch(trigger, str(config.get("python", "/usr/bin/python3")))
-        _post(trigger.chat_id, ACK_MESSAGE)
+        _post(_ack_target(trigger), ACK_MESSAGE)
         LOGGER.warning(
             "meeting gate intercepted docs=%d body=%s",
             len(trigger.doc_paths),
@@ -239,7 +296,7 @@ def pre_gateway_dispatch(event, gateway, session_store, **kwargs):
     except Exception:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK — triggered content must remain fail-closed
         LOGGER.exception("meeting gate launch failed (still skipping dispatch)")
         try:
-            _post(trigger.chat_id, ERROR_MESSAGE)
+            _post(_ack_target(trigger), ERROR_MESSAGE)
         except Exception:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK — error notification is best-effort
             LOGGER.exception("meeting gate error notify failed")
     return {"action": "skip", "reason": "meeting_ingest"}

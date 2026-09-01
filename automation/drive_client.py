@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from automation.interop.external_effect_gate import JsonValue
 
@@ -36,6 +39,15 @@ def _q_escape(value: str) -> str:
 
 def _result_id(result: _JsonResult) -> str:
     return str(result.get("id", "")) if isinstance(result, dict) else ""
+
+
+def _resolve_executable(executable: str) -> str:
+    resolved = shutil.which(executable)
+    if resolved is not None:
+        return str(Path(resolved).resolve())
+    if os.sep in executable or (os.altsep is not None and os.altsep in executable):
+        return str(Path(executable).resolve())
+    return executable
 
 
 def _permission_rows(result: _JsonResult) -> list[dict[str, JsonValue]]:
@@ -65,6 +77,8 @@ class DriveClient:
     def _run(self, argv: list[str], *, cwd: Path | None = None) -> _JsonResult:
         if self.runner is not None:
             return self.runner(argv)
+        if cwd is not None:
+            argv = [_resolve_executable(argv[0]), *argv[1:]]
         proc = subprocess.run(  # noqa: S603
             argv, capture_output=True, text=True, timeout=600, check=False, cwd=cwd
         )
@@ -110,8 +124,10 @@ class DriveClient:
         )
 
     def _upload_new(self, local: Path, name: str, parent: str) -> str:
+        upload_path = str(local) if self.runner is not None else local.name
         result = self._run(
-            [self.gws_bin, "drive", "+upload", str(local), "--parent", parent, "--name", name]
+            [self.gws_bin, "drive", "+upload", upload_path, "--parent", parent, "--name", name],
+            cwd=None if self.runner is not None else local.parent,
         )
         file_id = _result_id(result)
         if not file_id:
@@ -119,11 +135,63 @@ class DriveClient:
         return file_id
 
     def _update_media(self, file_id: str, local: Path) -> str:
+        upload_path = str(local) if self.runner is not None else local.name
         result = self._run(
             [self.gws_bin, "drive", "files", "update", "--params",
-             json.dumps({"fileId": file_id}), "--upload", str(local)]
+             json.dumps({"fileId": file_id}), "--upload", upload_path],
+            cwd=None if self.runner is not None else local.parent,
         )
         return _result_id(result) or file_id
+
+    def _files_update(self, file_id: str, *, params: dict[str, str] | None = None,
+                      body: dict[str, JsonValue] | None = None) -> str:
+        try:
+            argv = [self.gws_bin, "drive", "files", "update", "--params",
+                    json.dumps({"fileId": file_id, **(params or {})})]
+            if body is not None:
+                argv += ["--json", json.dumps(body)]
+            return _result_id(self._run(argv)) or file_id
+        except DriveClientError:
+            raise
+        except Exception as error:
+            raise DriveClientError("Drive 파일 갱신 실패") from error
+
+    def move_file(self, file_id: str, add_parent: str, remove_parent: str) -> str:
+        return self._files_update(file_id, params={"addParents": add_parent, "removeParents": remove_parent})
+
+    def rename_file(self, file_id: str, new_name: str) -> str:
+        return self._files_update(file_id, body={"name": new_name})
+
+    def list_children(self, folder_id: str) -> list[dict[str, JsonValue]]:
+        files: list[dict[str, JsonValue]] = []
+        page_token: str | None = None
+        try:
+            while True:
+                params: dict[str, str | int] = {
+                    "q": f"'{folder_id}' in parents and trashed = false",
+                    "fields": "files(id,name,mimeType,modifiedTime,createdTime,size)",
+                    "pageSize": 1000,
+                }
+                if page_token:
+                    params["pageToken"] = page_token
+                result = self._run(
+                    [self.gws_bin, "drive", "files", "list", "--params", json.dumps(params)]
+                )
+                raw_files = result.get("files", []) if isinstance(result, dict) else None
+                if not isinstance(raw_files, list):
+                    raise DriveClientError("자식 파일 목록 응답이 올바르지 않음")
+                files.extend(row for row in cast(list[object], raw_files) if isinstance(row, dict))
+                raw_token = result.get("nextPageToken") if isinstance(result, dict) else None
+                page_token = raw_token if isinstance(raw_token, str) else None
+                if not isinstance(page_token, str) or not page_token:
+                    return files
+        except DriveClientError:
+            raise
+        except Exception as error:
+            raise DriveClientError("자식 파일 목록 조회 실패") from error
+
+    def trash_file(self, file_id: str) -> str:
+        return self._files_update(file_id, body={"trashed": True})
 
     def _web_view_link(self, file_id: str) -> str:
         result = self._run(
@@ -146,6 +214,21 @@ class DriveClient:
             json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8"
         )
         self.folder_cache.chmod(0o600)
+
+    def find_folder_path(self, parts: tuple[str, ...]) -> str | None:
+        """Resolve an existing folder path, or ``None`` — never creates, never caches.
+
+        The sibling of ``ensure_folder_path`` for folders we do not own: the owner's
+        own reference shelf must not gain a folder because we looked for it, and the
+        shared publish cache must not learn ids this read-only path resolved.
+        """
+        parent = "root"
+        for name in parts:
+            found = self._find_folder(name, parent)
+            if found is None:
+                return None
+            parent = found
+        return parent if parts else None
 
     def ensure_folder_path(self, parts: tuple[str, ...]) -> str:
         if not parts:
@@ -199,17 +282,82 @@ class DriveClient:
                 f"소유자 권한이 유일하지 않음({len(rows)}건, fail-closed): {file_id}"
             )
 
+    def _fetch_media(self, file_id: str, fetched: Path, tmp: Path, export_as: str = "") -> None:
+        """Land ``file_id``'s bytes at ``fetched``, inside the private directory ``tmp``.
+
+        ``export_as`` names the MIME type for a Google-native document, which has no
+        media to download and answers ``alt=media`` with an error.
+        """
+        argv = [
+            _resolve_executable(self.gws_bin),
+            "drive",
+            "files",
+            "export" if export_as else "get",
+            "--params",
+            json.dumps(
+                {"fileId": file_id, "mimeType": export_as}
+                if export_as
+                else {"fileId": file_id, "alt": "media"}
+            ),
+        ]
+        if self.runner is not None:
+            self._run([*argv, "-o", str(fetched)], cwd=tmp)
+            return
+        # gws currently emits `alt=media` bytes to stdout even when --output is
+        # supplied. Capture the binary stream directly instead of trusting a
+        # success exit code that produced no read-back artifact.
+        proc = subprocess.run(  # noqa: S603
+            argv,
+            capture_output=True,
+            timeout=600,
+            check=False,
+            cwd=tmp,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.decode("utf-8", "replace").strip()[:200]
+            raise DriveClientError(
+                f"{' '.join(argv[:4])} 실패 rc={proc.returncode}: {detail}"
+            )
+        try:
+            metadata = json.loads(proc.stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            metadata = None
+        saved_name = metadata.get("saved_file") if isinstance(metadata, dict) else None
+        if isinstance(saved_name, str) and saved_name:
+            saved = (tmp / saved_name).resolve()
+            try:
+                saved.relative_to(tmp.resolve())
+            except ValueError as error:
+                raise DriveClientError("gws download escaped its private directory") from error
+            if saved.is_symlink() or not saved.is_file():
+                raise DriveClientError(f"재다운로드 산출물 없음(fail-closed): {file_id}")
+            saved.replace(fetched)
+        else:
+            fetched.write_bytes(proc.stdout)
+
+    def download_file(self, file_id: str, dest: Path, *, export_as: str = "") -> str:
+        """Fetch ``file_id`` into ``dest`` and return its sha256 (no read-back to compare).
+
+        The verify-after-upload path re-downloads to compare against a local file;
+        this one is the plain read used when the remote file is the only copy —
+        an owner's recording sitting in the watched Drive folder, for instance.
+        """
+        with tempfile.TemporaryDirectory(prefix="drive-fetch-") as tmp:
+            fetched = Path(tmp) / "remote.bin"
+            self._fetch_media(file_id, fetched, Path(tmp), export_as)
+            if not fetched.is_file():
+                raise DriveClientError(f"다운로드 산출물 없음(fail-closed): {file_id}")
+            payload = fetched.read_bytes()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(payload)
+        return hashlib.sha256(payload).hexdigest()
+
     def download_and_verify(self, file_id: str, local: Path) -> str:
         """Re-download ``file_id`` and fail closed unless its sha256 matches ``local``."""
         expected = hashlib.sha256(local.read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory(prefix="drive-verify-") as tmp:
             fetched = Path(tmp) / "remote.bin"
-            output_path = str(fetched) if self.runner is not None else fetched.name
-            self._run(
-                [self.gws_bin, "drive", "files", "get", "--params",
-                 json.dumps({"fileId": file_id, "alt": "media"}), "-o", output_path],
-                cwd=Path(tmp),
-            )
+            self._fetch_media(file_id, fetched, Path(tmp))
             if not fetched.is_file():
                 raise DriveClientError(f"재다운로드 산출물 없음(fail-closed): {file_id}")
             actual = hashlib.sha256(fetched.read_bytes()).hexdigest()

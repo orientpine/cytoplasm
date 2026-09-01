@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from dataclasses import replace
 from pathlib import Path
 
+from automation.install.assets import build_inputs
 from automation.install.plan import (
     Check,
     DirectoryState,
@@ -20,11 +22,21 @@ from automation.install.plan import (
     SystemState,
     build_plan,
 )
-from automation.node_config import default_node_config
+from automation.node_config import default_node_config, load_node_config
+
+
+_REPO = Path(__file__).resolve().parents[2]
 
 
 def _digest(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _public_key() -> str:
+    algorithm = b"ssh-ed25519"
+    material = len(algorithm).to_bytes(4, "big") + algorithm
+    material += (32).to_bytes(4, "big") + bytes(range(32))
+    return f"ssh-ed25519 {base64.b64encode(material).decode()} installer-test"
 
 
 def _inputs() -> InstallInputs:
@@ -111,6 +123,34 @@ def test_converged_system_only_plans_checks() -> None:
         Check("update-trust"),
         Check("healthcheck"),
     )
+
+
+def test_command_sync_dropin_idempotent_after_first_plan() -> None:
+    config = load_node_config(_REPO / "configs" / "node.example.toml")
+    inputs = build_inputs(_REPO, config, _public_key())
+    paths = {
+        config.agent_home
+        / ".config/systemd/user"
+        / f"{config.agent_gateway_unit}.d"
+        / "30-command-sync.conf",
+        config.peer_home
+        / ".config/systemd/user"
+        / f"{config.peer_gateway_unit}.d"
+        / "30-command-sync.conf",
+    }
+
+    initial = build_plan(inputs, SystemState.empty())
+    planned_paths = {
+        action.spec.path for action in initial.actions if isinstance(action, EnsureFile)
+    }
+
+    assert paths <= planned_paths
+
+    converged = build_plan(inputs, SystemState.from_actions(initial.actions))
+    repeated_paths = {
+        action.spec.path for action in converged.actions if isinstance(action, EnsureFile)
+    }
+    assert paths.isdisjoint(repeated_paths)
 
 
 def test_drifted_file_and_directory_are_converged_without_recreating_accounts() -> None:

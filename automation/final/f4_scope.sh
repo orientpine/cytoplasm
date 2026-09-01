@@ -25,61 +25,16 @@ record() {
   fi
 }
 
+# The audit itself lives in automation/final/approvals_send_log_audit.py so it can be
+# tested locally (tests/unit/test_f4_approvals_send_log_match.py) instead of only being
+# exercised against a production node. It is streamed to the node's stdin rather than
+# executed from a node checkout — the node need not carry this branch, and the file the
+# tests pin is byte-for-byte the file that runs. Contract is unchanged: same two
+# arguments, same evidence lines (plus a per-row reason), exit 1 on any unmatched send.
 check_approvals() {
-  ssh "$NODE_PRIMARY_NODE_NAME" "sudo -n -u $NODE_AGENT_ACCOUNT -H python3 - $NODE_DEPLOY_CHECKOUT/logs/approvals.jsonl $NODE_AGENT_HOME" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-approvals_path = Path(sys.argv[1])
-home = Path(sys.argv[2])
-interop_config = json.loads((home / ".hermes/interop/config.json").read_text(encoding="utf-8"))
-owner_id = interop_config.get("owner_id")
-if not isinstance(owner_id, str) or not owner_id:
-    raise SystemExit("owner_id missing from interop config")
-owner_approved = set()
-send_logged = set()
-for raw in approvals_path.read_text(encoding="utf-8").splitlines():
-    row = json.loads(raw)
-    approval = row.get("approval", {})
-    result = row.get("result", {})
-    if (
-        row.get("action") == "external_effect.approval"
-        and result.get("status") == "approved"
-        and approval.get("owner_id") == owner_id
-    ):
-        owner_approved.add((approval.get("message_id"), approval.get("method")))
-    if (
-        row.get("action", "").endswith(("reply_send", "request_mail"))
-        and result.get("status") == "sent"
-    ):
-        send_logged.add((approval.get("ref"), approval.get("method")))
-
-sent = 0
-injected = 0
-unmatched = []
-for path in home.rglob("send-log.jsonl"):
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        row = json.loads(raw)
-        if row.get("status") != "sent":
-            continue
-        if row.get("method") == "signed_injection_e2e" and str(row.get("ref", "")).startswith("injected:"):
-            injected += 1
-            continue
-        sent += 1
-        key = (row.get("ref"), row.get("method"))
-        if key not in owner_approved or key not in send_logged:
-            unmatched.append((key[0], key[1], row.get("sha256")))
-
-print(f"owner_approved_records={len(owner_approved)}")
-print(f"send_logged_records={len(send_logged)}")
-print(f"sent_records={sent}")
-print(f"injected_test_records={injected}")
-print(f"unmatched_sends={len(unmatched)}")
-for ref, method, digest in unmatched:
-    print(f"unmatched ref={ref!r} method={method!r} sha256_prefix={str(digest)[:12]}")
-raise SystemExit(1 if unmatched else 0)
-PY
+  ssh "$NODE_PRIMARY_NODE_NAME" \
+    "sudo -n -u $NODE_AGENT_ACCOUNT -H python3 - $NODE_DEPLOY_CHECKOUT/logs/approvals.jsonl $NODE_AGENT_HOME" \
+    <"$ROOT/automation/final/approvals_send_log_audit.py"
 }
 
 check_patent_glm() {

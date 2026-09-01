@@ -288,8 +288,8 @@ send_calls() { [ -f "$work/mailon-send-calls.log" ] && wc -l < "$work/mailon-sen
 cat > "$work/evidence-pack.json" <<'JSON'
 {"version":"knowledge-v1","query":{"text":"peer@example.invalid 일정","purpose":"synthesize","sources":["rag","wiki","twin"],"tags":[],"limit":8,"caller":"mail"},"verdict":"hit","items":[{"id":"E1","store":"rag","source_type":"note","ref":"contacts/peer.md","title":"상대 노트","doc_date":"2026-08-18","date_basis":"path","score":0.9,"grounded":true,"authority":null,"expired":null,"sensitivity":null,"content":"지난 일정 합의","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"layers":{"rag":"hit","wiki":"none","twin":"none"},"notes":[]}
 JSON
-if PYTHONPATH="$repo_root" python3 -c \
-  'import automation.entity_preflight.gate; import automation.knowledge.render' 2>/dev/null; then
+if python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import automation.entity_preflight.gate; import automation.knowledge.render' \
+  "$repo_root" 2>/dev/null; then
   AUTOPHAGY_REPO_ROOT="$repo_root" KNOWLEDGE_FAKE_PACK="$work/evidence-pack.json" \
     tri evidence --counterparty peer@example.invalid --subject 일정 --json \
     | grep -q '"evidence_count": 1' || fail "offline evidence preview"
@@ -391,7 +391,8 @@ triage_gate.list_drafts = lambda: [draft]
 triage_gate.execute_draft = no_send
 triage_cli.cmd_process = lambda _args: 0
 assert triage_cli.cmd_watch(argparse.Namespace()) == 0
-assert notices == ["메일 발송 취소됨"]
+assert len(notices) == 1 and "발송 취소" in notices[0], notices
+assert "Re: 취소 반응" in notices[0] and draft["id"] in notices[0], notices
 try:
     triage_gate.load_draft(draft["id"])
 except triage_gate.GateError:

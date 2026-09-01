@@ -891,3 +891,72 @@ def test_run_digest_deliver_failure_emits_structured_marker_without_retry(
         assert connection.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'digest_runs'"
         ).fetchone() == (0,)
+
+
+def test_dm_owner_prefers_the_agent_chat_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: the shared directory resolves the configured agent-chat channel.
+    import triage_approval
+
+    class _Directory:
+        def agent_chat(self) -> str:
+            return "chat-1"
+
+        def owner_dm(self) -> str:
+            pytest.fail("agent-chat delivery must not open the owner DM")
+
+    class _Sent:
+        message_id = "m-1"
+
+    opened: list[str] = []
+
+    def fake_transport(channel_id: str):
+        opened.append(channel_id)
+
+        class _Transport:
+            def send(self, content: str) -> list[_Sent]:
+                return [_Sent()]
+
+        return _Transport()
+
+    monkeypatch.setattr(triage_approval, "approval_directory", lambda: _Directory())
+    monkeypatch.setattr(triage_confirm, "_dm_transport", fake_transport)
+
+    # When: an owner notice (the digest body rides this path) is delivered.
+    message_id = triage_confirm.dm_owner("다이제스트")
+
+    # Then: it lands in the agent-chat channel, never the DM.
+    assert (opened, message_id) == (["chat-1"], "m-1")
+
+
+def test_dm_owner_falls_back_to_the_owner_dm_when_agent_chat_is_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the directory has no agent-chat channel configured.
+    import triage_approval
+
+    class _Directory:
+        def agent_chat(self) -> str:
+            raise RuntimeError("agent_chat_channel_id is not configured")
+
+        def owner_dm(self) -> str:
+            return "dm-1"
+
+    class _Sent:
+        message_id = "m-2"
+
+    opened: list[str] = []
+
+    def fake_transport(channel_id: str):
+        opened.append(channel_id)
+
+        class _Transport:
+            def send(self, content: str) -> list[_Sent]:
+                return [_Sent()]
+
+        return _Transport()
+
+    monkeypatch.setattr(triage_approval, "approval_directory", lambda: _Directory())
+    monkeypatch.setattr(triage_confirm, "_dm_transport", fake_transport)
+
+    # When / Then: delivery still reaches the owner through the DM.
+    assert (triage_confirm.dm_owner("다이제스트"), opened) == ("m-2", ["dm-1"])

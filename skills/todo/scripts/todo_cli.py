@@ -206,7 +206,35 @@ def create_task(
     if claim is None:
         raise TodoReconciliationRequiredError("todo write completed without an approval claim")
     claims.complete(claim, result.task_id, result.title)
+    _notify_created(result.action_hash, result.task_id, result.title, ctx)
     return CreatedTask(result.task_id, result.title, request.tasklist, result.action_hash, True)
+
+
+def _notify_created(action_hash: str, task_id: str, title: str, ctx: ApprovalContext) -> None:
+    """Best-effort result notice after the verified write — never touches the exit code.
+
+    E2E 승인(E2E_TEST_MODE)과 DUMMY-secret 샌드박스는 실제 통지를 열지 않는다
+    (mail `_notify_sent` allowlist 선례). 목적지는 승인된 그 생성(generation)의 origin
+    바인딩 — 원 채널 스레드, 없으면 레코드에 저장된 승인 채널.
+    """
+    dummy_secret = os.environ.get("AUTOPHAGY_DEMO_SECRET", "")
+    if ctx.e2e_test_mode or dummy_secret.startswith("DUMMY-"):
+        reason = "e2e_test_mode" if ctx.e2e_test_mode else "dummy_secret"
+        print(f"NOTIFY-SKIP hash={action_hash[:19]} reason={reason}", file=sys.stderr)
+        return
+    try:
+        runtime = import_module("todo_approval_runtime")
+        record_like = runtime.origin_record(action_hash)
+        if record_like is None:
+            raise TodoError("approval record for the verified write is missing", 3)
+        runtime.notify_result(
+            record_like,
+            f"✅ 할일 등록 완료: {title} (task {task_id})\n"
+            "소유자 ✅ 승인 · tasks.get 재조회로 검증되었습니다.",
+            thread_name=f"할일: {title}",
+        )
+    except Exception as error:  # noqa: BLE001 — notice must never undo a verified write
+        print(f"NOTIFY-FAIL hash={action_hash[:19]} err={type(error).__name__}", file=sys.stderr)
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
@@ -230,6 +258,10 @@ def _cmd_request(args: argparse.Namespace) -> int:
         adapter.masked_argv_summary(argv),
         request.title,
         request.due,
+        origin_channel_id=str(getattr(args, "origin_channel_id", "") or ""),
+        origin_message_id=str(getattr(args, "origin_message_id", "") or ""),
+        tasklist=request.tasklist,
+        notes=request.notes,
     )
     try:
         adapter.request_cli_approval(intent, owner_id())
@@ -274,6 +306,14 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--tasklist", default="@default")
         sub.add_argument("--notes", default=None)
         sub.add_argument("--due", default=None)
+        sub.add_argument(
+            "--origin-channel-id", default="",
+            help="지시를 받은 원 채널 id — 등록/취소 결과를 이 채널의 스레드로 통지",
+        )
+        sub.add_argument(
+            "--origin-message-id", default="",
+            help="원 채널의 지시 메시지 id — 있으면 그 메시지에 결과 스레드를 앵커",
+        )
         sub.set_defaults(handler=handler)
     listing = subparsers.add_parser("list")
     listing.add_argument("--tasklist", default="@default")

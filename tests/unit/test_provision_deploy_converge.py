@@ -54,6 +54,7 @@ def _provision(prefix: Path, *, times: int = 1) -> subprocess.CompletedProcess[s
             f'HELPER_PATH="{prefix}/usr/local/libexec/autophagy-converge-origin-main"',
             f'HELPER_LIBDIR="{prefix}/usr/local/libexec/autophagy-converge.d"',
             f'LOCK_DIR="{prefix}/srv/autophagy-private/locks"',
+            f'RELEASE_FLOOR_PATH="{prefix}/var/lib/autophagy/update-trust/release-floor.json"',
             f'bash "{_PROVISION}"',
         )
     )
@@ -109,12 +110,14 @@ def test_the_target_sha_comes_from_update_trust_not_from_the_caller() -> None:
     """
     text = _HELPER_SRC.read_text(encoding="utf-8")
     assert "unset RELEASE_EXPECTED_SHA" in text
-    target_assignments = [
-        line for line in text.splitlines() if line.lstrip().startswith("target=")
-    ]
-    assert len(target_assignments) == 1, target_assignments
-    assert "UPDATE_TRUST" in target_assignments[0]
-    assert "refs/heads/main" not in target_assignments[0]
+    assert 'pre_gate_target="$(as_ops' in text
+    assert 'verified="$(as_ops' in text
+    assert "resolve_signed_update" in text
+    assert "privileged_advance_release_floor" in text
+    assert 'read -r verified_tag target extra' in text
+    assert "refs/heads/main" not in "\n".join(
+        line for line in text.splitlines() if "pre_gate_target=" in line or "verified=" in line
+    )
 
 
 def test_helper_resets_the_inherited_environment() -> None:
@@ -179,8 +182,9 @@ def test_helper_pins_the_anti_rollback_floor_it_shares_with_the_pre_gate() -> No
     no longer reads.
     """
     text = _HELPER_SRC.read_text(encoding="utf-8")
-    assert "deploy-reconcile/release-floor.json" in text
+    assert "/var/lib/autophagy/update-trust/release-floor.json" in text
     assert "--floor-path" in text
+    assert "privileged_advance_release_floor" in text
 
 
 def test_helper_applies_the_bound_update_channel_to_verification_and_snapshot() -> None:
@@ -188,4 +192,5 @@ def test_helper_applies_the_bound_update_channel_to_verification_and_snapshot() 
 
     assert "deploy-reconcile/update-channel.json" in text
     assert "GIT_CONFIG_KEY_0=remote.origin.url" in text
-    assert text.count('"${remote_env[@]}"') == 2
+    # Two independent signature checks plus the pinned snapshot use the same channel.
+    assert text.count('"${remote_env[@]}"') == 3

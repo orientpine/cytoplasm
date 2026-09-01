@@ -5,8 +5,13 @@ Thin wrapper: runs the mounted mail skill CLI `watch` subcommand (reposts
 unposted pending drafts, resolves owner ✅/⛔ reactions, sends approved
 drafts — no auto-drafting: drafts are owner-initiated via the `draft`
 subcommand). no_agent semantics: empty stdout + exit 0 on success (silent tick);
-on failure prints one masked line and exits 1 so the scheduler records an
-alert. Deployed copy lives at ~/.hermes/scripts/mail_triage_watch.py (Hermes
+an expected child failure is recorded in the failure streak and also exits 0 —
+under ``--deliver discord`` the scheduler posts its own failure banner for ANY
+non-zero exit regardless of stdout (2026-08-24 budget-watch measurement), and a
+stuck ``*/2`` job exiting 1 would be 720 banners a day, the exact flood the
+streak model exists to prevent. Only a failure the streak could NOT record
+(helper missing/broken) keeps exit 1 so the banner stays as the last line of
+defence. Deployed copy lives at ~/.hermes/scripts/mail_triage_watch.py (Hermes
 cron sandbox rule); the skill CLI stays the single implementation in the
 immutable governed live store at /srv/autophagy-skills/live/mail/scripts/ — no
 import of it here, subprocess only (avoids the W3-2 cron-sandbox PYTHONPATH
@@ -80,24 +85,28 @@ def _redact(text: str) -> str:
     return _LONG_DIGITS.sub("[MASKED-NUM]", _EMAIL.sub("[MASKED-EMAIL]", text))
 
 
-def _announce(*, ok: bool, detail: str = "") -> None:
-    """Speak only when a failure streak opens or closes — see watch_failure_streak."""
+def _announce(*, ok: bool, detail: str = "") -> bool:
+    """Speak only when a failure streak opens or closes — see watch_failure_streak.
+
+    Returns True when the streak recorded the tick — only then may a failing
+    tick exit 0 (silence is earned by a recorded failure, never by breakage).
+    """
     if watch_failure_streak is None:
         if not ok:
             print(f"{WATCH_NAME} error: {detail}"[:300])
-        return
+        return False
     notice = watch_failure_streak.record(
         WATCH_NAME, ok=ok, detail=detail, threshold=FAILURE_NOTICE_THRESHOLD
     )
     if notice is not None:
         print(notice[:300])
+    return True
 
 
 def main() -> int:
     _load_env_secrets()
     if not CLI.exists():
-        _announce(ok=False, detail="mail skill is not mounted")
-        return 1
+        return 0 if _announce(ok=False, detail="mail skill is not mounted") else 1
     result = subprocess.run(  # noqa: S603 — fixed argv, agent-owned script
         [sys.executable, str(CLI), "watch"],
         capture_output=True, text=True, timeout=1800, check=False,
@@ -109,8 +118,8 @@ def main() -> int:
         return 0
     tail = (result.stderr or result.stdout).strip().splitlines()
     detail = tail[-1] if tail else f"rc={result.returncode}"
-    _announce(ok=False, detail=f"rc={result.returncode}: {_redact(detail)[:200]}")
-    return 1
+    recorded = _announce(ok=False, detail=f"rc={result.returncode}: {_redact(detail)[:200]}")
+    return 0 if recorded else 1
 
 
 if __name__ == "__main__":

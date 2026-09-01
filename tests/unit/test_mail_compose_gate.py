@@ -18,6 +18,7 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "skills" / "mail" / "scripts"))
 
 import triage_cli  # noqa: E402
+import triage_approval  # noqa: E402
 import triage_binding  # noqa: E402
 import triage_confirm  # noqa: E402
 import triage_core  # noqa: E402
@@ -26,12 +27,14 @@ import triage_mode  # noqa: E402
 import triage_pipeline  # noqa: E402
 import triage_store  # noqa: E402
 
-from automation.interop.approval_surface import POLICY_VERSION  # noqa: E402
+from automation.interop.approval_surface import ChannelFacts, POLICY_VERSION  # noqa: E402
 
 
 OWNER_ID = "owner-1"
 APPROVALS_CHANNEL = "approvals-1"
 DM_CHANNEL = "100000000000000002"
+AGENT_CHAT_CHANNEL = "100000000000000003"
+AGENT_CHAT_THREAD = "100000000000000004"
 MESSAGE_ID = "message-1"
 
 COMPOSE_TO = "x@y.z"
@@ -74,6 +77,12 @@ def _compose_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "gate"))
     monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
     monkeypatch.setenv("TRIAGE_DB", str(tmp_path / "triage.db"))
+    interop = tmp_path / "interop-config.json"
+    interop.write_text(
+        json.dumps({"owner_id": OWNER_ID, "agent_chat_channel_id": AGENT_CHAT_CHANNEL}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INTEROP_CONFIG", str(interop))
 
 
 def _dm_post_api(requests: list[tuple[str, str]]):
@@ -84,6 +93,17 @@ def _dm_post_api(requests: list[tuple[str, str]]):
             return {"id": DM_CHANNEL}
         if method == "GET" and path == f"/channels/{DM_CHANNEL}":
             return {"type": 1, "name": "", "recipients": [{"id": OWNER_ID}]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
+            return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
+        if method == "GET" and path == "/guilds/guild-1/threads/active":
+            return {"threads": [{
+                "id": AGENT_CHAT_THREAD,
+                "type": 11,
+                "name": "승인-mail-compose",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
+            return {"type": 11, "name": "승인-mail-compose", "parent_id": AGENT_CHAT_CHANNEL}
         if method == "POST":
             return {"id": MESSAGE_ID}
         if method == "PUT":
@@ -146,10 +166,10 @@ def test_compose_draft_record_binds_kind_channel_and_frozen_argv(
     monkeypatch.setattr(triage_confirm, "_api", _dm_post_api([]))
     # When: the compose pipeline drafts and posts a new outbound mail
     record = triage_pipeline.compose_and_post(COMPOSE_TO, COMPOSE_SUBJECT, COMPOSE_BODY, post=True)
-    # Then: the record binds compose kind, the DM channel, and the frozen argv
+    # Then: the record binds compose kind, its agent-chat thread, and the frozen argv
     assert record["kind"] == "compose"
-    assert record["channel_id"] == DM_CHANNEL
-    assert record["surface"] == "owner-dm"
+    assert record["channel_id"] == AGENT_CHAT_THREAD
+    assert record["surface"] == "agent-chat-thread"
     assert record["policy_version"] == POLICY_VERSION
     assert record["sender"] == ""
     assert record["mail_subject"] == ""
@@ -196,11 +216,11 @@ def test_compose_post_targets_dm_channel_with_reaction_order(
     monkeypatch.setattr(triage_confirm, "_api", _dm_post_api(requests))
     # When: the compose pipeline posts the confirmation request
     triage_pipeline.compose_and_post(COMPOSE_TO, COMPOSE_SUBJECT, COMPOSE_BODY, post=True)
-    # Then: the DM message is posted, then ✅ and ⛔ are pre-added in that order
+    # Then: the agent-chat thread message is posted, then ✅ and ⛔ are pre-added in that order
     expected = [
-        ("POST", f"/channels/{DM_CHANNEL}/messages"),
-        ("PUT", f"/channels/{DM_CHANNEL}/messages/{MESSAGE_ID}/reactions/%E2%9C%85/@me"),
-        ("PUT", f"/channels/{DM_CHANNEL}/messages/{MESSAGE_ID}/reactions/%E2%9B%94/@me"),
+        ("POST", f"/channels/{AGENT_CHAT_THREAD}/messages"),
+        ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9C%85/@me"),
+        ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9B%94/@me"),
     ]
     assert [item for item in requests if item in expected] == expected
 
@@ -453,6 +473,17 @@ def _dm_payload_api(payloads: list[dict]):
             return {"id": DM_CHANNEL}
         if method == "GET" and path == f"/channels/{DM_CHANNEL}":
             return {"type": 1, "name": "", "recipients": [{"id": OWNER_ID}]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
+            return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
+        if method == "GET" and path == "/guilds/guild-1/threads/active":
+            return {"threads": [{
+                "id": AGENT_CHAT_THREAD,
+                "type": 11,
+                "name": "승인-mail-compose",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }]}
+        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
+            return {"type": 11, "name": "승인-mail-compose", "parent_id": AGENT_CHAT_CHANNEL}
         if method == "POST":
             return {"id": MESSAGE_ID}
         return None
@@ -494,3 +525,136 @@ def test_compose_no_warning_without_gap(
     triage_pipeline.compose_and_post(COMPOSE_TO, COMPOSE_SUBJECT, COMPOSE_BODY, post=True)
     contents = [p["content"] for p in payloads if "content" in p]
     assert contents and all("⚠️" not in c for c in contents)
+
+
+def test_compose_persists_origin_binding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given: a channel-initiated compose instruction carrying its origin refs
+    _compose_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
+    args = triage_cli.build_parser().parse_args([
+        "compose", "--to", COMPOSE_TO, "--subject", COMPOSE_SUBJECT,
+        "--body", COMPOSE_BODY, "--no-post",
+        "--origin-channel-id", "200000000000000001",
+        "--origin-message-id", "origin-message-1",
+    ])
+    # When: the compose draft is created without posting
+    assert triage_cli.cmd_compose(args) == 0
+    # Then: the stored record carries the origin binding for result routing
+    [draft] = triage_gate.list_drafts()
+    assert draft["origin_channel_id"] == "200000000000000001"
+    assert draft["origin_message_id"] == "origin-message-1"
+
+
+_RETIRED_APPROVALS = "100000000000000013"
+_RETIRED_MESSAGE = "100000000000000016"
+
+
+class _RetiredDirectory:
+    def owner_dm(self) -> str:
+        return DM_CHANNEL
+
+    def skill_approvals(self) -> str:
+        return _RETIRED_APPROVALS
+
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_CHANNEL
+
+    def agent_chat_thread(self, _kind: object) -> str:
+        return AGENT_CHAT_THREAD
+
+    def describe(self, channel_id: str) -> ChannelFacts:
+        if channel_id == DM_CHANNEL:
+            return ChannelFacts(1, "", (OWNER_ID,))
+        if channel_id == _RETIRED_APPROVALS:
+            return ChannelFacts(0, "approvals", ())
+        if channel_id == AGENT_CHAT_THREAD:
+            return ChannelFacts(11, "approval-thread", (), AGENT_CHAT_CHANNEL)
+        raise AssertionError(f"unexpected channel: {channel_id}")
+
+
+def _retired_draft(*, legacy: bool) -> dict[str, object]:
+    record: dict[str, object] = {
+        "argv": ["python3", "send", "--masked"],
+        "body": "synthetic body",
+        "category": "compose",
+        "channel_id": None if legacy else DM_CHANNEL,
+        "created": "2026-07-17T00:00:00Z",
+        "flags": [],
+        "id": "legacy1" if legacy else "compose1",
+        "kind": None if legacy else "compose",
+        "mail_subject": "",
+        "message_id": _RETIRED_MESSAGE,
+        "sender": "",
+        "sender_masked": triage_core.mask_value(""),
+        "sensitive": False,
+        "status": "pending",
+        "subject": "synthetic subject",
+        "surface": None if legacy else "owner-dm",
+        "tags": [],
+        "to": "recipient@example.test",
+        "uid": "legacy-uid" if legacy else "compose:retired",
+        "uid_opaque": "masked",
+        "policy_version": None if legacy else 6,
+    }
+    record["sha256"] = triage_core.draft_sha256(record)
+    return record
+
+
+def _run_retired_watch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    draft: dict[str, object],
+) -> tuple[dict[str, object], list[tuple[str, str]]]:
+    monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "gate"))
+    monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
+    monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
+    monkeypatch.setattr(triage_confirm, "owner_id", lambda: OWNER_ID)
+    monkeypatch.setattr(triage_binding, "approval_directory", lambda: _RetiredDirectory())
+    monkeypatch.setattr(triage_approval, "approval_directory", lambda: _RetiredDirectory())
+    monkeypatch.setattr(triage_cli, "_remind_pending", lambda _draft, _config: None)
+    requests: list[tuple[str, str]] = []
+
+    def api(method: str, path: str, payload: dict | None = None):
+        del payload
+        requests.append((method, path))
+        channel = draft["channel_id"] or _RETIRED_APPROVALS
+        if method == "GET" and path == f"/channels/{channel}/messages/{_RETIRED_MESSAGE}":
+            return {"content": f"draft sha256:{draft['sha256']}"}
+        if method == "GET" and "/reactions/" in path:
+            return []
+        if method == "DELETE":
+            return None
+        raise AssertionError(f"unexpected Discord call: {method} {path}")
+
+    monkeypatch.setattr(triage_confirm, "_api", api)
+    path = tmp_path / "gate" / "drafts" / f"{draft['id']}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(draft), encoding="utf-8")
+    assert triage_cli.cmd_watch(argparse.Namespace()) == 0
+    return json.loads(path.read_text(encoding="utf-8")), requests
+
+
+def test_watch_expires_owner_dm_compose_from_retired_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stored, requests = _run_retired_watch(monkeypatch, tmp_path, _retired_draft(legacy=False))
+
+    assert stored["status"] == "expired"
+    assert stored["expired_reason"] == "approval-surface-retired"
+    assert ("DELETE", f"/channels/{DM_CHANNEL}/messages/{_RETIRED_MESSAGE}") in requests
+    assert not any(method == "POST" for method, _path in requests)
+
+
+def test_watch_expires_legacy_pending_without_fabricating_approval(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stored, requests = _run_retired_watch(monkeypatch, tmp_path, _retired_draft(legacy=True))
+
+    assert stored["status"] == "expired"
+    assert "approval_ref" not in stored
+    assert ("DELETE", f"/channels/{_RETIRED_APPROVALS}/messages/{_RETIRED_MESSAGE}") in requests
+    assert not any(method in {"POST", "PUT"} for method, _path in requests)

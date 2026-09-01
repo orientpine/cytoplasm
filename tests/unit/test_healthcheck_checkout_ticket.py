@@ -222,7 +222,9 @@ def _quiet_release_probes(tmp_path: Path, checkout: Path) -> tuple[Path, Path, P
     return current, installed / "autophagy-install-release", installed / "release_provenance.py"
 
 
-def _sweep(tmp_path: Path, checkout: Path, *args: str, ssh_down: bool = False) -> Sweep:
+def _sweep(
+    tmp_path: Path, checkout: Path, *args: str, ssh_down: bool = False, no_repair: bool = False
+) -> Sweep:
     journal = tmp_path / "tickets.txt"
     env = dict(os.environ)
     env["HOME"] = str(tmp_path / "isolated-home")
@@ -238,6 +240,11 @@ def _sweep(tmp_path: Path, checkout: Path, *args: str, ssh_down: bool = False) -
     current, helper, provenance = _quiet_release_probes(tmp_path, checkout)
     env["RUNTIME_RELEASE_CURRENT"] = str(current)
     env["HEALTHCHECK_RELEASE_SOURCE_ROOT"] = str(current)
+    receipt = tmp_path / "deploy-all-receipt.json"
+    _ = receipt.write_text(
+        f'{{"release_sha":"{current.resolve().name}"}}\n', encoding="utf-8"
+    )
+    env["HEALTHCHECK_DEPLOY_ALL_RECEIPT"] = str(receipt)
     env["HEALTHCHECK_RELEASE_HELPER"] = str(helper)
     env["HEALTHCHECK_RELEASE_PROVENANCE"] = str(provenance)
     env["HEALTHCHECK_LIBEXEC_DIR"] = str(helper.parent)
@@ -276,6 +283,8 @@ def _sweep(tmp_path: Path, checkout: Path, *args: str, ssh_down: bool = False) -
     update_trust.write_text("raise SystemExit(0)\n", encoding="utf-8")
     env["UPDATE_TRUST_SCRIPT"] = str(update_trust)
     env["TICKET_JOURNAL"] = str(journal)
+    if no_repair:
+        env["HEALTHCHECK_NO_REPAIR"] = "1"
     # The skill-mount probe also runs locally, so a real sweep would judge THIS host's
     # /srv and fail for reasons unrelated to the checkout. Point it at a matching
     # (empty) pair so it passes and these assertions stay about the checkout ticket.
@@ -316,6 +325,16 @@ def test_drift_fails_the_sweep_and_raises_a_repair_ticket(tmp_path: Path) -> Non
     assert f"REPAIR_TICKET {_TICKET_ID}" in sweep.output
     assert "--source healthcheck" in sweep.tickets
     assert f"--location '{_CHECK_NAME}'" in sweep.tickets
+
+
+def test_manual_diagnostic_opt_out_does_not_file_repair_occurrences(tmp_path: Path) -> None:
+    sweep = _sweep(tmp_path, _drifted_checkout(tmp_path), no_repair=True)
+
+    assert sweep.returncode == 1, sweep.output
+    assert f"FAIL {_CHECK_NAME}" in sweep.output
+    assert "REPAIR_TICKET" not in sweep.output
+    assert sweep.tickets == ""
+    assert "HEALTHCHECK_FAILED" in sweep.output
 
 
 def test_only_the_drifted_check_is_ticketed(tmp_path: Path) -> None:

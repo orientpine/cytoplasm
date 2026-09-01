@@ -30,6 +30,10 @@ DEFAULT_THRESHOLD: Final = 5
 #: writes into the live owner state and a second account never shares the first's.
 STATE_ROOT_ENV: Final = "WATCH_FAILURE_ROOT"
 
+#: Returned when a state transition could not be saved, so a watcher can keep its
+#: failure visible instead of silently treating the tick as recorded.
+PERSISTENCE_FAILURE: Final = "failure streak state was not persisted"
+
 
 def default_root() -> Path:
     override = os.environ.get(STATE_ROOT_ENV, "").strip()
@@ -65,8 +69,8 @@ def load(name: str, root: Path | None = None) -> Streak:
     )
 
 
-def store(name: str, streak: Streak, root: Path | None = None) -> None:
-    """Persist the streak 0600 under a private directory; a write failure is not fatal."""
+def store(name: str, streak: Streak, root: Path | None = None) -> bool:
+    """Persist the streak 0600 under a private directory, returning whether it succeeded."""
     path = state_path(name, root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -83,7 +87,8 @@ def store(name: str, streak: Streak, root: Path | None = None) -> None:
         )
         os.chmod(path, 0o600)
     except OSError:
-        return
+        return False
+    return True
 
 
 def record(
@@ -94,25 +99,31 @@ def record(
     threshold: int = DEFAULT_THRESHOLD,
     root: Path | None = None,
 ) -> str | None:
-    """Advance the streak and return the ONE line worth delivering, or ``None`` for silence.
+    """Advance the streak and return a notice, silence, or a persistence-failure marker.
 
     A successful tick after an open incident closes it and returns the recovery line; a
     failing tick returns the escalation line only on the tick that reaches ``threshold``.
     Every other tick returns ``None``, which is what keeps a stuck `*/2` job from filling
-    the owner's DMs while still letting the job run under ``--deliver discord``.
+    the owner's DMs while still letting the job run under ``--deliver discord``. A failed
+    write returns ``PERSISTENCE_FAILURE`` so callers do not mistake an unrecorded failure
+    for a recorded silent tick.
     """
     previous = load(name, root)
     if ok:
         if previous == Streak():
             return None  # healthy steady state writes nothing — a `*/2` job touches no disk
-        store(name, Streak(), root)
+        if not store(name, Streak(), root):
+            return PERSISTENCE_FAILURE
         if not previous.incident_open:
             return None
         return f"{name} recovered after {previous.consecutive_failures} consecutive failures"
 
     failures = previous.consecutive_failures + 1
     reached = failures >= threshold and not previous.incident_open
-    store(name, Streak(consecutive_failures=failures, incident_open=previous.incident_open or reached), root)
+    if not store(
+        name, Streak(consecutive_failures=failures, incident_open=previous.incident_open or reached), root
+    ):
+        return PERSISTENCE_FAILURE
     if not reached:
         return None
     suffix = f": {detail}" if detail else ""

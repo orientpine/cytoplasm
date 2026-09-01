@@ -28,7 +28,15 @@ def test_meeting_child_environment_loads_credentials_for_detached_spawn(
     assert environment["LITELLM_AGENT_KEY"] == "meeting-litellm-key"
 
 
-def test_launch_raises_typed_error_for_empty_trigger() -> None:
-    with pytest.raises(plugin.EmptyMeetingTriggerError):
-        plugin._launch(plugin.Trigger(chat_id="C1", doc_paths=(), body=None), "python3")
-    assert issubclass(plugin.EmptyMeetingTriggerError, ValueError)
+def test_empty_trigger_looks_for_a_transcript_instead_of_refusing(monkeypatch) -> None:
+    """`!meeting` 만 쓴 것은 오류가 아니라 "아직 회의록이 없는 전사본을 처리하라"는 요청이다."""
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(plugin, "_spawn", spawned.append)
+
+    plugin._launch(plugin.Trigger(chat_id="C1", doc_paths=(), body=None), "python3")
+    plugin._launch(plugin.Trigger(chat_id="C1", doc_paths=(), body="   \n "), "python3")
+
+    assert len(spawned) == 2, "본문이 공백뿐인 경우도 같은 요청이다"
+    for argv in spawned:
+        assert "--from-pending-transcript" in argv
+        assert "--body-file" not in argv

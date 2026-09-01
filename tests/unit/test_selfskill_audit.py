@@ -133,6 +133,36 @@ def test_ledger_when_a_skill_is_archived_then_records_the_archive_delta(tmp_path
     assert result.deltas[0].sha256 == ledger.skill_digest(archive)
 
 
+def test_ledger_when_skill_states_change_then_records_every_delta_kind(tmp_path: Path) -> None:
+    # Given: records in active and archive roots.
+    home = tmp_path / "agent"
+    edited = _skill(home, "edited-note", "body-v1\n")
+    archived = _skill(home, "archived-note", "body\n")
+    removed = _skill(home, "removed-note", "body\n")
+    restored = _skill(home, "restored-note", "body\n")
+    archive_root = home / ".hermes" / "skills" / ".archive"
+    archive_root.mkdir()
+    restored.rename(archive_root / "restored-note")
+    _ = ledger.audit(home, now=_NOW)
+
+    # When: one skill is added, edited, archived, restored, and removed.
+    _ = edited.joinpath("SKILL.md").write_text("body-v2\n", encoding="utf-8")
+    archived.rename(archive_root / "archived-note")
+    (archive_root / "restored-note").rename(home / ".hermes" / "skills" / "restored-note")
+    shutil.rmtree(removed)
+    _skill(home, "created-note", "body\n")
+    result = ledger.audit(home, now=_NOW)
+
+    # Then
+    assert [(delta.action.value, delta.name) for delta in result.deltas] == [
+        ("created", "created-note"),
+        ("edited", "edited-note"),
+        ("restored", "restored-note"),
+        ("archived", "archived-note"),
+        ("removed", "removed-note"),
+    ]
+
+
 def test_report_when_rendered_then_contains_no_file_bodies_and_no_surface_literals(tmp_path: Path) -> None:
     # Given
     home = tmp_path / "agent"

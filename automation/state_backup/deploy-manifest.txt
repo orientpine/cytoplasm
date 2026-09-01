@@ -1,0 +1,2 @@
+# 주 1회 암호화 상태 백업은 agent 계정에서 돈다(매일 03:15 no-agent cron + 주간 워터마크).
+agent|automation/state_backup/cron/state_backup_watch.py|.hermes/scripts/state_backup_watch.py|required

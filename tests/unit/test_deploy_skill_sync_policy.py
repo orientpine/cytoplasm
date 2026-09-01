@@ -135,6 +135,19 @@ def test_deploy_prefers_release_current_when_present() -> None:
     assert "release_store.py" in converge
 
 
+def test_deploy_skips_origin_convergence_when_current_matches_local_head() -> None:
+    script = DEPLOY.read_text(encoding="utf-8")
+    start = script.index("sync_ops_checkout_for_peer_attest() {")
+    body = script[start : script.index("\n}", start)]
+
+    assert 'local_release_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"' in body
+    assert "current_release_sha" in body
+    assert 'if [[ "$current_release_sha" == "$local_release_sha" ]]' in body
+    assert body.index('if [[ "$current_release_sha" == "$local_release_sha" ]]') < (
+        body.index("autophagy-converge-origin-main")
+    )
+
+
 def test_deploy_release_probe_failure_reports_ops_access_error() -> None:
     # Given: run_as itself can fail before the node can report presence or absence.
     script = DEPLOY.read_text(encoding="utf-8")

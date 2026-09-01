@@ -9,6 +9,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 eval "$(python3 "$repo_root/automation/node_config_sh.py" --print-env)"
 host="${RAG_STACK_SSH_HOST:-$NODE_RAG_NODE_NAME}"
+if [ -z "$host" ]; then
+  echo "DEPLOY-BLOCK: RAG_STACK_SSH_HOST is unset and node config gave no RAG node name. Set it (or configure ~/.hermes/node.toml)" >&2
+  echo "              and re-run; refusing to ssh to an unresolvable placeholder." >&2
+  exit 3
+fi
 
 run_ops() {
   local script="$1"
