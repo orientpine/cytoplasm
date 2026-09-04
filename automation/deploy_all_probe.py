@@ -26,13 +26,19 @@ if __package__ in (None, ""):  # pragma: no cover - 스크립트로 직접 실�
 
 from automation import deploy_all  # noqa: E402
 from automation.skill_mount_drift import DriftError, inspect_mounts  # noqa: E402
-from automation.watcher_manifest import CENTRAL_MANIFEST, ManifestError, parse_rows  # noqa: E402
+from automation.watcher_manifest import (  # noqa: E402
+    CENTRAL_MANIFEST,
+    HOME_DEPLOYED_PATTERN,
+    ManifestError,
+    parse_rows,
+)
 
 #: 계정·목적지는 sudo 명령에 박히므로 안전하게 인용할 수 없는 값은 관측하지 않는다 —
 #: watcher_drift_probe 와 같은 fail-closed(관측 불가 = "?" = 판정 실패).
 _SAFE: Final = re.compile(r"^[A-Za-z0-9_./-]+$")
 
 HomeReader = Callable[[str, str], str]
+HomeLister = Callable[[str], tuple[str, ...] | str]
 
 
 def _read_home(account: str, destination: str) -> str:
@@ -57,10 +63,50 @@ def _read_home(account: str, destination: str) -> str:
     return proc.stdout.strip()
 
 
+#: 홈 배포물 열거 스크립트. 첫 줄의 ``cd "$HOME"`` 이 하중을 진다 — sudo 로 계정을 바꿔도
+#: cwd 는 호출자의 것(운영자 홈, 0700)이 그대로 남고, find(1) 는 끝날 때 시작 디렉터리로
+#: 돌아가려다 EACCES 로 exit 1 을 낸다. 목록은 다 뽑혔는데 rc 만 1 이라 "?" 로 읽혀
+#: v1.0.154 배포 전량이 UNVERIFIABLE 로 멈췄다(2026-09-03).
+_LIST_HOME_SCRIPT: Final = (
+    'cd "$HOME" || exit 1; '
+    'status=0; for root in "$HOME/.hermes/scripts" '
+    '"$HOME/.hermes/plugins"; do [[ -d "$root" ]] || continue; '
+    'if [[ "$root" == */scripts ]]; then '
+    "find \"$root\" -mindepth 1 -maxdepth 1 -type f -printf "
+    "'.hermes/scripts/%f\\n' || status=$?; "
+    "else find \"$root\" -mindepth 2 -maxdepth 2 -type f -printf "
+    "'.hermes/plugins/%P\\n' || status=$?; fi; done; exit \"$status\""
+)
+
+
+def _list_home(account: str) -> tuple[str, ...] | str:
+    """선언 계정의 배포 가능 모양만 열거한다. ``?`` 는 sudo·find 관측 실패다."""
+    if not _SAFE.fullmatch(account):
+        return "?"
+    proc = subprocess.run(
+        ("sudo", "-n", "-u", account, "-H", "bash", "-c", _LIST_HOME_SCRIPT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return "?"
+    paths = tuple(sorted(set(proc.stdout.splitlines())))
+    if any(
+        not _SAFE.fullmatch(path) or not HOME_DEPLOYED_PATTERN.fullmatch(path)
+        for path in paths
+    ):
+        return "?"
+    return paths
+
+
 def observations(
-    runtime_root: Path, live_root: Path, home_reader: HomeReader
+    runtime_root: Path,
+    live_root: Path,
+    home_reader: HomeReader,
+    home_lister: HomeLister,
 ) -> list[str]:
-    """관측 줄을 만든다. 읽지 못하면 예외 — 잘린 관측은 판정이 되면 안 된다."""
+    """관측 줄을 만든다. 목록을 못 보면 선언 밖 파일 부재를 증명할 수 없어 실패한다."""
     lines: list[str] = [f"OBS|release|{runtime_root.resolve().name}"]
     drift = inspect_mounts(runtime_root, live_root)
     lines.append("OBS|mounts|judged")
@@ -71,7 +117,10 @@ def observations(
     for skill in drift.orphaned:
         lines.append(f"OBS|mount-orphaned|{skill}")
     manifest = runtime_root / CENTRAL_MANIFEST
-    for row in parse_rows(manifest.read_text(encoding="utf-8")):
+    rows = parse_rows(manifest.read_text(encoding="utf-8"))
+    declared: dict[str, set[str]] = {}
+    for row in rows:
+        declared.setdefault(row.account, set()).add(row.destination)
         source_sha = hashlib.sha256((runtime_root / row.source).read_bytes()).hexdigest()
         policy_kind = "optional" if row.policy.startswith("optional") else "required"
         deployed = home_reader(row.account, row.destination)
@@ -79,6 +128,21 @@ def observations(
             f"OBS|home|{row.account}|{row.destination}|{row.source}"
             f"|{policy_kind}|{source_sha}|{deployed}"
         )
+    for account, destinations in sorted(declared.items()):
+        listed = home_lister(account)
+        if listed == "?":
+            raise deploy_all.ObservationError(f"home listing unreadable: {account}")
+        for destination in listed:
+            if destination in destinations:
+                continue
+            deployed = home_reader(account, destination)
+            if not deployed or deployed == "?":
+                raise deploy_all.ObservationError(
+                    f"listed home artifact unreadable: {account}:{destination}"
+                )
+            lines.append(
+                f"OBS|undeclared|{account}|{destination}|{deployed[:12]}"
+            )
     lines.append("OBS|end")
     return lines
 
@@ -94,10 +158,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--format", choices=("report", "actions", "receipt"), default="report"
     )
+    parser.add_argument(
+        "--strict-undeclared",
+        action="store_true",
+        help="선언 밖 홈 파일도 drift 로 판정",
+    )
     args = parser.parse_args(argv)
     try:
-        lines = observations(args.runtime_root, args.live_root, _read_home)
-        plan = deploy_all.parse_observations(lines)
+        lines = observations(args.runtime_root, args.live_root, _read_home, _list_home)
+        plan = deploy_all.parse_observations(
+            lines, strict_undeclared=args.strict_undeclared
+        )
     except (DriftError, ManifestError, OSError, deploy_all.ObservationError) as error:
         print(f"DEPLOY-ALL-UNVERIFIABLE: {error}", file=sys.stderr)
         return 4

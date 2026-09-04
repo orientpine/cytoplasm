@@ -18,6 +18,7 @@ import wiki_gate  # noqa: E402
 
 OWNER_ID = "owner-1"
 CHANNEL_ID = "1526487935975952385"
+AGENT_CHAT_ID = "1526487935975952400"
 MESSAGE_ID = "message-1"
 NOTE_TEXT = (
     "---\n"
@@ -38,6 +39,7 @@ class FakeDiscordRest:
     message_channel_id: str = CHANNEL_ID
     missing_message: bool = False
     calls: list[tuple[str, str, dict[str, str] | None]] = field(default_factory=list)
+    threads: list[str] = field(default_factory=list)
 
     def __call__(
         self,
@@ -48,7 +50,12 @@ class FakeDiscordRest:
         self.calls.append((method, path, payload))
         if method == "POST" and path == "/users/@me/channels":
             return {"id": CHANNEL_ID}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_ID}/threads":
+            self.threads.append(str((payload or {})["name"]))
+            return {"id": CHANNEL_ID, "type": 11, "parent_id": AGENT_CHAT_ID}
         if method == "GET" and path == f"/channels/{CHANNEL_ID}":
+            if self.threads:
+                return {"id": CHANNEL_ID, "name": self.threads[-1], "type": 11, "parent_id": AGENT_CHAT_ID}
             return {"id": CHANNEL_ID, "name": "", "recipients": [{"id": OWNER_ID}], "type": 1}
         if method == "POST" and path == f"/channels/{CHANNEL_ID}/messages":
             assert payload is not None
@@ -86,6 +93,11 @@ def _post(
     fake: FakeDiscordRest,
 ) -> dict:
     draft = _draft(tmp_path, monkeypatch)
+    interop = tmp_path / "interop.json"
+    interop.write_text(
+        json.dumps({"owner_id": OWNER_ID, "agent_chat_channel_id": AGENT_CHAT_ID}), encoding="utf-8",
+    )
+    monkeypatch.setenv("INTEROP_CONFIG", str(interop))
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "unit-test-token")
     monkeypatch.setattr(wiki_gate, "owner_id", lambda: OWNER_ID)
@@ -111,6 +123,11 @@ def test_post_confirm_message_preadds_reactions_and_records_bound_message(
     # Then
     assert draft["confirm_message_id"] == MESSAGE_ID
     assert fake.calls == [
+        (
+            "POST",
+            f"/channels/{AGENT_CHAT_ID}/threads",
+            {"name": f"위키 · {draft['id']}", "auto_archive_duration": 10080, "type": 11},
+        ),
         ("GET", f"/channels/{CHANNEL_ID}", None),
         ("POST", f"/channels/{CHANNEL_ID}/messages", {"content": wiki_gate.confirm_text(draft)}),
         (

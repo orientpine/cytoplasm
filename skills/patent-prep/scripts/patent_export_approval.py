@@ -67,6 +67,7 @@ class PatentApprovalPayload:
             message_id=None,
             created_ts=self.created_ts,
             approval_ts=None,
+            approval_thread_id=binding.channel_id,
             kind=str(binding.kind),
             surface=str(binding.surface),
             channel_id=binding.channel_id,

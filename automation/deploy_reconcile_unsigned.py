@@ -37,7 +37,11 @@ class IncidentRecorder:
         save_state(self.state_path, updated)
 
     def unsigned(
-        self, remote_head: str, current_sha: str, commit_count: int | None = None
+        self,
+        remote_head: str,
+        current_sha: str,
+        commit_count: int | None = None,
+        mirror_state: str = "unknown",
     ) -> None:
         state = load_state(self.state_path)
         updated = reconcile_unsigned_head(
@@ -47,6 +51,7 @@ class IncidentRecorder:
             now=self.clock(),
             deliver=self.deliver,
             commit_count=commit_count,
+            mirror_state=mirror_state,
         )
         save_state(self.state_path, updated)
 

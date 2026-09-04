@@ -1,7 +1,7 @@
 ---
 name: wiki
 description: "개인 위키(~/wiki, 700, git 밖) + 의사결정 트윈(decision-twin) 관리 스킬. 노트 생성/수정은 반드시 초안 → 확인 메시지 게시(봇이 ✅·⛔ 미리 부착) → cha의 ✅ 리액션 → 저장의 게이트를 거친다(⛔=취소, ⛔ 우선; 텍스트 `저장 <draft-id>`는 하위호환 fallback). 조회/백링크/정리 제안/twin 컨설트는 읽기 전용. W2-2 + DT-B."
-version: 2.0.0
+version: 2.0.2
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -16,7 +16,7 @@ prerequisites:
 
 cha의 개인 마크다운 볼트 `~/wiki`(mode 700, **git 밖**)를 관리한다.
 모든 노트는 frontmatter 스키마(필수 5키 title/tags/created/updated/links +
-선택 twin 키)를 강제한다. schema v1부터 이 볼트는 cha의 **의사결정 디지털
+선택 twin 키)를 강제한다. 변경 명령은 `/srv/autophagy-skills/live/wiki/scripts/` 밖의 사본에서 실행을 거부하며 `STALE-SKILL-COPY-BLOCK`을 출력한다. schema v1부터 이 볼트는 cha의 **의사결정 디지털
 트윈**(결정/원칙/선호를 타입드 신뢰 메타데이터로 축적한 판단 코퍼스)을 겸한다.
 
 ## 절대 규칙 (안전)
@@ -29,14 +29,14 @@ cha의 개인 마크다운 볼트 `~/wiki`(mode 700, **git 밖**)를 관리한�
 4. 구 cha_wiki 이관 스크립트(`automation/migrate-cha-wiki.sh`)는 cha 본인만
    실행한다. 에이전트가 자율 실행하지 않는다.
 
-## 명령 (CLI = `python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py …`)
+## 명령 (CLI = `python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py …`)
 
 ### 1) 노트 생성 — cha가 DM으로 "위키에 정리해줘 …" 요청 시
 
 대화 내용으로 제목/태그/본문을 구성해 **초안만** 만든다:
 
 ```bash
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py draft \
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py draft \
   --title "노트 제목" --tags "tag1,tag2" --links "관련-슬러그" --stdin <<'BODY'
 노트 본문 (markdown)
 BODY
@@ -51,7 +51,7 @@ BODY
 안내되며 차단하지 않는다):
 
 ```bash
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py draft \
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py draft \
   --title "결정: 예시" --tags "decision" \
   --kind decision --authority default --provenance stated \
   --review-after 2026-12-01 --stdin <<'BODY'
@@ -73,9 +73,14 @@ BODY
 **cha는 ✅ 한 번 탭으로 저장, ⛔로 취소**한다:
 
 ```bash
-cd ~/.hermes/skills/wiki/scripts && python3 -c \
+cd /srv/autophagy-skills/live/wiki/scripts && python3 -c \
   "import wiki_gate; wiki_gate.post_confirm_message(wiki_gate.load_draft('<draft-id>'))"
 ```
+
+게시 위치: 요청 1건은 cha의 agent-chat 채널 아래 **자기 전용 스레드**에서 열린다 —
+스레드 이름은 `위키 · <draft-id>`로 **id 하나뿐**이며, 노트 제목·본문·slug는 이름에
+절대 들어가지 않는다(내용은 스레드 안 승인 본문에만 있다). 초안 레코드는 그 스레드를
+`approval_thread_id`로 기록해, 이후 리마인더·결과가 같은 스레드에서 끝난다.
 
 이 게시는 공유 승인 생명주기(`automation.interop.approval_lifecycle`)를 경유하며,
 승인 키 `wiki:{action}:{slug}`당 **살아 있는 확인 메시지는 항상 1건**이다:
@@ -99,7 +104,7 @@ resolver(`wiki_gate.resolve_reaction`)로 처리한다:
 먼저 해석하고, 리액션이 없을 때만 텍스트 fallback을 검증한다:
 
 ```bash
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py confirm --draft <draft-id>
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py confirm --draft <draft-id>
 ```
 
 **금지**: 에이전트는 "`저장 <draft-id>` 라고 답장해 주세요" 같은 **텍스트 답장
@@ -113,13 +118,13 @@ python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py confirm --draft <draft-id>
 취소가 확인되었거나 cha가 취소를 요청하면 초안을 폐기한다:
 
 ```bash
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py discard --draft <draft-id>
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py discard --draft <draft-id>
 ```
 
 ### 3) 수정 — "위키 <노트> 수정해줘"
 
 ```bash
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py draft --edit <slug> \
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py draft --edit <slug> \
   [--title …] [--tags …] [--links …] [--kind …] [--authority …] [--provenance …] \
   [--status …] [--review-after …] [--supersedes …] [--stdin]
 ```
@@ -130,9 +135,9 @@ python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py draft --edit <slug> \
 ### 4) 조회/백링크/정리 제안 — 읽기 전용, 즉시 실행 가능
 
 ```bash
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py query "<검색어>" [--tag <태그>]
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py backlinks <slug>
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py cleanup-suggest
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py query "<검색어>" [--tag <태그>]
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py backlinks <slug>
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py cleanup-suggest
 ```
 
 `cleanup-suggest`(주간 정리 제안)는 STALE/UNTAGGED/ORPHAN/DUPLICATE-TITLE에
@@ -208,7 +213,7 @@ cha가 DM에서 **지속적 판단을 선언**하면(예: “앞으로 …는 �
 읽기 전용 지식 파사드를 **한 번만** 호출한다.
 
 ```bash
-python3 ~/.hermes/skills/wiki/scripts/wiki_cli.py consult \
+python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py consult \
   "budget 범위에서 cha라면 어떻게 판단할까?"
 ```
 

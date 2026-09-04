@@ -1,7 +1,7 @@
 ---
 name: hello-autophagy
 description: "Deterministic demo skill that validates the W1-8 skill deploy pipeline (sandbox → owner approval → mount). Prints a fixed Korean greeting via scripts/hello.sh."
-version: 1.0.0
+version: 1.0.1
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -22,7 +22,7 @@ W1-8 배포 파이프라인(샌드박스 → 소유자 승인 → 마운트) 검
 사용자가 "autophagy 인사" 또는 "hello autophagy demo"를 요청하면:
 
 ```bash
-bash ~/.hermes/skills/hello-autophagy/scripts/hello.sh
+bash /srv/autophagy-skills/live/hello-autophagy/scripts/hello.sh
 ```
 
 출력 마커는 항상 `HELLO-AUTOPHAGY`로 시작한다. 이 마커가 없으면 실패다.

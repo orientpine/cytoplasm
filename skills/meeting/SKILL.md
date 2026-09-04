@@ -1,11 +1,13 @@
 ---
 name: meeting
 description: "명시적 !meeting 신호가 붙은 회의록(md/txt/pdf 업로드 또는 본문)에서 결정사항/액션아이템/마일스톤을 추출해 연구 회의록 서식의 노트를 쓰고(근거는 하단 부록), 내 Kanban 카드와 milestones.yaml을 갱신하고 타인 항목은 #team에 규약 게시하는 W2-3 스킬. 발표자료(--slides)를 받으면 대명사·모호 지시어를 그 표기로 교정하고, 소유자 Drive 참고자료 폴더의 자료를 자동으로 근거에 더한다. `!meeting` 만 쓰면 아직 회의록이 없는 Drive 전사본을 찾아 만들고(매일 00:00 KST 에 같은 일을 하는 no-agent cron 이 함께 돈다), `--project` 를 주면 Drive 의 과제별 회의록 양식 순서로 본문을 배치하고, 과제별 action-item 데이터베이스(관리번호 10자리)를 갱신해 미결·신규 표로 회의록을 닫는다. 민감도 게이트(constraint 6) 내장."
-version: 1.5.1
+version: 1.6.2
 author: autophagy-agents
 ---
 
 # meeting — 회의록 인제스트 (W2-3)
+
+변경 명령은 `/srv/autophagy-skills/live/meeting/scripts/` 에서만 실행하며, 낡은 사본은 `STALE-SKILL-COPY-BLOCK`으로 거부한다.
 
 명시적 `!meeting` 신호가 붙은 회의록(md/txt/pdf ≤25MiB 또는 명령 본문)에서 결정사항/액션아이템을
 추출해 ①내 항목 → Kanban 카드 + `~/state/milestones.yaml`, ②타인 항목 →
@@ -32,7 +34,7 @@ author: autophagy-agents
    내용을 절대 읽지 말고(컨텍스트에 넣지 말고) 아래 CLI를 실행하라:
 
    ```bash
-   python3 ~/.hermes/skills/meeting/scripts/meeting_cli.py ingest \
+   python3 /srv/autophagy-skills/live/meeting/scripts/meeting_cli.py ingest \
      --file <경로> --label "<회의 라벨>" --project "<과제명>" \
      [--with-evidence] [--slides <발표자료 경로>]
    ```
@@ -56,6 +58,8 @@ author: autophagy-agents
    으로 순차 처리한다. 대화형은 다건이면 멈추지만 야간 배치는 멈출 수 없다 — 매일 밤 같은 이유로
    서면 기능이 죽는다. 만들 것이 없는 밤에는 아무 말도 하지 않는다(`--no-agent` 의 빈 stdout =
    침묵). 내가 이 워처를 대신 실행하거나 결과를 지어내지 않는다.
+   **미처리 전사본으로 만든 회의록은 `--project` 없이도 그 전사본 자신의 과제 폴더
+   (`회의록/<과제>/<연도>/`)로 게시된다 — 다음 밤이 바로 그 자리를 보고 이 전사본을 건너뛴다.**
 
 2-1. **회의록은 어떤 경로로 요청받든 이 CLI 가 만든다 — 내가 손으로 쓰지 않는다.**
    소유자가 Drive 의 전사본이나 기존 문서를 가리키며 "회의록 써줘"라고 해도 마찬가지다.
@@ -91,6 +95,18 @@ author: autophagy-agents
 모델이 추출한 논의 주제는 `논의 요지` 아래의 굵은 목록 항목으로만 렌더한다. 추출 문자열을
 절 제목으로 승격하지 않으므로 특정 참석자 이름이나 개인 중심 Action Item 문구가 공용 회의록의
 섹션 제목이 될 수 없다.
+
+**화자 범례 (v1.6.0)**: 전사본 본문이 `화자1`, `화자2` 같은 라벨을 달고 있으면 v6 프롬프트가
+`speakers` 배열(`label`/`name`/`basis`)로 그 라벨을 실제 이름에 잇는다. 근거는 회의록에 적힌 것만
+쓰고(자기소개·호명·소개), 근거가 없는 라벨은 `name` 을 `null` 로 둔다. 렌더러는 이것을 메타 표
+바로 아래 한 줄로 적는다: `- 화자: 화자1=김민수 · 화자2=미상`. 표 밖에 두는 이유는 라벨이 많은
+회의에서 셀 하나가 줄바꿈 없이 늘어나 머리말이 안 읽히기 때문이다. 이름을 모르는 라벨도 적는다,
+누락과 미상은 다른 사실이다.
+
+같은 배열이 `ingest` 의 **마지막 stdout JSON** 에도 `speakers` 로 실린다(라우팅 로그에는 남기지
+않는다, 화자 이름은 메타데이터가 아니라 회의 내용이다). speechtotext 가 이 값을 받아 전사본 범례에
+되먹이며, 그쪽 규칙(자기소개)이 이미 정한 이름과 다르면 규칙 이름이 이기고 이견만 `LLM 제안` 으로
+남는다.
 
 **근거는 전부 하단이다.** 본문에는 `[근1]` 같은 짧은 마커만 남고, 근거 원문·지식 파사드
 출처(`[E1]`)·원문 전사본은 `## 부록 · 근거와 원문` 아래 A/B/C 소절에 모인다. 회의록과 근거는
@@ -188,11 +204,12 @@ Drive 프리뷰의 지원 여부도 확인되지 않았다.
 
 ## 구성 파일
 
-- 민감도 규칙: `~/.hermes/skills/meeting/configs/sensitivity-rules.yaml`
+- 민감도 규칙: `/srv/autophagy-skills/live/meeting/configs/sensitivity-rules.yaml`
   (원본: repo `configs/sensitivity-rules.yaml`)
-- 추출 프롬프트: `~/.hermes/skills/meeting/prompts/meeting-extraction-v5.md`
-  (v1/v2는 codex 에코 이슈로 폐기, v3·v4는 이력용 보관. v5는 v4의 "펜스·스키마 블록 없음,
-  재료 먼저 지시 마지막" 구조를 그대로 지키고 미결 action item 목록과 `resolved_actions` 만 더한다)
+- 추출 프롬프트: `/srv/autophagy-skills/live/meeting/prompts/meeting-extraction-v6.md`
+  (v1/v2는 codex 에코 이슈로 폐기, v3~v5는 이력용 보관. v5는 v4의 "펜스·스키마 블록 없음,
+  재료 먼저 지시 마지막" 구조를 그대로 지키고 미결 action item 목록과 `resolved_actions` 만
+  더했으며, v6은 거기에 `speakers` 키 하나를 더한다)
 - 런타임 설정: `~/.hermes/meeting/config.json` (owner_id / team_channel_id /
   agent_id / my_names — repo 밖, 600)
 

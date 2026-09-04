@@ -80,7 +80,11 @@ PY
 
 # CLI fail-closed without a Discord token (config error, nothing sent/written)
 set +e
+# The staged copy passes the governed-copy guard only because deploy-skill.sh declares it as
+# the live root; dropping AUTOPHAGY_SKILL_LIVE_ROOT here sends the guard to the node default
+# and the refusal reads STALE-SKILL-COPY-BLOCK instead of COORD-REFUSED (2026-09-03).
 out="$(cd "$script_dir" && env -i HOME="$empty_home" PATH=/usr/bin:/bin E2E_TEST_MODE=1 INTEROP_RUNTIME="$runtime" \
+  AUTOPHAGY_SKILL_LIVE_ROOT="${AUTOPHAGY_SKILL_LIVE_ROOT:-}" \
   python3 coordinate_cli.py request --peer peer-test --summary demo \
   --range-start 2099-01-01T09:00:00+09:00 --range-end 2099-01-01T18:00:00+09:00 \
   --duration-min 30 --timeout-s 1 --e2e-confirm 2>&1)"; rc=$?

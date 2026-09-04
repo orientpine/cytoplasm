@@ -15,6 +15,45 @@
 
 # OWNER — 소유자·노드에서만 닫힌다
 
+## Plaud lifelog 노트 v2 양식 착지 후 소유자만 닫을 수 있는 것 (2026-09-04)
+
+- **[OWNER] vault Linter 의 `yaml-timestamp` 가 `date-modified-source-of-truth: file system` 이라 소유자가 Obsidian 에서 lifelog 노트를 처음 저장(lintOnSave)하면 `modified` 가 그 시각으로 바뀐다(`created` 는 유지 — 실제 플러그인 빌드 헤드리스 실측, `docs/qa/PLV2/linter-idempotence.txt`) → 녹음 시각을 두 값 모두에 보존하려면 vault Linter 설정에서 modified 의 source of truth 를 `frontmatter` 로 바꾼다(소유자 결정; 노트 생성 코드는 어느 쪽이든 바뀔 것이 없다).** 본문은 그대로이고 메타데이터 한 줄만 움직이는 표시 문제(심각도 낮음).
+- **[OWNER] 노드 agent 계정의 `~/.env.secrets` 에 `LITELLM_AGENT_KEY`(·`LITELLM_BASE_URL`) 가 있어야 사람·장소·결정·할 일이 뽑힌다 → 릴리스 뒤 첫 `planned` 카드의 한눈에 줄을 본다: `- 추출:: 생략 (LLM 미설정)` 이면 키를 넣는다. 동결 본문은 승인 해시에 묶여 소급되지 않으므로 다음 녹음부터 적용된다.** 키가 없어도 노트는 결정론 필드(녹음·주제·한 줄)만으로 저장된다(심각도 낮음).
+- **[OWNER] 2026-09-02 에 이미 push 된 lifelog 노트(직장 동료 대화)는 v1 양식이고 첫 줄의 깨진 포스터 이미지가 그대로다 → vault 에서 그 줄을 지우거나 v2 로 다시 쓰려면 소유자가 직접 편집한다.** processed 원장이 같은 녹음의 재동기화를 막으므로 코드는 소급하지 않는다(심각도 낮음).
+
+## 릴리스 승인 카드에 대한 피어 봇 자체 심사 (2026-09-03)
+
+- **[OWNER] peer 에이전트가 `[release]` 승인 카드(v1.1.2)에 `⛔ DO-NOT-APPROVE — HEAD a75057c0 확인 불가(unpushed tip)` 를 붙이고 "✅ 하지 말고 push 뒤 재게시하라" 고 안내했다 → peer 에게 `[release]` 카드는 심사 범위 밖(VA-1 은 소유자 단독 ✅, 피어 attestation 은 스킬 단위)임을 지시하거나, HEAD 존재 확인을 `git ls-remote origin` 으로만 하게 자가 스킬 참고 문서를 고친다(peer 홈 `~/.hermes/skills/software-development/skill-deploy-review/`, `hermes curator`).** 판정 주체는 저장소 코드가 아니다 — 그 자가 스킬은 `[skill-deploy]` 전용 결정적 리포터(git 호출 0)이고, peer 가 그 어휘만 빌려 즉석 심사를 하며 HEAD 를 노드 로컬 체크아웃(`origin/main=7e130408`)에서 찾았다. 미러는 설계상 릴리스가 수렴한 **뒤에야** origin/main 을 따라오므로(「ops 체크아웃 단방향 규칙」 sync_mirror) 새 릴리스 HEAD 는 로컬에서 항상 "unpushed" 로 읽힌다. 실측: a75057c0 은 PR #378 머지(13:01:22Z)로 origin/main 에 있었고 요청 게시는 그 뒤, v1.1.2 태그·`agent-current`·deploy 영수증 전부 그 HEAD. 영향: 카드마다 거짓 ⛔ 안내가 붙어 소유자가 멀쩡한 릴리스를 막을 수 있다 — 심각도 중(릴리스·노드는 무영향).
+
+## 수리 티켓 t_bd0d3789 종결 중 소유자만 닫을 수 있는 것 (2026-09-03)
+
+- **[OWNER] 09-02·09-03 야간 재처리로 과제 원장 `회의록/해양고신뢰성/action-items.csv` 에 같은 회의의 미결 행이 중복 발급됐고(09-03 actions_new=4, 관리번호도 그만큼 소모), 옛 `회의록/2026` 폴더에는 야간 회의록 `2026-08-25_회의록-2026-08-26_20260825_해양고신뢰성.md` 가 남아 있다 → 소유자가 중복 행을 검토해 병합·종결하고 그 회의록 파일을 정본과 합치거나 지운다.** 이 PR 의 수정은 새 중복이 생기는 것을 멈출 뿐, 이미 쌓인 원장 행과 잘못된 자리의 파일을 되돌려 쓰지 않는다 — 원장 편집과 Drive 파일 정리는 소유자 판단이다(심각도: 낮음).
+
+## 2026-09-03 수리 스윕(메일 인용·다이제스트 GLM 폴백)
+
+- **[OWNER] glm-main 뒤 제공자의 잔액이 2026-09-02 15:21Z부터 소진돼 다이제스트·twin_distill·peer의 모든 비민감 GLM 호출이 HTTP 429를 받는다 → 소유자가 잔액을 충전하거나 별칭을 재바인딩한다.** FIX 2 뒤 다이제스트는 그때까지 codex 티어로 계속 처리된다(심각도: 중). [해소 2026-09-03: 잔액 충전이 아니라 별칭 재바인딩으로 닫혔다 — PR #370 이 `gpt-5-mini` 로 잠시 옮겼고 PR #373 이 `openai/gpt-5.6-luna`(`reasoning_effort: none`) 로 확정했다(routing-policy §2 바인딩 표 동기). 노드 `litellm-gateway/config.yaml` 에 luna 바인딩이 적용돼 재기동됐고 agent 키로 `glm-main` 완료 1건 성공을 SpendLogs 에서 확인했다. z.ai 는 별칭 뒤에서 빠졌으므로 충전할 것이 없다 — 남은 잔액·계정 정리는 소유자 선택이지 조치 항목이 아니다.]
+- **[OWNER] FIX 3의 LiteLLM compose 변경은 ops가 <primary-node>에 파일을 복사한 뒤 `litellm-gateway.service`를 재시작해야 적용된다 → 컨테이너 재시작은 소유자가 결정한다.** 적용 전에는 이전 healthcheck가 계속 provider completion을 만들 수 있다(심각도: 중). [해소 2026-09-03: 노드 compose 가 `/health/liveliness` 로 갱신됐고 `litellm-gateway.service` 재기동으로 컨테이너가 healthy 로 올라왔다(PR #373 배포와 같은 사이클). 재기동 뒤 SpendLogs 에 `litellm-internal-health-check` 행이 더 이상 늘지 않는 것을 확인했다.]
+- **노드의 live mail 스킬 마운트가 배포 릴리스 안에 있는 `c709c852`보다 앞서 있어 09-03 분류 실패가 그곳에는 기록되지 않았다 → 다음 릴리스 뒤 live/mail이 HEAD의 `triage_digest.py`를 담는지 확인한다.** 영향: 관측 결손, 동작 결함 아님(심각도: 낮음). [해소 2026-09-03: 릴리스 v1.0.154(`6e8f7c33`) 의 `deploy-skill.sh mail --release-approval` 로 live/mail 이 `7cf8afe2…`(SKILL 1.7.7) 로 올라갔고, `triage_llm_routing.py`·`mail_preflight.py` sha 가 HEAD 와 일치함을 노드에서 확인했다 — 분류 실패 로그 줄(`classify_failed`)을 남기는 `c709c852` 이 포함된 트리다.]
+- **`triage_confirm.add_reaction` 이 승인 메시지를 게시한 뒤 ✅/⛔를 미리 붙이는 중 Discord HTTP 503을 받으면 draft는 게시됐는데 `compose`가 traceback과 exit 1로 끝난다 → 리액션 사전 부착을 `APPROVAL-REACTION-FAIL` 마커의 best-effort로 바꾸고 exit 0으로 끝내 소유자가 수동으로 반응할 수 있게 한다.** 영향: 운영 불편, 외부효과 없음(심각도: 낮음).
+  ↳ 처리(2026-09-03): `fix(mail): 승인 카드의 ✅/⛔ 사전 부착 실패를 APPROVAL-REACTION-FAIL 마커의 best-effort 로 바꾼다` — `triage_approval.MailApprovalGate.post` 가 HTTPError 를 잡아 stderr 한 줄, 반환값·레코드 불변, tests/unit/test_mail_reaction_confirm.py
+
+## 수리 티켓 t_ecb1654b 종결 중 소유자만 닫을 수 있는 것 (2026-09-02)
+
+- **[OWNER] 피어 분류 레지스트리 `~/.hermes/interop/peers.yaml` 이 노드 agent 계정에 없다 → 피어 이름 기반 라우팅(coordination 위임 판정)이 필요하면 `python3 -m automation.group_roster.cli peers-seed --output ~/.hermes/interop/peers.yaml` 로 생성한다(선택, 분류 전용 — trust root 아님).** PR #358 이후 부재는 fail-soft(`PEER-REGISTRY-ABSENT` stderr 1줄)라 단독 일정 draft-create 는 정상이고, 없는 동안 피어 이름은 제목 토큰으로만 취급된다(심각도: 낮음).
+
+## Plaud lifelog 롤아웃 — 소유자만 닫을 수 있는 것 (2026-09-02)
+
+- **Plaud OAuth 는 브라우저가 필요하다 → 워크스테이션에서 `npm install -g @plaud-ai/cli` 후 `plaud login`,
+  토큰 캐시 `~/.plaud`(tokens.json) 를 노드 agent 홈으로 복사하고 `automation/plaud_sync/deploy.sh` 를 돌린다.**
+  `@plaud-ai/mcp install` 은 로컬 클라이언트에 MCP 설정을 쓰는 부작용이 있어 로그인 용도로 쓰지 않는다.
+  복사 후 워처의 MCP 서버가 그 토큰을 실제로 읽는지(같은 `~/.plaud` 공유) 첫 틱에서 1회 검증한다.
+  그 전까지 워처 discovery 는 "Not authenticated" 로 조용히 재시도만 한다.
+- **기존 Zapier→Drive `PLAUD/raw` 내보내기 구상은 이 동기화가 대체한다 → Zapier 잽을 둘지 정리할지 소유자 결정.**
+  남겨두면 무해하나 사본 두 벌이 쌓인다(심각도: 낮음).
+- **MCP 는 `~/.plaud/tokens-mcp.json` 을, CLI 는 `tokens.json` 을 쓴다(같은 디렉터리·다른 파일) → 재설치·토큰 회전 때마다
+  `tokens.json` 을 `tokens-mcp.json` 으로 복사(씨앗)해야 워처가 인증된다.** 2026-09-02 최초 롤아웃은 이 브리지를 만들어
+  노드 `~agent/.plaud` 로 복사했다. 자동 씨앗(deploy/워처가 없으면 복사)을 넣을지는 리프레시 분기 위험과 함께 판단(심각도: 낮음).
+
 ## 참고자료 후속 5건 종결 중 남긴 것 (2026-08-27)
 
 > [이관 2026-08-31] 배포 후 노드에서 `--slides` 실측이 선행 조건이다 — 소유자·노드 작업.
@@ -46,6 +85,22 @@
   `hermes cron list` 의 Last run 으로 그 사이에 실행이 없었는지 확인한다. 창이 분 단위라
   실제 충돌 확률은 낮다. **일회성 · 심각도 낮음**.
 
+## 노드 배포 표면 감사(2026-09-01) 중 소유자만 닫을 수 있는 것
+
+> 2026-08-29 첨부 아카이브 자가 배포 사건을 계기로 노드 배포 표면(미러·계정 홈·cron·세션 기록·자가 스킬)을 읽기 전용으로 전수 실측했다. 증적: 이 세션의 감사 보고서 `docs/qa/audit-2026-09-01/node-deploy-surface-audit.md`.
+
+- **[OWNER] 에이전트가 만든 게이트웨이 재시동 헬퍼가 상주한다 → 회수하고 재시동은 승인된 노드 런북(agent·peer 함께, 원인 확인 후)으로만 한다.** `~agent/.hermes/scripts/restart-hermes-gateway-once.sh`(95B, 2026-08-14, 내용은 `systemctl --user restart hermes-gateway.service` 한 줄, 리포 소스 없음; 세션 기록상 08-14~16 사이 6회 생성·실행). 「게이트웨이 재시동 규칙」을 우회하는 수단이 남아 있다(심각도: 높음).
+- **[OWNER] agent 홈에 별도 클론이 있고 로컬 전용 커밋 2건이 있다 → 살릴지 버릴지 결정한다.** `/home/agent/src/autophagy-agents`: 작업트리는 clean 이지만 origin 에 없는 커밋 2건(2026-07-30, 08-02)이 있고 origin/main 보다 크게 뒤처져 있다 — 미러 사건과 같은 계열의 "리포 밖 개발" 흔적이며, 에이전트가 이 경로의 스크립트를 실행하면 낡은 사본 실행이 된다(심각도: 중).
+- **[OWNER] 소유자 없는 홈 자산 2건의 출처를 판정한다.** `~agent/.hermes/scripts/regression_bank_weekly.py`(1657B, 2026-07-16; 리포 소스·매니페스트·cron 등록 모두 없음)와 `~agent/.hermes/plugins/hermes-achievements/`(JSON 3개 1.3MB, 코드 없음, 2026-08-16). 회수하거나 벤더 산출물로 기록한다(심각도: 낮음).
+- **[OWNER] 자가 스킬 5개 중 governed 와 겹치는 것의 승격·폐기를 결정한다.** `meeting-minutes-authoring`(meeting 과 겹침)·`document-publishing`(doctype·report 와 겹침) 등 `~agent/.hermes/skills/{documents,devops}/…` 5개(2026-08-18~28). 결정 전까지 `hermes curator pin/archive` 로 상태를 고정한다(심각도: 중).
+- **[OWNER] 미러가 agent 자격증명으로는 원격을 읽지 못한다.** `/srv/autophagy-agents` 에서 `git ls-remote origin` 이 `Repository not found` 인데도 `origin/main` ref 는 최신이다(ops 가 fetch). 미러를 읽기 전용 관측소로 고정하면 자연 해소되며, fetch 주체를 운영 가이드에 적는다(심각도: 낮음).
+
+## 관측 미러가 미커밋 편집으로 동결돼 121 커밋 뒤에 있었다 (2026-09-01 실측)
+
+- **`/srv/autophagy-agents` 가 `ec39b11f`(#319) 에 멈춰 있고 08-29 00:54Z 부터 dirty 다 → 소유자가 그 미커밋 편집을 살릴지 버릴지 결정한 뒤 미러를 정본으로 되돌린다.** dirty 내용은 `skills/mail/SKILL.md`(v1.6.3 "메일 첨부파일 Drive 아카이브" 절)와 `skills/mail/deploy.sh`(`mail_attachment_drive_sync.py`·`mail_attachment_drive_watch.py` 배포 행) — 리포에 없는 기능이라 살리려면 `git diff` + untracked 파일을 워크스테이션 브랜치로 옮겨 PR 로 착지시키고, 그 뒤 미러에서 `git checkout -- .` 후 `git pull --ff-only`(리컨실러 `sync_mirror` 는 dirty 를 건드리지 않으므로 사람이 한 번 해야 한다). 이 동결이 2026-09-01 김경호 회신 무인용 사고의 두 번째 원인이다 — 에이전트가 실행한 미러 사본에 `mail_quote` 도 승인 정책 v8 도 없었다. `checkout_mirrors_origin` 프로브는 dirty 를 FAIL 로 내고 있었으나 아무도 닫지 않았다(심각도: 중 — mail 은 `governed_copy_refusal` 로 사본 실행이 막혔지만 다른 스킬과 문서 읽기는 여전히 낡은 미러를 본다). [해소 2026-09-01: 미커밋 작업은 PR #352 로 정식 착지(v1.0.146, mail v1.7.2 마운트 `7ea8af3f…`)했고, ops 가 추적 2파일 `git checkout --`·agent 소유 untracked 3파일 제거·`git pull --ff-only` 로 미러를 `7c0ed308` == origin/main 으로 복원했다(clean, 0 behind).]
+- **[OWNER] 미러가 agent 에게 쓰기 가능하다 → root 가 `/srv/autophagy-agents` 트리의 group 쓰기 비트를 내린다(`chmod -R g-w`, setgid 디렉터리 `2775`→`2755`; ops 만 쓰기).** 2026-09-01 실측: 디렉터리가 `ops:autophagy 2775` 라 group `autophagy` 의 일원인 agent 가 파일을 만들고 추적 파일(`skills/mail/SKILL.md` 가 agent 소유로 바뀜)까지 덮어썼다. 커밋 거부 훅은 커밋만 막고 편집·untracked 는 못 막는다 — 「ops 체크아웃 단방향 규칙」이 산문에 그친 구조적 원인이다(심각도: 높음).
+- **게이트웨이 수준 경로 정책은 위 「게이트웨이 플러그인 배포 경로(2026-08-28) 후속」 이 풀린 뒤에 싣는다.** `pre_tool_call` 에서 `…/skills/<skill>/scripts/…` 참조가 live 루트 밖이면 막는 순수 판정을 `automation/interop` 에 두고, 플러그인 배포 경로 신설과 같은 사이클에 agent·peer 재시동으로 반영한다(심각도: 중).
+
 ## 게이트웨이 플러그인 배포 경로(2026-08-28) 후속 — interop-protocol
 
 > [이관 2026-08-31] 소유자 roster 배치 결정이 선행 조건이다 — 순서를 바꾸면 인터롭이 fail-closed 로 막힌다.
@@ -72,6 +127,7 @@
   등록은 roster 결정과 같은 사이클에 넣는다.
 - **심각도 중** — 방어가 꺼져 있으나 해당 채널 참여자가 제한적이고, 잘못 고치면 인터롭이 멈춘다.
   되돌리기는 쉽다(옛 사본 복구 + 재시동). 증적: 이 세션의 해시·diff·`load_roster` 실측.
+- **[2026-09-01 실측 추가] agent·peer 두 계정 모두 같은 2026-07-20 사본이다** — `~/.hermes/plugins/interop-protocol/__init__.py` sha256 `d229b105…`(268줄) 양쪽 동일, 리포 `automation/interop/hermes_plugin/__init__.py` 는 288줄(최종 9e481bb1). 배포 경로 신설 시 두 계정을 함께 민다(심각도: 중).
 
 
 
@@ -303,6 +359,30 @@ OWNER-37이 그 외부 상태 판정만 소유한다.
 - **`PLAUD/raw` 18건은 이미 전사된 `.txt`** — 기기가 STT 를 끝낸 결과물이라 전사 단계가 불필요하다.
   조치: 붙인다면 `meeting ingest` 직행 경로가 맞다. **미사용 · 심각도 낮음**.
 
+## 화자 구분·문장 단위 출력 착지 후 남긴 것 (2026-09-01)
+
+> [이관 2026-09-03 · OWNER] 소유자·노드에서만 닫힌다.
+
+- **화자 분리는 CPU, 전사는 GPU 로 갈려 있다** — whisper.cpp 는 CUDA 빌드(`build-cuda`)를 쓰지만 sherpa-onnx 는 CPU 빌드다. 긴 녹취에서 화자 분리가 전체 처리 시간의 하한을 만들 수 있고, 상한은 `SPEECHTOTEXT_DIARIZE_TIMEOUT`(3600초)에서 끊긴다. 조치: 실측 소요를 먼저 남기고, 필요해지면 sherpa-onnx GPU 빌드를 노드에 올린다(노드 작업). **영향 범위: 처리 지연뿐이며 타임아웃도 fail-soft(`DIARIZE-FAIL` 후 화자 없이 진행) · 심각도 낮음**.
+  ↳ 처리(2026-09-03): 노드 작업 — 실측 소요를 남기고 필요해지면 sherpa-onnx GPU 빌드를 노드에 올린다
+
+
+## healthcheck 폭주 수리(PR #347) 중 발견한 인접 결함
+
+> [이관 2026-09-03 · OWNER] 소유자·노드에서만 닫힌다.
+
+- **healthcheck 상시 FAIL 4건이 PR #347 범위 밖에 남는다 → 노드 운영자(OWNER)가 폭주 해소 후 재판정하고, 남는 것만 조치한다.** `ops checkout mirrors origin/main`(mirror-dirty), `privileged release helpers match release`(HELPER-DRIFT `autophagy-converge-origin-main` → 노드에서 `sudo bash <release>/automation/provision-deploy-converge.sh`), `watcher wrappers match the release`·`runtime packages match the release`(RUNTIME-PACKAGE DIFF `memory_curator effects.py` → `automation/memory_curator/deploy.sh`)가 해당한다. 나머지 UNKNOWN 은 폭주 중 ssh 불통 탓일 가능성이 있어 폭주 해소 후 재판정한다. 영향 범위: 운영 드리프트, 보안 문제 아님, **심각도 낮음**.
+  ↳ 처리(2026-09-03): 노드 운영자가 폭주 해소 후 재판정 — mirror-dirty 는 이번 스윕의 미러 동결 문구가, HELPER-DRIFT·RUNTIME-PACKAGE DIFF 는 provision-deploy-converge.sh·memory_curator/deploy.sh 실행이 닫는다
+
+
+## 후속 과제 스윕 4 착지 후 소유자만 닫을 수 있는 것 (2026-09-03)
+
+- **[OWNER] 중앙 매니페스트(`configs/watcher-deploy-manifest.txt`) 바이트가 바뀌었다 → 노드에서 `automation/healthcheck_probe_wrapper.sh --install` 을 다시 돌리고, 새 배포기 `automation/cost-report/deploy.sh`·`automation/reminder_poller/deploy.sh`·`automation/repair/deploy.sh`·`automation/skill_generation/deploy.sh` 를 한 번씩 실행해 손배포 사본을 선언된 배포본으로 바꾼다.** 그 전까지 `healthcheck_wrapper_current` 프로브가 지문 불일치를 알린다(심각도: 중).
+- **[OWNER] 08-29~09-01 미러 동결 동안 `checkout_mirrors_origin` 프로브가 실제로 FAIL·수리 티켓을 냈는지, 그리고 이번 릴리스 뒤 `state.json` 의 `mirror_state` 가 노드에서 값을 갖는지 노드 로그로 1회 확인한다.** 리컨실러 문구 보강은 코드로 끝났고 이것은 관측 확인이다(심각도: 낮음).
+- **[OWNER] `~/.hermes/selfskill-audit/pending-overlaps.json` 의 미결 겹침(실측: `meeting-minutes-authoring`·`document-publishing` ↔ governed meeting·doctype·report)을 승격(governed 로 제출) 또는 폐기(`hermes curator archive`)로 결정한다.** 원장은 코드가 유지하고 결정만 남았다(심각도: 중).
+- **[OWNER] obsidian write clone 전환 뒤 첫 fetch 로그에서 origin 이 `uploadpack.allowfilter` 를 허용하는지(blob 없는 fetch 가 실제로 작아졌는지) 와 `tmp_pack_*` 잔해가 더 생기지 않는지 1주 관측한다.** 거부되면 fetch 는 전량이지만 실패하지는 않는다(심각도: 낮음).
+- **[OWNER] 이번 스윕이 SKILL.md·스크립트를 바꾼 스킬(mail·calendar·budget·todo·wiki·coordination·speechtotext·doctype·meeting·patent-prep·procurement·prompt·proposal·recall·report·topics·hello-autophagy)은 릴리스 ✅ 1회로 전량 마운트된다 — `automation/release.sh` 실행.** 그 전까지 노드는 옛 마운트로 돈다("커밋됨 ≠ 배포됨")(심각도: 중).
+
 # BLOCKED — 동결·벤더·외부 의존으로 지금 손댈 수 없다
 
 ## G8 — LOC 등록부
@@ -465,7 +545,26 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   (`created:false`) 보드의 열린 목록에는 아무것도 나타나지 않았다 → signature 티켓이 done/archived면
   새 티켓을 만들거나 reopen한다. **재발 가시성 영향 · 심각도 중**.
 
+## healthcheck 폭주 수리(PR #347) 중 발견한 인접 결함
+
+> [이관 2026-09-03 · BLOCKED] 동결 파일에 막혀 있다 — freeze 해제 뒤 되돌린다.
+
+- **수리 티켓 레지스트리(`~/.hermes/repair-tickets.json`)는 done 카드에도 같은 시그니처로 occurrence 만 계속 올린다 → `automation/repair/repair_core.py` 의 registry lookup 에서 카드 상태를 확인해 done 이면 새 티켓을 발급(또는 재오픈)하는 설계 판단을 별도 논의한다.** t_318263ba 2623회·t_c0718520 2233회·t_6f3f7e1e 2078회 등에서 done 카드가 재발해도 소유자가 볼 새 신호가 없다. 영향 범위: 수리 티켓 재발 감지, 운영 가시성 저하, **심각도 낮음**.
+  ↳ 처리(2026-09-03): `automation/repair/repair_core.py` 는 configs/freeze-inventory.txt closed 동결 — repair-report-rollout 소유자와 조율하고 cha 가 해제를 승인한 뒤 별도 사이클
+
+
+## 요청별 승인 스레드 착지 후 남긴 것 (2026-09-01)
+
+> [이관 2026-09-03 · BLOCKED] 동결 파일에 막혀 있다 — freeze 해제 뒤 되돌린다.
+
+- **repair 워처와 `--apply-approved` 의 read-only 부트스트랩이 여전히 kind 스레드 `승인-repair` 를 find-or-create 한다 → `RepairDiscordApi` 를 바인딩 없이 만들고 `for_pending` 에서만 저장 레코드로 바인딩하도록 transport·워처·CLI 를 정리해 kind 스레드 의존을 없앤다.** 승인 게시(`_approval`)는 이미 티켓별 스레드 `수리 · t_<ticket>` 로 가고 이 경로는 아무것도 게시하지 않으므로 기능 결함은 아니다 — 빈 `승인-repair` 스레드 하나가 채널에 남는 표시 문제(심각도 낮음). 디렉터리는 요청별 스레드를 조회 없이 열기 때문에 부트스트랩에 티켓을 넘기는 손쉬운 우회는 틱마다 빈 스레드를 하나씩 더 만든다 — 그래서 미루었다.
+  ↳ 처리(2026-09-03): `automation/repair/repair_ops_*.py` 는 configs/freeze-inventory.txt closed 동결 — repair 소유 계획에 제출하고 cha 가 해제를 승인한 뒤 별도 사이클
+
 # OBSERVE — 조건이 성립하기 전에는 조치하지 않는다
+
+## Plaud lifelog 노트 v2 양식 착지 후 관측할 것 (2026-09-04)
+
+- **[OBSERVE] `transcribe.finalize` 에서 추출(glm-main)이 실패하면 그 녹음은 `추출: …` 사유로 `transcribing` 에 남고, 전사본은 추출 뒤에 저장되므로 다음 틱이 오디오 다운로드·로컬 전사를 통째로 다시 한다 → 노드 stderr 에 같은 녹음의 `추출:` 대기가 2회 이상 반복되면 전사본을 추출 **전에** 저장하고 finalize 가 저장된 전사본을 재사용하도록 순서를 바꾼다.** 지금 바꾸면 stale 판정·저장 경로가 복잡해지는데 실제로 반복되는지 모른다(117분 녹음 = 약 45분 재전사; 정확성 무영향, 비용만 — 심각도 낮음).
 
 ## 참고자료 후속 5건 종결 중 남긴 것 (2026-08-27)
 
@@ -666,6 +765,7 @@ healthcheck까지 구현했다.
   유효하고 `tinydiarize`는 실험적이다. 회의록의 "타인 액션아이템" 정확도는 LLM 추출에
   의존한다. 조치: 필요해지면 별도 로컬 diarization 파이프라인을 검토(파이썬 ML 스택이라
   stdlib 정책 예외가 필요). **현재 기능에 영향 없음 · 심각도 낮음**.
+- 해소 (2026-09-01): sherpa-onnx 로컬 화자 분리 착지 — 전사본 블록에 `화자N` 헤더와 이름 범례가 붙고, 도구가 없으면 `DIARIZE-FAIL` 후 화자 없이 계속한다(파이썬 ML 스택 없이 바이너리 호출로 해결해 stdlib 정책 예외 불필요). [소개](기능소개/전사본-화자-구분과-문장-단위-출력.md)
 - **proposal 이 루트 기본값을 여전히 따로 적는다** — 살아 있던 절반(override 불일치)은 닫았다:
   `proposal_publish._root_folder()` 가 `DRIVE_OUTPUTS_ROOT` 를 함께 읽는다. 남은 것은 기본
   문자열 중복이며, `outputs_root()` 유도로 바꾸려면 이 모듈이 일부러 피해 온 runtime-root
@@ -676,6 +776,46 @@ healthcheck까지 구현했다.
   meeting 의 민감도 게이트를 거치는 별도 설계가 필요하다. **동작 영향 없음 · 심각도 낮음**.
 
 관련 기능: [음성 녹취 → 전사본 → 회의록 자동화](기능소개/음성-녹취-회의록-자동화.md).
+
+## Plaud lifelog 동기화 후속 (2026-09-02)
+
+> [이관 2026-09-03 · OBSERVE] 조건이 성립하기 전에는 조치하지 않는다.
+
+- **get_note 항목의 `data_error_code`(실측 예: 10) 의미가 불확실해 지금은 오류 항목의 `data_content` 도 요약에 넣는다
+  → 실사용에서 오류 항목이 관측되면 스킵 규칙을 넣는다.** 실스키마 자체는 2026-09-02 로그인 후 측정해 fetch.py 를
+  교정했고(top-level 리스트·segments·next_cursor·빈=[]), 승인 게이트가 최종 검토라 잘못된 요약은 ✅ 단계에서 걸린다(심각도: 중).
+  ↳ 처리(2026-09-03): get_note 오류 항목(`data_error_code`)이 실사용에서 관측되면 스킵 규칙을 넣는다 — 그 전에는 승인 게이트(✅)가 잘못된 요약을 거른다
+
+
+## 기관메일 회신 원문 인용 후속 (2026-09-01)
+
+> [이관 2026-09-03 · OBSERVE] 조건이 성립하기 전에는 조치하지 않는다.
+
+- **mailon 웹메일의 답장 버튼(In-Reply-To/References 헤더) 경유는 vendor 변경이 필요해 미도입 → 상대 클라이언트의 스레드 묶음이 어긋나는 사례가 보고되면 `send_trigger` 계열에 답장 모드를 실측 기반으로 추가한다.** 현재는 본문 인용으로 사람 눈에는 회신으로 보이며 발송 안전성과 무관(심각도: 낮음).
+  ↳ 처리(2026-09-03): 상대 클라이언트의 스레드 묶음 어긋남이 실제로 보고되면 vendor 답장 모드를 실측 기반으로 추가한다 — 그 전에는 본문 인용으로 충분
+
+
+## 화자 구분·문장 단위 출력 착지 후 남긴 것 (2026-09-01)
+
+> [이관 2026-09-03 · OBSERVE] 조건이 성립하기 전에는 조치하지 않는다.
+
+- **API 백엔드(`gpt-4o-transcribe`)에는 화자 구분이 없다** — 그 응답에는 구간 타임스탬프가 없어 sherpa-onnx 의 turn 과 문장을 맞출 수 없다. `gpt-4o-transcribe-diarize` 는 화자를 주지만 **원음이 민감도 게이트를 거치기 전에** 외부로 나가므로 이 스킬의 기본 경로가 될 수 없다. 조치: 기본값으로 만들지 않고, 소유자가 비민감 녹취에 한해 켤 수 있는 명시 옵션으로 검토한다(지금은 아이디어 단계). **영향 범위: API 폴백 경로의 전사본에만 화자 헤더가 없다 · 심각도 낮음** — 운영 노드는 로컬 whisper.cpp 경로다.
+  ↳ 처리(2026-09-03): 비민감 녹취 한정 명시 옵션은 소유자가 필요를 표명할 때 설계한다(원음이 게이트 전에 외부로 나가므로 기본값 불가)
+
+- **자기소개 인식 패턴이 아직 측정되지 않은 휴리스틱이다** — `stt_speakers._INTRODUCTION`·`_TITLE` 은 "저는 ○○입니다"·"○○ 박사입니다" 계열 정규식과 불용어 목록이고, 실제 회의록 표본으로 재현율·오탐률을 잰 적이 없다. 조치: 실회의 전사본이 쌓이면 라벨링해 패턴을 조정하거나 LLM 근거 쪽 가중을 올린다. **영향 범위: 이름이 안 붙으면 `미상` 으로 남을 뿐 전사·회의록은 정상 · 심각도 낮음**.
+  ↳ 처리(2026-09-03): 실회의 전사본 표본이 쌓이면 라벨링해 재현율·오탐률을 잰 뒤 패턴/LLM 가중을 조정한다
+
+- **이름은 화자 분리 오류를 그대로 따라간다** — 자기소개 문장이 잘못된 클러스터에 배정되면 그 이름도 잘못된 라벨에 붙고, 병합 규칙상 소유자 override 전까지 유지된다(규칙 출처가 LLM 보다 세다). 조치: 범례가 출처와 시각(`자기소개 00:03:12`)을 적어 소유자가 그 지점을 직접 확인할 수 있게 해 두었고, 정정은 `polish --speakers` 한 번이다. 자동 교차검증(LLM 이견이 있을 때 규칙 신뢰를 낮추기)은 표본이 쌓인 뒤 판단한다. **영향 범위: 회의록의 발화 귀속이 어긋날 수 있다 · 심각도 중**.
+  ↳ 처리(2026-09-03): 표본이 쌓인 뒤 LLM 이견 시 규칙 신뢰를 낮추는 교차검증을 판단한다 — 지금은 범례의 출처·시각으로 소유자가 직접 확인
+
+
+## 후속 과제 스윕 4 착지 후 남긴 것 (2026-09-03)
+
+- **[OBSERVE] 전환된 obsidian 클론에서 `git reset --hard` 의 지연 blob fetch 는 fetch 예산(900초)이 아니라 일반 git 예산(120초)에 묶인다 → 틱당 vault 델타가 커져 reset 이 타임아웃되는 사례가 관측되면 reset 도 fetch 예산으로 옮긴다.** 지금은 틱당 노트 한 건이라 해당 없음(심각도: 낮음).
+- **`automation/pipeline_lock.hold` 가 `@contextlib.contextmanager` 생성기라 `with hold()` 본문에서 frozen+slots dataclass 예외가 나면 contextlib 의 `exc.__traceback__` 대입이 TypeError 로 바뀌어 진짜 실패 사유가 사라진다(obsidian `clone_lock` 구현 중 실측, 그래서 그쪽은 class 기반 CM) → speechtotext·meeting 워처의 lock 본문에서 그런 예외가 날 수 있는지 확인하고, 있으면 class 기반 CM 으로 바꾼다.** 영향 범위: 워처 실패 사유의 표시뿐, 동작 무관(심각도: 낮음).
+  ↳ 처리(2026-09-03): `fix(pipeline-lock): hold 를 class 기반 컨텍스트 매니저로 바꿔 frozen+slots 예외가 TypeError 로 가려지지 않게 한다` — `automation/pipeline_lock.hold` 가 `__enter__/__exit__` 클래스, tests/unit/test_pipeline_lock.py 에 frozen+slots 예외 전파 회귀(RED: TypeError → GREEN)
+- **`automation/memory_relocate/effects_live.py` 가 transport 승격 뒤에도 261 pure LOC 라 `automation/final/f2_loc_exceptions.txt` 예외가 남는다 → `RelocationStore` 를 별도 모듈로 분리해 등록부에서 내린다.** 코드 크기 규약만, 동작 무관(심각도: 낮음).
+  ↳ 처리(2026-09-03): `refactor(memory-relocate): RelocationStore 를 relocation_store.py 로 분리해 effects_live.py 를 F2 예외 등록부에서 내린다` — effects_live 219 pure LOC, `automation/final/f2_loc_exceptions.txt` 에서 제거, 재수출로 호출부 무변경
 
 # 해소 기록 — 닫혔지만 회계 가드가 원문을 요구한다
 
@@ -1253,3 +1393,132 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
   [해소 확인 2026-08-31] 구현: `automation/release.sh` + `release_approval.py abandon` 서브커맨드 — `binding-mismatch`·`bound_pending`이고 head가 origin/main tip에서 밀려난 경우만 감사형 abandon 뒤 정확히 1회 재요청하며 결정 레코드는 불변(L3).
   회귀: `tests/unit/test_release_sh.py` stub. 정정: 인시던트 head `6a03321f`는 origin/main의 조상이라 조상-아님 조건은 자기 사례를 못 거른다 — 실제 경계는 tip 동일성이다.
+
+## Plaud lifelog 동기화 후속 (2026-09-02)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **Discord 리액션 transport·`record_push_approval` 이 memory_relocate 와 사본으로 갈라져 있다 → interop 공용
+  모듈로 승격해 두 워처가 공유한다.** relocate 모듈 import 는 memory_curator 체인을 끌고 와 의도적으로 복사했다.
+  영향 범위: 코드 중복뿐, 동작 무관(심각도: 낮음).
+  ↳ 처리(2026-09-03): `refactor(interop): 리액션 승인 transport 를 공용 모듈로 모으고 plaud 종결 통지를 승인 스레드에 닫는다` — automation/interop/reaction_approval.py 신설, plaud_sync·memory_relocate 가 import
+
+- **relocate·plaud 워처가 같은 obsidian write clone 에 `write_note` 한다 → 규약 (n)대로 공유 lock 도입을 검토한다.**
+  경쟁 시 push 는 retryable 실패 후 다음 틱 재시도이고 read-back 검증이 오염을 막는다(심각도: 낮음).
+  ↳ 처리(2026-09-03): `fix(obsidian-write): 클론 lock·tmp_pack 정리·fetch 전용 타임아웃·blobless 클론으로 승인된 노트 유실을 막는다` — automation/obsidian_write/clone_lock.py, `OBSIDIAN_WRITE_FETCH_TIMEOUT`(기본 900초), promisor 전환
+
+- **결과 통지가 승인 스레드 게시까지만이고 outcome-archive(접두어+아카이브) 미채택 → `origin_notice.deliver(outcome=)`
+  채택을 검토한다.** 통지는 best-effort 라 실행·영수증 무관(심각도: 낮음).
+  ↳ 처리(2026-09-03): `refactor(interop): 리액션 승인 transport 를 공용 모듈로 모으고 plaud 종결 통지를 승인 스레드에 닫는다` — automation/interop/reaction_approval.py 신설, plaud_sync·memory_relocate 가 import · plaud `notify` 가 origin_notice.deliver(outcome=) 로 ✅ 완료·⛔ 취소·⌛ 만료를 스레드에 표시·아카이브
+
+- **memory_relocate 도 message 소실(missing) 뒤 재게시 때 `resolve_new_binding` 만 불러 같은 요청에 스레드가 둘 생길 수 있다 → plaud 의 `effects_live.thread_candidates`(레코드 `approval_thread_id` 재사용)를 interop 공용으로 올려 두 생산자가 공유하도록 검토한다.** 재게시는 드물어 동작 영향 낮음, 보안 문제 아님.
+  ↳ 처리(2026-09-03): `refactor(interop): 리액션 승인 transport 를 공용 모듈로 모으고 plaud 종결 통지를 승인 스레드에 닫는다` — automation/interop/reaction_approval.py 신설, plaud_sync·memory_relocate 가 import · 재게시가 레코드 approval_thread_id 를 먼저 재사용
+
+- **Plaud 기본 녹음명이 일시라 노트 파일명에 날짜가 두 번 들어간다(`2026-09-02-2026-09-02-13…`) → `note.plan_lifelog_note` 슬러그가 파일명의 날짜 접두와 같은 날짜로 시작하면 한 번만 쓰도록 검토한다.** 미관 문제, 기능 영향 없음(id 해시 접미가 유일성을 보장).
+  ↳ 처리(2026-09-03): `fix(plaud-sync): 녹음명이 일시로 시작하면 노트 파일명에 날짜를 한 번만 쓴다`
+
+- **obsidian-write 클론의 `git fetch` 가 120초(`writer._GIT_TIMEOUT_SECONDS`)에 죽으며 매 틱 ~770 MB `tmp_pack_*` 잔해를 남겼다(2026-09-02 실측: 8/4 이후 한 달, 230개·176 GB, plaud·relocate 두 워처 공용) → 쓰기 전용 클론을 `--filter=blob:none` 부분 클론으로 바꾸거나 fetch 타임아웃을 델타 크기에 맞게 올리고, 실패한 fetch 의 `tmp_pack_*` 를 다음 시도 전에 정리한다.** 심각도 높음(디스크 성장 + 승인된 노트가 저장되지 않음), 보안 문제 아님. 임시 조치: 잔해 삭제 + 3600초 fetch 로 1회 따라잡기.
+  ↳ 처리(2026-09-03): `fix(obsidian-write): 클론 lock·tmp_pack 정리·fetch 전용 타임아웃·blobless 클론으로 승인된 노트 유실을 막는다` — automation/obsidian_write/clone_lock.py, `OBSIDIAN_WRITE_FETCH_TIMEOUT`(기본 900초), promisor 전환
+
+
+## 노드 배포 표면 감사 후속 (2026-09-01)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **드리프트 프로브가 "선언된 것"만 대조해 손배포 사본을 보지 못한다 → `automation/deploy_all_probe.py`(또는 healthcheck)에 홈 표면 스캔을 더해 매니페스트에 없는 `~/.hermes/scripts/*`·`~/.hermes/plugins/*/` 를 미선언 산출물로 보고한다.** 2026-09-01 실측(agent 홈): `restart-hermes-gateway-once.sh`(에이전트 저작 재시동 헬퍼)·`regression_bank_weekly.py`(출처 불명)·`send_cost_report.py`·`poll_reminders.py`·`repair_report_consume_watch.py`(리포 소스는 있으나 선언 없음)·`mail_attachment_drive_{sync,watch}.py`(이번 착지로 해소)가 `configs/watcher-deploy-manifest.txt` 에 없고, 프로브는 파생 매니페스트 행만 읽어 이들에 대해 "드리프트 0"을 보고한다 — 손배포일수록 안 보이는 구조다. 영향 범위: 노드 배포 판정 전체(심각도: 높음).
+  ↳ 처리(2026-09-03): `feat(deploy): 매니페스트에 없는 홈 배포물을 프로브가 경고로 관측한다` — `undeclared` 관측(경고, `--strict-undeclared` 로 drift 승격), tests/unit/test_deploy_all_undeclared.py
+
+- **리포에 소스가 있는 홈 배포물 3개에 배포 선언이 없다 → `automation/cost-report`·`automation/reminder_poller`·`automation/repair`(cron) 옆에 `deploy-manifest.txt` 를 신설하고 `python3 -m automation.watcher_manifest emit` 으로 파생본을 재생성한다.** `rg -c 'send_cost_report|poll_reminders|repair_report_consume' configs/watcher-deploy-manifest.txt` → 모두 0인데 노드에는 셋 다 배포돼 cron(daily-cost-report·reminder-poller·repair-report-consumer)으로 돈다. 영향 범위: 이 3개 워처의 드리프트 탐지(심각도: 중).
+  ↳ 처리(2026-09-03): `feat(deploy): 손배포되던 홈 산출물 4종을 deploy-manifest 에 선언하고 빠진 배포기를 만든다` — cost-report·reminder_poller·repair 에 deploy-manifest.txt+deploy.sh, 중앙 표 emit 재생성
+
+- **게이트웨이 플러그인 `05-skill-generation` 에 배포 선언이 없다 → `automation/skill_generation/deploy-manifest.txt` 를 신설해 `.hermes/plugins/05-skill-generation/{__init__.py,plugin.yaml}` 를 등록한다.** 지금은 노드 사본과 리포 소스 해시가 같지만(`3c0072ea…`) 감시가 없어 다음 변경부터 조용히 벌어진다 — `interop-protocol` 이 같은 조건에서 6주째 07-20 사본이다. 영향 범위: 플러그인 드리프트 탐지(심각도: 중).
+  ↳ 처리(2026-09-03): 같은 커밋 — automation/skill_generation/deploy-manifest.txt 가 05-skill-generation 의 __init__.py·plugin.yaml 을 등록
+
+- **미러 dirty 가 3일간 아무 사건도 만들지 않았다 → `checkout_mirrors_origin` 프로브가 실제로 FAIL·수리 티켓을 냈는지 노드 로그로 확인하고, 리컨실러의 `release-backlog` 다이제스트가 "미러가 dirty 라 못 따라온다"를 "소유자가 아직 릴리스를 안 올렸다"와 구분해 통지하도록 보강한다.** 2026-09-01 실측 `/srv/autophagy-private/deploy-reconcile/state.json`: `consecutive_failures=162`, `skip_reason=release-backlog`, `incident_open=false` — 08-29 부터 미러가 미커밋 파일로 동결된 동안 같은 조용한 경로를 탔다. 영향 범위: 노드 배포 정지 탐지(심각도: 중).
+  ↳ 처리(2026-09-03): `fix(reconcile): 릴리스 백로그 다이제스트가 미러 동결(dirty/ahead)을 '릴리스 미실행'과 구분해 말한다` — `mirror_state` 를 state.json 에 additive 저장. 노드 로그로 프로브 FAIL 여부를 확인하는 부분은 OWNER 신규 항목
+
+- **자가 스킬 감사 결과가 노드에 남지 않고 겹침 판정이 결정으로 이어지지 않는다 → `automation/selfskill_audit` 리포트를 `~/.hermes/logs/selfskill-audit/` 에도 남기고 `OVERLAPS-GOVERNED` 를 승격·폐기 결정 큐(소유자 항목)로 연결한다.** 노드에 자가 스킬 5개(2026-08-18~28)가 있고 `meeting-minutes-authoring`·`document-publishing` 은 governed meeting·doctype·report 와 겹치는데, `selfskill-audit-watch` 는 매일 ok 로 끝나며 산출물이 Discord 로만 간다. 영향 범위: 자가 스킬 거버넌스(심각도: 중).
+  ↳ 처리(2026-09-03): `feat(selfskill-audit): 감사 결과를 노드 로컬 jsonl 에 남기고 겹침을 미결 원장으로 추적한다` — logs/selfskill-audit/<YYYY-MM>.jsonl + pending-overlaps.json. 승격·폐기 결정 자체는 OWNER 신규 항목
+
+
+## 첨부 아카이브 착지 후 남긴 것 (2026-09-01)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **`mail_attachment_drive_sync.py` 가 250 pure-LOC 상한을 넘겨 F2 등록부에 예외로 올라갔다(378) → 순수 계획·이름 정책·상태 DB(`mail_attachment_archive.py`)와 Drive 실행(CLI)로 나누고 등록부에서 내린다.** 착지 사이클에서는 돌고 있는 archive.db·folders.json 호환을 한 파일에서 보장하는 쪽을 택했다. 영향 범위: 코드 크기 규약만, 동작 무관(심각도: 낮음).
+  ↳ 처리(2026-09-03): `refactor(mail): 첨부 아카이브를 순수 계획(mail_attachment_archive)과 Drive 실행 CLI 로 나눈다` — 185/154 pure LOC, F2 등록부에서 내림
+
+
+## 스킬 실행 경로 후속 (2026-09-01)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **mail 외 SKILL.md 들이 아직 `~/.hermes/skills/<skill>/scripts/…` 를 안내한다 → SS-1(2026-08-15) 이후 그 루트는 자가 스킬 전용이라 경로가 없다. wiki·topics·speechtotext·report·recall·proposal 등(`rg '~/.hermes/skills/[a-z-]+/scripts' skills/*/SKILL.md`)을 `/srv/autophagy-skills/live/<skill>/scripts/…` 로 바꾸고 각 스킬 버전을 올린다.** 최근 14일 세션 기록에서 없는 경로 시도 30건·미러 경로 실행 90건이 이 안내에서 비롯됐다 — 에이전트가 파일을 찾아 헤매다 낡은 사본을 채택한다. 지금은 mail 만 고쳤다(심각도: 중 — 다른 스킬도 같은 방식으로 낡은 코드를 실행할 수 있다; 발송 안전성은 각 스킬의 승인 게이트가 지킨다).
+  ↳ 처리(2026-09-03): `docs(skills): SKILL.md 스크립트 경로를 governed live 마운트(/srv/autophagy-skills/live)로 고친다` — 15개 SKILL.md(meeting 은 configs·prompts 도), 버전 patch 상승
+
+- **관리자 배포본 밖 사본 실행 거부(`mail_runtime.governed_copy_refusal`)가 mail 에만 있다 → calendar·budget·todo·wiki·coordination 등 mutating CLI 를 가진 스킬에 같은 판정을 넣되 사본을 늘리지 않는다.** 스킬은 import 시점에 `automation` 을 못 쓰므로 판정 함수의 단일 정의를 어디에 둘지(각 스킬 `*_runtime.py` 의 인라인 + 동일성 회귀, 또는 마운트된 릴리스 경유 lazy import)를 먼저 정한다. 게이트웨이 수준(`interop-protocol` 플러그인 `pre_tool_call`)의 경로 정책이 근본 해법이지만 그 플러그인은 배포 경로가 없어 [follow-ups-deferred](follow-ups-deferred.md) 의 OWNER 선행 조건에 묶여 있다(심각도: 중).
+  ↳ 처리(2026-09-03): `refactor(skill-mount): governed 사본 거부 판정을 automation.skill_mount 단일 정의로 올린다` + `feat(calendar|wiki|coordination|budget|todo): … STALE-SKILL-COPY-BLOCK 으로 거부한다` + `test(skills): … conformance` — 정의는 skill_mount 하나, 스킬은 `<skill>_governed.py` 로 지연 호출·ImportError 시 fail-closed
+
+
+## 기관메일 회신 원문 인용 후속 (2026-09-01)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **Gmail 계정 회신(`gws gmail +reply --message-id`)은 인용을 붙이지 않는다 → gws 가 원문을 자동 인용하는지 노드에서 실측한 뒤, 안 하면 `mail_gmail_send.ReplyMailRequest` 본문에 같은 `mail_quote.render_quote` 를 붙인다.** Gmail 은 message-id 스레딩으로 대화 보기에 원문이 이미 묶이므로 동작 정상 — 표시 일관성 문제일 뿐이고 발송 안전성과 무관(심각도: 낮음).
+  ↳ 처리(2026-09-03): 코드 불필요 — 실측(librarian, 2026-09-03): `gws`(npm `@googleworkspace/cli` 0.22.5, github.com/googleworkspace/cli) 의 `gmail +reply` 는 crates/google-workspace-cli/src/helpers/gmail/reply.rs 에서 `format_quoted_original(original)` 을 본문 뒤에 붙이고 In-Reply-To/References/threadId 도 자동 설정한다. Gmail 회신도 원문이 인용된다
+
+
+## cron 워처 수리 후속 (2026-09-01)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **`typing.override` 직수입이 3.11 no-agent 런타임 밖 경로에 남아 있다 → 해당 경로를 cron 체인에 편입하거나 리팩터할 때 `automation/typing_compat.py`(또는 mail_runtime 의 인라인 폴백 패턴) 경유로 먼저 바꾼다.** `skills/doctype/scripts/doctype_save.py`(게이트웨이 대화 경로 전용 — doctype 은 cron 워처가 없다)·`automation/group_roster/editor.py`·`automation/managed_skills/submission_errors.py`(둘 다 워크스테이션 CLI 전용)가 `from typing import override` 를 직수입한다. Hermes cron 의 uv CPython 3.11 이 실행하는 체인에는 현재 도달하지 않아 동작 정상 — mail-triage-watch 를 매 틱 죽인 결함(2026-08-31)과 같은 계열이지만 지금은 잠복이다. 영향 범위: 현재 없음, **심각도 낮음**. cron 편입 순간 같은 ImportError 가 재발한다.
+  ↳ 처리(2026-09-03): `fix(py311): typing.override 직수입을 3.11 호환 경로로 바꾸고 가드가 재발을 막는다` — 남은 직수입 전부 typing_compat/인라인 폴백으로, tests/unit/test_py311_syntax_guard.py 가 배포 소스 전수를 검사
+
+
+## 화자 구분·문장 단위 출력 착지 후 남긴 것 (2026-09-01)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **문장 경계가 구두점에 묶여 있어 구두점 없는 전사에서는 화자 블록이 무너진다** — whisper 가 구두점을 내지 않는 언어·구간(배포 검증 실측: 중국어 4화자 샘플 57초가 한 문장 158자 → 화자1 하나)에서는 `split_sentences` 가 문장 하나를 만들고 화자 배정도 그 문장의 최다 겹침 하나로 굳는다. 한국어 large-v3-turbo 출력은 735문장 중 1건만 구두점이 없어 실사용 영향은 낮다. 조치: `stt_diarize.assign` 이 문장 안 토큰 타이밍으로 화자 전환 지점(단어 경계 최근접)에서 문장을 쪼개거나, 구두점 없는 긴 문장을 시간 기준(예: 15초)으로 나눈다. **영향 범위: 구두점 없는 출력에 한정 · 심각도 중**.
+  ↳ 처리(2026-09-03): `feat(speechtotext): 화자 경계와 15초 무구두점 구간에서 문장을 쪼개 한 문장이 여러 화자를 삼키지 않게 한다` — skills/speechtotext/scripts/stt_split.py `split_on_turns`, assign 직전에 적용(fail-soft)
+
+
+## healthcheck 폭주 수리(PR #347) 중 발견한 인접 결함
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **`from typing import override` 를 폴백 없이 쓰는 모듈이 남아 있다 → `automation/typing_compat.override` 로 통일하거나 `tests/unit/test_py311_syntax_guard.py` 범위를 넓혀 기계적으로 막는다.** `automation/freeze_inventory.py`, `automation/group_roster/editor.py`, `automation/install/allowed_signers.py`, `automation/managed_skills/{publish_core,submission_errors,submission_source,submission_transport}.py`, `automation/managed_sync/verify.py`, `automation/memory_relocate/cli.py`, `automation/update_trust.py`, `automation/update_trust_state.py`, `skills/doctype/scripts/doctype_save.py`가 해당한다. Hermes no-agent cron 은 uv CPython 3.11 로 돌아 t_4829b4b5 의 원인처럼 이들 중 cron 자식 체인에 들어가는 것이 생기면 같은 ImportError 가 재발한다. 영향 범위: 현재 cron 체인에는 없음(정적 import 그래프 확인), 잠재 결함, **심각도 낮음**.
+  ↳ 처리(2026-09-03): `fix(py311): typing.override 직수입을 3.11 호환 경로로 바꾸고 가드가 재발을 막는다` — 남은 직수입 전부 typing_compat/인라인 폴백으로, tests/unit/test_py311_syntax_guard.py 가 배포 소스 전수를 검사
+
+
+## 요청별 승인 스레드 착지 후 남긴 것 (2026-09-01)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **budget 에는 만료 경로가 없고 todo `_expire()` 는 통지 없이 아카이브해 `origin_notice.ThreadOutcome.EXPIRED` 가 두 스킬에서 미사용이다 → 만료 시 결과 통지(`deliver(..., outcome=EXPIRED)`)를 붙여 스레드가 `⌛ 만료 ·` 로 닫히게 한다.** 만료된 요청의 스레드가 활성 목록(=진행 중 요청 보드)에 남는 정확도 문제이며 실행·원장·영수증에는 무영향(심각도 낮음).
+  ↳ 처리(2026-09-03): `feat(approval): 만료된 todo·budget 요청의 승인 스레드를 ⌛ 만료 로 닫고 결과를 통지한다` — todo `_expire` 가 EXPIRED 를 전달, budget 은 24시간 TTL 만료 분기 추가
+
+
+## 수리 티켓 스윕 후속 (2026-09-02)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(PR 「follow-ups sweep 4」, 브랜치 session/followup-sweep-4). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **digest 요약 실패는 이제 `llm-calls.jsonl` 에 `digest_summary_failed` 로 남지만 classify 폴백(`_CLASSIFY_FALLBACK`)은 여전히 사유를 남기지 않는다 → `triage_llm.log_failure(purpose="classify", …)` 를 classify 재시도 소진 지점(`triage_digest.build_item`)에도 붙인다.** `⚠️ 분류 실패` 배지만 남고 원인(LlmCallError/LlmParseError)이 사라져, t_44b406fe 처럼 조치 불가능한 수리 티켓이 다시 생성될 수 있다. 영향 범위: 다이제스트 분류 실패의 원인 추적만, 동작은 fail-open 으로 정상 — 심각도 낮음.
+  ↳ 처리(2026-09-03): `fix(mail-digest): classify 재시도 소진 사유를 llm-calls.jsonl 에 남긴다` — `triage_llm.log_failure(purpose="classify")`, tests/unit/test_mail_digest.py
+
+## 수리 티켓 t_bd0d3789 후속 (2026-09-03)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(브랜치 session/v110-convenience, v1.1.0 편의 릴리스). 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **`automation/drive_client.py` 의 `ensure_folder_path` 가 `~/.hermes/drive-publish/folders.json` 의 캐시된 폴더 id 를 살아 있는지 확인하지 않고 그대로 돌려준다 → 캐시 id 를 `files get fields=trashed,parents` 로 재검증하고, 휴지통에 있거나 없어졌으면 캐시를 버리고 새로 조회하도록 폴백을 넣는다.** 2026-08-26 에 옮겨지거나 버려진 옛 폴더(`autophagy/회의록/2026`)로의 게시가 조용히 성공하고, 파일은 살아 있는 트리 어디에도 보이지 않는다. 영향 범위: 파사드로 게시하는 모든 스킬 · 자료 유실은 없다(파일은 존재하되 자리가 틀리다) — 심각도 중.
+  ↳ 처리(2026-09-03): `fix(drive): 캐시된 폴더 id 를 files get 으로 재검증하고 휴지통·부재면 재조회한다` — `automation/drive_client_cache.py`(`_folder_alive` + 접두 키 무효화), tests/unit/test_drive_client.py 가짜 runner 로 trashed → 재조회·캐시 재기록 회귀
+
+## LiteLLM GPT 전환과 헬스체크 정리 후 남긴 것 (2026-09-03)
+
+> [이관 2026-09-03 · 해소] 이 저장소에서 고쳤다(브랜치 session/v110-convenience, v1.1.0 편의 릴리스). 회계 가드가 원문을 요구해 불릿을 그대로 둔다. 노드 설치(OWNER)와 alerting 검토(OBSERVE)는 아래 두 불릿.
+
+- **`automation/healthcheck.sh` 의 LiteLLM 프로브가 `/health/liveliness`(프록시 생존)만 봐서 상류 제공자 장애(2026-09-03 00:21 KST 부터 전 요청 429 잔액 소진)를 11시간 동안 아무도 몰랐다 → 30분 틱에 `glm-main` 실제 completion 1건(≈48건/일)을 더해 실패 시 FAIL·수리 티켓을 내고, LiteLLM `alerting` 에 outage 유형을 alert-dispatcher 와 함께 붙일지 검토한다.** ops 의 compose 배포본은 seed 보다 낡아 `/health`(모든 배치에 실제 completion, 하루 8,640건)를 치고 있었고 이번 배포로 seed 의 liveliness 로 수렴한다 — 그 뒤 실제 completion 프로브는 우리 healthcheck 만이 낼 수 있다. 영향 범위: 상류 장애 탐지 지연 — 심각도 중.
+  ↳ 처리(2026-09-03): `feat(healthcheck): LiteLLM 에 실제 completion 프로브(litellm_completion)를 더해 상류 429·잔액 소진을 FAIL·수리 티켓으로 드러낸다` — `probe_litellm_completion`(glm-main, max_tokens 1, 20초, choices[0] 만 PASS, 상태·error type/code 만 출력), 래퍼 `# probe-type: litellm_completion` + allowlist 해시, tests/unit/test_healthcheck_probe_wrapper.py·test_healthcheck_allowlist_manifest.py(RED 5→GREEN 29). LiteLLM `alerting` 연동은 검토 보류(아래 OBSERVE).
+- **[OWNER] 재생성된 healthcheck 래퍼(`litellm_completion` 프로브 포함)는 노드에서 `automation/provision-healthcheck-probe.sh` 를 소유자가 돌려야 설치된다 → 설치 전까지 새 행은 allowlist 불일치로 FAIL 한다.** 영향: 설치 전 healthcheck 30분 틱의 LiteLLM completion 행 1건 — 심각도 낮음(설치 1회로 끝).
+- **[OBSERVE] LiteLLM `alerting` 에 outage 유형을 alert-dispatcher 와 함께 붙일지 → 실제 completion 프로브가 2주간 429 를 몇 번 잡는지 본 뒤 결정(프로브가 충분하면 얹지 않는다).** 영향: 없음(관측 대기).

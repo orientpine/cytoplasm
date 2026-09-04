@@ -1,7 +1,7 @@
 ---
 name: proposal
 description: "개인 제안서 워크스페이스에서 섹션 Kanban·초안·인간 기여분·취합·Codex 최종 검토를 안전하게 관리한다. W5-4."
-version: 2.2.1
+version: 2.2.3
 author: autophagy-agents
 license: MIT
 metadata:
@@ -12,6 +12,8 @@ prerequisites:
 ---
 
 # proposal — 개인 제안서 작성 워크스페이스
+
+변경 명령은 `/srv/autophagy-skills/live/proposal/scripts/`에서만 실행하며, 오래된 사본은 STALE-SKILL-COPY-BLOCK으로 거부한다.
 
 모든 본문은 `~/proposals/<slug>/`(0700)과 그 하위 0600 파일에만 둔다. `PROPOSAL_STATUS_ROOT`는
 본문 없이 `slug`, 섹션 키/제목/상태, Kanban 카드 ID만 가진 상태 메타데이터 위치다. 운영에서 repo
@@ -74,37 +76,37 @@ CLI는 시작 시 `~/.env.secrets`의 `PROPOSAL_*`·`KIMM_DOCBOT_*`를 fill-only
 
 ```bash
 # 섹션 구조와 실제 Hermes Kanban 카드 생성
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py create \
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py create \
   --slug <kebab-slug> --title "제안서 제목" \
   --section need:필요성 --section approach:추진전략 --section impact:기대효과
 
 # 섹션 현황과 추가
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py sections --slug <kebab-slug>
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py section-add \
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py sections --slug <kebab-slug>
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py section-add \
   --slug <kebab-slug> --key budget --title 예산계획
 
 # 사람이 준 본문을 섹션 초안으로 저장하거나, brief 기반 초안을 생성
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py draft \
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py draft \
   --slug <kebab-slug> --section need --file <local-file>
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py draft \
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py draft \
   --slug <kebab-slug> --section approach --brief-file <local-file> --with-evidence
 
 # 생성 전에 원문을 노출하지 않는 팩 요약 또는 파사드 렌더 출처를 미리 확인
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py evidence \
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py evidence \
   --slug <kebab-slug> --section approach --brief-file <local-file> --json
 
 # 사람이 전달한 자료만 관련 섹션에 취합
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py contribute \
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py contribute \
   --slug <kebab-slug> --section approach --source collaborator --file <local-file>
 
 # 취합: 누락 섹션은 표지+리마인더를 출력하고 실패하지 않음
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py assemble --slug <kebab-slug>
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py assemble --slug <kebab-slug>
 
 # 최종 Codex 검토 1회와 cha DM
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py review --slug <kebab-slug>
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py review --slug <kebab-slug>
 
 # 최종 HWPX를 페이지별 PNG로 펼쳐 에이전트가 직접 육안 검토
-python3 ~/.hermes/skills/proposal/scripts/proposal_cli.py visual-review \
+python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py visual-review \
   --slug <kebab-slug> --json
 ```
 

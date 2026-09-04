@@ -50,6 +50,7 @@ else:
         sys.modules["skills"].procurement = _sk  # type: ignore[attr-defined]
 
 from skills.procurement.scripts import procure_core as core  # noqa: E402
+from skills.procurement.scripts import procurement_governed  # noqa: E402
 from skills.procurement.scripts import procure_generate as gen  # noqa: E402
 from skills.procurement.scripts import procure_hwpx, procure_registry as registry  # noqa: E402
 from skills.procurement.scripts import procure_registry_cli as registry_cli  # noqa: E402
@@ -279,6 +280,11 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.command == "generate" and not (args.session or args.template or args.template_name):
         parser.error("--session, --template, --template-name 중 하나가 필요합니다")
+    if args.command in {"collect-start", "collect-answer", "generate", "register", "review"}:
+        message = procurement_governed.refusal(Path(__file__))
+        if message:
+            print(message, file=sys.stderr)
+            raise SystemExit(3)
     args.fn(args)
 
 

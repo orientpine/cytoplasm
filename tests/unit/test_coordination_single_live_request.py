@@ -36,6 +36,29 @@ OWNER_DM_CHANNEL_ID = "1526487935975952385"
 AGENT_CHAT_CHANNEL_ID = "1526487935975952390"
 AGENT_CHAT_THREAD_ID = "1526487935975952391"
 AGENT_CHAT_GUILD_ID = "1526487935975952392"
+REQUEST_THREAD_ID = "1526487935975952400"
+
+
+class AgentChatDirectory:
+    """Fake directory recording the request spec each new binding asks for."""
+
+    def __init__(self) -> None:
+        self.specs: list[tuple[object, object]] = []
+
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_CHANNEL_ID
+
+    def agent_chat_thread(self, _kind: object) -> str:
+        return AGENT_CHAT_THREAD_ID
+
+    def agent_chat_request_thread(self, kind: object, request: object) -> str:
+        self.specs.append((kind, request))
+        return REQUEST_THREAD_ID
+
+    def describe(self, channel_id: str):
+        assert channel_id in {AGENT_CHAT_THREAD_ID, REQUEST_THREAD_ID}
+        surface = importlib.import_module("automation.interop.approval_surface")
+        return surface.ChannelFacts(11, "일정 조율 · 요청", (), AGENT_CHAT_CHANNEL_ID)
 
 
 class FakeDiscord:
@@ -46,6 +69,10 @@ class FakeDiscord:
         self.deleted: set[str] = set()
         self.post_channels: list[str] = []
         self.posts = 0
+        self.request_threads: list[str] = []
+
+    def request_thread_id(self, index: int) -> str:
+        return f"{int(REQUEST_THREAD_ID) + index}"
 
     def owner_channel(self, _owner_id: str) -> str:
         return "dm-1"
@@ -67,6 +94,18 @@ class FakeDiscord:
         parts = path.strip("/").split("/")
         if method == "POST" and path == "/users/@me/channels":
             return {"id": OWNER_DM_CHANNEL_ID}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/threads":
+            self.request_threads.append(str((_payload or {})["name"]))
+            return {"id": self.request_thread_id(len(self.request_threads) - 1)}
+        if (
+            method == "GET"
+            and len(parts) == 2
+            and parts[1] in {self.request_thread_id(index) for index in range(8)}
+        ):
+            return {
+                "id": parts[1], "name": "일정 조율 · 요청",
+                "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11,
+            }
         if method == "GET" and path == f"/channels/{OWNER_DM_CHANNEL_ID}":
             return {"id": OWNER_DM_CHANNEL_ID, "name": "", "recipients": [{"id": OWNER}], "type": 1}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}":
@@ -151,7 +190,7 @@ def test_second_confirm_same_slot_and_hash_posts_nothing_and_keeps_message_id(
 
     entries = tuple(entry for entry in _store().load() if entry.key == KEY)
     assert fake.posts == 1
-    assert fake.post_channels == [AGENT_CHAT_THREAD_ID]
+    assert fake.post_channels == [fake.request_thread_id(0)]
     assert len(entries) == 1
     assert entries[0].dm_message_id == "msg-1"
 
@@ -174,8 +213,24 @@ def test_changed_content_deletes_message_before_dropping_row_then_posts_once(
     assert calls.index("DELETE:msg-1") < calls.index("DROP:msg-1") < calls.index("POST:msg-2")
     entries = tuple(entry for entry in _store().load() if entry.key == KEY)
     assert fake.posts == 2
-    assert fake.post_channels == [AGENT_CHAT_THREAD_ID, AGENT_CHAT_THREAD_ID]
+    assert fake.post_channels == [fake.request_thread_id(0), fake.request_thread_id(0)]
     assert [entry.dm_message_id for entry in entries] == ["msg-2"]
+
+
+def test_duplicate_and_superseding_requests_reuse_the_first_request_thread(
+    coordination_env: tuple[FakeDiscord, list[str]],
+) -> None:
+    # Given: one owner-leg request already posted into its own thread
+    fake, _calls = coordination_env
+    assert _request("before", correlation="coord-first") == 7
+
+    # When: the same slot is requested again (same hash) and then with new content
+    assert _request("before", correlation="coord-second") == 7
+    assert _request("after", correlation="coord-third") == 7
+
+    # Then: one approval key keeps ONE thread — no empty orphan per retry or supersede
+    assert len(fake.request_threads) == 1
+    assert fake.post_channels == [fake.request_thread_id(0), fake.request_thread_id(0)]
 
 
 def test_owner_already_approved_defers_without_deleting_or_dropping(
@@ -191,7 +246,7 @@ def test_owner_already_approved_defers_without_deleting_or_dropping(
 
     assert "DELETE:msg-1" not in calls
     assert fake.posts == 1
-    assert fake.post_channels == [AGENT_CHAT_THREAD_ID]
+    assert fake.post_channels == [fake.request_thread_id(0)]
     assert _store().path.read_bytes() == before
 
 
@@ -228,17 +283,82 @@ def test_owner_leg_persists_the_instruction_origin_into_the_pending_record(
     coordination_env: tuple[FakeDiscord, list[str]],
 ) -> None:
     # Given / When: a channel-instructed request reaches the owner approval leg
-    _fake, _calls = coordination_env
+    fake, _calls = coordination_env
     assert _request() == 7
 
     # Then: the stored pending record carries the origin binding for result routing
     [entry] = tuple(entry for entry in _store().load() if entry.key == KEY)
     assert entry.origin_channel_id == ORIGIN_CHANNEL
     assert entry.origin_message_id == ORIGIN_MESSAGE
-    assert entry.dm_channel_id == AGENT_CHAT_THREAD_ID
-    assert entry.channel_id == AGENT_CHAT_THREAD_ID
+    assert entry.dm_channel_id == fake.request_thread_id(0)
+    assert entry.channel_id == fake.request_thread_id(0)
     assert entry.surface == "agent-chat-thread"
     assert entry.policy_version == POLICY_VERSION
+
+
+def test_owner_leg_opens_a_request_thread_labelled_as_the_team_post_does(
+    coordination_env: tuple[FakeDiscord, list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: the directory records the spec each new binding asks for
+    _fake, _calls = coordination_env
+    binding = importlib.import_module("coordination_binding")
+    directory = AgentChatDirectory()
+    monkeypatch.setattr(binding, "approval_directory", lambda _owner_id=None: directory)
+
+    # When: a channel-instructed coordination request reaches the owner approval leg
+    assert coordination_lifecycle.owner_leg(
+        _args(), {"owner_id": OWNER}, "coord-run", None, SLOT
+    ) == 7
+
+    # Then: the request thread is named with the label #team already publishes
+    surface = importlib.import_module("automation.interop.approval_surface")
+    [(kind, request)] = directory.specs
+    assert kind == surface.ApprovalKind.COORDINATION
+    assert request.title == "coord-run"
+    assert request.origin_channel_id == ORIGIN_CHANNEL
+    assert request.origin_message_id == ORIGIN_MESSAGE
+    assert surface.request_thread_name(kind, request) == "일정 조율 · coord-run"
+
+
+def test_new_binding_falls_back_to_the_pending_id_without_a_label(
+    coordination_env: tuple[FakeDiscord, list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: a pending record with no coordination label
+    _fake, _calls = coordination_env
+    binding = importlib.import_module("coordination_binding")
+    directory = AgentChatDirectory()
+    monkeypatch.setattr(binding, "approval_directory", lambda _owner_id=None: directory)
+
+    # When: the producer resolves that request's binding
+    payload = _approval().CoordinationApprovalPayload(
+        draft={"id": "abc123", "sha256": "sha-1"}, slot=SLOT, summary="피어 미팅",
+        correlation="", duration_min=30, content="",
+    )
+    resolved = binding.new_binding(OWNER, payload)
+
+    # Then: the thread is titled with the pending id instead
+    [(_kind, request)] = directory.specs
+    assert request.title == "abc123"
+    assert resolved.channel_id == REQUEST_THREAD_ID
+
+
+def test_owner_leg_persists_the_approval_thread_without_changing_the_hash(
+    coordination_env: tuple[FakeDiscord, list[str]],
+) -> None:
+    # Given / When: a coordination approval is posted into its own request thread
+    fake, _calls = coordination_env
+    assert _request() == 7
+
+    # Then: the pending record carries the approval thread the result notice returns to
+    [entry] = tuple(entry for entry in _store().load() if entry.key == KEY)
+    assert entry.approval_thread_id == entry.channel_id == fake.request_thread_id(0)
+    assert entry.origin_record()["approval_thread_id"] == fake.request_thread_id(0)
+
+    # …and the approval binding hash is untouched by the new field
+    import calendar_gate
+
+    draft = calendar_gate.load_draft(entry.draft_id)
+    assert entry.sha256 == draft["sha256"]
 
 
 def test_coordination_legacy_record_derives_key_from_slot(

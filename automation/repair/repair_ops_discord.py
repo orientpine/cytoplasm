@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from contextlib import AbstractContextManager
 from typing import Protocol, TypeAlias
@@ -11,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from automation.interop.approval_surface import ApprovalBinding, ApprovalSurfaceError, ChannelDirectory, validate_stored_binding
+from automation.interop.approval_surface import ApprovalBinding, ApprovalSurfaceError, ChannelDirectory, LiveRequest, validate_stored_binding
 from automation.repair.repair_ops_binding import directory_for_ops, new_binding, stored_binding
 from automation.repair.repair_ops_pending import PendingRepairApproval
 
@@ -146,15 +147,25 @@ class RepairDiscordApi:
         return value
 
 
-def configured_discord() -> RepairDiscordApi:
-    """Construct the production transport only from explicitly injected ops credentials."""
+def configured_discord(
+    ticket_id: str | None = None,
+    outstanding: Iterable[LiveRequest] = (),
+) -> RepairDiscordApi:
+    """Construct the production transport only from explicitly injected ops credentials.
+
+    ``ticket_id`` is passed by the one caller that is about to POST a request, so
+    that request gets its own thread; it hands over that ticket's live pending
+    record as ``outstanding`` so a re-request returns to the thread that request
+    already opened instead of opening an empty one. A reader passes nothing and
+    rebinds to the stored record, because resolving a request thread opens one.
+    """
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     owner_id = os.environ.get("AUTOPHAGY_OWNER_ID", "")
     if not token or not owner_id:
         raise RepairDiscordError("repair approval Discord credential or owner identity is missing")
     try:
         directory = directory_for_ops(token, owner_id)
-        binding = new_binding(directory, owner_id)
+        binding = new_binding(directory, owner_id, ticket_id, outstanding)
     except ApprovalSurfaceError as error:
         raise RepairDiscordError("repair approval surface cannot be resolved") from error
     discord = RepairDiscordApi(token, binding, directory, owner_id)

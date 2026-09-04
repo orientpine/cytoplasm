@@ -23,14 +23,21 @@ REPO_ROOT="${RELEASE_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 log() { printf '[release] %s\n' "$*" >&2; }
 die() { log "RELEASE-BLOCK: $1"; exit "${2:-1}"; }
 
-(( $# <= 1 )) || { echo "usage: release.sh [--no-deploy]" >&2; exit 2; }
+usage="usage: release.sh [--no-deploy] [--bump {major,minor,patch}]"
 no_deploy=0
-case "${1:-}" in
-  "") ;;
-  --no-deploy) no_deploy=1 ;;
-  --help|-h) echo "usage: release.sh [--no-deploy]"; exit 0 ;;
-  *) echo "usage: release.sh [--no-deploy]" >&2; exit 2 ;;
-esac
+bump=patch
+while (( $# )); do
+  case "$1" in
+    --no-deploy) no_deploy=1; shift ;;
+    --bump)
+      (( $# >= 2 )) || { echo "$usage" >&2; exit 2; }
+      case "$2" in major|minor|patch) bump="$2" ;; *) echo "$usage" >&2; exit 2 ;; esac
+      shift 2
+      ;;
+    --help|-h) echo "$usage"; exit 0 ;;
+    *) echo "$usage" >&2; exit 2 ;;
+  esac
+done
 
 # shellcheck source=automation/release_tag_lib.sh
 source "${RELEASE_TAG_LIB:-$SCRIPT_DIR/release_tag_lib.sh}"
@@ -61,7 +68,7 @@ main="$(git -C "$REPO_ROOT" rev-parse origin/main)" || die "cannot resolve origi
 # 전제 ③: 로컬 CI 영수증 — 기존 push 게이트의 판정을 그대로 재사용한다.
 bash "$local_ci" verify "$head" || die "no valid local CI receipt for ${head:0:12}" 4
 
-version="$(next_release_tag "$REPO_ROOT")" || die "could not derive the next version" 4
+version="$(release_version_for "$REPO_ROOT" "$head" "$bump")" || die "could not derive the next version" 4
 base="$(latest_release_base "$REPO_ROOT")"
 if [[ -z "$base" ]]; then
   base="$(git -C "$REPO_ROOT" rev-list --max-parents=0 HEAD | tail -n 1)" \
@@ -89,7 +96,7 @@ if (( decision_rc != 0 )); then
   "${approval[@]}" retire --head "$base" \
     || die "previous release record cannot be archived safely" 4
   "${plan_approval[@]}" plan --repo "$REPO_ROOT" --base "$base" --head "$head" \
-    --version "$version" > "$workdir/plan.json" || die "release plan failed" 4
+    --version "$version" --bump "$bump" > "$workdir/plan.json" || die "release plan failed" 4
   request_refusal="approval request was refused — 살아 있는 다른 요청은 파괴하지 않는다 (⛔ 로 막혔다면 노드 agent 계정에서: python3 -m automation.release_abandon --version <v> --head <sha> --message-id <id> --reason <why>)"
   if ! post_request; then
     # 낡은 pending 요청의 자동 복구. 두 세션이 번갈아 릴리스하면, 소유자 결정을 아직
@@ -162,7 +169,7 @@ else
   log "approved release request already live for ${head:0:12} — resuming to the tag cut"
 fi
 
-ensure_signed_tag "$REPO_ROOT" "$head" || die "signed release tag failed" 1
+ensure_signed_tag "$REPO_ROOT" "$head" "$version" || die "signed release tag failed" 1
 log "released $version at ${head:0:12} — 리컨실러가 ~2분 내 수렴한다"
 if (( no_deploy )); then
   log "수렴 후 전량 반영·영수증: automation/deploy_all.sh --apply"

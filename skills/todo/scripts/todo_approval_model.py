@@ -23,6 +23,8 @@ class TodoApprovalSpec:
     policy_version: int
     origin_channel_id: str = ""
     origin_message_id: str = ""
+    #: 이 요청 전용 승인 스레드 — 결과 통지가 되돌아갈 곳. action hash 밖의 라우팅 값이다.
+    approval_thread_id: str = ""
     tasklist: str = ""
     title: str = ""
     notes: str | None = None
@@ -46,6 +48,7 @@ class TodoApprovalRecord:
     policy_version: int
     origin_channel_id: str = ""
     origin_message_id: str = ""
+    approval_thread_id: str = ""
     tasklist: str = ""
     title: str = ""
     notes: str | None = None

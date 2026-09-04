@@ -855,7 +855,12 @@ run_as "$NODE_PEER_ACCOUNT" "test -x \"\$HOME/.hermes/skills/$SKILL/scripts/scen
 # the ops checkout for its peer registry). Pin it to the resolved runtime root
 # (release `current`, else the mirror), resolved NODE-SIDE — one root, no staged
 # duplicate to drift.
-SCENARIO_OUT="$(run_as "$NODE_PEER_ACCOUNT" "$NODE_RUNTIME_ROOT_SNIPPET; RR=\$(node_runtime_root); REAL_HOME=\"\$HOME\"; IR=\"\$REAL_HOME/.hermes/interop_runtime\"; [ -d \"\$IR\" ] || { echo 'SANDBOX-HOME-BLOCK interop runtime missing' >&2; exit 90; }; SH=\$(mktemp -d) || exit 91; chmod 700 \"\$SH\" || { rm -rf \"\$SH\"; exit 91; }; trap 'rm -rf \"\$SH\"' EXIT; env -i HOME=\"\$SH\" PATH=/usr/bin:/bin \"\$(printf '%s=%s' AUTOPHAGY_REPO_ROOT \"\$RR\")\" INTEROP_RUNTIME=\"\$IR\" AUTOPHAGY_DEMO_SECRET=\"DUMMY-w18-sandbox-\$(date +%s)\" bash \"\$REAL_HOME/.hermes/skills/$SKILL/scripts/scenario.sh\"")" \
+# The staged copy under the peer home is, by definition, not the live mount — and every
+# mutating CLI refuses to run from such a copy (skill_mount.governed_copy_refusal,
+# STALE-SKILL-COPY-BLOCK). The sandbox therefore declares its own root as the live root
+# so the guard sees "this copy IS the governed dir" (2026-09-03: without this, v1.1.0
+# left 13 guarded skills SKILL-STALE — stage 1 blocked every one of them).
+SCENARIO_OUT="$(run_as "$NODE_PEER_ACCOUNT" "$NODE_RUNTIME_ROOT_SNIPPET; RR=\$(node_runtime_root); REAL_HOME=\"\$HOME\"; IR=\"\$REAL_HOME/.hermes/interop_runtime\"; [ -d \"\$IR\" ] || { echo 'SANDBOX-HOME-BLOCK interop runtime missing' >&2; exit 90; }; SH=\$(mktemp -d) || exit 91; chmod 700 \"\$SH\" || { rm -rf \"\$SH\"; exit 91; }; trap 'rm -rf \"\$SH\"' EXIT; env -i HOME=\"\$SH\" PATH=/usr/bin:/bin \"\$(printf '%s=%s' AUTOPHAGY_REPO_ROOT \"\$RR\")\" INTEROP_RUNTIME=\"\$IR\" AUTOPHAGY_SKILL_LIVE_ROOT=\"\$REAL_HOME/.hermes/skills\" AUTOPHAGY_DEMO_SECRET=\"DUMMY-w18-sandbox-\$(date +%s)\" bash \"\$REAL_HOME/.hermes/skills/$SKILL/scripts/scenario.sh\"")" \
   || sandbox_block "scenario failed under dummy secrets"
 grep -q "SCENARIO-PASS" <<<"$SCENARIO_OUT" || sandbox_block "scenario output missing SCENARIO-PASS marker"
 log "scenario: $(tail -n1 <<<"$SCENARIO_OUT")"

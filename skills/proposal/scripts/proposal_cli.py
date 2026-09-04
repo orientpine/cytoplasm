@@ -20,7 +20,7 @@ if __package__ in (None, ""):
     __package__ = "proposal.scripts"
 
 from . import proposal_assembly, proposal_core, proposal_dm, proposal_kanban, proposal_knowledge, proposal_llm, proposal_preflight, proposal_prompts, proposal_sensitivity  # noqa: E402
-from . import proposal_env, proposal_images  # noqa: E402
+from . import proposal_env, proposal_images, proposal_governed  # noqa: E402
 from .proposal_corpus import command as corpus_command  # noqa: E402
 from .proposal_research import command as research_command  # noqa: E402
 from .proposal_storage import ProposalError, ProposalPaths, Section, load_proposal  # noqa: E402
@@ -475,9 +475,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_MUTATING_COMMANDS = frozenset({
+    "create", "section-add", "draft", "contribute", "assemble", "review",
+    "delta", "improve", "refine", "publish",
+})
+
+
 def main(argv: list[str] | None = None) -> int:
     proposal_env.load_env_secrets()
     args = build_parser().parse_args(argv)
+    if args.command in _MUTATING_COMMANDS:
+        message = proposal_governed.refusal(Path(__file__).resolve())
+        if message:
+            print(message, file=sys.stderr)
+            return 3
     try:
         return int(args.func(args))
     except (

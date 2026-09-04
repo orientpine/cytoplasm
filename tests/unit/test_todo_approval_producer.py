@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -16,6 +16,7 @@ from automation.interop.approval_lifecycle import Outcome
 from automation.interop.approval_surface import (
     ApprovalKind,
     ChannelFacts,
+    request_thread_name,
     resolve_new_binding,
 )
 from automation.interop.external_effect_gate import ApprovalContext
@@ -32,12 +33,21 @@ sys.path.insert(0, str(_SCRIPTS))
 _OWNER = "owner-fixture"
 _AGENT_CHAT_CHANNEL = "1526487935975952390"
 _CHANNEL = "1526487935975952391"
+#: 이 요청 하나가 여는 스레드 — 승인 카드·리마인더·결과가 여기서 끝난다.
+_REQUEST_THREAD = "1526487935975952392"
+_ORIGIN_CHANNEL = "200000000000000001"
+_ORIGIN_MESSAGE = "origin-message-1"
 _NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
 
 
 @dataclass(slots=True)
 class FakeDirectory:
     described: list[str]
+    #: 요청별 스레드 스펙 — 무엇을 제목으로 쓰고 무엇을 앵커로 넘겼는지 기록한다.
+    requests: list[tuple[ApprovalKind, object]] = field(default_factory=list)
+    #: 만들어진 요청별 스레드 id → 만들 때 쓴 이름(실제 Discord 가 그렇게 기술한다).
+    thread_names: dict[str, str] = field(default_factory=dict)
+    per_kind: int = 0
 
     def owner_dm(self) -> str:
         raise AssertionError("todo must not resolve the owner-DM approval surface")
@@ -50,11 +60,19 @@ class FakeDirectory:
 
     def agent_chat_thread(self, kind: ApprovalKind) -> str:
         assert kind is ApprovalKind.TODO
+        self.per_kind += 1
         return _CHANNEL
+
+    def agent_chat_request_thread(self, kind: ApprovalKind, request: object) -> str:
+        self.requests.append((kind, request))
+        channel_id = str(int(_REQUEST_THREAD) + len(self.requests) - 1)
+        self.thread_names[channel_id] = request_thread_name(kind, request)
+        return channel_id
 
     def describe(self, channel_id: str) -> ChannelFacts:
         self.described.append(channel_id)
-        return ChannelFacts(11, "승인-todo", (), _AGENT_CHAT_CHANNEL)
+        name = self.thread_names.get(channel_id, "승인-todo")
+        return ChannelFacts(11, name, (), _AGENT_CHAT_CHANNEL)
 
 
 @dataclass(slots=True)
@@ -87,8 +105,17 @@ class FakeTransport:
     def delete_message(self, channel_id: str, message_id: str) -> None:
         self.calls.append(("delete", channel_id, message_id))
 
+    def api(self, method: str, path: str, payload: dict | None = None) -> object:
+        raise AssertionError("the fake directory owns every channel lookup")
 
-def _intent(todo: ModuleType, approval: ModuleType, title: str = "합성 승인 과제") -> TodoApprovalIntent:
+
+def _intent(
+    todo: ModuleType,
+    approval: ModuleType,
+    title: str = "합성 승인 과제",
+    *,
+    origin: tuple[str, str] = ("", ""),
+) -> TodoApprovalIntent:
     request = todo.TaskRequest("@default", title, notes="본문 비저장", due="2026-08-20T00:00:00Z")
     argv = todo.insert_argv(request)
     decision = todo.evaluate(argv, context=ApprovalContext(None, _OWNER, False))
@@ -98,6 +125,9 @@ def _intent(todo: ModuleType, approval: ModuleType, title: str = "합성 승인 
         argv_summary=approval.masked_argv_summary(argv),
         title=request.title,
         due=request.due,
+        origin_channel_id=origin[0],
+        origin_message_id=origin[1],
+        notes=request.notes,
     )
 
 
@@ -244,6 +274,91 @@ def test_request_command_is_the_only_cli_entry_that_calls_producer(
     assert len(calls) == 1
     assert len(transport.messages) == 1
     assert store.active(f"todo:{calls[0]}") is not None
+
+
+def _cli_producer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[ModuleType, FakeTransport, FakeDirectory, TodoApprovalStore]:
+    """The production ``request_cli_approval`` wired to a fake Discord identity."""
+    runtime_module = import_module("todo_approval_runtime")
+    root = tmp_path / "todo-approvals"
+    transport = FakeTransport({}, [])
+    directory = FakeDirectory([])
+    monkeypatch.setenv("TODO_APPROVAL_ROOT", str(root))
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(
+        import_module("todo_discord"), "TodoDiscordTransport", lambda _token: transport
+    )
+    real_repo_module = runtime_module._repo_module
+
+    def repo_module(name: str) -> object:
+        if name == "approval_directory":
+            return SimpleNamespace(DiscordChannelDirectory=lambda *_args: directory)
+        return real_repo_module(name)
+
+    monkeypatch.setattr(runtime_module, "_repo_module", repo_module)
+    store = import_module("todo_approval_store").TodoApprovalStore(root)
+    return runtime_module, transport, directory, store
+
+
+def test_cli_request_opens_its_own_thread_and_persists_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the production producer entry point with a fake Discord identity
+    todo = import_module("todo_cli")
+    approval = import_module("todo_approval")
+    runtime_module, transport, directory, store = _cli_producer(tmp_path, monkeypatch)
+    intent = _intent(todo, approval, origin=(_ORIGIN_CHANNEL, _ORIGIN_MESSAGE))
+
+    # When: the CLI requests owner approval for that task
+    verdict = runtime_module.request_cli_approval(intent, _OWNER)
+
+    # Then: the request asked for ITS OWN thread — 제목만(노트 제외), 지시 메시지를 앵커
+    # 후보로 넘기고 — and the record remembers that thread for the result notice
+    assert verdict.outcome is Outcome.POSTED
+    [(kind, spec)] = directory.requests
+    assert kind is ApprovalKind.TODO
+    assert spec.title == "합성 승인 과제"
+    assert "본문 비저장" not in spec.title
+    assert (spec.origin_channel_id, spec.origin_message_id) == (_ORIGIN_CHANNEL, _ORIGIN_MESSAGE)
+    assert directory.per_kind == 0
+    record = store.active(intent.key)
+    assert record is not None
+    assert record.channel_id == _REQUEST_THREAD
+    assert record.approval_thread_id == _REQUEST_THREAD
+    assert record.action_hash == intent.action_hash
+    assert [call[1] for call in transport.calls if call[0] == "post"] == [_REQUEST_THREAD]
+
+
+def test_repeated_cli_requests_reuse_the_first_request_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: one request of this argv already posted into its own thread
+    todo = import_module("todo_cli")
+    approval = import_module("todo_approval")
+    runtime_module, transport, directory, store = _cli_producer(tmp_path, monkeypatch)
+    intent = _intent(todo, approval, origin=(_ORIGIN_CHANNEL, _ORIGIN_MESSAGE))
+    first = runtime_module.request_cli_approval(intent, _OWNER)
+
+    # When: the same argv is requested twice more before the owner decides
+    second = runtime_module.request_cli_approval(intent, _OWNER)
+    third = runtime_module.request_cli_approval(intent, _OWNER)
+
+    # Then: one approval key keeps ONE thread — no empty orphan per re-request
+    assert (first.outcome, second.outcome, third.outcome) == (
+        Outcome.POSTED, Outcome.PENDING, Outcome.PENDING,
+    )
+    assert len(directory.requests) == 1
+    assert directory.per_kind == 0
+
+    # …and every post of that key landed in that one thread
+    assert [call[1] for call in transport.calls if call[0] == "post"] == [_REQUEST_THREAD]
+    record = store.active(intent.key)
+    assert record is not None
+    assert (record.channel_id, record.approval_thread_id) == (_REQUEST_THREAD, _REQUEST_THREAD)
 
 
 def test_todo_producer_is_registered_in_every_conformance_inventory() -> None:

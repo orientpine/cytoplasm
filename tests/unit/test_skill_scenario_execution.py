@@ -33,6 +33,7 @@ machine-consumed form of this table and must cover the on-disk set.
     | mail            | UNSAFE  | mailon send + two LLM CLIs behind TRIAGE_* seams; already run by test_mail_scenario.py |
     | meeting         | UNSAFE  | LLM extraction, offline only via --offline/--recorded-response |
     | patent-prep     | UNSAFE  | Drive upload + age encryption behind PATENT_GWS_BIN / PATENT_AGE_BIN |
+    | plaud           | SAFE    | stdlib-only read of a mktemp state fixture; no transport, no writes outside mktemp |
     | procurement     | UNSAFE  | Drive upload (DRIVE_GWS_BIN) + Discord review DM (PROCURE_DISCORD_STUB) |
     | prompt          | UNSAFE  | root flips to /srv/autophagy-agents when that path exists — executed code path is host-dependent |
     | proposal        | UNSAFE  | Drive publish / image / refine transports, offline only via *_TRANSPORT=fake |
@@ -69,7 +70,7 @@ _TIMEOUT_S: Final = 30.0
 # The scenarios this module executes. Growing it is the point of the follow-up:
 # add a skill only after reading it end to end and confirming the SAFE criteria
 # in the table above.
-_EXECUTED: Final = ("hello-autophagy", "recall", "repair", "topics")
+_EXECUTED: Final = ("hello-autophagy", "plaud", "recall", "repair", "topics")
 
 # Everything else, with the effect that keeps it out. Fail-closed: a new
 # scenario that is in neither mapping fails `test_every_scenario_is_classified`

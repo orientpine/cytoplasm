@@ -34,6 +34,7 @@ APPROVAL_PRODUCERS: Final[Mapping[str, str]] = {
     "skills/patent-prep/scripts/patent_export.py::prepare_export": "skills/patent-prep/scripts/patent_export_approval.py",
     "automation/obsidian_write/gate_binding.py::request_approval": "automation/obsidian_write/gate_binding.py",
     "automation/memory_relocate/approval_gate.py::request_approval": "automation/memory_relocate/approval_gate.py",
+    "automation/plaud_sync/approval_gate.py::request_approval": "automation/plaud_sync/approval_gate.py",
     "skills/todo/scripts/todo_cli.py::_cmd_request": "skills/todo/scripts/todo_approval.py",
     "automation/release_approval.py::cmd_request": "automation/skill_gate_approval.py",
 }
@@ -50,6 +51,7 @@ _LIFECYCLE_HOSTS: Final[Mapping[str, str]] = {
     "skills/patent-prep/scripts/patent_export_approval.py": "skills/patent-prep/scripts/patent_export.py",
     "automation/obsidian_write/gate_binding.py": "automation/obsidian_write/gate_binding.py",
     "automation/memory_relocate/approval_gate.py": "automation/memory_relocate/approval_gate.py",
+    "automation/plaud_sync/approval_gate.py": "automation/plaud_sync/approval_gate.py",
     "skills/todo/scripts/todo_approval.py": "skills/todo/scripts/todo_approval.py",
 }
 
@@ -64,6 +66,7 @@ _ADAPTER_POSTERS: Final[frozenset[str]] = frozenset({
     "skills/budget/scripts/budget_approval.py::BudgetApprovalGate.post",
     "skills/patent-prep/scripts/patent_export_approval.py::PatentApprovalGate.post",
     "automation/memory_relocate/approval_gate.py::RelocateApprovalGate.post",
+    "automation/plaud_sync/approval_gate.py::PlaudApprovalGate.post",
     "skills/todo/scripts/todo_approval.py::TodoApprovalGate.post",
 })
 
@@ -118,6 +121,7 @@ APPROVAL_KINDS: Final[Mapping[str, str]] = {
     "skills/patent-prep/scripts/patent_export.py::prepare_export": "patent-export",
     "automation/obsidian_write/gate_binding.py::request_approval": "obsidian-write",
     "automation/memory_relocate/approval_gate.py::request_approval": "obsidian-write",
+    "automation/plaud_sync/approval_gate.py::request_approval": "obsidian-write",
     "skills/todo/scripts/todo_cli.py::_cmd_request": "todo",
     "automation/release_approval.py::cmd_request": "release",
 }
@@ -135,6 +139,7 @@ _RECORD_WRITERS: Final[Mapping[str, str]] = {
     "skills/budget/scripts/budget_approval.py::BudgetApprovalGate.commit": "skills/budget/scripts/budget_gate.py",
     "skills/patent-prep/scripts/patent_export_approval.py::PatentApprovalGate.commit": "skills/patent-prep/scripts/patent_export_manifest.py",
     "automation/memory_relocate/approval_gate.py::RelocateApprovalGate.commit": "automation/memory_relocate/model.py",
+    "automation/plaud_sync/approval_gate.py::PlaudApprovalGate.commit": "automation/plaud_sync/model.py",
     "skills/todo/scripts/todo_approval.py::TodoApprovalGate.commit": "skills/todo/scripts/todo_approval_store.py",
 }
 

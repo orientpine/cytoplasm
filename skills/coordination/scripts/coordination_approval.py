@@ -70,7 +70,7 @@ def confirm_intent(
     digest = payload.draft.get("sha256")
     if not isinstance(digest, str) or not digest:
         raise io.CoordinationError("드래프트 sha256 누락 — 승인 게시 거부", 3)
-    resolved = binding or coordination_binding.new_binding()
+    resolved = binding or coordination_binding.new_binding(None, payload)
     return lifecycle().ApprovalIntent(
         key=approval_key(payload.slot), action_hash=digest, channel_id=resolved.channel_id
     )
@@ -219,11 +219,12 @@ class CoordinationApprovalGate:
                 policy_version=binding.policy_version,
                 origin_channel_id=self.payload.origin_channel_id,
                 origin_message_id=self.payload.origin_message_id,
+                approval_thread_id=binding.channel_id,
             )
         )
 
     def _binding_for(self, intent: ApprovalIntent) -> coordination_binding.ApprovalBindingLike:
-        binding = self.binding or coordination_binding.new_binding()
+        binding = self.binding or coordination_binding.new_binding(None, self.payload)
         if intent.channel_id != binding.channel_id:
             raise lifecycle().ApprovalSurfaceError("coordination approval intent binding changed")
         return binding
@@ -239,7 +240,9 @@ class CoordinationApprovalGate:
 def request_confirmation(payload: CoordinationApprovalPayload, owner_id: str) -> PendingConfirm:
     facade = lifecycle()
     store = PendingConfirmStore()
-    binding = coordination_binding.new_binding(owner_id)
+    binding = coordination_binding.reusable_binding(
+        store, approval_key(payload.slot)
+    ) or coordination_binding.new_binding(owner_id, payload)
     verdict = facade.request_owner_approval(
         confirm_intent(payload, binding),
         CoordinationApprovalGate(payload, store, owner_id, binding),

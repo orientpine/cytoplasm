@@ -1,7 +1,7 @@
 ---
 name: procurement
 description: "이미 등록된 구매/용역 템플릿에 품목·금액·업체를 채워 초안 파일을 생성하고 cha에게만 검토 요청을 보낸다. 새 문서의 등록·스킬화·문서 종류 저장·개선은 doctype 소유이며, 이 스킬은 새로 받은 문서를 템플릿으로 저장하지 않는다."
-version: 1.2.1
+version: 1.2.3
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -13,6 +13,8 @@ prerequisites:
 ---
 
 # 구매/용역 서류 초안 (procurement)
+
+변경 명령은 /srv/autophagy-skills/live/procurement/scripts/에서만 실행하며, 낡은 사본은 STALE-SKILL-COPY-BLOCK으로 거부한다.
 
 이미 등록된 cha의 기관 양식에 값을 채워 **초안 파일**을 만들고 검토를 요청한다.
 
@@ -41,8 +43,8 @@ prerequisites:
 새 양식을 등록하지 않는다. 이미 등록된 이름과 필드만 조회하고, 해당 양식의 값 채우기 요청만 처리한다.
 
 ```bash
-$PY ~/.hermes/skills/procurement/scripts/procure_cli.py templates-list
-$PY ~/.hermes/skills/procurement/scripts/procure_cli.py templates-show --name po_form
+$PY /srv/autophagy-skills/live/procurement/scripts/procure_cli.py templates-list
+$PY /srv/autophagy-skills/live/procurement/scripts/procure_cli.py templates-show --name po_form
 ```
 
 Registry는 `~/.hermes/procurement/templates/<name>/`에 private template과 분석 맵

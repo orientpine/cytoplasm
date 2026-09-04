@@ -26,7 +26,11 @@ from typing import Final, Protocol
 import budget_core
 
 GWS_TIMEOUT_S = 120
-BINDING_FIELDS: Final = ("kind", "surface", "channel_id", "policy_version")
+#: ``approval_thread_id`` 는 결과 통지 목적지(요청별 승인 스레드)일 뿐이라 초안 내용
+#: 해시(`budget_core.draft_sha256`) 밖에 있다 — origin 바인딩과 같은 취급이다.
+BINDING_FIELDS: Final = (
+    "kind", "surface", "channel_id", "policy_version", "approval_thread_id",
+)
 
 
 class GateError(RuntimeError):
@@ -174,7 +178,11 @@ def load_draft(draft_id: str) -> dict:
 
 
 def _binding_fields(binding: ApprovalBindingLike | None) -> dict[str, str | int]:
-    """The four record columns one resolved approval binding contributes."""
+    """The record columns one resolved approval binding contributes.
+
+    이 요청이 게시된 채널은 곧 이 요청 전용 스레드이므로, 결과 통지가 그 스레드로
+    되돌아갈 수 있도록 ``approval_thread_id`` 로도 남긴다.
+    """
     if binding is None:
         return {}
     return {
@@ -182,6 +190,7 @@ def _binding_fields(binding: ApprovalBindingLike | None) -> dict[str, str | int]
         "surface": str(binding.surface),
         "channel_id": str(binding.channel_id),
         "policy_version": int(binding.policy_version),
+        "approval_thread_id": str(binding.channel_id),
     }
 
 

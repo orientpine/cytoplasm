@@ -47,7 +47,17 @@ def plan_note(
 
 
 def render_note(plan: NotePlan, *, created: str, modified: str) -> str:
-    """Render the vault's heading-and-callout format without YAML frontmatter."""
+    """Render the vault's heading-and-callout format, or hoist a body-owned frontmatter.
+
+    A body that opens with a closed '---' block (plaud lifelog v2, 2026-09-04) is a
+    note whose metadata the owner's Linter manages as YAML: the block goes above the
+    H1 and the info callout is omitted — tags/created/modified already live in the
+    YAML and the location is the path. Bodies without such a block render byte for
+    byte as before (wiki·memory notes are untouched).
+    """
+    yaml_block, body = _split_frontmatter(plan.body)
+    if yaml_block is not None:
+        return f"{yaml_block}\n\n# {plan.title}\n\n{body}\n"
     tag = "#KIMM" if plan.relpath.parts[0] == _KIMM_PARA_ROOT.name else "#personal"
     return (
         f"# {plan.title}\n\n"
@@ -59,6 +69,17 @@ def render_note(plan: NotePlan, *, created: str, modified: str) -> str:
         f"> Tag: {tag}\n\n"
         f"{plan.body}\n"
     )
+
+
+def _split_frontmatter(body: str) -> tuple[str | None, str]:
+    """(closed leading '---' block, rest) — an unclosed leading rule is ordinary body."""
+    lines = body.split("\n")
+    if lines[0] != "---":
+        return None, body
+    for index in range(1, len(lines)):
+        if lines[index] == "---":
+            return "\n".join(lines[: index + 1]), "\n".join(lines[index + 1 :]).strip()
+    return None, body
 
 
 def _normalize_title(title: str) -> str:

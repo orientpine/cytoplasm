@@ -25,7 +25,7 @@ from automation.obsidian_write import (
     plan_note,
     write_note,
 )
-from automation.obsidian_write import gate_binding
+from automation.obsidian_write import clone_lock, gate_binding
 
 _OWNER_ID = "owner"
 _E2E_SECRET = b"obsidian-write-tests"
@@ -37,6 +37,15 @@ class CapturedCall:
     cwd: Path | None
     environment: dict[str, str]
     timeout: float | None
+    #: Fetch temporaries present at the moment of the call, so ordering is observable.
+    tmp_packs: tuple[str, ...] = ()
+
+
+def tmp_pack_names(clone_dir: Path) -> tuple[str, ...]:
+    pack_dir = clone_dir / ".git" / "objects" / "pack"
+    if not pack_dir.is_dir():
+        return ()
+    return tuple(sorted(path.name for path in pack_dir.glob("tmp_pack_*")))
 
 
 class FakeGitRunner:
@@ -46,11 +55,15 @@ class FakeGitRunner:
         *,
         failure_at: int | None = None,
         remote_content: str | None = None,
+        partial_filter: str = "",
+        litter_on: tuple[str, ...] | None = None,
     ) -> None:
         self.calls: list[CapturedCall] = []
         self._clone_dir: Path = clone_dir
         self._failure_at: int | None = failure_at
         self._remote_content: str | None = remote_content
+        self._partial_filter: str = partial_filter
+        self._litter_on: tuple[str, ...] | None = litter_on
 
     def __call__(
         self,
@@ -66,14 +79,25 @@ class FakeGitRunner:
         assert env is not None, "git invocations must carry explicit env"
         assert capture_output is True
         assert text is True
-        self.calls.append(CapturedCall(tuple(argv), cwd, dict(env), timeout))
+        self.calls.append(
+            CapturedCall(tuple(argv), cwd, dict(env), timeout, tmp_pack_names(self._clone_dir))
+        )
 
         if tuple(argv[1:2]) == ("clone",):
             _ = self._clone_dir.mkdir(mode=0o700)
             _ = (self._clone_dir / ".git").mkdir()
 
+        if self._litter_on is not None and tuple(argv[: len(self._litter_on)]) == self._litter_on:
+            # Reproduce a fetch killed mid-transfer: residue appears during the run.
+            pack_dir = self._clone_dir / ".git" / "objects" / "pack"
+            _ = pack_dir.mkdir(parents=True, exist_ok=True)
+            _ = (pack_dir / f"tmp_pack_{len(self.calls)}").write_bytes(b"\0" * 512)
+
         if self._failure_at == len(self.calls):
             return subprocess.CompletedProcess(argv, 1, stdout="", stderr="failed")
+
+        if tuple(argv[1:3]) == ("config", "--default"):
+            return subprocess.CompletedProcess(argv, 0, stdout=self._partial_filter, stderr="")
 
         if tuple(argv[1:2]) == ("show",):
             remote_content = self._remote_content
@@ -163,6 +187,9 @@ def test_write_note_fetches_upserts_commits_only_target_pushes_and_verifies_remo
     assert "> Tag:" in target.read_text(encoding="utf-8")
     relpath = plan.relpath.as_posix()
     assert [call.argv for call in runner.calls] == [
+        ("git", "config", "--default", "", "--get", "remote.origin.partialclonefilter"),
+        ("git", "config", "remote.origin.promisor", "true"),
+        ("git", "config", "remote.origin.partialclonefilter", "blob:none"),
         ("git", "fetch", "origin", "main"),
         ("git", "reset", "--hard", "origin/main"),
         ("git", "add", "--", relpath),
@@ -263,13 +290,13 @@ def test_write_note_refuses_missing_key_before_subprocess(tmp_path: Path) -> Non
 def test_write_note_marks_failed_push_retryable(configured_clone: ObsidianWriteConfig) -> None:
     # Given
     plan = plan_note("push failure", "body", institutional=False, bucket_hint="area")
-    runner = FakeGitRunner(configured_clone.clone_dir, failure_at=5)
+    runner = FakeGitRunner(configured_clone.clone_dir, failure_at=8)
 
     # When / Then
     with pytest.raises(ObsidianWriteError, match="push") as captured:
         _ = write_approved(plan, configured_clone, runner)
     assert captured.value.retryable is True
-    assert len(runner.calls) == 5
+    assert runner.calls[-1].argv[:2] == ("git", "push")
 
 
 def test_write_note_refuses_mismatched_remote_readback(configured_clone: ObsidianWriteConfig) -> None:
@@ -281,7 +308,7 @@ def test_write_note_refuses_mismatched_remote_readback(configured_clone: Obsidia
     with pytest.raises(ObsidianWriteError, match="verification") as captured:
         _ = write_approved(plan, configured_clone, runner)
     assert captured.value.retryable is True
-    assert len(runner.calls) == 7
+    assert runner.calls[-1].argv[:2] == ("git", "show")
 
 
 def test_write_note_calls_push_guard_immediately_before_push(
@@ -298,6 +325,122 @@ def test_write_note_calls_push_guard_immediately_before_push(
     # When
     _ = write_approved(plan, replace(configured_clone, push_guard=push_guard), runner)
 
+    # Then: whatever the surrounding call count is, the very next git call is the push.
+    assert len(guard_calls) == 1
+    assert runner.calls[guard_calls[0][1]].argv[:2] == ("git", "push")
+
+
+def test_write_note_yields_when_another_writer_holds_the_clone(
+    configured_clone: ObsidianWriteConfig,
+) -> None:
+    # Given: memory_relocate's tick lands while plaud_sync still holds the same clone.
+    plan = plan_note("lock contention", "body", institutional=False, bucket_hint="area")
+    runner = FakeGitRunner(configured_clone.clone_dir)
+
+    # When / Then
+    with clone_lock.hold(configured_clone.clone_dir):
+        with pytest.raises(ObsidianWriteError, match="another writer") as captured:
+            _ = write_note(plan, configured_clone, runner)
+    assert captured.value.retryable is True, "the next cron tick must be allowed to retry"
+    assert runner.calls == [], "a yielding writer must not touch the shared clone at all"
+
+
+def test_write_note_purges_stale_tmp_packs_before_every_fetch(
+    configured_clone: ObsidianWriteConfig,
+) -> None:
+    # Given: residue left by a fetch killed at the old 120 s timeout, plus fresh residue
+    # dropped mid-run so the verification fetch is covered too.
+    pack_dir = configured_clone.clone_dir / ".git" / "objects" / "pack"
+    _ = pack_dir.mkdir(parents=True)
+    stale = pack_dir / "tmp_pack_fromLastTick"
+    _ = stale.write_bytes(b"\0" * 4096)
+    plan = plan_note("pack hygiene", "body", institutional=False, bucket_hint="area")
+    runner = FakeGitRunner(configured_clone.clone_dir, litter_on=("git", "push"))
+
+    # When
+    _ = write_approved(plan, configured_clone, runner)
+
+    # Then: every fetch starts from a clean pack directory.
+    fetches = [call for call in runner.calls if call.argv[1:2] == ("fetch",)]
+    assert len(fetches) == 2
+    assert [call.tmp_packs for call in fetches] == [(), ()]
+    assert not stale.exists()
+    assert tmp_pack_names(configured_clone.clone_dir) == ()
+
+
+def test_write_note_applies_the_fetch_timeout_only_to_the_transfer_step(
+    configured_clone: ObsidianWriteConfig,
+) -> None:
+    # Given
+    config = replace(configured_clone, fetch_timeout_seconds=1800.0)
+    plan = plan_note("timeout split", "body", institutional=False, bucket_hint="area")
+    runner = FakeGitRunner(config.clone_dir)
+
+    # When
+    _ = write_approved(plan, config, runner)
+
+    # Then: a slow pack transfer must not be killed, but a hung local op still is.
+    timeouts = {call.argv[1]: call.timeout for call in runner.calls}
+    assert timeouts["fetch"] == 1800.0
+    assert timeouts["reset"] == 120.0
+    assert timeouts["push"] == 120.0
+    assert timeouts["show"] == 120.0
+
+
+def test_write_note_creates_new_clones_without_blobs(tmp_path: Path) -> None:
+    # Given: the very first run, before any clone exists.
+    key_path = tmp_path / "obsidian-write-key"
+    _ = key_path.write_text("test key material", encoding="utf-8")
+    _ = key_path.chmod(0o600)
+    config = ObsidianWriteConfig(
+        repo_url="git@example.invalid:owner/vault.git",
+        clone_dir=tmp_path / "obsidian-write",
+        ssh_key_path=key_path,
+        branch="main",
+        fetch_timeout_seconds=1500.0,
+    )
+    plan = plan_note("first clone", "body", institutional=False, bucket_hint="area")
+    runner = FakeGitRunner(config.clone_dir, partial_filter="blob:none")
+
+    # When
+    _ = write_approved(plan, config, runner)
+
     # Then
-    assert guard_calls == [("before-push", 4)]
-    assert runner.calls[4].argv[:2] == ("git", "push")
+    clone_call = next(call for call in runner.calls if call.argv[1:2] == ("clone",))
+    assert "--filter=blob:none" in clone_call.argv
+    assert clone_call.timeout == 1500.0
+
+
+def test_write_note_converts_an_existing_full_clone_to_blobless_fetches(
+    configured_clone: ObsidianWriteConfig,
+) -> None:
+    # Given: the deployed clone that has been pulling a 770 MB pack every tick.
+    plan = plan_note("clone conversion", "body", institutional=False, bucket_hint="area")
+    runner = FakeGitRunner(configured_clone.clone_dir)
+
+    # When
+    _ = write_approved(plan, configured_clone, runner)
+
+    # Then: converted before the first fetch, so this very tick already benefits.
+    assert [call.argv for call in runner.calls if call.argv[1:2] == ("config",)] == [
+        ("git", "config", "--default", "", "--get", "remote.origin.partialclonefilter"),
+        ("git", "config", "remote.origin.promisor", "true"),
+        ("git", "config", "remote.origin.partialclonefilter", "blob:none"),
+    ]
+    assert runner.calls[0].argv[1:2] == ("config",)
+
+
+def test_write_note_leaves_an_already_converted_clone_alone(
+    configured_clone: ObsidianWriteConfig,
+) -> None:
+    # Given
+    plan = plan_note("already converted", "body", institutional=False, bucket_hint="area")
+    runner = FakeGitRunner(configured_clone.clone_dir, partial_filter="blob:none\n")
+
+    # When
+    _ = write_approved(plan, configured_clone, runner)
+
+    # Then: the conversion is a one-off, not a per-tick config write.
+    assert [call.argv for call in runner.calls if call.argv[1:2] == ("config",)] == [
+        ("git", "config", "--default", "", "--get", "remote.origin.partialclonefilter"),
+    ]

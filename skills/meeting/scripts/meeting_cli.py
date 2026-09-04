@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import meeting_action_db
 import meeting_action_id
+import meeting_governed
 import meeting_actions
 import meeting_evidence
 import meeting_extract
@@ -341,7 +342,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
             sensitive=gate.sensitive,
             prompt_path=_env_path(
                 "MEETING_PROMPT_FILE",
-                "/srv/autophagy-skills/live/meeting/prompts/meeting-extraction-v5.md",
+                "/srv/autophagy-skills/live/meeting/prompts/meeting-extraction-v6.md",
             ),
             my_names=str(config.get("my_names", "cha,차")),
             base_url=os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:4000/v1"),
@@ -420,7 +421,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
                 label=label,
                 sensitive=gate.sensitive,
                 on=date.fromisoformat(match.group(1)),
-                project=(getattr(args, "project", "") or "").strip(),
+                project=project,
             )
     except Exception:
         # A malformed date or unavailable gate/publisher is fail-closed; local save stands.
@@ -436,7 +437,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
 
     cards = meeting_actions.plan_cards(
         extraction, sensitive=gate.sensitive, note_name=note_path.name, ref=ref,
-        rules=rules, project=(getattr(args, "project", "") or "").strip(),
+        rules=rules, project=project,
     )
     card_ids: list[str] = []
     if offline_dir is not None:
@@ -506,6 +507,12 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
                "milestones", "others", "cards", "milestones_added", "note", "team_posted",
                "evidence_count", "layers", "slides", "actions_new", "actions_open",
                "actions_closed", "project")}
+    # 화자 이름은 회의 내용이다 — 결과 JSON(호출자에게 돌려주는 값)에만 싣고
+    # 라우팅 로그에는 남기지 않는다(로그는 메타데이터만 적는다는 이 모듈의 계약).
+    output["speakers"] = [
+        {"label": speaker.label, "name": speaker.name, "basis": speaker.basis}
+        for speaker in extraction.speakers
+    ]
     print(json.dumps(output, ensure_ascii=False))
     return 0
 
@@ -568,6 +575,11 @@ def main(argv: list[str] | None = None) -> int:
     gate.set_defaults(func=cmd_gate)
 
     args = parser.parse_args(argv)
+    if args.command == "ingest":
+        message = meeting_governed.refusal(Path(__file__))
+        if message:
+            print(message, file=sys.stderr)
+            return 3
     return args.func(args)
 
 

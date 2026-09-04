@@ -33,7 +33,7 @@ else:
         sys.modules["skills.doctype"] = _sk
         setattr(sys.modules["skills"], "doctype", _sk)
 
-from skills.doctype.scripts import doctype_extract, doctype_generate, doctype_llm, doctype_review, doctype_routing, doctype_schema, doctype_store  # noqa: E402
+from skills.doctype.scripts import doctype_extract, doctype_generate, doctype_governed, doctype_llm, doctype_review, doctype_routing, doctype_schema, doctype_store  # noqa: E402
 
 
 SAVE_CLARIFY_EXIT_CODE: Final = 5
@@ -271,6 +271,11 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command in {"register-from-example", "draft", "refine"}:
+            message = doctype_governed.refusal(Path(__file__))
+            if message:
+                print(message, file=sys.stderr)
+                return 3
         match _argument(args, "command"):
             case "register-from-example":
                 return cmd_register(args)

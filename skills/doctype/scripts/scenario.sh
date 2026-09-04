@@ -72,10 +72,10 @@ canary="SENSITIVE-CANARY-$(python3 -c 'import secrets; print(secrets.token_hex(6
 printf '# 민감 예시\n\n특허 출원 검토 %s\n' "$canary" > "$work/sensitive.md"
 cli register-from-example --name "민감서류" --example "$work/sensitive.md" > "$work/sensitive.out" || fail "sensitive reroute"
 grep -q 'sensitivity=patent-sensitive' "$work/sensitive.out" || fail "sensitivity metadata"
-python3 - "$repo_root" <<'PY' || fail "sensitive GLM gate"
+python3 - "$script_dir" <<'PY' || fail "sensitive GLM gate"
 import sys
-sys.path.insert(0, sys.argv[1])
-from skills.doctype.scripts import doctype_llm
+sys.path.insert(0, sys.argv[1])  # scripts dir: the live mount has no `skills` package above it
+import doctype_llm
 try:
     doctype_llm.call_glm("never send", sensitive=True)
 except doctype_llm.PatentRoutingError:

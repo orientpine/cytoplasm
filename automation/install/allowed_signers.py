@@ -9,7 +9,8 @@ import hmac
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, override
+from typing import Final
+from automation.typing_compat import override
 
 UPDATE_ALLOWED_SIGNERS_PATH: Final = Path("/etc/autophagy/update-allowed-signers")
 MANAGED_SKILLS_ALLOWED_SIGNERS_PATH: Final = Path(

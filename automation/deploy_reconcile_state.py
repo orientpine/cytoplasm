@@ -27,6 +27,7 @@ from typing import Final
 from automation.deploy_reconcile import ReconcileState
 
 DEFAULT_STATE_PATH: Final = Path("/srv/autophagy-private/deploy-reconcile/state.json")
+_MIRROR_STATES: Final = frozenset({"dirty", "ahead", "behind", "clean", "unknown"})
 
 
 class _Invalid(Exception):
@@ -62,6 +63,11 @@ def _optional_str(value: object) -> str | None:
     return value
 
 
+def _mirror_state(value: object) -> str:
+    """관측값 오류가 사고 시계를 지우지 않도록 모르는 상태로만 낮춘다."""
+    return value if isinstance(value, str) and value in _MIRROR_STATES else "unknown"
+
+
 def load_state(path: Path = DEFAULT_STATE_PATH) -> ReconcileState:
     """Read the persisted state, degrading to the default on anything unexpected.
 
@@ -82,6 +88,7 @@ def load_state(path: Path = DEFAULT_STATE_PATH) -> ReconcileState:
             pending_notice=_optional_str(raw.get("pending_notice")),
             incident_open=_require_bool(raw.get("incident_open", False)),
             skip_reason=_optional_str(raw.get("skip_reason")),
+            mirror_state=_mirror_state(raw.get("mirror_state", "unknown")),
         )
     except _Invalid:
         return ReconcileState()
@@ -105,6 +112,7 @@ def save_state(path: Path, state: ReconcileState) -> None:
             "pending_notice": state.pending_notice,
             "incident_open": state.incident_open,
             "skip_reason": state.skip_reason,
+            "mirror_state": state.mirror_state,
         },
         ensure_ascii=False,
         indent=2,

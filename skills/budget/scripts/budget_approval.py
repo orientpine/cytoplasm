@@ -100,6 +100,34 @@ def _bound_message_id(record: dict) -> str:
     return message_id if isinstance(message_id, str) else ""
 
 
+def _outstanding(key: str) -> tuple[ApprovalRequest, ...]:
+    """Every live request bound to this approval key, read from the draft store."""
+    request_type = lifecycle().ApprovalRequest
+    return tuple(
+        request_type(
+            key=key,
+            action_hash=str(record["sha256"]),
+            message_id=_bound_message_id(record),
+            channel_id=budget_binding.stored_binding(record).channel_id,
+            created_at=str(record["created"]),
+        )
+        for _, record in _pending_drafts()
+        if approval_key(record) == key and _bound_message_id(record)
+    )
+
+
+def _live_requests(key: str) -> tuple[ApprovalRequest, ...]:
+    """The same read the gate's ``outstanding`` does — for thread reuse only.
+
+    기회적 읽기다: 읽을 수 없는 저장소를 여기서 판정하지 않는다 — 파사드가 곧바로 같은
+    읽기를 다시 하고 store-unreadable 로 거부한다.
+    """
+    try:
+        return _outstanding(key)
+    except (lifecycle().ApprovalRecordsError, budget_gate.GateError):
+        return ()
+
+
 @dataclass(frozen=True, slots=True)
 class BudgetApprovalGate:
     """``approval_lifecycle.ApprovalGate`` over the budget draft store + Discord REST."""
@@ -112,18 +140,7 @@ class BudgetApprovalGate:
         return self.binding.channel_id
 
     def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
-        request_type = lifecycle().ApprovalRequest
-        return tuple(
-            request_type(
-                key=key,
-                action_hash=str(record["sha256"]),
-                message_id=_bound_message_id(record),
-                channel_id=budget_binding.stored_binding(record).channel_id,
-                created_at=str(record["created"]),
-            )
-            for _, record in _pending_drafts()
-            if approval_key(record) == key and _bound_message_id(record)
-        )
+        return _outstanding(key)
 
     def probe(self, request: ApprovalRequest) -> Probe:
         state = lifecycle().Probe
@@ -205,7 +222,7 @@ class BudgetApprovalGate:
 
 def request_approval(draft: dict) -> Verdict:
     """Run the shared lifecycle for one draft while holding its key's lease."""
-    binding = budget_binding.binding_for(draft)
+    binding = budget_binding.binding_for(draft, _live_requests(approval_key(draft)))
     intent = confirm_intent(draft, binding)
     return lifecycle().request_owner_approval(
         intent,

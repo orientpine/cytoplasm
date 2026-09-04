@@ -41,6 +41,10 @@ USER_AGENT = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
 DM_SCAN_LIMIT = 50
 APPROVE_EMOJI = "\u2705"
 CANCEL_EMOJI = "\u26d4"
+#: Terminal states a result notice may close its request thread with (origin_notice 소유).
+OUTCOME_DONE = "done"
+OUTCOME_CANCELLED = "cancelled"
+OUTCOME_EXPIRED = "expired"
 
 
 def confirm_text(draft: DraftRecord) -> str:
@@ -235,13 +239,15 @@ def _thread_transport(channel_id: str):
     return DiscordTransport(token=bot_token(), channel_id=channel_id)
 
 
-def notify_result(draft: DraftRecord, content: str) -> object:
-    """Route an execution/cancellation result: origin thread first, owner fallback.
+def notify_result(draft: DraftRecord, content: str, outcome: str = "") -> object:
+    """Route a result to the request's own approval thread, else the owner fallback.
 
     라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
     `automation.interop.origin_notice.deliver`가 소유한다(2026-08-23 전 스킬 공통화).
     캘린더 내용(제목·시각·이벤트/캘린더 id)은 문구에도 스레드 이름에도 싣지 않는다 —
     SKILL.md 반출 금지 규칙에 따라 호출자가 draft id 만 담은 문구를 넘긴다.
+    ``outcome``(OUTCOME_DONE/CANCELLED/EXPIRED)이 있으면 게시가 성공한 뒤 그 스레드를
+    종결 표시한다. 비어 있으면 스레드는 열린 채로 남는다(고아 초안 정리 등).
     """
     try:
         origin_notice = _origin_notice()
@@ -258,6 +264,7 @@ def notify_result(draft: DraftRecord, content: str) -> object:
         thread_name=f"캘린더 확정 (draft {draft['id']})",
         content=content,
         fallback=lambda body: send_owner_dm(owner_id(), body),
+        outcome=origin_notice.ThreadOutcome[outcome.upper()] if outcome else None,
     )
 
 

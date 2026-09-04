@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -20,6 +20,7 @@ sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "skills" / "budget" / "scripts"))
 
 import budget_approval  # noqa: E402
+import budget_binding  # noqa: E402
 import budget_cli  # noqa: E402
 import budget_confirm  # noqa: E402
 import budget_core  # noqa: E402
@@ -28,7 +29,9 @@ from automation.interop.approval_directory import DiscordChannelDirectory  # noq
 from automation.interop.approval_surface import (  # noqa: E402
     ApprovalKind,
     ApprovalSurface,
+    ChannelFacts,
     reaction_instruction,
+    request_thread_name,
 )
 
 OWNER_ID = "owner-1"
@@ -36,6 +39,9 @@ APPROVALS_CHANNEL = "1528936606856122421"
 DM_CHANNEL = "1526487935975952385"
 AGENT_CHAT_CHANNEL = "1526487935975952390"
 AGENT_CHAT_THREAD = "1526487935975952391"
+#: 이 요청 하나가 여는 스레드 — 승인·리마인더·결과가 여기서 완결된다.
+REQUEST_THREAD = "1526487935975952392"
+REQUEST_THREAD_NAME = "과제비 메일 · s"
 MESSAGE_ID = "message-1"
 
 type DraftValue = str | int | list[str] | list[list[str]]
@@ -107,11 +113,22 @@ def _reaction_api(draft: dict, users_by_emoji: dict[str, list[dict]]):
 
     return request
 
-def _surface_api(requests: list[tuple[str, str]], draft_sha: str, posted: list[str] | None = None):
+def _surface_api(
+    requests: list[tuple[str, str]],
+    draft_sha: str,
+    posted: list[str] | None = None,
+    thread_names: list[str] | None = None,
+):
     """Serve BOTH approval surfaces, so the channel actually posted to is observable."""
 
     def request(method: str, path: str, payload: dict | None = None):
         requests.append((method, path))
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/threads":
+            if thread_names is not None:
+                thread_names.append(str((payload or {}).get("name", "")))
+            return {"id": REQUEST_THREAD}
+        if method == "GET" and path == f"/channels/{REQUEST_THREAD}":
+            return {"type": 11, "name": REQUEST_THREAD_NAME, "parent_id": AGENT_CHAT_CHANNEL}
         if method == "POST" and path == "/users/@me/channels":
             return {"id": DM_CHANNEL}
         if method == "GET" and path == f"/channels/{DM_CHANNEL}":
@@ -268,8 +285,8 @@ def test_watch_preadds_approve_then_cancel_reactions(monkeypatch: pytest.MonkeyP
     assert budget_cli.cmd_watch(argparse.Namespace()) == 0
     # Then: the bot pre-adds the exact reactions in approve, then cancel order
     assert [path for method, path in requests if method == "PUT"] == [
-        f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9C%85/@me",
-        f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9B%94/@me",
+        f"/channels/{REQUEST_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9C%85/@me",
+        f"/channels/{REQUEST_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9B%94/@me",
     ]
 
 
@@ -334,23 +351,25 @@ def test_a_record_bound_to_a_foreign_surface_fails_closed(
 
 
 @pytest.mark.usefixtures("budget_env")
-def test_request_posts_to_the_agent_chat_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_request_posts_to_its_own_request_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given: a never-posted budget draft and a Discord fake that answers for both surfaces
     draft = _draft(message_id="", bound=False)
     requests: list[tuple[str, str]] = []
     posted: list[str] = []
+    names: list[str] = []
     monkeypatch.setattr(
-        budget_confirm, "_api", _surface_api(requests, str(draft["sha256"]), posted)
+        budget_confirm, "_api", _surface_api(requests, str(draft["sha256"]), posted, names)
     )
 
     # When: the lifecycle posts the one hash-bound approval request for this draft
     message_id = budget_approval.post_for_approval(draft)
 
-    # Then: the single approval message lands in its agent-chat thread, never the guild channel,
-    # and its reaction line is the one the policy renders for that surface
+    # Then: the single approval message lands in THIS request's own thread — named by the
+    # outbound mail 제목, never the shared per-kind thread — with the policy's reaction line
     assert message_id == MESSAGE_ID
     posts = [path for method, path in requests if method == "POST" and path.endswith("/messages")]
-    assert posts == [f"/channels/{AGENT_CHAT_THREAD}/messages"]
+    assert posts == [f"/channels/{REQUEST_THREAD}/messages"]
+    assert names == [REQUEST_THREAD_NAME]
     assert reaction_instruction(
         ApprovalKind.BUDGET_MAIL, ApprovalSurface.AGENT_CHAT_THREAD
     ) in posted[0]
@@ -398,6 +417,7 @@ def _run_origin_watch(
     dm_notices: list[str] = []
     thread_calls: list[dict | None] = []
     thread_posts: list[tuple[str, str]] = []
+    closed: list[dict] = []
     base = _reaction_api(draft, users_by_emoji)
 
     def api(method: str, path: str, payload: dict | None = None):
@@ -408,6 +428,12 @@ def _run_origin_watch(
                 raise RuntimeError("thread API down")
             thread_calls.append(payload)
             return {"id": THREAD_ID}
+        if path == f"/channels/{REQUEST_THREAD}":
+            if method == "GET":
+                return {"id": REQUEST_THREAD, "name": REQUEST_THREAD_NAME}
+            if method == "PATCH":
+                closed.append(payload or {})
+                return {"id": REQUEST_THREAD}
         return base(method, path, payload)
 
     class _ThreadTransport:
@@ -426,7 +452,7 @@ def _run_origin_watch(
     monkeypatch.setattr(budget_confirm, "dm_owner", lambda content: dm_notices.append(content))
     monkeypatch.setattr(budget_cli, "cmd_snapshot", lambda _args: 0)
     assert budget_cli.cmd_watch(argparse.Namespace()) == 0
-    return sent, discarded, dm_notices, thread_calls, thread_posts
+    return sent, discarded, dm_notices, thread_calls, thread_posts, closed
 
 
 @pytest.mark.usefixtures("budget_env")
@@ -434,7 +460,7 @@ def test_watch_posts_send_result_to_origin_thread(monkeypatch: pytest.MonkeyPatc
     # Given: an origin-bound draft with an owner-only ✅
     draft = _origin_draft()
     # When: the production watch tick resolves the approval
-    sent, discarded, dm_notices, thread_calls, thread_posts = _run_origin_watch(
+    sent, discarded, dm_notices, thread_calls, thread_posts, _closed = _run_origin_watch(
         monkeypatch, draft, {budget_confirm.APPROVE_EMOJI: [{"id": OWNER_ID, "bot": False}]}
     )
     # Then: the result lands in the origin-channel thread, never the owner DM
@@ -453,7 +479,7 @@ def test_watch_posts_cancel_result_to_origin_thread(monkeypatch: pytest.MonkeyPa
     # Given: an origin-bound draft the owner cancels with ⛔
     draft = _origin_draft()
     # When: the production watch tick resolves the cancellation
-    sent, discarded, dm_notices, _thread_calls, thread_posts = _run_origin_watch(
+    sent, discarded, dm_notices, _thread_calls, thread_posts, _closed = _run_origin_watch(
         monkeypatch, draft, {budget_confirm.CANCEL_EMOJI: [{"id": OWNER_ID, "bot": False}]}
     )
     # Then: the discard result lands in the origin thread with full mail context
@@ -474,7 +500,7 @@ def test_watch_falls_back_to_dm_when_thread_creation_fails(
     # Given: an origin-bound approved draft whose thread creation will fail
     draft = _origin_draft()
     # When: the watch tick sends and tries to report to the origin thread
-    sent, _discarded, dm_notices, _thread_calls, thread_posts = _run_origin_watch(
+    sent, _discarded, dm_notices, _thread_calls, thread_posts, _closed = _run_origin_watch(
         monkeypatch, draft,
         {budget_confirm.APPROVE_EMOJI: [{"id": OWNER_ID, "bot": False}]},
         thread_fail=True,
@@ -542,6 +568,110 @@ def test_snapshot_parser_accepts_origin_flags() -> None:
     assert args.origin_message_id == ORIGIN_MESSAGE
 
 
+def test_notify_result_forwards_expired_outcome_to_shared_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """만료 표시는 공유 전달기에만 맡겨야 스레드 종료 의미가 모든 스킬에서 같다."""
+    delivered: dict[str, object] = {}
+
+    class _OriginNotice:
+        class ThreadOutcome:
+            EXPIRED = object()
+
+        @staticmethod
+        def deliver(**kwargs: object) -> str:
+            delivered.update(kwargs)
+            return "notice-1"
+
+    monkeypatch.setattr(budget_confirm, "_origin_notice", lambda: _OriginNotice)
+
+    assert budget_confirm.notify_result(
+        _origin_draft(), "⌛ 승인 만료", outcome=budget_confirm.OUTCOME_EXPIRED
+    ) == "notice-1"
+    assert delivered["outcome"] is _OriginNotice.ThreadOutcome.EXPIRED
+
+
+def _store_pending_expiry_draft(draft: BudgetDraft) -> Path:
+    path = budget_gate.gate_dir() / "drafts" / f"{draft['id']}.json"
+    budget_gate.write_json(path, draft)
+    return path
+
+
+@pytest.mark.usefixtures("budget_env")
+def test_expiry_archives_bound_draft_and_delivers_expired_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """승인 TTL을 넘긴 초안은 재게시하지 않고 스레드 종료 결과만 남겨야 한다."""
+    created = datetime(2026, 8, 16, 12, tzinfo=UTC)
+    draft = {**_thread_draft(), "created": created.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    pending_path = _store_pending_expiry_draft(draft)
+    notices: list[tuple[dict, str, dict[str, object]]] = []
+
+    def record_notice(record: dict, content: str, **kwargs: object) -> str:
+        notices.append((record, content, kwargs))
+        return "notice-1"
+
+    monkeypatch.setattr(budget_confirm, "notify_result", record_notice)
+
+    budget_confirm.expire_pending_drafts(created + budget_confirm.BUDGET_APPROVAL_TTL)
+
+    assert not pending_path.exists()
+    archived = json.loads(
+        (budget_gate.gate_dir() / "archives" / f"{draft['id']}.json").read_text(encoding="utf-8")
+    )
+    assert archived["status"] == "expired"
+    assert len(notices) == 1
+    _record, content, kwargs = notices[0]
+    assert draft["subject"] in content and str(draft["id"]) in content
+    assert "86400초" in content
+    assert kwargs["outcome"] == budget_confirm.OUTCOME_EXPIRED
+
+
+@pytest.mark.usefixtures("budget_env")
+def test_expiry_notice_failure_leaves_budget_archive_intact(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """결과 통지가 실패해도 만료된 초안이 다시 발송 대기열로 돌아가면 안 된다."""
+    created = datetime(2026, 8, 16, 12, tzinfo=UTC)
+    draft = {**_thread_draft(), "created": created.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    pending_path = _store_pending_expiry_draft(draft)
+
+    def fail_notice(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("synthetic notice failure")
+
+    monkeypatch.setattr(budget_confirm, "notify_result", fail_notice)
+
+    budget_confirm.expire_pending_drafts(created + budget_confirm.BUDGET_APPROVAL_TTL)
+
+    assert not pending_path.exists()
+    assert json.loads(
+        (budget_gate.gate_dir() / "archives" / f"{draft['id']}.json").read_text(encoding="utf-8")
+    )["status"] == "expired"
+    assert f"NOTIFY-FAIL draft={draft['id']} err=RuntimeError" in capsys.readouterr().err
+
+
+@pytest.mark.usefixtures("budget_env")
+def test_nonexpired_budget_draft_is_not_notified_or_archived(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """유효한 요청은 원래 워처가 리액션을 소비할 때까지 pending으로 남겨야 한다."""
+    created = datetime(2026, 8, 16, 12, tzinfo=UTC)
+    draft = {**_thread_draft(), "created": created.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    pending_path = _store_pending_expiry_draft(draft)
+    notices: list[object] = []
+    monkeypatch.setattr(
+        budget_confirm, "notify_result", lambda *_args, **_kwargs: notices.append(object())
+    )
+
+    budget_confirm.expire_pending_drafts(
+        created + budget_confirm.BUDGET_APPROVAL_TTL - timedelta(seconds=1)
+    )
+
+    assert pending_path.exists()
+    assert not (budget_gate.gate_dir() / "archives" / f"{draft['id']}.json").exists()
+    assert notices == []
+
+
 def test_notify_result_falls_back_to_owner_when_helper_is_unavailable(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -558,3 +688,128 @@ def test_notify_result_falls_back_to_owner_when_helper_is_unavailable(
     # Then: the owner still gets it through the legacy path, with a marker
     assert result == "dm-1" and notices == ["결과"]
     assert "NOTIFY-HELPER-MISSING" in capsys.readouterr().err
+
+
+# ------------------------------------------------------- per-request approval thread
+
+
+class _RecordingDirectory:
+    """Records the thread spec one budget request asks for; refuses every other surface."""
+
+    def __init__(self) -> None:
+        self.specs: list[tuple[object, object]] = []
+        self.per_kind = 0
+
+    def owner_dm(self) -> str:
+        raise AssertionError("budget must not resolve a direct-message surface")
+
+    def skill_approvals(self) -> str:
+        raise AssertionError("budget must not resolve the skill approval channel")
+
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_CHANNEL
+
+    def agent_chat_thread(self, _kind: object) -> str:
+        self.per_kind += 1
+        return AGENT_CHAT_THREAD
+
+    def agent_chat_request_thread(self, kind: object, request: object) -> str:
+        self.specs.append((kind, request))
+        return REQUEST_THREAD
+
+    def describe(self, _channel_id: str) -> ChannelFacts:
+        return ChannelFacts(11, REQUEST_THREAD_NAME, (), AGENT_CHAT_CHANNEL)
+
+
+@pytest.mark.usefixtures("budget_env")
+def test_new_binding_asks_for_a_request_thread_titled_by_the_mail_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: an unposted draft that was instructed from a channel
+    draft = {
+        **_draft(message_id="", bound=False),
+        "origin_channel_id": ORIGIN_CHANNEL,
+        "origin_message_id": ORIGIN_MESSAGE,
+    }
+    directory = _RecordingDirectory()
+    monkeypatch.setattr(budget_binding, "approval_directory", lambda: directory)
+
+    # When: the one surface resolution of this draft happens
+    binding = budget_binding.new_binding(draft)
+
+    # Then: it asks for THIS request's thread — 제목만, 금액·잔액 없이 — carrying the
+    # instruction message so the thread can anchor on it, and never the per-kind thread
+    [(kind, spec)] = directory.specs
+    assert kind is ApprovalKind.BUDGET_MAIL
+    assert spec.title == draft["subject"]
+    assert (spec.origin_channel_id, spec.origin_message_id) == (ORIGIN_CHANNEL, ORIGIN_MESSAGE)
+    assert request_thread_name(ApprovalKind.BUDGET_MAIL, spec) == REQUEST_THREAD_NAME
+    assert binding.channel_id == REQUEST_THREAD
+    assert directory.per_kind == 0
+
+
+@pytest.mark.usefixtures("budget_env")
+def test_posting_persists_the_request_thread_outside_the_draft_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a never-posted draft and the production Discord surface fake
+    draft = {
+        **_draft(message_id="", bound=False),
+        "origin_channel_id": ORIGIN_CHANNEL,
+        "origin_message_id": ORIGIN_MESSAGE,
+    }
+    monkeypatch.setattr(budget_confirm, "_api", _surface_api([], str(draft["sha256"])))
+
+    # When: the producer posts it for owner approval
+    assert budget_approval.post_for_approval(draft) == MESSAGE_ID
+
+    # Then: the record remembers the thread the request lives in, and the approval hash
+    # is untouched by it (the routing column sits outside the frozen content)
+    stored = json.loads(
+        (budget_gate.gate_dir() / "drafts" / f"{draft['id']}.json").read_text(encoding="utf-8")
+    )
+    assert stored["approval_thread_id"] == REQUEST_THREAD
+    assert stored["channel_id"] == REQUEST_THREAD
+    assert stored["sha256"] == draft["sha256"] == budget_core.draft_sha256(stored)
+
+
+def _thread_draft() -> BudgetDraft:
+    """A draft whose approval already lives in its own request thread."""
+    return {**_origin_draft(), "approval_thread_id": REQUEST_THREAD}
+
+
+@pytest.mark.usefixtures("budget_env")
+def test_watch_send_notice_lands_in_the_request_thread_and_closes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: an approved draft whose request thread is recorded
+    draft = _thread_draft()
+    # When: the production watch tick sends and reports the result
+    sent, discarded, dm_notices, thread_calls, thread_posts, closed = _run_origin_watch(
+        monkeypatch, draft, {budget_confirm.APPROVE_EMOJI: [{"id": OWNER_ID, "bot": False}]}
+    )
+    # Then: the notice goes into that same thread (no new thread), which is then marked
+    # 완료 and archived — the open threads are exactly the requests still in flight
+    assert len(sent) == 1 and discarded == [] and dm_notices == []
+    assert thread_calls == []
+    assert [channel for channel, _content in thread_posts] == [REQUEST_THREAD]
+    assert "발송 완료" in thread_posts[0][1]
+    assert closed == [{"archived": True, "name": f"✅ 완료 · {REQUEST_THREAD_NAME}"}]
+
+
+@pytest.mark.usefixtures("budget_env")
+def test_watch_cancel_notice_closes_the_request_thread_as_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a draft the owner cancels with ⛔, bound to its request thread
+    draft = _thread_draft()
+    # When: the production watch tick resolves the cancellation
+    sent, discarded, dm_notices, thread_calls, thread_posts, closed = _run_origin_watch(
+        monkeypatch, draft, {budget_confirm.CANCEL_EMOJI: [{"id": OWNER_ID, "bot": False}]}
+    )
+    # Then: the ⛔ notice lands in the same thread, which is closed as 취소
+    assert sent == [] and discarded == [draft["id"]] and dm_notices == []
+    assert thread_calls == []
+    assert [channel for channel, _content in thread_posts] == [REQUEST_THREAD]
+    assert "발송 취소" in thread_posts[0][1]
+    assert closed == [{"archived": True, "name": f"⛔ 취소 · {REQUEST_THREAD_NAME}"}]

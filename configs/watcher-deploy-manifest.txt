@@ -14,6 +14,9 @@
 # 노드에서 `automation/healthcheck_probe_wrapper.sh --install` 을 다시 돌려야 하고, 그
 # 필요는 healthcheck_wrapper_current 프로브가 지문 대조로 알려준다(조용히 낡지 않는다).
 
+# --- automation/cost-report/deploy-manifest.txt ---
+agent|automation/cost-report/send_cost_report.py|.hermes/scripts/send_cost_report.py|required
+
 # --- automation/managed_sync/deploy-manifest.txt ---
 agent|automation/managed_sync/cron/managed_sync_watch.py|.hermes/scripts/managed_sync_watch.py|optional:구독자 전용 opt-in 컴포넌트라 그룹 스킬을 구독하지 않는 설치에는 없는 것이 정상이다(D3)
 
@@ -26,8 +29,17 @@ agent|automation/memory_relocate/cron/memory_relocate_watch.py|.hermes/scripts/m
 # --- automation/notes_organize/deploy-manifest.txt ---
 agent|automation/notes_organize/notes_organize.py|.hermes/scripts/notes_organize.py|required
 
+# --- automation/plaud_sync/deploy-manifest.txt ---
+agent|automation/plaud_sync/cron/plaud_sync_watch.py|.hermes/scripts/plaud_sync_watch.py|required
+
 # --- automation/rag_ingest/deploy-manifest.txt ---
 agent|automation/rag_ingest/cron/rag_ingest_watch.py|.hermes/scripts/rag_ingest_watch.py|required
+
+# --- automation/reminder_poller/deploy-manifest.txt ---
+agent|automation/reminder_poller/poll_reminders.py|.hermes/scripts/poll_reminders.py|required
+
+# --- automation/repair/deploy-manifest.txt ---
+agent|automation/repair/cron/repair_report_consume_watch.py|.hermes/scripts/repair_report_consume_watch.py|required
 
 # --- automation/research_trends/deploy-manifest.txt ---
 agent|automation/research_trends/research_trends.py|.hermes/scripts/research_trends.py|required
@@ -35,6 +47,10 @@ agent|automation/research_trends/research_trends.py|.hermes/scripts/research_tre
 # --- automation/selfskill_audit/deploy-manifest.txt ---
 agent|automation/selfskill_audit/cron/selfskill_audit_watch.py|.hermes/scripts/selfskill_audit_watch.py|required
 peer|automation/selfskill_audit/cron/selfskill_audit_watch.py|.hermes/scripts/selfskill_audit_watch.py|required
+
+# --- automation/skill_generation/deploy-manifest.txt ---
+agent|automation/skill_generation/plugin/__init__.py|.hermes/plugins/05-skill-generation/__init__.py|required
+agent|automation/skill_generation/plugin/plugin.yaml|.hermes/plugins/05-skill-generation/plugin.yaml|required
 
 # --- automation/state_backup/deploy-manifest.txt ---
 agent|automation/state_backup/cron/state_backup_watch.py|.hermes/scripts/state_backup_watch.py|required
@@ -50,6 +66,7 @@ agent|skills/coordination/scripts/confirm_reaction_watch.py|.hermes/scripts/conf
 
 # --- skills/mail/deploy-manifest.txt ---
 agent|skills/mail/scripts/mail_digest_watch.py|.hermes/scripts/mail_digest_watch.py|required
+agent|skills/mail/scripts/mail_attachment_drive_watch.py|.hermes/scripts/mail_attachment_drive_watch.py|required
 agent|skills/mail/scripts/mail_triage_watch.py|.hermes/scripts/mail_triage_watch.py|required
 agent|skills/mail/scripts/watch_failure_streak.py|.hermes/scripts/watch_failure_streak.py|required
 agent|skills/mail/scripts/mailon_vendor_digest.sh|.hermes/scripts/mailon_vendor_digest.sh|required

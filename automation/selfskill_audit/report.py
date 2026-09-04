@@ -12,6 +12,7 @@ from typing import Final
 
 from automation.owner_notice import notify_owner
 from automation.selfskill_audit.ledger import Action, Delta, audit, mark_reported
+from automation.selfskill_audit.local_log import append_run, update_pending_overlaps
 from automation.selfskill_audit.overlap import OverlapHit, find_overlaps
 
 _ACCOUNT_LABEL: Final = re.compile(r"[a-z0-9_-]{1,32}")
@@ -30,6 +31,7 @@ def render_summary(
     account_label: str,
     shadowed: tuple[str, ...] = (),
     overlaps: tuple["OverlapHit", ...] = (),
+    pending_overlaps: int = 0,
 ) -> str:
     label = account_label if _ACCOUNT_LABEL.fullmatch(account_label) else "unknown"
     counts = Counter(delta.action for delta in deltas)
@@ -51,6 +53,10 @@ def render_summary(
         "archive 하거나 repo 로 승격(코드화→PR→릴리스)"
         for hit in overlaps
     )
+    if pending_overlaps > 0:
+        lines.append(
+            f"미결 겹침 {pending_overlaps}건 — 승격·폐기 결정 대기(pending-overlaps.json)"
+        )
     return "\n".join(lines)
 
 
@@ -60,10 +66,15 @@ def send_report(
     account_label: str,
     shadowed: tuple[str, ...] = (),
     overlaps: tuple["OverlapHit", ...] = (),
+    pending_overlaps: int = 0,
 ) -> bool:
     return notify_owner(
         render_summary(
-            deltas, account_label=account_label, shadowed=shadowed, overlaps=overlaps
+            deltas,
+            account_label=account_label,
+            shadowed=shadowed,
+            overlaps=overlaps,
+            pending_overlaps=pending_overlaps,
         )
     )
 
@@ -103,9 +114,8 @@ def run_once(
     account_label: str | None = None,
     now: datetime | None = None,
 ) -> int:
-    result = audit(
-        home, now=datetime.now(UTC) if now is None else now, governed_root=_governed_root()
-    )
+    run_at = datetime.now(UTC) if now is None else now
+    result = audit(home, now=run_at, governed_root=_governed_root())
     # 가림은 델타가 없어도 알린다 — 승인 게이트를 강제하는 배포본이 가려진 상태 자체가 사건이고,
     # 해소될 때까지 매 틱(일 1회) 다시 말하는 편이 조용히 사는 것보다 낫다.
     # 기능 겹침 advisory(SC-4)도 같은 원칙 — 해소(archive/승격)까지 매일 한 줄.
@@ -113,16 +123,55 @@ def run_once(
         overlaps = find_overlaps(home, _governed_root())
     except Exception:  # noqa: BLE001 - advisory 가 감사·보고 본연을 죽이면 안 된다
         overlaps = ()
+        overlaps_available = False
+    else:
+        overlaps_available = True
+    label = getpass.getuser() if account_label is None else account_label
+    pending_overlaps = (
+        update_pending_overlaps(now=run_at, overlaps=overlaps, home=home)
+        if overlaps_available
+        else 0
+    )
     if not result.pending_deltas and not result.shadowed and not overlaps:
+        append_run(
+            now=run_at,
+            account=label,
+            deltas=result.deltas,
+            shadowed=result.shadowed,
+            overlaps=overlaps,
+            notified=False,
+            home=home,
+        )
         return 0
     owner_id = resolve_owner_id(home)
     if owner_id and not os.environ.get("AUTOPHAGY_OWNER_ID", "").strip():
         os.environ["AUTOPHAGY_OWNER_ID"] = owner_id
-    label = getpass.getuser() if account_label is None else account_label
     if not send_report(
-        result.pending_deltas, account_label=label, shadowed=result.shadowed, overlaps=overlaps
+        result.pending_deltas,
+        account_label=label,
+        shadowed=result.shadowed,
+        overlaps=overlaps,
+        pending_overlaps=pending_overlaps,
     ):
+        append_run(
+            now=run_at,
+            account=label,
+            deltas=result.deltas,
+            shadowed=result.shadowed,
+            overlaps=overlaps,
+            notified=False,
+            home=home,
+        )
         return 1
+    append_run(
+        now=run_at,
+        account=label,
+        deltas=result.deltas,
+        shadowed=result.shadowed,
+        overlaps=overlaps,
+        notified=True,
+        home=home,
+    )
     mark_reported(result)
     return 0
 

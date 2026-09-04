@@ -85,6 +85,32 @@ def test_parse_serialize_roundtrip_when_v1_record_is_complete() -> None:
     assert parsed == state
 
 
+def test_parse_when_record_predates_the_approval_thread_id_keeps_it_empty() -> None:
+    # Given: a persisted record written before the per-request approval thread existed.
+    raw = _raw_state(_raw_record())
+
+    # When: it is parsed and written back at the persisted-state boundary.
+    parsed = parse_state(raw)
+    record = parsed.relocations[f"memory:{'a' * 64}"]
+
+    # Then: the legacy row loads and round-trips without inventing a thread id.
+    assert record.approval_thread_id is None
+    assert serialize_state(parsed) == raw
+
+
+def test_parse_serialize_roundtrip_keeps_the_approval_thread_id() -> None:
+    # Given: a record bound to the thread its approval request lives in.
+    raw_record = {**_raw_record(), "approval_thread_id": "thread-1"}
+
+    # When: it is parsed and serialized back.
+    parsed = parse_state(_raw_state(raw_record))
+    record = parsed.relocations[f"memory:{'a' * 64}"]
+
+    # Then: the thread id survives the boundary untouched.
+    assert record.approval_thread_id == "thread-1"
+    assert serialize_state(parsed) == _raw_state(raw_record)
+
+
 def test_serialize_state_when_record_is_keyed_uses_record_key() -> None:
     # Given: a relocation indexed by its source-qualified digest.
     raw = _raw_state(_raw_record())

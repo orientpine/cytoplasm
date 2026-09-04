@@ -1,7 +1,7 @@
 ---
 name: report
 description: "개인 노트를 민감도 게이트 뒤 보고서·reveal.js 슬라이드·발표 대본으로 생성한다. 모든 산출물은 agent 전용 outputs에만 저장한다. W5-3."
-version: 1.0.2
+version: 1.0.4
 author: autophagy-agents
 license: MIT
 metadata:
@@ -25,23 +25,24 @@ prerequisites:
    않는다. CLI 출력의 경로·provider·건수만 응답에 사용한다.
 3. `!slides`, `!script`는 이미 `~/outputs/`에 있는 보고서에서만 파생 산출물을 만든다.
    Drive/repo 이동 명령은 이 스킬에 없다.
+변경 명령은 `/srv/autophagy-skills/live/report/scripts/`에서만 실행하며, 낡은 사본은 STALE-SKILL-COPY-BLOCK으로 거부한다.
 
 ## Commands
 
 ```bash
 # !report [선택 키워드] — 최근 노트에서 보고서 초안 생성
-python3 ~/.hermes/skills/report/scripts/report_cli.py report \
+python3 /srv/autophagy-skills/live/report/scripts/report_cli.py report \
   [--query "키워드"] [--limit 12] [--title "보고서 제목"] [--with-evidence]
 
 # 원문 없이 근거 수와 계층 상태 미리보기
-python3 ~/.hermes/skills/report/scripts/report_cli.py evidence \
+python3 /srv/autophagy-skills/live/report/scripts/report_cli.py evidence \
   [--query "키워드"] [--limit 12] [--title "보고서 제목"] [--json]
 
 # !slides <report-path> — reveal.js HTML 생성
-python3 ~/.hermes/skills/report/scripts/report_cli.py slides --report <~/outputs/report-*.md>
+python3 /srv/autophagy-skills/live/report/scripts/report_cli.py slides --report <~/outputs/report-*.md>
 
 # !script <report-path> [slides-path] — 발표 대본 생성
-python3 ~/.hermes/skills/report/scripts/report_cli.py script \
+python3 /srv/autophagy-skills/live/report/scripts/report_cli.py script \
   --report <~/outputs/report-*.md> [--slides <~/outputs/slides-*.html>]
 ```
 

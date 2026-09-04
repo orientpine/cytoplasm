@@ -1,23 +1,27 @@
 from __future__ import annotations
 
-import fcntl
-import json
 import os
 import stat
-import time
-from dataclasses import dataclass, replace
-from datetime import UTC, datetime
-from http.client import HTTPSConnection
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Callable, Final
-from urllib.error import HTTPError
-from urllib.parse import quote
+from typing import Final
 
-from automation.interop.approval_directory import DiscordChannelDirectory, JsonValue
-from automation.interop.discord_transport import _retry_after
+from automation.interop.approval_directory import DiscordChannelDirectory
 from automation.interop.approval_lease import FileKeyLease, PostingJournal
 from automation.interop.approval_lifecycle import ApprovalRequest, Probe
-from automation.interop.approval_surface import ApprovalKind, resolve_new_binding
+from automation.interop.approval_surface import (
+    ApprovalKind,
+    RequestThread,
+    resolve_new_binding,
+    reuse_request_thread,
+)
+from automation.interop.reaction_approval import (
+    DiscordTransport,
+    DiscordTransportError,
+    record_push_approval,
+    thread_candidates,
+)
 from automation.memory_curator.binding import entry_digest
 from automation.memory_curator.watch_steps import read_native
 from automation.obsidian_write.config import ObsidianWriteError, load_config
@@ -28,217 +32,26 @@ from automation.obsidian_write.writer import write_note
 from .approval_gate import RelocateApprovalGate, request_approval
 from .apply import ApplyDeps, ApplyOutcome, apply_relocation
 from .binding import RelocationHashFields, relocation_action_hash
-from .model import RelocationRecord, RelocationState, record_key
+from .model import RelocationRecord, record_key
 from .plan import RelocationPlan, build_relocation_plan
 from .rag_verify import verify_ingested
-from .store import JsonLoader, load_state, save_state
+from .relocation_store import RelocationStore, RelocationStoreError
 from .watch_step import ResolveEffects
 
-_DISCORD_API: Final = "https://discord.com/api/v10"
-_USER_AGENT: Final = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
-_DISCORD_MAX_ATTEMPTS: Final = 3
-_PENDING_STATUSES: Final = frozenset({"proposed", "posted", "approved", "written", "ingested"})
 _EFFECT_ERRORS: Final = (OSError, ValueError, RuntimeError, ObsidianWriteError)
 
+#: Re-exported for the callers and tests that reached for them here while this module
+#: still owned the transport; ``automation.interop.reaction_approval`` is the source.
+__all__ = [
+    "DiscordTransport",
+    "DiscordTransportError",
+    "RelocationStore",
+    "RelocationStoreError",
+    "build_effects",
+    "recover_entry_text",
+    "record_push_approval",
+]
 
-_JSON_LOADS: JsonLoader = json.loads
-
-def record_push_approval(
-    approval_log: Path,
-    *,
-    action_hash: str,
-    target_id: str,
-    owner_id: str,
-    message_id: str,
-    now: datetime | None = None,
-) -> None:
-    """Transcribe the owner's ✅ into the record the external-effect gate accepts.
-
-    The Obsidian push is a denylisted mutation, so ``write_note`` refuses until the gate finds
-    an owner approval for THAT exact tool call.  cha's ✅ on the relocation message already
-    approved this note byte-for-byte — the composite action hash binds ``relpath+title+body``,
-    which is precisely the push payload — so this writes that same decision in the gate's
-    schema, bound to the Discord message the reaction was read from.  It is only ever called
-    after the approval gate probed a real owner ✅ on the bound message.
-    """
-    moment = (now or datetime.now(UTC)).astimezone(UTC)
-    payload = {
-        "action": "external_effect.approval",
-        "approval": {
-            "channel": "approvals",
-            "message_id": message_id,
-            "method": "manual_reaction",
-            "owner_id": owner_id,
-        },
-        "hash": action_hash,
-        "result": {"status": "approved"},
-        "target_id": target_id,
-        "timestamp": moment.strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    approval_log.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with approval_log.open("a", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        _ = handle.write(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
-        )
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    approval_log.chmod(0o600)
-
-
-RelocationStoreError = RuntimeError
-
-
-@dataclass(frozen=True, slots=True)
-class RelocationStore:
-    state_path: Path
-
-    def all_pending(self) -> tuple[RelocationRecord, ...]:
-        return tuple(record for record in load_state(self.state_path).relocations.values() if record.status in _PENDING_STATUSES)
-
-    def pending(self) -> tuple[RelocationRecord, ...]:
-        return self.all_pending()
-
-    def set_message_id(self, record: RelocationRecord, message_id: str, channel_id: str) -> None:
-        """Bind the posted message AND the surface it was posted to, atomically.
-
-        The channel is part of the binding (interop invariant: the surface is persisted on the
-        record). Losing it makes the next tick probe an empty channel, read MISSING, and discard
-        the owner's ✅ — so both fields are written in one no-overwrite commit.
-        """
-        state, current = self._current(record_key(record.source_kind, record.entry_sha256))
-        if current.action_hash != record.action_hash:
-            raise RelocationStoreError("relocation approval message id is already bound or stale")
-        if current.message_id is not None:
-            if (current.message_id, current.channel_id) == (message_id, channel_id):
-                return
-            raise RelocationStoreError("relocation approval message id is already bound or stale")
-        self._persist(state, replace(current, message_id=message_id, channel_id=channel_id))
-
-    def clear_message_id(self, key: str, action_hash: str, message_id: str) -> None:
-        state, current = self._current(key)
-        if (current.action_hash, current.message_id) == (action_hash, message_id):
-            self._persist(state, replace(current, message_id=None))
-
-    def update(self, record: RelocationRecord) -> None:
-        state, current = self._current(record_key(record.source_kind, record.entry_sha256))
-        if current.action_hash != record.action_hash or current.message_id != record.message_id:
-            raise RelocationStoreError("relocation update would change an immutable message binding")
-        self._persist(state, record)
-
-    def _current(self, key: str) -> tuple[RelocationState, RelocationRecord]:
-        state = load_state(self.state_path)
-        record = state.relocations.get(key)
-        if record is None:
-            raise RelocationStoreError("relocation record is absent")
-        return state, record
-
-    def _persist(self, state: RelocationState, record: RelocationRecord) -> None:
-        records = dict(state.relocations)
-        records[record_key(record.source_kind, record.entry_sha256)] = record
-        save_state(self.state_path, RelocationState(state.version, records))
-
-
-DiscordTransportError = ValueError
-
-
-class DiscordTransport:
-    token: str
-    owner_id: str
-    sleeper: Callable[[float], None]
-    max_attempts: int
-
-    def __init__(
-        self,
-        token: str,
-        owner_id: str,
-        *,
-        sleeper: Callable[[float], None] = time.sleep,
-        max_attempts: int = _DISCORD_MAX_ATTEMPTS,
-    ) -> None:
-        if max_attempts < 1:
-            raise DiscordTransportError("Discord max attempts must be positive")
-        self.token = token
-        self.owner_id = owner_id
-        self.sleeper = sleeper
-        self.max_attempts = max_attempts
-
-    def api(self, method: str, path: str, payload: dict[str, JsonValue] | None = None) -> JsonValue:
-        attempt = 0
-        while True:
-            attempt += 1
-            connection = HTTPSConnection("discord.com", timeout=30)
-            try:
-                connection.request(
-                    method,
-                    f"/api/v10{path}",
-                    body=None if payload is None else json.dumps(payload).encode("utf-8"),
-                    headers={"Authorization": f"Bot {self.token}", "Content-Type": "application/json", "User-Agent": _USER_AGENT},
-                )
-                response = connection.getresponse()
-                body = response.read().decode("utf-8")
-                if response.status >= 400:
-                    raise HTTPError(f"{_DISCORD_API}{path}", response.status, response.reason, response.headers, None)
-            except HTTPError as error:
-                if error.code != 429 or attempt >= self.max_attempts:
-                    raise
-                self.sleeper(_retry_after(error.headers))
-                continue
-            finally:
-                connection.close()
-            break
-        try:
-            return _JSON_LOADS(body) if body else None
-        except json.JSONDecodeError as error:
-            raise DiscordTransportError("Discord response is not valid JSON") from error
-
-    def post_message(self, channel_id: str, content: str) -> str:
-        return _required_string(_json_object(self.api("POST", f"/channels/{channel_id}/messages", {"content": content})), "id")
-
-    def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
-        _ = self.api("PUT", f"/channels/{channel_id}/messages/{message_id}/reactions/{quote(emoji, safe='')}/@me")
-
-    def get_message_content(self, channel_id: str, message_id: str) -> str | None:
-        try:
-            return _required_string(_json_object(self.api("GET", f"/channels/{channel_id}/messages/{message_id}")), "content")
-        except HTTPError as error:
-            if error.code == 404:
-                return None
-            raise
-
-    def get_message(self, channel_id: str, message_id: str) -> str | None:
-        return self.get_message_content(channel_id, message_id)
-
-    def reaction_users(self, channel_id: str, message_id: str, emoji: str) -> tuple[tuple[str, bool], ...]:
-        payload = self.api("GET", f"/channels/{channel_id}/messages/{message_id}/reactions/{quote(emoji, safe='')}")
-        if not isinstance(payload, list):
-            raise DiscordTransportError("Discord reaction users response is not a list")
-        users: list[tuple[str, bool]] = []
-        for raw_user in payload:
-            user = _json_object(raw_user)
-            is_bot = user.get("bot", False)
-            if not isinstance(is_bot, bool):
-                raise DiscordTransportError("Discord reaction user has an invalid bot flag")
-            users.append((_required_string(user, "id"), is_bot))
-        return tuple(users)
-
-    def get_reaction_users(self, channel_id: str, message_id: str, emoji: str) -> tuple[tuple[str, bool], ...]:
-        return self.reaction_users(channel_id, message_id, emoji)
-
-    def delete_message(self, channel_id: str, message_id: str) -> None:
-        _ = self.api("DELETE", f"/channels/{channel_id}/messages/{message_id}")
-
-
-def _json_object(value: JsonValue) -> dict[str, JsonValue]:
-    if not isinstance(value, dict):
-        raise DiscordTransportError("Discord response is not an object")
-    return value
-
-
-def _required_string(payload: dict[str, JsonValue], key: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str) or not value:
-        raise DiscordTransportError(f"Discord response omitted {key}")
-    return value
 
 
 def recover_entry_text(memory_dir: Path, record: RelocationRecord) -> str | None:
@@ -283,14 +96,50 @@ def build_effects(*, memory_dir: Path, state_path: Path, rag_state_path: Path, t
         except _EFFECT_ERRORS:
             return None
 
+    def live_requests(key: str) -> tuple[RelocationRecord, ...]:
+        """The records whose approval message is live for this key — the gate's own read."""
+        try:
+            return tuple(
+                pending
+                for pending in store.all_pending()
+                if record_key(pending.source_kind, pending.entry_sha256) == key
+                and pending.message_id
+            )
+        except _EFFECT_ERRORS:
+            return ()
+
     def post(record: RelocationRecord) -> tuple[str, str] | None:
         try:
             text = recover_entry_text(memory_dir, record)
             if text is None:
                 return None
-            binding = resolve_new_binding(ApprovalKind.OBSIDIAN_WRITE, directory, owner_id)
+            key = record_key(record.source_kind, record.entry_sha256)
+            # One approval key keeps ONE thread: this runs before the façade decides
+            # PENDING, so a live request of the same key lends its thread instead of
+            # leaving an empty one behind per tick. A request whose message went MISSING
+            # has no live candidate at all, so the record's own thread is offered too —
+            # otherwise the re-post resolves a fresh binding and opens a SECOND thread.
+            # The thread name carries the pending id ONLY — never the note path, title
+            # or the entry text being moved.
+            binding = reuse_request_thread(
+                ApprovalKind.OBSIDIAN_WRITE,
+                thread_candidates(
+                    live_requests(key),
+                    approval_thread_id=record.approval_thread_id,
+                    rebind=lambda thread_id: replace(record, channel_id=thread_id),
+                ),
+                directory,
+                owner_id,
+            ) or resolve_new_binding(
+                ApprovalKind.OBSIDIAN_WRITE,
+                directory,
+                owner_id,
+                request=RequestThread(title=key),
+            )
+            bound = replace(record, approval_thread_id=binding.channel_id)
+            store.update(bound)
             verdict = request_approval(
-                record,
+                bound,
                 text,
                 store=store,
                 transport=transport,

@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from automation.drive_client_cache import _folder_alive as folder_alive
+from automation.drive_client_cache import ensure_folder_path as resolve_folder_path
 from automation.interop.external_effect_gate import JsonValue
 
 _JsonResult = dict[str, JsonValue] | list[JsonValue]
@@ -201,19 +203,34 @@ class DriveClient:
         link = str(result.get("webViewLink", "")) if isinstance(result, dict) else ""
         return link or f"https://drive.google.com/file/d/{file_id}/view"
 
-    def _load_cache(self) -> dict[str, str]:
-        try:
-            data = json.loads(self.folder_cache.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    def file_checksum(self, file_id: str) -> tuple[str, int]:
+        """Return ``(sha256Checksum, size)`` Drive reports for ``file_id`` — a read, no media.
 
-    def _save_cache(self, cache: dict[str, str]) -> None:
-        self.folder_cache.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.folder_cache.write_text(
-            json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        The read-back an upload verification needs when the local copy is the only
+        other party: comparing the two metadata fields costs one API call, while
+        :meth:`download_and_verify` re-fetches every byte. A response missing either
+        field is unusable (Google-native documents carry neither), so it fails closed
+        rather than reporting an unverified upload as verified.
+        """
+        result = self._run(
+            [self.gws_bin, "drive", "files", "get", "--params",
+             json.dumps({"fileId": file_id, "fields": "sha256Checksum,size"})]
         )
-        self.folder_cache.chmod(0o600)
+        checksum = str(result.get("sha256Checksum", "")) if isinstance(result, dict) else ""
+        raw_size = result.get("size") if isinstance(result, dict) else None
+        if not checksum or raw_size is None:
+            raise DriveClientError(
+                f"체크섬/크기 응답 불완전(fail-closed): {file_id} "
+                f"sha256={checksum or '없음'} size={raw_size if raw_size is not None else '없음'}"
+            )
+        try:
+            size = int(str(raw_size))
+        except ValueError as error:
+            raise DriveClientError(f"크기 값이 정수가 아님: {file_id} size={raw_size!r}") from error
+        return checksum, size
+
+    def _folder_alive(self, file_id: str) -> bool:
+        return folder_alive(file_id, gws_bin=self.gws_bin, run=self._run)
 
     def find_folder_path(self, parts: tuple[str, ...]) -> str | None:
         """Resolve an existing folder path, or ``None`` — never creates, never caches.
@@ -233,24 +250,13 @@ class DriveClient:
     def ensure_folder_path(self, parts: tuple[str, ...]) -> str:
         if not parts:
             raise DriveClientError("folder path is empty")
-        cache = self._load_cache()
-        parent = "root"
-        walked: list[str] = []
-        changed = False
-        for name in parts:
-            walked.append(name)
-            key = "/".join(walked)
-            cached = cache.get(key)
-            if cached:
-                parent = cached
-                continue
-            resolved = self._find_folder(name, parent) or self._create_folder(name, parent)
-            cache[key] = resolved
-            parent = resolved
-            changed = True
-        if changed:
-            self._save_cache(cache)
-        return parent
+        return resolve_folder_path(
+            parts,
+            folder_cache=self.folder_cache,
+            find_folder=self._find_folder,
+            create_folder=self._create_folder,
+            folder_alive=self._folder_alive,
+        )
 
     def upsert_file(
         self, local: Path, name: str, parent_id: str, prior_id: str | None = None

@@ -21,8 +21,10 @@ import argparse
 import os
 import secrets
 import sys
+from pathlib import Path
 
 import coordinate_io as io
+import coordination_governed
 from coordination_lifecycle import finalize as lifecycle_finalize, owner_leg, reason_ko, send_owner_dm
 from coordination_time import (
     RequestRangeInput,
@@ -33,6 +35,10 @@ from coordination_time import (
 EXIT_DEADLOCK = 4
 EXIT_REFUSED = 5
 EXIT_PENDING_OWNER = 7
+
+
+# request/finalize propose, accept, confirm, persist state, post, or create approvals.
+_READ_ONLY_COMMANDS = frozenset({"status", "list", "show"})
 
 
 def _reject_calendar_intent(args: argparse.Namespace, request_range) -> None:
@@ -182,6 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
+        if args.command not in _READ_ONLY_COMMANDS:
+            refusal = coordination_governed.refusal(Path(__file__))
+            if refusal:
+                print(refusal, file=sys.stderr)
+                return 3
         return int(args.func(args))
     except io.CoordinationError as error:
         print(f"COORD-REFUSED {error}", file=sys.stderr)

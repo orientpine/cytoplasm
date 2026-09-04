@@ -247,6 +247,65 @@ def test_build_item_summary_failure_falls_back(monkeypatch: pytest.MonkeyPatch) 
     assert store_item["uid"] == "uid-7"  # item kept — fail-open listing
 
 
+def test_build_item_retries_summary_once_before_falling_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: one mail whose first summary call fails at the transport level.
+    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
+    monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
+    calls: list[str] = []
+
+    def summarize(**kwargs):
+        calls.append(kwargs["uid_opaque"])
+        if len(calls) == 1:
+            raise triage_llm.LlmCallError("stub summarize transport failure")
+        return "Synthetic summary"
+
+    monkeypatch.setattr(triage_llm, "summarize", summarize)
+
+    # When: that mail is built into one digest item.
+    dm_item, store_item = triage_digest.build_item(_detail("uid-8"), 1, rules=())
+
+    # Then: the retry result is used — one transient failure must not cost the summary.
+    assert dm_item["summary"] == "Synthetic summary"
+    assert store_item["summary"] == "Synthetic summary"
+    assert len(calls) == 2
+
+
+def test_build_item_logs_masked_reason_when_summary_keeps_failing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    # Given: a mail whose summary never parses, with the routing log redirected to tmp.
+    log = tmp_path / "llm-calls.jsonl"
+    monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
+    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
+    monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
+    calls: list[str] = []
+
+    def summarize(**kwargs):
+        calls.append(kwargs["uid_opaque"])
+        raise triage_core.LlmParseError("digest summary is empty")
+
+    monkeypatch.setattr(triage_llm, "summarize", summarize)
+    detail = {**_detail("uid-8"), "sender": "Synthetic Sender <sender@example.invalid>"}
+
+    # When: the item is built after both attempts fail.
+    dm_item, _store_item = triage_digest.build_item(detail, 1, rules=())
+
+    # Then: the item survives with the fallback and the reason is recorded, masked —
+    # the cron drops stderr, so the log line is the only forensic trace.
+    assert dm_item["summary"] == "(요약 실패)"
+    assert len(calls) == 2
+    raw = log.read_text(encoding="utf-8")
+    records = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    assert len(records) == 1
+    assert records[0]["purpose"] == "digest_summary_failed"
+    assert records[0]["uid"] == triage_core.mask_value("uid-8")
+    assert records[0]["error"].startswith("LlmParseError")
+    assert "Synthetic subject" not in raw
+    assert "example.invalid" not in raw
+
+
 def test_build_item_retries_only_the_current_classification_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -305,6 +364,31 @@ def test_build_item_classify_failure_fails_open(
     assert store_item["uid"] == "uid-cf"  # item kept — fail-open listing
     assert dm_item["note"] == "" and store_item["note"] == ""  # no calendar delegation
     assert dm_item["summary"] == "Synthetic summary"  # summary path still runs
+
+
+def test_build_item_logs_classify_failure_after_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    log = tmp_path / "llm-calls.jsonl"
+    monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
+    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
+
+    def classify(**kwargs):  # noqa: ARG001
+        raise triage_llm.LlmCallError("classify timed out")
+
+    monkeypatch.setattr(triage_llm, "classify", classify)
+    monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
+
+    dm_item, store_item = triage_digest.build_item(_detail("uid-classify-log"), 1, rules=())
+
+    records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 1
+    assert records[0]["purpose"] == "classify_failed"
+    assert records[0]["uid"] == triage_core.mask_value("uid-classify-log")
+    assert records[0]["error"].startswith("LlmCallError")
+    assert dm_item["category"] == "important"
+    assert "classification_failed" in dm_item["flags"]
+    assert store_item["uid"] == "uid-classify-log"
 
 
 def test_render_digest_dm_shows_classification_failed_badge() -> None:
@@ -575,7 +659,9 @@ def _patch_cli_digest_engine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
         lambda _uid: _detail("uid-cli", subject="Synthetic CLI subject"),
     )
 
-    def build_item(detail: dict, item_no: int, *, rules: tuple) -> tuple[dict, dict]:  # noqa: ARG001
+    def build_item(  # noqa: ARG001
+        detail: dict, item_no: int, *, rules: tuple, latch=None
+    ) -> tuple[dict, dict]:
         shared = {
             "item_no": item_no,
             "uid": detail["uid"],
@@ -843,7 +929,9 @@ def test_run_digest_build_stage_llm_failure_emits_structured_marker(
     dm_calls: list[str] = []
     monkeypatch.setattr(triage_confirm, "dm_owner", lambda body: dm_calls.append(body) or "dm-1")
 
-    def fail_build(_detail: dict, _item_no: int, *, rules: tuple) -> tuple[dict, dict]:  # noqa: ARG001
+    def fail_build(  # noqa: ARG001
+        _detail: dict, _item_no: int, *, rules: tuple, latch=None
+    ) -> tuple[dict, dict]:
         raise triage_llm.LlmCallError("glm-main 호출 실패: leak@example.com uid=1234567 timed out")
 
     monkeypatch.setattr(triage_digest, "build_item", fail_build)

@@ -46,14 +46,16 @@ skills/<name>/
 - 성공 시 stdout에 `SCENARIO-PASS` + exit 0. 그 외 전부 실패.
 - 참조 구현: [hello-autophagy/scripts/scenario.sh](hello-autophagy/scripts/scenario.sh).
 
-## 스킬 목록 (16 기능 + hello-autophagy 데모 = 17 디렉터리)
+## 스킬 목록 (18 기능 + hello-autophagy 데모 = 19 디렉터리)
 calendar · coordination · mail · budget · repair · patent-prep · proposal · report ·
-topics · prompt · meeting · recall · wiki · todo · doctype · procurement · (hello-autophagy=데모).
+topics · prompt · meeting · recall · wiki · todo · doctype · procurement · speechtotext ·
+plaud · (hello-autophagy=데모).
 
 ## 예외 매트릭스 (표준 계약 밖)
 - 승인 워처 보유: calendar · coordination · mail(triage+digest 2개) · budget · wiki · patent-prep(export confirm). `deploy.sh` 보유: calendar · coordination · mail.
 - CLI 명명 예외: mail=`triage_cli.py`, coordination=`coordinate_cli.py`, procurement=`procure_cli.py`+`procure_registry_cli.py`(2개), recall=`recall_cli.py`+`recall_reference.py`(2개 — 후자는 소유자 참고자료 폴더 조회. `recall_cli.py` 가 250 pure-LOC 상한에 정확히 붙어 있어 서브커맨드를 넣으면 F2 등록부에 자기 예외를 쌓게 된다).
 - meeting: 워처 대신 게이트웨이 **플러그인 훅**(`meeting/plugin/plugin.yaml`).
+- plaud: **읽기 전용** 상태 보고만(`plaud_cli.py status`, stdlib 전용). 워처·승인 카드·재게시는 스킬이 아니라 `automation/plaud_sync/`(홈 배포물 `plaud_sync_watch.py`)가 소유한다 — 스킬은 그 상태 파일을 읽을 뿐이다.
 - repair: repo-local CLI 아님 — `~/.hermes/repair/automation/repair/repair_cli.py` 외부 런타임 호출.
 - wiki: 본문·제목은 owner DM 밖 유출 금지. 트윈 판단은 `review_after` 만료 시 자율 행동에 사용 금지(`docs/guide/decision-twin-스키마.md`).
 - automation 공유 코드: calendar/coordination/mail/budget/wiki/meeting/todo는 `automation.interop.*`(external_effect_gate · injection_adapter · discord_transport · coordination)에 의존 — interop 시그니처 변경 시 동반 갱신.
@@ -74,5 +76,5 @@ topics · prompt · meeting · recall · wiki · todo · doctype · procurement 
 - **cron 워처 파일명은 `~/.hermes/scripts/` 안에서 스킬별 고유** (예: `calendar_confirm_reaction_watch.py`).
 - **추적 config는 시드 전용** — 스킬 런타임 상태(mode 재판정 등)는 ~/.hermes 등 체크아웃 밖에 기록한다. 런타임 경로가 시드/체크아웃 경로를 가리키면 코드 가드로 fail-closed 거부(선례: mail triage_mode._runtime_path_shadows_seed).
 - 상세: [docs/guide/스킬-제작.md](../docs/guide/스킬-제작.md), [docs/guide/watcher-cron-설계규약.md](../docs/guide/watcher-cron-설계규약.md).
-- **결과 통지는 지시가 온 채널의 스레드로 — `automation.interop.origin_notice` 경유 (2026-08-23, 소유자 지시)**: 승인 게이트 스킬의 실행/취소/만료 통지는 레코드의 `origin_channel_id`/`origin_message_id`(mutating CLI `--origin-channel-id`/`--origin-message-id`, 승인 해시 밖)로 원 채널 스레드에 게시하고, 없으면 기존 경로(소유자 DM/저장된 승인 채널)로 폴백한다. 승인 요청 자체는 v7부터 `#agent-chat`의 `승인-<kind>` 스레드다(repair만 DM). 문구는 대상·id·사유 포함, 통지는 best-effort(`NOTIFY-THREAD-FAIL`/`NOTIFY-FAIL`/`NOTIFY-SKIP`). 스킬의 마스킹 규칙이 우선한다(calendar=draft id만, wiki·patent-prep=제외). 자체 스레드 생성 코드 금지. 강제: `tests/unit/test_origin_notice_adoption_conformance.py` — 상세는 루트 AGENTS.md 「결과 통지 원채널 스레드 규칙」.
+- **결과 통지는 지시가 온 채널의 스레드로 — `automation.interop.origin_notice` 경유 (2026-08-23, 소유자 지시)**: 승인 게이트 스킬의 실행/취소/만료 통지는 레코드의 `origin_channel_id`/`origin_message_id`(mutating CLI `--origin-channel-id`/`--origin-message-id`, 승인 해시 밖)로 원 채널 스레드에 게시하고, 없으면 기존 경로(소유자 DM/저장된 승인 채널)로 폴백한다. 승인 요청 자체는 2026-09-01 부터 `#agent-chat` 의 **요청별 스레드**다 — `resolve_new_binding(request=RequestThread(title, origin_channel_id, origin_message_id))` 로 열고 레코드에 `approval_thread_id`(승인 해시 밖)를 저장하며, 결과 통지는 그 스레드로 돌아와 `deliver(..., outcome=ThreadOutcome.DONE|CANCELLED|EXPIRED)` 로 종결 표시(접두어+아카이브)한다. 마스킹 kind(calendar·wiki·patent-prep·obsidian)는 스레드 이름에 id 만. 강제: `tests/unit/test_request_thread_adoption_conformance.py`, 상세는 루트 AGENTS.md 「요청별 승인 스레드 규칙」. 문구는 대상·id·사유 포함, 통지는 best-effort(`NOTIFY-THREAD-FAIL`/`NOTIFY-FAIL`/`NOTIFY-SKIP`). 스킬의 마스킹 규칙이 우선한다(calendar=draft id만, wiki·patent-prep=제외). 자체 스레드 생성 코드 금지. 강제: `tests/unit/test_origin_notice_adoption_conformance.py` — 상세는 루트 AGENTS.md 「결과 통지 원채널 스레드 규칙」.
 - **승인 메시지를 게시하고 `message_id`를 저장하는 모든 스킬은 `automation.interop.approval_lifecycle.request_owner_approval`을 경유해야 함**: 이는 `dm_message_id`, `confirm_message_id` 등을 포함한 모든 소유자 승인 표면에 적용됩니다. 각 스킬은 `<skill>_approval.py` 어댑터를 통해 파사드를 호출하며, 저장소 참조는 lazy import + `AUTOPHAGY_REPO_ROOT` `sys.path` 삽입을 사용합니다. `ImportError` 발생 시 무가드 게시로 폴백하지 않고 요청을 거부(fail-closed)해야 합니다. 강제 수단으로 `tests/unit/test_approval_lifecycle_conformance.py` 준수 테스트가 실행됩니다.

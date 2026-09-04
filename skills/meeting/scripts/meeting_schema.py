@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Final
 
 from meeting_types import (
     ActionItem,
@@ -20,6 +21,7 @@ from meeting_types import (
     NextMeeting,
     OpenQuestion,
     ResolvedAction,
+    SpeakerRef,
     Topic,
     map_extraction,
 )
@@ -33,10 +35,15 @@ __all__ = [
     "NextMeeting",
     "OpenQuestion",
     "ResolvedAction",
+    "SpeakerRef",
     "Topic",
     "map_extraction",
     "parse_extraction",
 ]
+
+#: 전사본 본문이 쓰는 라벨 그대로여야 한다 — `speaker_00` 같은 도구 원본 라벨이나
+#: 지어낸 이름이 라벨 자리에 오면 회의록 범례가 본문의 어느 블록도 가리키지 못한다.
+_SPEAKER_LABEL: Final = re.compile(r"화자\d+")
 
 
 def _clean_deadline(value: object) -> str | None:
@@ -155,6 +162,26 @@ def _clean_resolved_actions(raw: object) -> tuple[ResolvedAction, ...]:
     return tuple(actions)
 
 
+def _clean_speakers(raw: object) -> tuple[SpeakerRef, ...]:
+    """Keep only entries whose label is a transcript label; an unnamed label still counts.
+
+    A label with no name is information — it says the transcript had a speaker the meeting
+    never identified — so it survives with `name=None` instead of being dropped.
+    """
+    if not isinstance(raw, list):
+        return ()
+    speakers = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        label = str(entry.get("label") or "").strip()
+        if not _SPEAKER_LABEL.fullmatch(label):
+            continue
+        name = str(entry.get("name") or "").strip()
+        speakers.append(SpeakerRef(label, name or None, str(entry.get("basis") or "").strip()))
+    return tuple(speakers)
+
+
 def _clean_next_meeting(raw: object) -> NextMeeting | None:
     if not isinstance(raw, dict):
         return None
@@ -210,4 +237,5 @@ def parse_extraction(raw: str) -> Extraction:
         open_questions=_clean_questions(payload.get("open_questions")),
         next_meeting=_clean_next_meeting(payload.get("next_meeting")),
         resolved_actions=_clean_resolved_actions(payload.get("resolved_actions")),
+        speakers=_clean_speakers(payload.get("speakers")),
     )

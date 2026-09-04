@@ -1,7 +1,7 @@
 ---
 name: prompt
 description: "버전형 프롬프트 자산을 canonical·overlay·legacy 계층에서 결정적으로 검색·조회·추가한다. 민감 본문은 agent 전용 private 저장소에만 두고 비-GLM 경로를 강제한다. W5-1."
-version: 1.0.0
+version: 1.0.3
 author: autophagy-agents
 license: MIT
 metadata:
@@ -13,7 +13,8 @@ prerequisites:
 
 # prompt
 
-CLI: `python3 ~/.hermes/skills/prompt/scripts/prompt_cli.py`
+CLI: `python3 /srv/autophagy-skills/live/prompt/scripts/prompt_cli.py`
+Mutating commands run only from /srv/autophagy-skills/live/prompt/scripts/ (stale copies refused with STALE-SKILL-COPY-BLOCK).
 
 ## Commands
 
@@ -22,7 +23,7 @@ CLI: `python3 ~/.hermes/skills/prompt/scripts/prompt_cli.py`
 - `!prompt add` → create a mode-600 body file, then run:
 
 ```bash
-python3 ~/.hermes/skills/prompt/scripts/prompt_cli.py add \
+python3 /srv/autophagy-skills/live/prompt/scripts/prompt_cli.py add \
   --id <id> --category <task|research-background> --purpose "<one line>" \
   --model <glm-main|openai-codex|any> --tags "tag1,tag2" --body-file <600-file>
 ```

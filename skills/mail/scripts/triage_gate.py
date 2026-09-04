@@ -187,7 +187,14 @@ def load_draft(draft_id: str) -> dict:
 
 def set_approval_binding(
     draft: dict, *, kind: str, surface: str, channel_id: str, policy_version: int,
+    approval_thread_id: str = "",
 ) -> dict:
+    """Persist the whole binding; ``approval_thread_id`` is the request's own thread.
+
+    그 스레드 id 는 승인 액션 해시 밖에 산다(``origin_channel_id`` 와 같은 취급) —
+    결과 통지가 돌아갈 곳을 기억할 뿐 발송 내용에 개입하지 않는다. 값이 없으면
+    필드를 쓰지 않아 기존 레코드는 바이트 그대로 남는다.
+    """
     path = _draft_path(draft["id"])
     if path is None:
         raise GateError(f"드래프트 없음: {draft['id']}", 3)
@@ -202,6 +209,8 @@ def set_approval_binding(
         "channel_id": channel_id,
         "policy_version": policy_version,
     }
+    if approval_thread_id:
+        updated["approval_thread_id"] = approval_thread_id
     write_json(path, updated)
     return updated
 

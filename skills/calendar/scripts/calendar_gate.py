@@ -115,6 +115,17 @@ def create_draft(
     return record
 
 
+def bind_approval_thread(draft: dict, thread_id: str) -> dict:
+    """Stamp this request's approval thread on the draft and return the new record.
+
+    ``origin_*`` 와 같은 이유로 ``draft_sha256`` 밖이다 — 해시는 실행할 변경만 묶는다.
+    워처가 결과를 승인 스레드로 되돌리려면 초안에서 이 값을 읽어야 한다.
+    """
+    record = {**draft, "approval_thread_id": thread_id}
+    write_json(_draft_path(str(draft["id"])), record)
+    return record
+
+
 def load_draft(draft_id: str) -> dict:
     path = _draft_path(draft_id)
     if not path.exists():

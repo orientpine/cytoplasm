@@ -40,13 +40,18 @@ def _literal_strings(node: ast.AST) -> frozenset[str]:
     )
 
 
-def _mutation_argvs(path: Path) -> tuple[ast.List | ast.Tuple, ...]:
+def _mutation_argvs(path: Path) -> tuple[ast.List | ast.Tuple | ast.Call, ...]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    found: list[ast.List | ast.Tuple] = []
+    found: list[ast.List | ast.Tuple | ast.Call] = []
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.List, ast.Tuple)):
+        if isinstance(node, (ast.List, ast.Tuple)):
+            values = _literal_strings(node)
+        elif isinstance(node, ast.Call):
+            values = frozenset(
+                value for argument in node.args for value in _literal_strings(argument)
+            )
+        else:
             continue
-        values = _literal_strings(node)
         is_upload = "drive" in values and "+upload" in values
         is_files_mutation = (
             "drive" in values

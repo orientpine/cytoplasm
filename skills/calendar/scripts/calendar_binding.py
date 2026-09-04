@@ -4,14 +4,14 @@ from __future__ import annotations
 import importlib
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol
 
 import calendar_confirm
 import calendar_gate
-from calendar_pending import PendingConfirmStore
+from calendar_pending import PendingConfirmError, PendingConfirmStore
 
 
 class ApprovalBindingLike(Protocol):
@@ -90,14 +90,25 @@ def approval_directory() -> OwnerDmDirectory:
     )
 
 
-def new_binding() -> ApprovalBindingLike:
-    """Resolve the one binding stamped on every new calendar approval."""
+def new_binding(draft: Mapping[str, object]) -> ApprovalBindingLike:
+    """Resolve this ONE request's binding — its own thread, named by draft id only.
+
+    마스킹 규칙(SKILL.md 절대 규칙 3)이 여기서 강제된다: 스레드 이름으로 나가는 것은
+    draft id 뿐이고 제목·시각·event/calendar id 는 어떤 경우에도 싣지 않는다. origin
+    쌍은 지시 메시지에 스레드를 앵커하는 데만 쓰이며 확인 표면을 바꾸지 않는다.
+    """
     surface = _surface()
+    request = surface.RequestThread(
+        title=str(draft.get("id", "")),
+        origin_channel_id=str(draft.get("origin_channel_id") or ""),
+        origin_message_id=str(draft.get("origin_message_id") or ""),
+    )
     try:
         return surface.resolve_new_binding(
             surface.ApprovalKind.CALENDAR,
             approval_directory(),
             calendar_confirm.owner_id(),
+            request=request,
         )
     except surface.ApprovalSurfaceError as error:
         raise calendar_gate.GateError(f"승인 표면 해석 실패 — 게시 거부: {error}", 3) from error
@@ -148,6 +159,31 @@ def binding_for_entry(entry: PendingApproval) -> ApprovalBindingLike:
             "surface": entry.surface,
         }
     )
+
+
+def reusable_binding(store: PendingConfirmStore, key: str) -> ApprovalBindingLike | None:
+    """The thread an earlier post of this same request already opened, if any.
+
+    한 승인 키는 스레드 하나다 — 같은 해시의 재요청(PENDING)도, 내용이 바뀐 재요청
+    (supersede)도 첫 게시가 연 스레드로 돌아간다. 폐지된 표면(옛 DM 바인딩)은 재사용하지
+    않고 새 스레드를 연다. 읽을 수 없는 저장소는 여기서 판정하지 않는다 — 파사드가
+    store-unreadable 로 거부한다.
+    """
+    try:
+        entries: Iterable[PendingApproval] = store.load()
+    except PendingConfirmError:
+        return None
+    surface = _surface()
+    required = surface.required_surface(surface.ApprovalKind.CALENDAR).value
+    for entry in entries:
+        if (
+            entry.key == key
+            and entry.surface == required
+            and entry.channel_id
+            and entry.policy_version is not None
+        ):
+            return binding_for_entry(entry)
+    return None
 
 
 def channel_for_entry(entry: PendingApproval) -> str:

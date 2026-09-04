@@ -349,3 +349,42 @@
   옵트인을 확인하지 않아, CLI 를 돌리는 테스트만으로 소유자 Drive 에 픽스처 이름의 폴더 4개가 생겼다
   (빈 폴더, 즉시 회수). 이제 `DRIVE_PUBLISH_ENABLED=1` 없이는 클라이언트를 만들지 않으며, 주입
   클라이언트만 예외다(테스트 seam). 회귀는 그 클라이언트 생성을 폭발시키는 테스트로 고정했다.
+
+### Plaud lifelog → Obsidian 동기화 (2026-09-02)
+
+- **MCP 무등록 3계층** — no-agent cron 이 `npx @plaud-ai/mcp@0.3.10` 과 stdio JSON-RPC 로 직접 대화해 녹음
+  건별 노트(요약 위+전문 아래)를 동결하고, 건별 ✅(OBSIDIAN_WRITE 재사용) 후 obsidian_write 로 push, RAG 자동
+  소비. [소개](기능소개/plaud-lifelog-동기화.md) · `automation/plaud_sync/` · 롤아웃(OAuth 1회·배포)은 소유자 단계.
+
+### v1.1.0 편의 릴리스 (2026-09-03)
+
+- **release.sh --bump 와 MAJOR 기계 판정기** — `next_release_tag <repo> [major|minor|patch]`, `release_plan.major_signals` 가 base..head 의 정책·스키마·필수 설정 변경을 찾아 `--bump patch/minor` 를 거부하고 `--bump major` 패치노트에 `MAJOR: 운영자 조치 필요` 를 싣는다; 손 태그 불일치·prerelease 접미 결함도 함께 닫음. [소개](기능소개/릴리스-버전-자리-선택.md) · `automation/release_tag_lib.sh`·`release.sh`·`release_plan.py`.
+- **실행 사본 가드 14/14** — meeting·speechtotext·doctype·proposal·report·procurement·patent-prep·prompt 가 `governed_copy_refusal` 을 채택해 mutating CLI 전부가 live 마운트 밖 사본을 exit 3 으로 거부. [소개](기능소개/실행경로-가드-일반화.md) · `tests/unit/test_governed_copy_guard_conformance.py`.
+- **승인 원장 KPI 집계기** — `python3 -m automation.approval_kpi --root <dir>` 가 kind 별 건수·일평균·p50/p95·재요청률과 소스에서 읽은 TTL·리마인더 표를 낸다(읽기 전용). [소개](기능소개/승인-원장-KPI.md) · `docs/guide/approval-kpi.md`.
+- **LiteLLM 실제 completion 프로브** — healthcheck 에 `litellm_completion` 행을 더해 liveliness 200 뒤의 상류 429 를 FAIL·수리 티켓으로 드러낸다. 노드 래퍼 설치는 소유자 단계. [소개](기능소개/LiteLLM-실제-completion-프로브.md).
+- **후속 과제 5건 해소** — pipeline_lock class CM · RelocationStore 분리 · Drive 폴더 캐시 재검증 · 승인 카드 리액션 best-effort · LiteLLM 프로브. 원문·처리는 [follow-ups-deferred.md](follow-ups-deferred.md) 해소 기록.
+- **수렴 중 핫픽스 2건(v1.1.1·v1.1.2)** — 샌드박스 `env -i` 가 `AUTOPHAGY_SKILL_LIVE_ROOT` 를 선언해 가드 채택 스킬이 stage 1 을 통과(PR #377); `release_version_for` 로 재실행이 HEAD 태그를 재사용, coordination 시나리오의 live root 전달, prompt·doctype heredoc 의 scripts 직접 import + `tests/unit/test_scenario_deployed_layout.py`(PR #378). 규약: [스킬-제작](guide/스킬-제작.md) scenario.sh 계약.
+
+
+### Plaud 녹음 로컬 전사 (2026-09-04)
+
+- **transcribing 스테이지** — 발견된 녹음은 `planned` 앞의 `transcribing` 에 놓이고, 워처가 watch.lock 을 푼 뒤
+  `transcribe_live` 가 pipeline_lock(speechtotext 와 공유) 아래 `get_file` presigned URL 로 오디오를 내려받아
+  speechtotext CLI(whisper.cpp + sherpa 화자 분리, `SPEECHTOTEXT_BACKEND=local` 고정·Drive 발행 0)로 전사한다.
+  전사본은 `~/.hermes/plaud-sync/transcripts/<노트 stem>.md` 에 남아 `meeting_cli.py ingest --file` 이 읽을 수 있고,
+  노트 `## 전문` 은 그 전사로 재조립된다. 환경 실패(rc 3/4·MCP·네트워크)는 무카운트 재시도, 녹음 실패 2회면
+  클라우드 전사 폴백(출처 줄에 명시). commit 은 watch.lock blocking 재획득 + 상태·hash 재검사.
+  [소개](기능소개/plaud-녹음-로컬-전사.md) · `automation/plaud_sync/{audio,transcribe,transcribe_live}.py` · plaud skill v1.1.0.
+
+### Plaud lifelog 노트 v2 양식 — Linter 정합 frontmatter·한눈에·결정 · 할 일·접힌 전문 + 사람·장소·결정·할 일 LLM 추출 (2026-09-04)
+
+- **양식(B안)** — 노트가 소유자 Obsidian Linter(v1.32.0) 가 그대로 두는 frontmatter(tags→title→source→created→modified,
+  필요할 때만 따옴표)로 시작하고 `## 한눈에`(녹음·주제·사람·장소·한 줄 Dataview 인라인 필드) → `## 요약`(포스터 이미지 제거) →
+  `## 결정 · 할 일`(없으면 생략) → 접힌 `## 전문` → 출처. vault 의 실제 플러그인 빌드를 헤드리스로 돌려 제목 따옴표 규칙 61건과
+  렌더 샘플 3종의 멱등(`lint(x)==x`)을 검증했다(`docs/qa/PLV2`). `obsidian_write.render_note` 가 body 선두 frontmatter 를
+  제목 위로 올리고 callout 을 생략한다(frontmatter 없는 노트는 바이트 동일). created/modified 는 `PLAUD_SYNC_TIMEZONE` 로컬 시각.
+- **추출** — `lifelog_extract(_live)` 가 규칙 파일→patent-sensitive→`LITELLM_AGENT_KEY`→템플릿 순 게이트 뒤 glm-main 으로
+  사람·장소·결정·할 일을 뽑는다. 로컬 전사가 들어온 `transcribe.finalize` 에서 돌고(클라우드 초안은 LLM 미호출), 생략 사유는
+  한눈에 줄에 적히며, 전송·파싱 실패는 전사 시도로 세지 않고 대기한다. 승인 카드 v3 는 한눈에 줄을 먼저 인용한다.
+  [소개](기능소개/plaud-lifelog-노트-v2-양식.md) · `automation/plaud_sync/{lifelog_model,lifelog_fields,lifelog_extract,lifelog_extract_live}.py` ·
+  계획 `.omo/plans/plaud-lifelog-format-v2.md`.

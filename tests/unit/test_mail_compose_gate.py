@@ -95,15 +95,13 @@ def _dm_post_api(requests: list[tuple[str, str]]):
             return {"type": 1, "name": "", "recipients": [{"id": OWNER_ID}]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
             return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
-        if method == "GET" and path == "/guilds/guild-1/threads/active":
-            return {"threads": [{
-                "id": AGENT_CHAT_THREAD,
-                "type": 11,
-                "name": "승인-mail-compose",
-                "parent_id": AGENT_CHAT_CHANNEL,
-            }]}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/threads":
+            return {"id": AGENT_CHAT_THREAD}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
-            return {"type": 11, "name": "승인-mail-compose", "parent_id": AGENT_CHAT_CHANNEL}
+            return {
+                "type": 11, "name": f"메일 발신 · {COMPOSE_SUBJECT}",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }
         if method == "POST":
             return {"id": MESSAGE_ID}
         if method == "PUT":
@@ -475,15 +473,13 @@ def _dm_payload_api(payloads: list[dict]):
             return {"type": 1, "name": "", "recipients": [{"id": OWNER_ID}]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
             return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
-        if method == "GET" and path == "/guilds/guild-1/threads/active":
-            return {"threads": [{
-                "id": AGENT_CHAT_THREAD,
-                "type": 11,
-                "name": "승인-mail-compose",
-                "parent_id": AGENT_CHAT_CHANNEL,
-            }]}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/threads":
+            return {"id": AGENT_CHAT_THREAD}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
-            return {"type": 11, "name": "승인-mail-compose", "parent_id": AGENT_CHAT_CHANNEL}
+            return {
+                "type": 11, "name": f"메일 발신 · {COMPOSE_SUBJECT}",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }
         if method == "POST":
             return {"id": MESSAGE_ID}
         return None
@@ -562,6 +558,9 @@ class _RetiredDirectory:
         return AGENT_CHAT_CHANNEL
 
     def agent_chat_thread(self, _kind: object) -> str:
+        return AGENT_CHAT_THREAD
+
+    def agent_chat_request_thread(self, _kind: object, _request: object) -> str:
         return AGENT_CHAT_THREAD
 
     def describe(self, channel_id: str) -> ChannelFacts:

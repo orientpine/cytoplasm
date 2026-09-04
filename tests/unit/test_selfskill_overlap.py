@@ -98,6 +98,8 @@ class TestMorningReport:
         assert "OVERLAPS-GOVERNED:recall" in text
         assert "mem-search" in text
         assert "archive" in text and "승격" in text
+        pending = report.render_summary((), account_label="agent", pending_overlaps=1)
+        assert "미결 겹침 1건 — 승격·폐기 결정 대기(pending-overlaps.json)" in pending
 
     def test_b_overlaps_alone_trigger_the_report(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

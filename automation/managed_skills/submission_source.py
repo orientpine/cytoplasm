@@ -7,7 +7,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, override
+from typing import Final
+from automation.typing_compat import override
 
 from automation.group_roster.schema import MemberStatus, Roster
 from automation.interop.approval_surface import ApprovalKind

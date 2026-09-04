@@ -23,6 +23,7 @@ import meeting_action_db  # noqa: E402
 import meeting_actions  # noqa: E402
 import meeting_action_id  # noqa: E402
 import meeting_cli  # noqa: E402
+import meeting_minutes  # noqa: E402
 import meeting_project  # noqa: E402
 import meeting_template  # noqa: E402
 
@@ -365,3 +366,61 @@ def test_pending_name_that_matches_nothing_is_refused(tmp_path, monkeypatch, cap
 
     assert code == 7
     assert "없는-전사본.md" in notice
+
+
+def test_pending_transcript_minutes_publish_under_its_project(tmp_path, monkeypatch, capsys):
+    """야간 배치의 회의록은 전사본이 확정한 과제 폴더로 올라가야 한다.
+
+    `meeting_project.pending_transcripts` 는 과제 쌍둥이 폴더에서만 `회의록-<전사본>` 을
+    찾는다. 과제 없이 게시하면 회의록은 과제 없는 옛 `회의록/<연도>/` 로 가고, 다음 밤에도
+    전사본은 여전히 '미처리' 라 같은 회의가 매일 다시 원장에 쌓인다(2026-09-02·03 실측).
+    """
+    import automation.drive_outputs as drive_outputs
+
+    calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setenv("DRIVE_PUBLISH_ENABLED", "1")
+    monkeypatch.setattr(
+        drive_outputs, "publish_best_effort",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    name = "2026-08-26_20260825_해양고신뢰성.md"
+    code, _ = _run_pending(
+        tmp_path, monkeypatch, capsys, [_pending(name)],
+        source=["--pending-name", name],
+    )
+
+    assert code == 0
+    assert len(calls) == 1, f"회의록 게시는 정확히 한 번이어야 한다: {calls}"
+    args, kwargs = calls[0]
+    assert args[0] == "meeting"
+    assert args[1] == f"회의록-{name[:-3]}", "다음 밤이 찾는 이름 그대로여야 한다"
+    assert kwargs["project"] == PROJECT, "--project 없이도 전사본의 과제로 게시해야 한다"
+
+
+def test_pending_transcript_cards_cite_the_project_minutes(tmp_path, monkeypatch, capsys):
+    """카드의 출처도 같은 과제 정본을 가리켜야 한다 — 게시 경로와 인용이 갈리면 안 된다."""
+    name = "2026-08-26_20260825_해양고신뢰성.md"
+    code, _ = _run_pending(
+        tmp_path, monkeypatch, capsys, [_pending(name)],
+        source=["--pending-name", name],
+    )
+    note_name = sorted((tmp_path / "notes").glob("*-meeting-*.md"))[0].name
+    expected = meeting_minutes.source_block(note_name, PROJECT)
+    bodies = [
+        argv[argv.index("--body") + 1]
+        for argv in (
+            json.loads(line)
+            for line in (tmp_path / "plan" / "kanban-plan.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        )
+        if argv[:2] == ["kanban", "create"]
+    ]
+
+    assert code == 0
+    assert f"회의록/{PROJECT}/" in expected, "출처 조각이 과제를 담고 있어야 이 검사가 성립한다"
+    assert bodies, "카드가 한 장은 계획되어야 한다"
+    assert all(body.endswith(expected) for body in bodies), (
+        f"카드 본문이 과제 정본을 인용해야 한다: {bodies}"
+    )

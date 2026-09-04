@@ -36,6 +36,8 @@ class PendingConfirm:
     # SI-5 conformance 때문에 origin은 그 앞에 둔다.
     origin_channel_id: str = field(default="", compare=False)
     origin_message_id: str = field(default="", compare=False)
+    # 이 요청의 승인 스레드 — 결과 통지가 돌아가 종결 표시할 자리(승인 해시 밖).
+    approval_thread_id: str = field(default="", compare=False)
     key: str = field(default="", compare=False)
     kind: str | None = field(default=None, compare=False)
     surface: str | None = field(default=None, compare=False)
@@ -66,6 +68,8 @@ class PendingConfirm:
             "slot": self.slot,
             "summary": self.summary,
         }
+        if self.approval_thread_id:
+            record["approval_thread_id"] = self.approval_thread_id
         if self.kind is not None and self.surface is not None and self.policy_version is not None:
             record.update(
                 {
@@ -83,9 +87,10 @@ class PendingConfirm:
         )
 
     def origin_record(self) -> dict[str, str]:
-        """Render what the shared result-notice router reads: origin + draft identity."""
+        """Render what the shared result-notice router reads: thread + origin + identity."""
         return {
             "id": self.draft_id,
+            "approval_thread_id": self.approval_thread_id,
             "origin_channel_id": self.origin_channel_id,
             "origin_message_id": self.origin_message_id,
         }
@@ -207,6 +212,7 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
     channel_id = raw.get("channel_id", raw["dm_channel_id"])
     policy_version = raw.get("policy_version")
     # Rows written before the origin binding existed stay readable with no origin.
+    approval_thread_id = raw.get("approval_thread_id", "")
     origin_channel_id = raw.get("origin_channel_id", "")
     origin_message_id = raw.get("origin_message_id", "")
     if (
@@ -216,6 +222,7 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
         or not isinstance(surface, str | None)
         or not isinstance(channel_id, str)
         or not isinstance(policy_version, int | None)
+        or not isinstance(approval_thread_id, str)
         or not isinstance(origin_channel_id, str)
         or not isinstance(origin_message_id, str)
     ):
@@ -226,6 +233,7 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
         correlation=raw["correlation"], duration_min=duration, created=created.astimezone(UTC), key=key,
         kind=kind, surface=surface, channel_id=channel_id, policy_version=policy_version,
         origin_channel_id=origin_channel_id, origin_message_id=origin_message_id,
+        approval_thread_id=approval_thread_id,
     )
 
 

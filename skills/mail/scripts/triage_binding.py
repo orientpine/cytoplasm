@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType
 
@@ -70,6 +71,29 @@ def draft_kind(draft: dict) -> str:
     return "compose" if draft.get("kind") == "compose" else "reply"
 
 
+def request_thread(draft: dict) -> object:
+    """This draft's own approval-thread spec — title is the mail subject.
+
+    메일 제목은 마스킹하지 않는다: 승인 본문과 결과 통지가 이미 제목·수신자를 담고
+    있어 스레드 이름만 가려도 얻는 것이 없다. 원 지시 메시지 쌍은 지시가 승인 채널에서
+    시작된 경우에만 스레드 앵커로 쓰인다(해석은 표면 모듈이 한다).
+    """
+    surface_module = _repo_module("approval_surface")
+    return surface_module.RequestThread(
+        title=str(draft.get("subject") or ""),
+        origin_channel_id=str(draft.get("origin_channel_id") or ""),
+        origin_message_id=str(draft.get("origin_message_id") or ""),
+    )
+
+
+def approval_thread_id(binding: object) -> str:
+    """The thread a result notice returns to — empty unless the binding IS a thread."""
+    surface_module = _repo_module("approval_surface")
+    if binding.surface is surface_module.ApprovalSurface.AGENT_CHAT_THREAD:
+        return str(binding.channel_id)
+    return ""
+
+
 def persisted_channel_id(draft: dict) -> str | None:
     channel_id = draft.get("channel_id")
     surface = draft.get("surface")
@@ -86,7 +110,33 @@ def persisted_channel_id(draft: dict) -> str | None:
     return None
 
 
-def stored_binding(draft: dict) -> object:
+def _request_binding(
+    surface_module: ModuleType,
+    kind: object,
+    directory: object,
+    draft: dict,
+    outstanding: Iterable[object],
+) -> object:
+    """This request's own thread — the one a LIVE request of the same key already opened.
+
+    파사드는 스레드가 열린 뒤에야 PENDING(같은 해시)·supersede(내용 변경)를 판정하므로,
+    재요청마다 빈 스레드가 하나씩 남았다. 같은 승인 키의 살아 있는 요청이 이미 연 요청
+    스레드를 먼저 재사용하고, 재사용할 것이 없을 때만 새 스레드를 연다. 옛 kind 스레드와
+    DM 은 재사용 대상이 아니다(표면 모듈이 판정한다).
+    """
+    owner_id = triage_confirm.owner_id()
+    reused = surface_module.reuse_request_thread(kind, outstanding, directory, owner_id)
+    if reused is not None:
+        return reused
+    return surface_module.resolve_new_binding(
+        kind,
+        directory,
+        owner_id,
+        request=request_thread(draft),
+    )
+
+
+def stored_binding(draft: dict, *, outstanding: Iterable[object] = ()) -> object:
     surface_module = _repo_module("approval_surface")
     kind = approval_kind(draft)
     channel_id = draft.get("channel_id")
@@ -119,7 +169,7 @@ def stored_binding(draft: dict) -> object:
                 directory,
                 triage_confirm.owner_id(),
             )
-        return surface_module.resolve_new_binding(kind, directory, triage_confirm.owner_id())
+        return _request_binding(surface_module, kind, directory, draft, outstanding)
     except (RuntimeError, TypeError, ValueError) as error:
         if isinstance(error, triage_gate.GateError):
             raise

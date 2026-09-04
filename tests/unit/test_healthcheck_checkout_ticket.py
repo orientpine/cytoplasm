@@ -37,6 +37,7 @@ case "$cmd" in
     echo "t_testticket"
     ;;
   *health/liveliness*) echo 200 ;;
+  *chat/completions*) printf 'PASS\t200\tnone\tnone\n' ;;
   *:8800/*) echo 401 ;;
   *:8001/health*) echo '{"status":"ok","model":"BAAI/bge-m3","dimensions":1024}' ;;
   *:6333/healthz*) echo 'healthz check passed' ;;

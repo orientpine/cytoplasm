@@ -514,3 +514,117 @@ def test_describe_maps_a_thread_parent_faithfully(interop_config: Path) -> None:
 
     # When / Then: the parent survives into the channel facts.
     assert directory.describe("thread-9") == ChannelFacts(11, "승인-todo", (), "chan-1")
+
+
+# ------------------------------------------------ per-request thread (2026-09-01)
+# 소유자 결정: 승인은 kind별 고정 스레드가 아니라 요청별 스레드에 게시된다 — 지시 메시지가
+# #agent-chat 소속이면 그 메시지에 앵커(결과 통지가 쓰는 바로 그 스레드), 아니면 채널 스레드.
+
+def _request_thread(**overrides: object):
+    from automation.interop.approval_surface import RequestThread
+
+    spec: dict[str, object] = {"title": "세미나 안내"}
+    spec.update(overrides)
+    return RequestThread(**spec)  # type: ignore[arg-type]
+
+
+def test_request_thread_anchors_on_an_agent_chat_instruction_message(interop_config: Path) -> None:
+    # Given: the instruction came from the configured agent-chat channel.
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {
+        ("POST", "/channels/chan-1/messages/msg-1/threads"): {"id": "thread-anchored"},
+    })
+    directory = _directory(fake)
+
+    # When: the per-request thread is resolved.
+    thread_id = directory.agent_chat_request_thread(
+        ApprovalKind.MAIL_COMPOSE,
+        _request_thread(origin_channel_id="chan-1", origin_message_id="msg-1"),
+    )
+
+    # Then: the thread hangs on the instruction message with the labelled name.
+    assert thread_id == "thread-anchored"
+    assert fake.calls == [(
+        "POST", "/channels/chan-1/messages/msg-1/threads",
+        {"name": "메일 발신 · 세미나 안내", "auto_archive_duration": 10080},
+    )]
+
+
+def test_request_thread_reuses_the_message_thread_on_400(interop_config: Path) -> None:
+    # Given: the instruction message already carries a thread (result notice opened it).
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {
+        ("POST", "/channels/chan-1/messages/msg-1/threads"): HTTPError(
+            f"https://discord.test/{SECRET_CANARY}", 400, "exists", None, None,
+        ),
+    })
+    directory = _directory(fake)
+
+    # When / Then: the message id doubles as the thread id — no second thread.
+    assert directory.agent_chat_request_thread(
+        ApprovalKind.MAIL_COMPOSE,
+        _request_thread(origin_channel_id="chan-1", origin_message_id="msg-1"),
+    ) == "msg-1"
+
+
+def test_request_thread_other_http_errors_fail_closed_without_leaking(interop_config: Path) -> None:
+    # Given: Discord refuses the anchored thread for another reason.
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {
+        ("POST", "/channels/chan-1/messages/msg-1/threads"): HTTPError(
+            f"https://discord.test/{SECRET_CANARY}", 403, "forbidden", None, None,
+        ),
+    })
+    directory = _directory(fake)
+
+    # When / Then: the surface fails closed and the message carries no url.
+    with pytest.raises(ApprovalSurfaceError) as raised:
+        _ = directory.agent_chat_request_thread(
+            ApprovalKind.MAIL_COMPOSE,
+            _request_thread(origin_channel_id="chan-1", origin_message_id="msg-1"),
+        )
+    assert SECRET_CANARY not in str(raised.value)
+    assert "http_status=403" in str(raised.value)
+
+
+def test_request_thread_creates_a_channel_thread_without_an_origin(interop_config: Path) -> None:
+    # Given: a cron-born request with no instruction message at all.
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {("POST", "/channels/chan-1/threads"): {"id": "thread-new"}})
+    directory = _directory(fake)
+
+    # When: the per-request thread is resolved.
+    thread_id = directory.agent_chat_request_thread(ApprovalKind.REPAIR, _request_thread(title="t_abc"))
+
+    # Then: a fresh public thread is created under agent-chat, never a kind thread.
+    assert thread_id == "thread-new"
+    assert fake.calls == [(
+        "POST", "/channels/chan-1/threads",
+        {"name": "수리 · t_abc", "auto_archive_duration": 10080, "type": 11},
+    )]
+
+
+def test_request_thread_ignores_an_origin_outside_agent_chat(interop_config: Path) -> None:
+    # Given: the instruction came from a channel the owner-only surface must not use.
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {("POST", "/channels/chan-1/threads"): {"id": "thread-new"}})
+    directory = _directory(fake)
+
+    # When / Then: the approval still lands under agent-chat, not on the foreign message.
+    assert directory.agent_chat_request_thread(
+        ApprovalKind.TODO,
+        _request_thread(title="보고서", origin_channel_id="chan-lab", origin_message_id="msg-9"),
+    ) == "thread-new"
+    assert all("/messages/" not in path for _method, path, _payload in fake.calls)
+
+
+def test_request_thread_refuses_an_unset_config_key(interop_config: Path) -> None:
+    # Given: no agent-chat channel is configured.
+    interop_config.write_text("{}", encoding="utf-8")
+    fake = FakeApi("bot-a", {})
+    directory = _directory(fake)
+
+    # When / Then: fail closed before any Discord request.
+    with pytest.raises(ApprovalSurfaceError):
+        _ = directory.agent_chat_request_thread(ApprovalKind.TODO, _request_thread())
+    assert fake.calls == []

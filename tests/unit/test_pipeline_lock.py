@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -71,6 +72,23 @@ def test_the_lock_lives_where_both_watchers_are_told_to_look(tmp_path: Path) -> 
 
     assert resolved.parent == tmp_path / ".hermes"
     assert resolved.name == pipeline_lock.LOCK_NAME
+
+
+@dataclass(frozen=True, slots=True)
+class Boom(Exception):
+    reason: str
+
+
+def test_frozen_slots_exception_propagates_and_releases(tmp_path: Path) -> None:
+    env = {pipeline_lock.STATE_ROOT_ENV: str(tmp_path)}
+
+    with pytest.raises(Boom):
+        with pipeline_lock.hold(env) as acquired:
+            assert acquired is True
+            raise Boom("x")
+
+    with pipeline_lock.hold(env) as acquired:
+        assert acquired is True
 
 
 def test_holding_is_exclusive_across_processes(tmp_path: Path) -> None:

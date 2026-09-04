@@ -18,6 +18,7 @@ APPROVALS_CHANNEL = "1528936606856122421"  # digit-only: bindings refuse a place
 OWNER_DM_CHANNEL = "1526487935975952385"
 AGENT_CHAT_CHANNEL = "1526487935975952390"
 AGENT_CHAT_THREAD = "1526487935975952391"
+REQUEST_THREAD = "1526487935975952392"
 APPROVE = "\u2705"
 CANCEL = "\u26d4"
 MARKER = "SYNTH-BODY-MARKER-DO-NOT-LEAK"
@@ -31,10 +32,14 @@ class FakeDiscord:
         self.messages: dict[str, str] = {}
         self.reactions: dict[str, list] = {}
         self.posts: list = []
+        self.threads: list = []
         self._n = 0
 
     def api(self, method, path, payload=None):
         self.posts.append((method, path, payload))
+        if method == "POST" and path.endswith("/threads"):
+            self.threads.append((payload or {}).get("name", ""))
+            return {"id": REQUEST_THREAD}
         if method == "POST" and path.endswith("/messages"):
             self._n += 1
             mid = f"m{self._n}"
@@ -65,11 +70,11 @@ class FakeDiscord:
             return {"id": channel_id, "type": 1, "recipients": [{"id": OWNER}]}
         if channel_id == AGENT_CHAT_CHANNEL:
             return {"id": channel_id, "type": 0, "name": "agent-chat", "guild_id": "guild"}
-        if channel_id == AGENT_CHAT_THREAD:
+        if channel_id in (AGENT_CHAT_THREAD, REQUEST_THREAD):
             return {
                 "id": channel_id,
                 "type": 11,
-                "name": "승인-patent-export",
+                "name": self.threads[-1] if self.threads else "승인-patent-export",
                 "parent_id": AGENT_CHAT_CHANNEL,
             }
         return {"id": channel_id, "type": 0, "name": "approvals"}

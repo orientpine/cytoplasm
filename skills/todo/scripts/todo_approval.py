@@ -206,6 +206,8 @@ class TodoApprovalGate:
             binding.policy_version,
             origin_channel_id=self.intent.origin_channel_id,
             origin_message_id=self.intent.origin_message_id,
+            # 이 요청이 게시된 채널이 곧 이 요청 전용 스레드다 — 결과 통지가 그리로 돌아온다.
+            approval_thread_id=binding.channel_id,
             tasklist=self.intent.tasklist,
             title=self.intent.title,
             notes=self.intent.notes,

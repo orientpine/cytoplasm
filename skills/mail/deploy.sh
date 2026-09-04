@@ -53,6 +53,7 @@ deploy_vendor_mailon() {
 source "$repo_root/automation/deploy_provenance.sh"
 deploy_provenance_check "$repo_root" \
   "$repo_root/skills/mail/scripts/mail_digest_watch.py" \
+  "$repo_root/skills/mail/scripts/mail_attachment_drive_watch.py" \
   "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
   "$repo_root/skills/mail/scripts/mail_triage_watch.py" \
   "$repo_root/skills/mail/scripts/mailon_runtime_release.sh" \
@@ -74,6 +75,12 @@ push_file "$repo_root/skills/mail/scripts/mailon_runtime_drift.sh" \
 run_agent "chmod 700 \"\$HOME/.hermes/scripts/mailon_runtime_drift.sh\""
 push_file "$repo_root/skills/mail/scripts/mail_digest_watch.py" \
   '.hermes/scripts/mail_digest_watch.py'
+push_file "$repo_root/skills/mail/scripts/mail_attachment_drive_watch.py" \
+  '.hermes/scripts/mail_attachment_drive_watch.py'
+run_agent "chmod 700 \"\$HOME/.hermes/scripts/mail_attachment_drive_watch.py\""
+# Remove the agent-made 2026-08-29 sync copy: the watcher now runs the sync script
+# directly from the governed live skill mount, not from the agent home.
+run_agent 'rm -f "$HOME/.hermes/scripts/"mail_attachment_drive_sync.py'
 # The approval/send loop. This file was corrected to read the governed live
 # store months ago but was never listed here, so the node kept running a copy
 # that still probed the pre-inversion ~/.hermes/skills/mail path — after the
@@ -95,6 +102,7 @@ run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [
 # which has 0 delivery targets). An already-registered job is converged in
 # place with `edit` (preserving its job id/history); otherwise it is created.
 run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-daily-digest\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --deliver discord --no-agent --script mail_digest_watch.py; else hermes cron create "0 8 * * *" --name mail-daily-digest --no-agent --script mail_digest_watch.py --deliver discord; fi'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-attachment-drive-watch\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --deliver discord --no-agent --script mail_attachment_drive_watch.py; else hermes cron create "*/30 * * * *" --name mail-attachment-drive-watch --no-agent --script mail_attachment_drive_watch.py --deliver discord; fi'
 run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list'
 
 # Build + activate the vendored mailon runtime release on the node.

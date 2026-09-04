@@ -12,8 +12,10 @@ _REPO = Path(__file__).resolve().parents[2]
 _WRAPPER = _REPO / "skills" / "budget" / "scripts" / "budget_watch.py"
 
 
-def _run_wrapper(home: Path, scripts: Path | None = None) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "HOME": str(home)}
+def _run_wrapper(
+    home: Path, scripts: Path | None = None, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "HOME": str(home), **(extra_env or {})}
     if scripts is not None:
         env["BUDGET_SCRIPTS"] = str(scripts)
     return subprocess.run(
@@ -80,6 +82,31 @@ def test_wrapper_honors_the_scripts_env_override(tmp_path: Path) -> None:
     # Then: the wrapper executes the mounted CLI successfully and remains silent.
     assert result.returncode == 0
     assert result.stdout == ""
+
+
+def test_wrapper_expires_pending_requests_before_running_the_governed_child(tmp_path: Path) -> None:
+    """만료가 먼저 끝나야 같은 tick의 watch가 초안을 재게시하지 않는다."""
+    scripts = tmp_path / "mounted-budget" / "scripts"
+    marker = tmp_path / "expired"
+    scripts.mkdir(parents=True)
+    (scripts / "budget_confirm.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "def expire_pending_drafts(_now):\n"
+        "    Path(os.environ['EXPIRY_MARKER']).write_text('expired', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    (scripts / "budget_cli.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "raise SystemExit(0 if Path(os.environ['EXPIRY_MARKER']).exists() else 1)\n",
+        encoding="utf-8",
+    )
+
+    result = _run_wrapper(tmp_path, scripts, {"EXPIRY_MARKER": str(marker)})
+
+    assert result.returncode == 0
+    assert marker.read_text(encoding="utf-8") == "expired"
 
 
 def test_wrapper_self_loads_secrets_and_propagates_them_to_the_child() -> None:

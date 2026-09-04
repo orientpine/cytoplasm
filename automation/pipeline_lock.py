@@ -10,16 +10,20 @@ lock 이 어느 스킬 디렉터리에도 없는 이유가 그것이다. 파이�
 
 겹치면 나중에 온 쪽이 **양보**한다(잡히지 않으면 그대로 종료). 양보는 실패가 아니므로 rc 0
 이고, 다음 틱이 이어받는다 — speechtotext 는 5분 뒤, meeting 은 다음 밤이다.
+
+plaud_sync 의 로컬 전사 스텝(`plaud_sync.transcribe_live.run_transcribe_step`)도 같은 lock 을
+잡는다(2026-09-04). 전사본·회의록 파일은 만지지 않지만 whisper.cpp·sherpa 라는 **같은 노드
+자원**을 쓴다 — 두 워처가 동시에 전사하면 둘 다 느려지고 메모리를 다툰다. 못 잡으면 busy 한
+줄을 내고 다음 틱(10분)에 다시 온다.
 """
 
 from __future__ import annotations
 
 import fcntl
 import os
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Final
+from typing import Final, TextIO
 
 LOCK_NAME: Final = "transcript-pipeline.lock"
 STATE_ROOT_ENV: Final = "HERMES_STATE_ROOT"
@@ -34,27 +38,38 @@ def lock_path(env: Mapping[str, str] | None = None) -> Path:
     return Path(environment.get("HOME", "/tmp")).expanduser() / ".hermes" / LOCK_NAME
 
 
-@contextmanager
-def hold(env: Mapping[str, str] | None = None) -> Iterator[bool]:
-    """Yield whether this process may touch the pipeline; never block, never raise.
+class hold:
+    """Context manager yielding whether this process may touch the pipeline.
 
     A watcher that cannot even open the lock file must not proceed on the assumption that
     nobody else is running — an unreadable lock is indistinguishable from a held one, and
     guessing wrong duplicates a meeting's minutes.
     """
-    path = lock_path(env)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle = path.open("w", encoding="utf-8")
-    except OSError:
-        yield False
-        return
-    try:
+
+    __slots__: tuple[str, ...] = ("_env", "_handle")
+
+    def __init__(self, env: Mapping[str, str] | None = None) -> None:
+        self._env: Mapping[str, str] | None = env
+        self._handle: TextIO | None = None
+
+    def __enter__(self) -> bool:
+        path = lock_path(self._env)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = path.open("w", encoding="utf-8")
+        except OSError:
+            return False
+        self._handle = handle
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            yield False
-            return
-        yield True
-    finally:
-        handle.close()
+            handle.close()
+            self._handle = None
+            return False
+        return True
+
+    def __exit__(self, *_exception: object) -> bool:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+        return False

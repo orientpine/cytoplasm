@@ -28,6 +28,7 @@ OWNER_ID = "owner-char-1"
 CHANNEL_ID = "1526487935975952385"
 AGENT_CHAT_CHANNEL_ID = "1526487935975952390"
 AGENT_CHAT_THREAD_ID = "1526487935975952391"
+REQUEST_THREAD_ID = "1526487935975952392"
 PATENT_CHANNEL_ID = "1528936606856122421"  # AS-1.6: a binding refuses a placeholder id
 SLUG = "char-slug"
 NOTE_TEXT = (
@@ -40,13 +41,14 @@ DRAFT_FIELDS = [
 ]
 POSTED_FIELDS = sorted([*DRAFT_FIELDS, "confirm_message_id"])
 STORED_POSTED_FIELDS = sorted([
-    *POSTED_FIELDS, "kind", "policy_version", "surface",
+    # 요청별 승인 스레드: 레코드가 자기 승인이 사는 스레드를 함께 기록한다.
+    *POSTED_FIELDS, "approval_thread_id", "kind", "policy_version", "surface",
 ])
 MANIFEST_FIELDS = sorted([
     "approval_ts", "created_ts", "dest_folder_id", "expiry_ts", "message_id",
     "mode", "nonce", "plaintext_sha256", "slug", "state",
     # AS-1.6: the manifest is now the durable record of WHERE its approval lives.
-    "kind", "surface", "channel_id", "policy_version",
+    "kind", "surface", "channel_id", "policy_version", "approval_thread_id",
 ])
 
 
@@ -57,13 +59,19 @@ class FakeDiscordRest:
         self.approve_users = approve_users
         self.contents: dict[str, str] = {}
         self.channels: dict[str, str] = {}
+        self.threads: list[str] = []
         self._posted = 0
 
     def __call__(self, method: str, path: str, payload: dict | None = None) -> object:
         channel = path.split("/")[2]
         if method == "POST" and path == "/users/@me/channels":
             return {"id": CHANNEL_ID}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/threads":
+            self.threads.append(str((payload or {})["name"]))
+            return {"id": CHANNEL_ID, "type": 11, "parent_id": AGENT_CHAT_CHANNEL_ID}
         if method == "GET" and path == f"/channels/{CHANNEL_ID}":
+            if self.threads:
+                return {"id": CHANNEL_ID, "name": self.threads[-1], "type": 11, "parent_id": AGENT_CHAT_CHANNEL_ID}
             return {"id": CHANNEL_ID, "name": "", "recipients": [{"id": OWNER_ID}], "type": 1}
         if method == "POST" and path.endswith("/messages"):
             self._posted += 1
@@ -86,7 +94,11 @@ class FakeDiscordRest:
 @pytest.fixture
 def wiki_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeDiscordRest:
     interop = tmp_path / "interop.json"
-    interop.write_text(json.dumps({"owner_id": OWNER_ID}), encoding="utf-8")
+    interop.write_text(
+        json.dumps({"owner_id": OWNER_ID, "agent_chat_channel_id": AGENT_CHAT_CHANNEL_ID}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INTEROP_CONFIG", str(interop))
     monkeypatch.setenv("WIKI_ROOT", str(tmp_path / "wiki"))
     monkeypatch.setenv("WIKI_GATE_DIR", str(tmp_path / "gate"))
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
@@ -226,8 +238,8 @@ def _manifest(slug: str) -> pm.Manifest:
         slug=slug, plaintext_sha256="sha256:" + "a" * 64, dest_folder_id="folder-char",
         mode="enc", expiry_ts=1_800_000_000, nonce="0123456789abcdef0123456789abcdef",
         state=pm.State.PENDING, message_id=None, created_ts=1_799_999_000, approval_ts=None,
-        kind="patent-export", surface="skill-approvals", channel_id=PATENT_CHANNEL_ID,
-        policy_version=1,
+        approval_thread_id=None, kind="patent-export", surface="skill-approvals",
+        channel_id=PATENT_CHANNEL_ID, policy_version=1,
     )
 
 
@@ -320,11 +332,16 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
             post_channels.append(path.split("/")[2])
             messages[message_id] = str((payload or {})["content"])
             return {"id": message_id}
-        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD_ID}":
+        if method == "POST" and path.endswith("/threads"):
+            return {"id": REQUEST_THREAD_ID}
+        if method == "GET" and path in (
+            f"/channels/{AGENT_CHAT_THREAD_ID}",
+            f"/channels/{REQUEST_THREAD_ID}",
+        ):
             return {
-                "id": AGENT_CHAT_THREAD_ID,
+                "id": path.rsplit("/", 1)[-1],
                 "type": 11,
-                "name": "승인-patent-export",
+                "name": f"특허 반출 · {SLUG}",
                 "parent_id": AGENT_CHAT_CHANNEL_ID,
             }
         if method == "PUT":
@@ -353,7 +370,7 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
     assert first.message_id == "msg-1"
     assert second.message_id == first.message_id
     assert posted == ["msg-1"]
-    assert post_channels == [AGENT_CHAT_THREAD_ID]
+    assert post_channels == [REQUEST_THREAD_ID]
     assert set(messages) == {"msg-1"}
 
 

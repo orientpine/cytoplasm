@@ -13,7 +13,7 @@ import stat
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import override
+from automation.typing_compat import override
 
 import yaml
 

@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""speechtotext — 음성 파일을 전사(.md)하고 기존 meeting 스킬로 회의록까지 잇는 CLI.
-
-두 동사가 있다. ``transcribe`` 는 전사본까지만 만들고, ``ingest`` 는 그 전사본을
-**meeting CLI 의 자식 프로세스**로 넘겨 회의록·칸반·통지까지 잇는다. 회의록 도메인의
-민감도 게이트·승인·발행은 meeting 이 이미 소유하므로 여기서 다시 구현하지 않는다
-(사본 금지). 자식에게는 워처-cron 설계규약 (b-2) 대로 자격증명을 명시 전파한다.
-
-거부 코드: 3=크기 초과 · 5=미지원/빈 전사 · 6=전사 API 실패 · 7=회의록 체인 실패.
-"""
+"""Audio to a transcript, optionally chained into the governed meeting CLI."""
 
 from __future__ import annotations
 
@@ -15,7 +7,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -23,13 +14,18 @@ from typing import Final
 from zoneinfo import ZoneInfo
 
 import stt_audio
+import stt_blocks
 import stt_chunked
 import stt_client
+import stt_diarize
 import stt_local
 import stt_media
 import stt_polish
 import stt_runtime
+import stt_speaker_flow
+import stt_speakers
 import stt_transcript
+import speechtotext_governed
 
 KST: Final = ZoneInfo("Asia/Seoul")
 MEETING_CHAIN_EXIT: Final = 7
@@ -48,8 +44,6 @@ def _backend() -> str:
 def _transcribe(
     args: argparse.Namespace, pairs: tuple[tuple[str, str], ...]
 ) -> stt_client.Transcription:
-    # The backend decides the size ceiling: 25MiB is the API upload cap, while a
-    # local run reads a 2-3 hour recording straight off disk.
     backend = _backend()
     toolchain = (
         stt_local.resolve_toolchain(os.environ) if backend in {"auto", "local"} else None
@@ -66,12 +60,14 @@ def _transcribe(
             raise stt_audio.TranscriptionRefused(stt_audio.EMPTY_TRANSCRIPT_NOTICE, exit_code=5)
         return stt_client.Transcription(text=text, model="recorded", endpoint="recorded")
 
-    # Local first: a cloud call would ship raw audio before the meeting skill's
-    # sensitivity gate ever sees the text. An explicit `local` request therefore
-    # refuses rather than quietly failing over to a shared provider.
     if toolchain is not None:
+        diarizer = None if args.no_diarize else stt_diarize.resolve_toolchain(os.environ)
         return stt_local.transcribe(
-            checked, toolchain, prompt=_prompt(args, pairs)
+            checked,
+            toolchain,
+            prompt=_prompt(args, pairs),
+            diarizer=diarizer,
+            num_speakers=args.speaker_count,
         )
     if backend == "local":
         raise stt_audio.TranscriptionRefused(
@@ -104,7 +100,6 @@ def _transcribe(
 def _api_call(
     path: Path, args: argparse.Namespace, model: str, pairs: tuple[tuple[str, str], ...]
 ) -> stt_client.Transcription:
-    """One upload — used directly for a short file and per window for a long one."""
     return stt_client.transcribe(
         stt_audio.check_audio(path, max_bytes=stt_audio.MAX_API_AUDIO_BYTES),
         api_key=stt_runtime.setting("OPENAI_API_KEY"),
@@ -115,31 +110,11 @@ def _api_call(
     )
 
 
-def _run_meeting(transcript: Path, args: argparse.Namespace, project: str) -> int:
-    argv = [sys.executable, str(stt_runtime.meeting_cli_path()), "ingest", "--file", str(transcript),
-            "--label", args.label or transcript.stem]
-    if project:
-        argv += ["--project", project]
-    if args.offline:
-        argv.append("--offline")
-    if args.with_evidence:
-        argv.append("--with-evidence")
-    if args.notify_channel:
-        argv += ["--notify-channel", args.notify_channel]
-    if args.notify_message_id:
-        argv += ["--notify-message-id", args.notify_message_id]
-    if args.meeting_recorded:
-        argv += ["--recorded-response", args.meeting_recorded]
-    completed = subprocess.run(argv, env=stt_runtime.child_env(), check=False, timeout=1800)  # noqa: S603
-    return completed.returncode
-
-
 def _prompt(args: argparse.Namespace, pairs: tuple[tuple[str, str], ...]) -> str:
     return stt_runtime.prompt_for(getattr(args, "prompt", ""), pairs)
 
 
 def _project(args: argparse.Namespace, label: str) -> str:
-    """`--project` wins; otherwise the recording's own name says which project it is."""
     return (getattr(args, "project", "") or "").strip() or stt_runtime.project_of(label)
 
 
@@ -158,43 +133,36 @@ def cmd_run(args: argparse.Namespace, *, chain: bool) -> int:
         print(str(failure))
         return failure.exit_code
 
-    tidied = stt_polish.polish(transcription.text, glossary=pairs)
+    tidied, speakers = stt_speaker_flow.tidy(transcription, pairs)
     transcript = stt_transcript.write_transcript(
         stt_runtime.transcript_dir(), label=label, source_name=source.name,
         transcription=transcription, now=now, polish=tidied,
+        extra_lines=stt_speaker_flow.legend_lines(speakers),
     )
-    summary: dict[str, object] = {
-        "label": label,
-        "project": project,
-        "source": source.name,
-        "transcript_path": str(transcript),
-        "model": transcription.model,
-        "chars": len(transcription.text),
-        "polish": stt_runtime.polish_summary(tidied),
-        "coverage": (
-            {
-                "ratio": round(transcription.coverage.ratio, 4),
-                "complete": transcription.coverage.complete,
-                "duration_ms": transcription.coverage.duration_ms,
-                "gaps": len(transcription.coverage.gaps),
-            }
-            if transcription.coverage is not None
-            else None
-        ),
-        "drive_link": stt_runtime.publish_transcript(transcript, label, now, project),
-        "meeting_exit": None,
-    }
+    summary = stt_speaker_flow.run_summary(
+        transcription, tidied, speakers, label=label, project=project,
+        source=source.name, transcript=transcript,
+        drive_link=stt_runtime.publish_transcript(transcript, label, now, project),
+    )
     if not chain:
         print(json.dumps(summary, ensure_ascii=False))
         return 0
-    meeting_exit = _run_meeting(transcript, args, project)
+    meeting_exit, llm = stt_speaker_flow.run_meeting(
+        transcript,
+        stt_speaker_flow.meeting_argv(
+            args.label or transcript.stem, project, offline=args.offline,
+            with_evidence=args.with_evidence, notify_channel=args.notify_channel,
+            notify_message_id=args.notify_message_id, recorded=args.meeting_recorded,
+        ),
+    )
+    speakers = stt_speaker_flow.absorb(transcript, llm, label, project, now)
     summary["meeting_exit"] = meeting_exit
+    summary["speakers"] = stt_speaker_flow.speaker_summary(speakers)
     print(json.dumps(summary, ensure_ascii=False))
     return 0 if meeting_exit == 0 else MEETING_CHAIN_EXIT
 
 
 def cmd_polish(args: argparse.Namespace) -> int:
-    """Re-tidy a transcript that already exists — no audio, no model, no cost."""
     now = datetime.now(KST)
     path = Path(args.file).expanduser()
     try:
@@ -205,11 +173,27 @@ def cmd_polish(args: argparse.Namespace) -> int:
     label = args.label or _label_of(path)
     project = _project(args, label)
     header, body = stt_polish.split_document(document)
-    tidied = stt_polish.polish(body, glossary=stt_runtime.merged_glossary(project))
+    existing = stt_speakers.parse_legend(header)
+    override = stt_speakers.parse_override(args.speakers)
+    speakers = stt_speakers.merge(override, existing)
+    tidied = stt_polish.polish_sentences(
+        stt_blocks.parse(body),
+        glossary=stt_runtime.merged_glossary(project),
+        names=stt_speakers.names(speakers),
+    )
     if not tidied.body.strip():
         print(stt_audio.EMPTY_TRANSCRIPT_NOTICE)
         return 5
-    path.write_text(stt_transcript.rewrite(header, tidied, label=label), encoding="utf-8")
+    path.write_text(
+        stt_transcript.rewrite(
+            header,
+            tidied,
+            label=label,
+            extra_lines=stt_speaker_flow.legend_lines(speakers),
+            managed_prefixes=(stt_transcript.TIDY_PREFIX, stt_speakers.SPEAKERS_PREFIX),
+        ),
+        encoding="utf-8",
+    )
     path.chmod(stt_transcript.FILE_MODE)
     print(json.dumps({
         "label": label,
@@ -218,12 +202,12 @@ def cmd_polish(args: argparse.Namespace) -> int:
         "chars": len(tidied.body),
         "polish": stt_runtime.polish_summary(tidied),
         "drive_link": stt_runtime.publish_transcript(path, label, now, project),
+        "speakers": stt_speaker_flow.speaker_summary(speakers),
     }, ensure_ascii=False))
     return 0
 
 
 def _label_of(path: Path) -> str:
-    """`2026-08-26_킥오프.md` names the meeting 킥오프 — the date prefix is placement."""
     return _DATE_PREFIX.sub("", path.stem, count=1) or path.stem
 
 
@@ -233,13 +217,14 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project", help="과제명(기본: 파일명의 날짜가 아닌 첫 토큰)")
     parser.add_argument("--prompt", default="", help="고유명사 힌트")
     parser.add_argument("--recorded", help="녹취 텍스트 파일(테스트 전용 — 전사 API 미호출)")
+    parser.add_argument("--speaker-count", type=int, help="예상 화자 수")
+    parser.add_argument("--no-diarize", action="store_true", help="화자 분리 생략")
 
 
 def main(argv: list[str] | None = None) -> int:
     stt_runtime.load_secrets_into_environment()
     parser = argparse.ArgumentParser(prog="speechtotext")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
     transcribe = subparsers.add_parser("transcribe", help="음성 → 전사본(.md) 까지만")
     _add_common(transcribe)
 
@@ -255,8 +240,13 @@ def main(argv: list[str] | None = None) -> int:
     tidy.add_argument("--file", required=True, help="전사본 .md 경로")
     tidy.add_argument("--label", help="회의 라벨(기본: 파일명에서 날짜 프리픽스를 뺀 값)")
     tidy.add_argument("--project", help="과제명(기본: 라벨의 날짜가 아닌 첫 토큰)")
+    tidy.add_argument("--speakers", default="", help="소유자 화자 이름(화자1=김민수,...)")
 
     args = parser.parse_args(argv)
+    message = speechtotext_governed.refusal(Path(__file__))
+    if message:
+        print(message, file=sys.stderr)
+        return 3
     if args.command == "polish":
         return cmd_polish(args)
     return cmd_run(args, chain=args.command == "ingest")

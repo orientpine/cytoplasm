@@ -49,6 +49,10 @@ class Manifest:
     message_id: str | None
     created_ts: int
     approval_ts: int | None
+    #: Thread this request's approval message lives in. Outside every field the gate
+    #: binds (sha256/dest/mode/expiry), so adding it cannot change a stored decision;
+    #: it sits before the binding so the record still ENDS in the whole binding.
+    approval_thread_id: str | None
     kind: str
     surface: str | None
     channel_id: str | None
@@ -79,6 +83,7 @@ def write_manifest(m: Manifest) -> None:
         "message_id": m.message_id,
         "created_ts": m.created_ts,
         "approval_ts": m.approval_ts,
+        "approval_thread_id": m.approval_thread_id,
         "kind": m.kind,
         "surface": m.surface,
         "channel_id": m.channel_id,
@@ -153,6 +158,7 @@ def load_manifest(slug: str) -> Manifest:
             message_id=_valid_opt_str(payload.get("message_id")),
             created_ts=_valid_int(payload["created_ts"]),
             approval_ts=_valid_opt_int(payload.get("approval_ts")),
+            approval_thread_id=_valid_opt_str(payload.get("approval_thread_id")),
             kind=_valid_str(payload.get("kind", _KIND)),
             surface=_valid_opt_str(payload.get("surface")),
             channel_id=_valid_opt_str(payload.get("channel_id")),
@@ -198,6 +204,7 @@ def transition(slug: str, *, allowed_from: frozenset[State], to: State, **fields
         "message_id": m.message_id,
         "created_ts": m.created_ts,
         "approval_ts": m.approval_ts,
+        "approval_thread_id": m.approval_thread_id,
         "kind": m.kind,
         "surface": m.surface,
         "channel_id": m.channel_id,

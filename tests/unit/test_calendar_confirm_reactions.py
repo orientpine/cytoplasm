@@ -28,6 +28,7 @@ OWNER_DM_CHANNEL_ID = "1526487935975952385"
 AGENT_CHAT_CHANNEL_ID = "1526487935975952390"
 AGENT_CHAT_THREAD_ID = "1526487935975952391"
 AGENT_CHAT_GUILD_ID = "1526487935975952392"
+REQUEST_THREAD_ID = "1526487935975952400"
 
 
 def _load_watch_module():
@@ -239,11 +240,12 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
             return {"id": OWNER_DM_CHANNEL_ID, "name": "", "recipients": [{"id": "cha-owner"}], "type": 1}
         if path == f"/channels/{AGENT_CHAT_CHANNEL_ID}":
             return {"id": AGENT_CHAT_CHANNEL_ID, "guild_id": AGENT_CHAT_GUILD_ID, "name": "agent-chat", "type": 0}
-        if path == f"/guilds/{AGENT_CHAT_GUILD_ID}/threads/active":
-            return {"threads": [{"id": AGENT_CHAT_THREAD_ID, "name": "승인-calendar", "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}]}
-        if path == f"/channels/{AGENT_CHAT_THREAD_ID}":
-            return {"id": AGENT_CHAT_THREAD_ID, "name": "승인-calendar", "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}
-        if path == f"/channels/{AGENT_CHAT_THREAD_ID}/messages":
+        if path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/threads":
+            return {"id": REQUEST_THREAD_ID}
+        if path == f"/channels/{REQUEST_THREAD_ID}":
+            return {"id": REQUEST_THREAD_ID, "name": f"캘린더 · {draft['id']}",
+                    "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}
+        if path == f"/channels/{REQUEST_THREAD_ID}/messages":
             return {"id": "msg-1"}
         return None
 
@@ -258,16 +260,18 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
     entry = PendingConfirmStore().load()
     assert entry == (
         PendingConfirm(
-            draft_id=draft["id"], sha256=draft["sha256"], dm_channel_id=AGENT_CHAT_THREAD_ID,
+            draft_id=draft["id"], sha256=draft["sha256"], dm_channel_id=REQUEST_THREAD_ID,
             dm_message_id="msg-1", created=entry[0].created,
         ),
     )
-    assert entry[0].channel_id == AGENT_CHAT_THREAD_ID
+    assert entry[0].channel_id == REQUEST_THREAD_ID
     assert entry[0].surface == "agent-chat-thread"
     assert entry[0].policy_version == POLICY_VERSION
+    assert ("POST", f"/channels/{AGENT_CHAT_CHANNEL_ID}/threads",
+            {"name": f"캘린더 · {draft['id']}", "auto_archive_duration": 10080, "type": 11}) in calls
     assert [call for call in calls if call[0] == "PUT"] == [
-            ("PUT", f"/channels/{AGENT_CHAT_THREAD_ID}/messages/msg-1/reactions/%E2%9C%85/@me", None),
-            ("PUT", f"/channels/{AGENT_CHAT_THREAD_ID}/messages/msg-1/reactions/%E2%9B%94/@me", None),
+            ("PUT", f"/channels/{REQUEST_THREAD_ID}/messages/msg-1/reactions/%E2%9C%85/@me", None),
+            ("PUT", f"/channels/{REQUEST_THREAD_ID}/messages/msg-1/reactions/%E2%9B%94/@me", None),
     ]
 
 
@@ -651,6 +655,130 @@ def test_origin_bound_cancellation_posts_masked_result_to_the_origin_thread(
     assert "캘린더 삭제 취소" in content
     assert "abc123" in content
     _assert_calendar_content_masked(content)
+
+
+# ------------------------------------------- per-request approval thread closing
+
+APPROVAL_THREAD = "300000000000000091"
+APPROVAL_THREAD_NAME = "캘린더 · abc123"
+
+
+def _run_approval_thread(
+    tmp_path: Path,
+    monkeypatch,
+    reactions: dict[str, tuple[dict[str, str | bool], ...]],
+    *,
+    record: dict,
+    created: datetime | None = None,
+    now: datetime = datetime(2026, 7, 17, 12, 0, tzinfo=UTC),
+) -> SimpleNamespace:
+    """Run one tick against a record already bound to its own approval thread."""
+    thread_posts: list[tuple[str, str]] = []
+    patches: list[dict] = []
+    dm_notices: list[tuple[str, str]] = []
+
+    def api(method: str, path: str, payload: dict | None = None):
+        if method == "GET" and path == f"/channels/{APPROVAL_THREAD}":
+            return {"id": APPROVAL_THREAD, "name": APPROVAL_THREAD_NAME}
+        if method == "PATCH" and path == f"/channels/{APPROVAL_THREAD}":
+            patches.append(dict(payload or {}))
+            return {"id": APPROVAL_THREAD}
+        raise AssertionError(f"unexpected Discord call: {method} {path}")
+
+    class _ThreadTransport:
+        def __init__(self, channel_id: str) -> None:
+            self.channel_id = channel_id
+
+        def send(self, content: str) -> tuple[_SentChunk, ...]:
+            thread_posts.append((self.channel_id, content))
+            return (_SentChunk("thread-post-1"),)
+
+    monkeypatch.setattr(calendar_confirm, "owner_id", lambda: "cha-owner")
+    monkeypatch.setattr(calendar_confirm, "_api", api)
+    monkeypatch.setattr(calendar_confirm, "_thread_transport", _ThreadTransport)
+    monkeypatch.setattr(
+        calendar_confirm, "send_owner_dm",
+        lambda owner, content: dm_notices.append((owner, content)),
+    )
+    store = PendingConfirmStore(tmp_path / "pending-confirms.jsonl")
+    store.append(_entry(created=created))
+    discord = FakeDiscord(reactions, f"calendar confirmation sha256:{record['sha256']}")
+    commands = FakeCommands()
+    watch.run_once(
+        store=store, owner_id="cha-owner", discord=discord, commands=commands,
+        draft_sha256=lambda _draft_id: str(record["sha256"]),
+        draft_record=lambda _draft_id: record, now=now,
+    )
+    return SimpleNamespace(
+        store=store, discord=discord, commands=commands,
+        thread_posts=thread_posts, patches=patches, dm_notices=dm_notices,
+    )
+
+
+def test_execution_result_closes_the_request_thread_it_was_approved_in(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Given a draft approved in its own thread, with no instructing channel at all
+    record = _origin_record(
+        origin_channel_id="", origin_message_id="", approval_thread_id=APPROVAL_THREAD
+    )
+
+    # When the watcher tick applies the owner's ✅
+    result = _run_approval_thread(
+        tmp_path, monkeypatch, {"✅": ({"id": "cha-owner", "bot": False},)}, record=record
+    )
+
+    # Then the masked result lands in the approval thread, which is then closed
+    assert [entry.draft_id for entry in result.commands.confirmed] == ["abc123"]
+    assert [channel for channel, _content in result.thread_posts] == [APPROVAL_THREAD]
+    assert "캘린더 등록 실행 완료" in result.thread_posts[0][1]
+    _assert_calendar_content_masked(result.thread_posts[0][1])
+    assert result.patches == [
+        {"archived": True, "name": f"✅ 완료 · {APPROVAL_THREAD_NAME}"}
+    ]
+    assert result.dm_notices == []
+
+
+def test_cancellation_result_closes_the_request_thread_as_cancelled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Given an approval-thread-bound draft the owner cancels with ⛔
+    record = _origin_record(action="delete", approval_thread_id=APPROVAL_THREAD)
+
+    # When the watcher tick applies the cancellation
+    result = _run_approval_thread(
+        tmp_path, monkeypatch, {"⛔": ({"id": "cha-owner", "bot": False},)}, record=record
+    )
+
+    # Then the notice goes to the approval thread, which closes as cancelled
+    assert result.commands.discarded == ["abc123"]
+    assert [channel for channel, _content in result.thread_posts] == [APPROVAL_THREAD]
+    assert "캘린더 삭제 취소" in result.thread_posts[0][1]
+    _assert_calendar_content_masked(result.thread_posts[0][1])
+    assert result.patches == [
+        {"archived": True, "name": f"⛔ 취소 · {APPROVAL_THREAD_NAME}"}
+    ]
+
+
+def test_expiry_result_closes_the_request_thread_as_expired(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Given an approval-thread-bound draft that outlived its 24h window
+    record = _origin_record(approval_thread_id=APPROVAL_THREAD)
+
+    # When the watcher tick expires it
+    result = _run_approval_thread(
+        tmp_path, monkeypatch, {}, record=record,
+        created=datetime(2026, 7, 15, 11, 59, tzinfo=UTC),
+    )
+
+    # Then the expiry notice closes the same thread
+    assert result.commands.discarded == ["abc123"]
+    assert [channel for channel, _content in result.thread_posts] == [APPROVAL_THREAD]
+    assert "캘린더 등록 만료 취소" in result.thread_posts[0][1]
+    assert result.patches == [
+        {"archived": True, "name": f"⌛ 만료 · {APPROVAL_THREAD_NAME}"}
+    ]
 
 
 def test_origin_thread_failure_falls_back_to_the_owner_dm_path(

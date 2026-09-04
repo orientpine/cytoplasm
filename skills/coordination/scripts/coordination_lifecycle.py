@@ -15,6 +15,10 @@ from confirm_reaction_watch import APPROVE_EMOJI, CANCEL_EMOJI, DiscordApi, reac
 from coordination_pending import PendingConfirm, PendingConfirmError, PendingConfirmStore
 
 E2E_DM_PREFIX = "[E2E] "
+#: Terminal states a result notice may close its request thread with (origin_notice 소유).
+OUTCOME_DONE = "done"
+OUTCOME_CANCELLED = "cancelled"
+OUTCOME_EXPIRED = "expired"
 
 
 def owner_leg(args: argparse.Namespace, config: dict[str, str], correlation: str, state, slot_iso: str) -> int:
@@ -148,6 +152,7 @@ def _notify_completion(
             record,
             f"✅ 일정 조율 완료 ({correlation}): {summary} — {label}. 캘린더에 등록되었습니다.",
             fallback=lambda content: send_owner_dm(config["owner_id"], content),
+            outcome=OUTCOME_DONE,
         )
     except Exception as error:  # noqa: BLE001 — a notice failure must not change the exit code
         print(f"NOTIFY-FAIL correlation={correlation} err={type(error).__name__}", file=sys.stderr)
@@ -168,14 +173,20 @@ def _thread_transport(channel_id: str) -> Any:
 
 
 def notify_result(
-    pending_or_draft: dict[str, str], content: str, *, fallback: Callable[[str], object]
+    pending_or_draft: dict[str, str],
+    content: str,
+    *,
+    fallback: Callable[[str], object],
+    outcome: str = "",
 ) -> object:
-    """Route a coordination result: origin-channel thread first, caller's fallback.
+    """Route a coordination result: this request's approval thread, else the fallback.
 
     라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
     ``automation.interop.origin_notice.deliver``가 소유한다(2026-08-23 전 스킬
     공통화). 폴백은 호출자가 넘긴다: CLI는 소유자 통지를, 워처는 자기 Discord
     표면을 쓰기 때문이다. 스레드 이름에는 일정 제목을 싣지 않는다(SKILL.md 규칙 3).
+    ``outcome``(OUTCOME_DONE/CANCELLED/EXPIRED)이 있으면 게시가 성공한 뒤 그 스레드를
+    종결 표시한다 — 활성 스레드 목록이 곧 진행 중인 조율 목록이 된다.
     """
     try:
         origin_notice = _origin_notice()
@@ -192,6 +203,7 @@ def notify_result(
         thread_name=f"일정 조율 결과 (draft {pending_or_draft.get('id', '')})",
         content=content,
         fallback=fallback,
+        outcome=origin_notice.ThreadOutcome[outcome.upper()] if outcome else None,
     )
 
 

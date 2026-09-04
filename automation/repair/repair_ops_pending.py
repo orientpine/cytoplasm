@@ -83,6 +83,21 @@ class PendingRepairApproval:
     channel_id: str | None = None
     policy_version: int | None = None
 
+    @property
+    def approval_thread_id(self) -> str:
+        """This request's own approval thread — read, never stored a second time.
+
+        The binding channel of a repair request IS its thread (the directory opens
+        one per request), so a stored copy could only ever disagree with it, and a
+        reader that picked the disagreeing one would look for the owner's decision
+        in the wrong place. Kept out of ``action_hash`` and out of the rendered
+        message: routing is not part of what the owner consented to. A record
+        with no channel answers "" instead of failing; one written before
+        per-request threads answers its shared kind thread, which no repair
+        notice consumer reads.
+        """
+        return self.channel_id or ""
+
 
 @dataclass(frozen=True, slots=True)
 class PendingRepairApprovalStore:

@@ -20,7 +20,6 @@ import sys
 from datetime import datetime, timedelta
 from importlib import import_module
 from pathlib import Path
-from typing import TypeAlias
 
 _repo_root = Path(os.environ.get("AUTOPHAGY_REPO_ROOT", Path(__file__).resolve().parents[3]))
 if str(_repo_root) not in sys.path:
@@ -32,8 +31,8 @@ calendar_gate = import_module("calendar_gate")
 calendar_output = import_module("calendar_output")
 calendar_preflight = import_module("calendar_preflight")
 calendar_routing = import_module("calendar_routing")
+calendar_governed = import_module("calendar_governed")
 
-DraftRecord: TypeAlias = dict[str, str | list[str]]
 ROUTING_REJECT_EXIT_CODE = 4
 
 
@@ -281,6 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
+        calendar_governed.guard(Path(__file__), args.command)
         return int(args.func(args))
     except calendar_core.AmbiguousTime as error:
         print(f"AMBIGUOUS-TIME 되묻기: {error.question}", file=sys.stderr)

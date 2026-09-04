@@ -46,6 +46,9 @@ class FakeDirectory:
     def agent_chat_thread(self, _kind: object) -> str:
         raise AssertionError("the watcher must use the stored channel binding")
 
+    def agent_chat_request_thread(self, _kind: object, _request: object) -> str:
+        raise AssertionError("the watcher must never open a second request thread")
+
     def describe(self, channel_id: str) -> ChannelFacts:
         self.described.append(channel_id)
         return ChannelFacts(11, "승인-todo", (), _AGENT_CHAT_CHANNEL)
@@ -208,6 +211,67 @@ def test_reaction_before_ttl_is_consumed_but_after_ttl_is_expired(tmp_path: Path
     archived = after.store.archives(after.record.key)
     assert [(entry.state.value, entry.outcome) for entry in archived] == [("expired", None)]
     assert not after.log.exists()
+
+
+def test_expiry_notifies_with_expired_thread_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """만료 뒤에만 요청 스레드를 닫아야 열린 요청이 실제 pending 상태와 일치한다."""
+    item = _fixture(tmp_path, title="만료 통지 과제")
+    runtime = import_module("todo_approval_runtime")
+    notices: list[tuple[dict, str, dict]] = []
+
+    def record_notice(record_like: dict, content: str, **kwargs: object) -> None:
+        notices.append((record_like, content, kwargs))
+
+    monkeypatch.setattr(runtime, "notify_result", record_notice)
+
+    _run(item, _NOW + item.store_module.TODO_APPROVAL_TTL + timedelta(seconds=1))
+
+    assert [(entry.state.value, entry.outcome) for entry in item.store.archives(item.record.key)] == [
+        ("expired", None)
+    ]
+    assert len(notices) == 1
+    record_like, content, kwargs = notices[0]
+    assert record_like["id"] == item.record.action_hash[:19]
+    assert item.record.key in content and item.record.title in content
+    assert "86400초" in content
+    assert kwargs["outcome"] == "EXPIRED"
+
+
+def test_expiry_notice_failure_keeps_the_archive_and_watcher_successful(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """통지 실패가 이미 확정된 만료 archive나 cron의 성공 종료를 뒤집어서는 안 된다."""
+    item = _fixture(tmp_path)
+    runtime = import_module("todo_approval_runtime")
+
+    def fail_notice(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("synthetic notice failure")
+
+    monkeypatch.setattr(runtime, "notify_result", fail_notice)
+
+    _run(item, _NOW + item.store_module.TODO_APPROVAL_TTL + timedelta(seconds=1))
+
+    assert [(entry.state.value, entry.outcome) for entry in item.store.archives(item.record.key)] == [
+        ("expired", None)
+    ]
+    assert f"NOTIFY-FAIL key={item.record.key} err=RuntimeError" in capsys.readouterr().err
+
+
+def test_nonexpired_record_does_not_send_an_expiry_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """아직 유효한 요청은 리액션 판정 전까지 결과 통지를 열지 않아야 한다."""
+    item = _fixture(tmp_path)
+    runtime = import_module("todo_approval_runtime")
+    notices: list[object] = []
+    monkeypatch.setattr(
+        runtime, "notify_result", lambda *_args, **_kwargs: notices.append(object())
+    )
+
+    _run(item, _NOW + item.store_module.TODO_APPROVAL_TTL - timedelta(seconds=1))
+
+    assert notices == []
+    assert item.store.active(item.record.key) == item.record
 
 
 def test_approval_log_failure_leaves_generation_pending(tmp_path: Path) -> None:

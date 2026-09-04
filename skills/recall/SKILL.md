@@ -1,7 +1,7 @@
 ---
 name: recall
 description: "개인 RAG(personal_cha) 검색 스킬. `!recall <질문>` 명시 호출 + 개인/프로젝트 지식 질문에 자동 사용. 검색 결과를 출처(위키 경로/회의/보고 id)와 함께 인용하고, 결과가 없으면 반드시 '기억 없음'이라고 답한다(지어내기 금지). RAG 노드 다운 시 '검색 불가' 안내 후 일반 답변. W2-5."
-version: 1.2.0
+version: 1.2.1
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -30,7 +30,7 @@ cha의 개인 RAG(`personal_cha` 컬렉션, W2-1 MCP memory server)를 검색해
 ## 검색 명령
 
 ```bash
-python3 ~/.hermes/skills/recall/scripts/recall_cli.py search "<질문>" --json
+python3 /srv/autophagy-skills/live/recall/scripts/recall_cli.py search "<질문>" --json
 ```
 
 출력은 `recall-v1` JSON 한 개다(스키마는 `scripts/recall_core.py` 문서화):
@@ -44,7 +44,7 @@ python3 ~/.hermes/skills/recall/scripts/recall_cli.py search "<질문>" --json
 지식 파사드 전면을 호출한다.
 
 ```bash
-python3 ~/.hermes/skills/recall/scripts/recall_cli.py evidence "<질문>" \
+python3 /srv/autophagy-skills/live/recall/scripts/recall_cli.py evidence "<질문>" \
   --purpose cite --json
 ```
 
@@ -67,7 +67,7 @@ python3 ~/.hermes/skills/recall/scripts/recall_cli.py evidence "<질문>" \
 출력하지 않는다. flag가 없으면 기존 단일 검색 동작 그대로다.
 
 ```bash
-python3 ~/.hermes/skills/recall/scripts/recall_cli.py search "<관계 질문>" \
+python3 /srv/autophagy-skills/live/recall/scripts/recall_cli.py search "<관계 질문>" \
   --entity-fallback --json
 ```
 
@@ -77,7 +77,7 @@ python3 ~/.hermes/skills/recall/scripts/recall_cli.py search "<관계 질문>" \
 다른 표면이다 — 이쪽은 인제스트된 기억이 아니라 소유자가 방금 올려 둔 원본 파일을 본다.
 
 ```bash
-python3 ~/.hermes/skills/recall/scripts/recall_reference.py "<질의>" [--limit 3] [--json]
+python3 /srv/autophagy-skills/live/recall/scripts/recall_reference.py "<질의>" [--limit 3] [--json]
 ```
 
 - 루트는 `DRIVE_REFERENCE_ROOT`(기본 `KIMM`, `/`로 중첩 경로 가능), Drive 접근은 다른 Drive

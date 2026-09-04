@@ -79,7 +79,8 @@ def test_write_note_when_approval_is_missing_then_refuses_before_git_push(
         _ = write_note(plan, write_config, runner)
 
     assert captured.value.retryable is False
-    assert [call.argv[:2] for call in runner.calls] == [
+    # `git config` calls are one-off clone setup; the gate's property is where work stops.
+    assert [call.argv[:2] for call in runner.calls if call.argv[1] != "config"] == [
         ("git", "fetch"),
         ("git", "reset"),
         ("git", "add"),

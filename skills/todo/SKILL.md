@@ -1,7 +1,7 @@
 ---
 name: todo
 description: Google Tasks 할 일 등록·조회 스킬. 등록(mutate)은 외부효과 승인 게이트를 반드시 경유하고, 쓰기 성공 뒤 tasks.tasks.get 재조회로 저장된 제목·식별자를 검증한다. 조회(list)는 READ이므로 게이트 대상이 아니다. 터미널에서 raw `gws tasks tasks insert`를 직접 실행하지 말 것 — 같은 명령이 denylist 규칙 gws_tasks_mutation에 매칭되어 승인 없이는 차단된다.
-version: 1.4.0
+version: 1.4.3
 author: autophagy-agents
 license: proprietary
 metadata:
@@ -33,14 +33,19 @@ Google Tasks 쓰기에는 **repo 측 코드가 아예 없었다.** 에이전트�
    receipt가 있거나 `write_started`가 남은 generation은 자동 재실행하지 않는다 — 상태는
    저장하지 않고 (archive된 approved 세대 × claim receipt)로 매 틱 유도하므로, 중간에
    죽어도 다음 틱이 이어받고 두 번 쓰지 않는다.
-4. **결과는 지시가 온 곳으로 돌아간다 (2026-08-23, 소유자 지시 — 전 스킬 공통).** cha가
-   채널(예: agent-chat)에서 할일 등록을 지시하면 `request`/`create`에
-   `--origin-channel-id <채널ID>`(지시 메시지 id를 알면 `--origin-message-id`도)를 전달한다.
-   승인 레코드가 origin을 기억하므로 등록 완료(`✅ 할일 등록 완료: <제목> (task <id>)`)와
-   워처의 ⛔ 취소 통지는 그 채널의 스레드(지시 메시지 앵커 우선)에 게시된다 — **승인
-   카드(✅/⛔) 자체는 `#agent-chat` 의 `승인-todo` 스레드 전용**(정책 v7). origin이 없으면 레코드에 저장된 승인 채널로 통지한다. 통지는
-   best-effort(실패 시 `NOTIFY-THREAD-FAIL`→저장 채널 폴백, `NOTIFY-FAIL`)라 receipt·원장·
-   exit code를 바꾸지 않으며, E2E 승인은 `NOTIFY-SKIP`으로 실제 통지를 열지 않는다.
+4. **요청 하나가 스레드 하나다 (2026-09-01, 소유자 지시 — 전 스킬 공통).** `request`는 이
+   할 일 전용 승인 스레드 `할 일 · <제목>`(제목만, notes 제외)을 열어 확인 카드를 거기에
+   게시하고, 그 스레드 id를 레코드의 `approval_thread_id`로 남긴다. cha가 채널에서 등록을
+   지시하면 `request`/`create`에 `--origin-channel-id <채널ID>`(지시 메시지 id를 알면
+   `--origin-message-id`도)를 전달한다 — 그 지시 메시지가 승인 채널에 있으면 요청 스레드가
+   거기에 앵커된다. 등록 완료(`✅ 할일 등록 완료: <제목> (task <id>)`)와 워처의 ⛔ 취소 통지는
+   **같은 스레드**에 게시되고, 그 스레드는 상태 접두어로 이름이 바뀐 뒤(`✅ 완료 · …` /
+   `⛔ 취소 · …`) 아카이브된다 — 열려 있는 스레드가 곧 진행 중인 요청이다. 만료된 요청은
+   승인 스레드를 `⌛ 만료 · …`로 닫는다. 스레드가 없는 옛
+   레코드는 origin 스레드, 그마저 없으면 저장된 승인 채널로 폴백한다. 통지는
+   best-effort(실패 시 `NOTIFY-THREAD-FAIL`→저장 채널 폴백, `NOTIFY-FAIL`, 종결 표시 실패는
+   `THREAD-CLOSE-FAIL`)라 receipt·원장·exit code를 바꾸지 않으며, E2E 승인은 `NOTIFY-SKIP`으로
+   실제 통지를 열지 않는다.
 
 ## 사용법
 
@@ -55,9 +60,9 @@ python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py plan --title "실험
 python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py request --title "실험 노트 정리" \
   --tasklist @default --notes "합성 메모" --due 2026-08-01T00:00:00Z
 
-# ④ #agent-chat 의 `승인-todo` 스레드에서 ✅ 또는 ⛔ 선택
+# ④ 이 요청의 스레드 `할 일 · <제목>` 에서 ✅ 또는 ⛔ 선택
 #    ✅ 를 누르면 그것으로 끝난다 — 다음 워처 틱(매 1분)이 동결된 인자로 등록까지 수행하고
-#    `tasks.tasks.get` 재조회로 검증한 뒤 결과를 지시가 온 채널의 스레드로 통지한다.
+#    `tasks.tasks.get` 재조회로 검증한 뒤 결과를 같은 스레드에 통지하고 그 스레드를 닫는다.
 #    사용자에게 "✅ 를 누르면 자동 등록된다"고 안내해도 된다.
 
 # ⑤ (진단용) 수동 등록 — 정상 흐름에서는 필요 없다
@@ -66,6 +71,8 @@ python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py request --title "실
 python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py create --title "실험 노트 정리" \
   --tasklist @default --notes "합성 메모" --due 2026-08-01T00:00:00Z
 ```
+
+변경 명령은 `/srv/autophagy-skills/live/todo/scripts/` 밖의 사본에서 실행하면 `STALE-SKILL-COPY-BLOCK`으로 거부한다.
 
 출력 계약:
 
@@ -95,7 +102,7 @@ python3 /srv/autophagy-skills/live/todo/scripts/todo_cli.py create --title "실�
   추측하거나 게이트를 우회하지 않는다. 진단에는 `todo_cli.py runtime-root`를 쓴다.
 - `request`가 동결된 tasklist·제목·notes·due를 승인 레코드에 함께 적고(그 4개가 없으면
   승인만으로는 무엇을 쓸지 복원할 수 없다 — `argv_summary`는 마스킹되어 있다) action hash와
-  확인 카드를 `approval_surface`가 정한 표면(정책 v7 = `#agent-chat` `승인-todo` 스레드)에 만들고,
+  확인 카드를 `approval_surface`가 정한 표면(정책 v7 = 요청별 스레드 `할 일 · <제목>`)에 만들고,
   owner 본인의 ✅/⛔만 `todo_confirm_reaction_watch.py`가 판정한다. 워처는 결정과 메시지
   바인딩을 `manual_reaction` 원장 및 불변 archive generation에 함께 기록하며 ⛔를 항상
   우선한다. raw `gws tasks tasks insert` 또는 수동 승인 레코드 작성은 금지한다.

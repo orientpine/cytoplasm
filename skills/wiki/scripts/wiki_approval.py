@@ -246,6 +246,9 @@ class WikiApprovalGate:
             raise lifecycle().ApprovalRecordsError("wiki approval channel binding changed")
         updated = {
             **self.draft,
+            # 승인 요청이 사는 스레드 — 결과 통지가 스레드를 새로 열지 않게 레코드에 남긴다.
+            # 승인 해시(sha256)와 무관한 필드이므로 바인딩 검증 내용은 그대로다.
+            "approval_thread_id": binding.channel_id,
             "channel_id": binding.channel_id,
             "confirm_message_id": posted.message_id,
             "kind": str(binding.kind),

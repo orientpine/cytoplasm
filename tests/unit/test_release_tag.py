@@ -49,12 +49,36 @@ def _origin_with_commits(tmp_path: Path, count: int = 2) -> tuple[Path, Path]:
     return origin, work
 
 
-def _run_lib(work: Path, sha: str, *, key: Path | None) -> subprocess.CompletedProcess[str]:
+def _run_lib(
+    work: Path,
+    sha: str,
+    *,
+    key: Path | None,
+    version: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     env = {**os.environ}
     env["UPDATE_TRUST_SIGNING_KEY"] = str(key) if key else str(work / "absent.pub")
+    requested = f' "{version}"' if version is not None else ""
     return subprocess.run(
-        ("bash", "-c", f'source "{_LIB}"; ensure_signed_tag "{work}" "{sha}"'),
-        capture_output=True, text=True, check=False, env=env,
+        (
+            "bash",
+            "-c",
+            f'source "{_LIB}"; ensure_signed_tag "{work}" "{sha}"{requested}',
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
+def _next_tag(work: Path, bump: str | None = None) -> subprocess.CompletedProcess[str]:
+    argument = f' "{bump}"' if bump is not None else ""
+    return subprocess.run(
+        ("bash", "-c", f'source "{_LIB}"; next_release_tag "{work}"{argument}'),
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
@@ -119,6 +143,43 @@ def test_the_version_advances_from_the_latest_tag(tmp_path: Path) -> None:
     result = _run_lib(work, _git(work, "rev-parse", "HEAD"), key=key)
 
     assert result.returncode == 0
+    assert "v1.0.1" in result.stderr
+
+
+def test_next_version_defaults_to_patch_and_selects_minor_or_major(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+    _git(work, "tag", "v2.3.4")
+    _git(work, "push", "origin", "v2.3.4")
+
+    assert _next_tag(work).stdout.strip() == "v2.3.5"
+    assert _next_tag(work, "patch").stdout.strip() == "v2.3.5"
+    assert _next_tag(work, "minor").stdout.strip() == "v2.4.0"
+    assert _next_tag(work, "major").stdout.strip() == "v3.0.0"
+
+
+def test_prerelease_suffix_does_not_stall_the_release_series(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+    _git(work, "tag", "v2.3.4")
+    _git(work, "tag", "v9.0.0-rc1")
+    _git(work, "push", "origin", "--tags")
+
+    result = _next_tag(work)
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "v2.3.5"
+
+
+def test_requested_version_must_match_existing_tag_at_head(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+    head = _git(work, "rev-parse", "HEAD")
+    key = _signing_key(tmp_path)
+    first = _run_lib(work, head, key=key, version="v1.0.0")
+    assert first.returncode == 0, first.stderr
+
+    result = _run_lib(work, head, key=key, version="v1.0.1")
+
+    assert result.returncode != 0
+    assert "v1.0.0" in result.stderr
     assert "v1.0.1" in result.stderr
 
 

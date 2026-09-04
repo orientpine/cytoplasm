@@ -29,6 +29,7 @@ import budget_approval
 import budget_confirm
 import budget_core
 import budget_gate
+import budget_governed
 import budget_registry
 import budget_store
 
@@ -130,6 +131,7 @@ def _notify_sent(draft: dict, method: str) -> None:
             draft,
             f"✉️ 발송 완료: {draft['subject']} → {draft['mail_to']} (draft {draft['id']})\n"
             "소유자 ✅ 승인으로 발송되었습니다.",
+            outcome=budget_confirm.OUTCOME_DONE,
         )
     except Exception as error:  # noqa: BLE001 — notification must never break the tick
         print(f"NOTIFY-FAIL draft={draft['id']} "
@@ -143,6 +145,7 @@ def _notify_cancelled(draft: dict) -> None:
             draft,
             f"⛔ 발송 취소: {draft['subject']} → {draft['mail_to']} (draft {draft['id']})\n"
             "소유자 ⛔ 리액션으로 취소되어 메일은 발송되지 않았습니다.",
+            outcome=budget_confirm.OUTCOME_CANCELLED,
         )
     except Exception as error:  # noqa: BLE001 — notification must never break the tick
         print(f"NOTIFY-FAIL draft={draft['id']} "
@@ -413,6 +416,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
+        # 상태 조회는 낡은 사본에서도 안전하지만, 나머지는 외부효과가 있어 배포본만 허용한다.
+        read_only = {"query", "list-drafts", "retry-queue", "sheets"}
+        if args.command not in read_only:
+            message = budget_governed.refusal(Path(__file__))
+            if message:
+                print(message, file=sys.stderr)
+                return 3
         return int(args.func(args))
     except (SheetAccessError, budget_core.SheetSchemaError) as error:
         print(f"SHEET-FAIL {budget_core.redact(str(error))[:200]}", file=sys.stderr)

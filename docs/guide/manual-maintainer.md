@@ -86,6 +86,14 @@ private 워킹트리 안이면 `target must be outside the private source workin
 
 ## 1. 릴리스 절차 — 순서가 전부다
 
+### 릴리스 트레인 (2026-09-03 정책)
+
+릴리스는 매일 18:00 KST에 `automation/release.sh`로 한 묶음씩 컷한다. 즉시 컷하는 예외는 긴급 핫픽스뿐이며, 3일 릴리스 백로그 다이제스트 정책은 그대로 유지한다.
+
+`automation/release.sh --bump {major,minor,patch}`의 기본값은 `patch`다. `base..head`에 `POLICY_VERSION`·`SCHEMA_VERSION` 상수, `node_config` 필수 필드, 인터롭 필수 키 변경이 있으면 `--bump patch`는 exit 4로 거부되며, `--bump major`는 승인 노트에 `MAJOR: 운영자 조치 필요` 줄을 추가한다.
+
+**재실행은 재개다.** 태그가 잘린 뒤 전량 반영이 실패해(`release.sh` exit 10) 사람이 다시 돌리거나 완결 타이머가 이어받으면 `release_version_for`가 HEAD에 이미 붙은 태그를 그대로 쓴다 — 다음 버전을 새로 계산하지 않는다(2026-09-03 v1.1.1: next를 다시 계산해 v1.1.2를 요청하자 이름 불일치 검사가 자기 태그를 거부했다). 손 태그와 요청 버전이 다른 경우만 `tag at HEAD is … not requested …`로 거부된다. 세션의 `release.sh`와 완결 타이머가 같은 ✅를 보고 `deploy_all`을 동시에 돌리면 스킬별 실행 lock이 서로를 `EXECUTION-LOCK-BLOCK`으로 막아 둘 다 `incomplete`로 끝날 수 있다 — 마운트는 합집합으로 완료되고 `deploy_all.sh --verify`가 영수증을 쓰지만, 한 실행의 rc=10을 사고로 읽지 말 것(릴리스 단위 lock은 `docs/follow-ups.md`).
+
 ### 1.1 최초 1회: 대상 저장소를 먼저 만든다 (스크립트가 하지 않는다)
 
 `public_export.sh`는 **존재하는 원격**을 전제로 한다. 시작하자마자 `git ls-remote`로
@@ -521,8 +529,9 @@ update-trust@autophagy namespaces="git" ssh-ed25519 AAAA...<신키> update-trust
 
 ### 5.1 ⚠️ 옛 태그를 다시 올려 되돌릴 수 **없다**
 
-`automation/update_trust_state.py`가 검증 성공 시점마다 **롤백 방지 floor**를
-`<private_root>/deploy-reconcile/release-floor.json`(0600)에 기록한다 —
+`automation/update_trust_state.py`의 롤백 방지 floor 앵커는 root 소유
+`/var/lib/autophagy/update-trust/release-floor.json`에 있다. 부모 디렉터리도 root 소유
+0755이며, ops 사전 게이트는 읽고 비교만 하고 root 헬퍼만 서명 재검증 뒤 단조 전진시킨다 —
 `tag` · `commit_sha` · `major.minor.patch` 삼중항.
 
 `refuse_release_rollback`의 판정:

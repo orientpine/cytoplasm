@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 import gmail_approval_gate
 import mail_gmail_send
+import mail_quote
 import mail_runtime
 import triage_core
 import triage_gate
@@ -144,7 +145,15 @@ def _draft_with_payload(draft: Mapping[str, JsonValue], payload: Mapping[str, Js
     cc = cc_value if isinstance(cc_value, str) else _draft_cc(draft)
     subject = _payload_text(payload, "subject")
     body = _payload_text(payload, "body")
-    updated["argv"] = list(_argv_with_payload(_argv(draft), to, cc, subject, body))
+    # The guard payload carries the owner-reviewed reply text alone, so rebuilding the
+    # argv from it dropped the quoted original that create_draft had frozen in: a
+    # forward whose quote was 3,530 chars went out with the 266-char reply only
+    # (2026-09-03). The quote is the answered mail — never entity-normalized — so it is
+    # re-attached below whatever reply text the preflight returns.
+    quote = str(draft.get("quote") or "")
+    updated["argv"] = list(
+        _argv_with_payload(_argv(draft), to, cc, subject, mail_quote.with_quote(body, quote))
+    )
     updated["to"] = to
     # Only a draft that already ships a ``cc`` field gets one back: adding the key to a
     # record persisted without it would change its sha256 out from under the approval

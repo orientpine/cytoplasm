@@ -197,6 +197,7 @@ class OwnerDecision:
                     self.discord, self.entry,
                     f"⛔ 일정 조율 취소 (draft {self.entry.draft_id}) — "
                     "소유자 ⛔ 리액션으로 취소되었습니다.",
+                    outcome="cancelled",
                 )
             case unreachable:
                 assert_never(unreachable)
@@ -243,6 +244,7 @@ def _process_entries(
                         discord, entry,
                         f"⌛ 일정 조율 만료 취소 (draft {entry.draft_id}) — "
                         "확정 시간이 지나 취소되었습니다.",
+                        outcome="expired",
                     )
                     decision.drop(coordination_approval.request_of(entry))
             else:
@@ -265,19 +267,22 @@ def _process_entries(
     return tuple(retained)
 
 
-def _notify_result(discord: DiscordClient, entry: PendingConfirm, content: str) -> None:
+def _notify_result(
+    discord: DiscordClient, entry: PendingConfirm, content: str, *, outcome: str = ""
+) -> None:
     """Best-effort result notice — a completed discard must never be retained.
 
-    라우팅은 CLI와 같은 `coordination_lifecycle.notify_result`가 소유한다(원 채널
-    스레드 우선, 이 워처의 소유자 표면이 폴백). 임포트는 지연시킨다: lifecycle이
-    이 모듈을 임포트하므로 모듈 최상단에서 부르면 순환이 된다. 스레드 게시에
-    필요한 자격증명은 모듈 로드 시 `_load_env_secrets()`가 os.environ에 올려둔다
+    라우팅은 CLI와 같은 `coordination_lifecycle.notify_result`가 소유한다(요청별
+    승인 스레드 우선, 이 워처의 소유자 표면이 폴백). ``outcome``은 그 스레드를
+    종결 표시하는 상태 토큰이다. 임포트는 지연시킨다: lifecycle이 이 모듈을
+    임포트하므로 모듈 최상단에서 부르면 순환이 된다. 스레드 게시에 필요한
+    자격증명은 모듈 로드 시 `_load_env_secrets()`가 os.environ에 올려둔다
     (규약 (b): cron은 아무것도 넘겨주지 않는다).
     """
     try:
         lifecycle = import_module("coordination_lifecycle")
         lifecycle.notify_result(
-            entry.origin_record(), content, fallback=discord.send_owner_dm
+            entry.origin_record(), content, fallback=discord.send_owner_dm, outcome=outcome
         )
     except Exception as error:  # noqa: BLE001 — notification must never break the tick
         print(f"coordination-confirm-watch notify failed: {_redact(str(error))}", file=sys.stderr)

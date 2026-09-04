@@ -16,11 +16,30 @@
 2026-08-31 오후에는 제안서 노드 자율 구동 3건과 릴리스 승인 자동 완결의 낡은 pending 회복 1건도 해소했다.
 전 이력은 [follow-ups-deferred.md](follow-ups-deferred.md) 의 해소 기록·BLOCKED 절에 있다. 새 후속 과제는 루트 `AGENTS.md`「후속 과제 기록 규칙」대로 여기에 다시 쌓는다.
 
-## 기관메일 회신 원문 인용 후속 (2026-09-01)
+## 2026-09-03 전수 처리 (후속 과제 스윕 4)
 
-- **Gmail 계정 회신(`gws gmail +reply --message-id`)은 인용을 붙이지 않는다 → gws 가 원문을 자동 인용하는지 노드에서 실측한 뒤, 안 하면 `mail_gmail_send.ReplyMailRequest` 본문에 같은 `mail_quote.render_quote` 를 붙인다.** Gmail 은 message-id 스레딩으로 대화 보기에 원문이 이미 묶이므로 동작 정상 — 표시 일관성 문제일 뿐이고 발송 안전성과 무관(심각도: 낮음).
-- **mailon 웹메일의 답장 버튼(In-Reply-To/References 헤더) 경유는 vendor 변경이 필요해 미도입 → 상대 클라이언트의 스레드 묶음이 어긋나는 사례가 보고되면 `send_trigger` 계열에 답장 모드를 실측 기반으로 추가한다.** 현재는 본문 인용으로 사람 눈에는 회신으로 보이며 발송 안전성과 무관(심각도: 낮음).
+열린 29건(10묶음)을 mass-ulw DAG 22노드로 병렬 처리했다 — 20건 해소, OWNER 2·BLOCKED 2(repair 동결)·OBSERVE 5 이관.
+기관메일 Gmail 회신 인용은 코드 없이 실측으로 닫혔다(`gws gmail +reply` 가 원문을 인용한다). 이관 사유와 해소 근거는
+[follow-ups-deferred.md](follow-ups-deferred.md) 의 각 `## 원 헤딩` 아래 `↳ 처리(2026-09-03)` 줄에 있다.
+착지 중 새로 발견한 것은 아래 묶음에 쌓는다.
 
-## cron 워처 수리 후속 (2026-09-01)
+## 후속 과제 스윕 4 착지 후 남긴 것 (2026-09-03)
 
-- **`typing.override` 직수입이 3.11 no-agent 런타임 밖 경로에 남아 있다 → 해당 경로를 cron 체인에 편입하거나 리팩터할 때 `automation/typing_compat.py`(또는 mail_runtime 의 인라인 폴백 패턴) 경유로 먼저 바꾼다.** `skills/doctype/scripts/doctype_save.py`(게이트웨이 대화 경로 전용 — doctype 은 cron 워처가 없다)·`automation/group_roster/editor.py`·`automation/managed_skills/submission_errors.py`(둘 다 워크스테이션 CLI 전용)가 `from typing import override` 를 직수입한다. Hermes cron 의 uv CPython 3.11 이 실행하는 체인에는 현재 도달하지 않아 동작 정상 — mail-triage-watch 를 매 틱 죽인 결함(2026-08-31)과 같은 계열이지만 지금은 잠복이다. 영향 범위: 현재 없음, **심각도 낮음**. cron 편입 순간 같은 ImportError 가 재발한다.
+> ↳ 2026-09-03 v1.1.0 세션에서 해소 — 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+
+## 수리 티켓 t_bd0d3789 후속 (2026-09-03)
+
+> ↳ 2026-09-03 v1.1.0 세션에서 해소 — 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+
+## 2026-09-03 수리 스윕(메일 인용·다이제스트 GLM 폴백)
+
+> ↳ 2026-09-03 v1.1.0 세션에서 해소 — 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+
+## LiteLLM GPT 전환과 헬스체크 정리 후 남긴 것 (2026-09-03)
+
+> ↳ 2026-09-03 v1.1.0 세션에서 해소 — 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래. 노드 래퍼 설치는 OWNER 항목으로 남았다.
+
+## v1.1.0 편의 릴리스 착지 후 남긴 것 (2026-09-03)
+
+- **`release.sh` 를 손으로 돌린 세션과 워크스테이션 완결 타이머(`autophagy-release-complete.timer`)가 같은 ✅ 를 보고 `deploy_all --apply` 를 동시에 돌렸다 — 스킬별 실행 lock 이 서로를 `EXECUTION-LOCK-BLOCK` 으로 막아 두 실행 모두 `incomplete` 로 끝났고, 합집합이 우연히 전부 마운트돼 영수증은 다음 `--verify` 에서야 나왔다(v1.1.2 실측) → 릴리스 단위 lock(`/srv/autophagy-private/deploy-all/`)을 deploy_all 이 잡거나, 완결 타이머가 활성이면 `release.sh` 가 deploy 를 완결기에 위임하고 폴링만 하도록 한다.** 영향 범위: 이중 실행 자체는 멱등(마운트 digest 대조)이라 손상 없음, 다만 한쪽이 `SKILL-STALE`·rc=10 으로 끝나 사람이 오독한다 — 심각도 낮음.
+

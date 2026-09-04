@@ -15,6 +15,7 @@ the request instead of falling back to an unbound surface.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from types import ModuleType
 from typing import Protocol
 
@@ -40,12 +41,34 @@ def approval_directory() -> _Directory:
     )
 
 
-def new_binding() -> budget_gate.ApprovalBindingLike:
-    """Resolve the surface for a NEW post — the only surface resolution in this flow."""
+def request_spec(record: dict):
+    """This draft's own approval-thread spec: 제목만 실린다.
+
+    스레드 이름은 발신할 메일의 제목이다 — 금액·잔액은 승인 카드 안에서만 마스킹된
+    형태로 보이고 스레드 이름에는 절대 들어가지 않는다. origin 쌍은 소유자의 지시
+    메시지이며, 그 메시지가 승인 표면과 같은 채널에 있을 때만 스레드를 거기에 앵커한다.
+    """
+    surface = _surface()
+    return surface.RequestThread(
+        title=str(record.get("subject") or ""),
+        origin_channel_id=str(record.get("origin_channel_id") or ""),
+        origin_message_id=str(record.get("origin_message_id") or ""),
+    )
+
+
+def new_binding(record: dict) -> budget_gate.ApprovalBindingLike:
+    """Resolve the surface for a NEW post — the only surface resolution in this flow.
+
+    요청 하나가 스레드 하나를 연다: 승인 카드·리마인더·결과 통지가 한 스레드에서
+    완결되도록 이 초안의 요청 스펙을 정책에 넘긴다.
+    """
     surface = _surface()
     try:
         return surface.resolve_new_binding(
-            surface.ApprovalKind.BUDGET_MAIL, approval_directory(), budget_confirm.owner_id()
+            surface.ApprovalKind.BUDGET_MAIL,
+            approval_directory(),
+            budget_confirm.owner_id(),
+            request=request_spec(record),
         )
     except surface.ApprovalSurfaceError as error:
         raise budget_gate.GateError(f"승인 표면 해석 실패 — 게시 거부: {error}", 3) from error
@@ -98,12 +121,32 @@ def persisted_channel_id(record: dict) -> str | None:
     return None
 
 
-def binding_for(record: dict) -> budget_gate.ApprovalBindingLike:
-    """A stored binding always wins; only a never-posted record resolves a new one."""
+def reused_binding(outstanding: Iterable[object]) -> budget_gate.ApprovalBindingLike | None:
+    """The request thread a LIVE request of the same승인 키 already opened, if any.
+
+    파사드는 스레드가 열린 뒤에야 PENDING(같은 해시)·supersede(내용 변경)를 판정하므로,
+    재요청마다 빈 스레드가 하나씩 남았다. 살아 있는 요청이 없으면 표면을 조회하지도 않는다.
+    """
+    candidates = tuple(outstanding)
+    if not candidates:
+        return None
+    surface = _surface()
+    return surface.reuse_request_thread(
+        surface.ApprovalKind.BUDGET_MAIL,
+        candidates,
+        approval_directory(),
+        budget_confirm.owner_id(),
+    )
+
+
+def binding_for(
+    record: dict, outstanding: Iterable[object] = ()
+) -> budget_gate.ApprovalBindingLike:
+    """A stored binding always wins; a never-posted record reuses this key's live thread."""
     channel_id = record.get("channel_id")
     if isinstance(channel_id, str) and channel_id:
         return stored_binding(record)
-    return new_binding()
+    return reused_binding(outstanding) or new_binding(record)
 
 
 def reaction_instruction(record: dict, *, name_surface: bool = False) -> str:

@@ -46,8 +46,8 @@
 | Item | Value on cha's node | Third-party note |
 |---|---|---|
 | Gateway alias | `glm-main` | any name; keep it single |
-| Provider model behind the alias | `zai/glm-5.2` | your provider/model id |
-| Binding verified on | 2026-07-16 | record your own verification date |
+| Provider model behind the alias | `openai/gpt-5.6-luna` (`reasoning_effort: none`; 2026-09-03 까지 `zai/glm-5.2`, 같은 날 잠시 `gpt-5-mini`) | your provider/model id |
+| Binding verified on | 2026-09-03 | record your own verification date |
 | Agent primary model | `openai-codex/gpt-5.6-sol` (ChatGPT subscription OAuth, outside LiteLLM), `agent.reasoning_effort: high` | optional — a single OpenAI-compatible `/v1` endpoint is the minimum |
 | Alias role | fallback for the primary model + batch pipelines (mail triage, meeting, twin_distill, report, …) | same structure |
 | Deployment tags | `default`, `non-patent-sensitive` | same structure |

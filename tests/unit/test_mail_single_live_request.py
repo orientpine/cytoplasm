@@ -55,6 +55,9 @@ class FakeDiscord:
         self.contents: dict[str, str] = {}
         self.approved: set[str] = set()
         self.posts = 0
+        #: 요청별 승인 스레드 — 만들어진 스레드 id → 만들 때 준 이름.
+        self.threads: dict[str, str] = {}
+        self.post_channels: list[str] = []
 
     def api(self, method: str, path: str, payload: dict | None = None):
         parts = path.strip("/").split("/")
@@ -64,16 +67,20 @@ class FakeDiscord:
             return {"type": 1, "name": "", "recipients": [{"id": OWNER}]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
             return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
-        if method == "GET" and path == "/guilds/guild-1/threads/active":
-            return {"threads": [{
-                "id": AGENT_CHAT_THREAD,
-                "type": 11,
-                "name": "승인-mail-reply",
+        if method == "POST" and parts[-1] == "threads":
+            thread_id = str(int(AGENT_CHAT_THREAD) + len(self.threads) + 1)
+            self.threads[thread_id] = str((payload or {}).get("name", ""))
+            return {
+                "id": thread_id, "type": 11, "name": self.threads[thread_id],
                 "parent_id": AGENT_CHAT_CHANNEL,
-            }]}
-        if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
-            return {"type": 11, "name": "승인-mail-reply", "parent_id": AGENT_CHAT_CHANNEL}
+            }
+        if method == "GET" and len(parts) == 2 and parts[1] in self.threads:
+            return {
+                "id": parts[1], "type": 11, "name": self.threads[parts[1]],
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }
         if method == "POST" and parts[-1] == "messages":
+            self.post_channels.append(parts[1])
             self.posts += 1
             message_id = f"m-{self.posts}"
             self.contents[message_id] = str((payload or {}).get("content", ""))
@@ -192,6 +199,10 @@ def _producer(draft: dict, barrier: ProcessBarrier, pipes: tuple[int, int, int])
             _wait_byte(release)
         return original()
 
+    # 스레드 재사용 읽기는 lease 밖의 기회적 읽기이고, 이 초안에는 살아 있는 요청이 없어
+    # 언제나 빈 튜플이다. 그대로 두면 아래 one-shot 동기화 훅을 그 읽기가 먼저 소비해 두
+    # 프로세스가 lease 경합 전에 멈춘다 — 이 테스트가 재는 것은 lease 직렬화다.
+    triage_approval._live_requests = lambda _draft: ()
     triage_approval._pending_drafts = blocking
     verdict = triage_approval.request_approval(draft)
     reason = verdict.reason.value if verdict.reason is not None else "none"
@@ -231,6 +242,22 @@ def test_changed_content_deletes_the_message_before_dropping_the_record(
     assert fake.posts == 2
     assert _live(drafts) == ["m-2"]
     assert _stored(drafts, stale["id"])["message_id"] == ""
+
+
+def test_duplicate_and_superseding_requests_reuse_the_first_request_thread(
+    mail_env: tuple[FakeDiscord, list[str], Path],
+) -> None:
+    # Given: one request already posted into its own thread
+    fake, _calls, _drafts = mail_env
+    record = _draft(body="예전 본문")
+    assert triage_approval.post_for_approval(record) == "m-1"
+    # When: the same key is re-requested (same hash) and then superseded (new content)
+    assert triage_approval.post_for_approval(record) == "m-1"
+    assert triage_approval.post_for_approval(_draft(body="새 본문")) == "m-2"
+    # Then: one approval key keeps ONE thread — no empty orphan per retry or supersede
+    assert len(fake.threads) == 1
+    [thread_id] = fake.threads
+    assert fake.post_channels == [thread_id, thread_id]
 
 
 def test_owner_approved_request_is_deferred_without_deleting_or_touching_it(

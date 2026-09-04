@@ -25,6 +25,21 @@ probe_healthcheck_wrapper_current() {
   local source_root="${HEALTHCHECK_RELEASE_SOURCE_ROOT:-/srv/autophagy-agent-current}"
   local generator="$source_root/automation/healthcheck_probe_wrapper.sh"
   local expected installed
+  # 이 프로브가 노드에 내는 유일한 명령. 기록 경로와 실제 호출이 **같은 문자열**이어야
+  # 한다 — 래퍼는 sha256 정확 일치만 통과시키므로 한 글자만 달라도 exit 126 이다.
+  local probe_command="sed -n 's/^# wrapper-inputs: //p' \"\$HOME/.local/libexec/autophagy-healthcheck-probe\""
+
+  # 허용목록 기록 스윕(`--inputs-digest`) 안에서는 명령만 남기고 **생성기를 부르지 않는다**.
+  # 부르면 그 프로세스가 다시 기록 스윕을 돌리고 그 안에서 이 프로브가 또 생성기를 부른다 —
+  # 끝없는 재귀다. 2026-08-31 실측: cron 실행 2 개가 ops 프로세스 436 개로 불어났고 전부
+  # `--inputs-digest` 였다. healthcheck 한 번이 몇 시간씩 걸리고(중앙값 4048 초), 노드가
+  # memory pressure critical 에 닿고, 기대 지문이 쓰레기가 되어 이 체크가 영구 FAIL(티켓
+  # t_d2ac107a ~1946 회)이던 원인이 모두 이것이다. 기록 모드에서 판정은 필요 없다 — 이
+  # 스윕의 목적은 "무슨 명령이 나가는가"를 관측하는 것뿐이므로 성공으로 돌려준다.
+  if [[ "${HEALTHCHECK_WRAPPER_RECORDING:-}" == "1" ]]; then
+    capture_on_node "$node" "$probe_command" >/dev/null
+    return 0
+  fi
 
   if [[ ! -r "$generator" ]]; then
     wrapper_probe_log "WRAPPER-DRIFT-UNKNOWN: generator missing at $generator"
@@ -38,8 +53,7 @@ probe_healthcheck_wrapper_current() {
 
   # 래퍼 자신이 이 명령을 거부하면 그것이 곧 답이다 — 재생성되지 않았다는 뜻이다.
   # (거부와 노드 불통을 여기서 가르지 않는다: 어느 쪽이든 사람이 봐야 하고, 안내는 같다.)
-  if ! installed="$(capture_on_node "$node" \
-    "sed -n 's/^# wrapper-inputs: //p' \"\$HOME/.local/libexec/autophagy-healthcheck-probe\"")"; then
+  if ! installed="$(capture_on_node "$node" "$probe_command")"; then
     wrapper_probe_log "WRAPPER-DRIFT: the wrapper rejected this probe or the node is unreachable"
     wrapper_probe_guidance "$node"
     return 1

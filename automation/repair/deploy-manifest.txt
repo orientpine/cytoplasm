@@ -1,0 +1,2 @@
+# 수리 보고 소비자는 agent no-agent cron이 계정 홈 스크립트를 직접 실행한다.
+agent|automation/repair/cron/repair_report_consume_watch.py|.hermes/scripts/repair_report_consume_watch.py|required

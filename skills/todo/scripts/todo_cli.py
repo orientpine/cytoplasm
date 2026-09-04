@@ -232,6 +232,7 @@ def _notify_created(action_hash: str, task_id: str, title: str, ctx: ApprovalCon
             f"✅ 할일 등록 완료: {title} (task {task_id})\n"
             "소유자 ✅ 승인 · tasks.get 재조회로 검증되었습니다.",
             thread_name=f"할일: {title}",
+            outcome=runtime.OUTCOME_DONE,
         )
     except Exception as error:  # noqa: BLE001 — notice must never undo a verified write
         print(f"NOTIFY-FAIL hash={action_hash[:19]} err={type(error).__name__}", file=sys.stderr)
@@ -325,6 +326,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command in {"request", "create"}:
+        import importlib
+
+        todo_governed = importlib.import_module("todo_governed")
+        message = todo_governed.refusal(Path(__file__))
+        if message is not None:
+            print(message, file=sys.stderr)
+            return 3
     try:
         return int(args.handler(args))
     except EntityClarificationError as error:

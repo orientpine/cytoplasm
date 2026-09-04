@@ -23,6 +23,8 @@ import wiki_gate  # noqa: E402
 OWNER_ID = "owner-live-1"
 CHANNEL_ID = "1526487935975952385"
 SLUG = "single-live"
+AGENT_CHAT_ID = "1526487935975952400"
+REQUEST_THREAD_ID = "1526487935975952401"
 
 
 def _note(body: str) -> str:
@@ -47,6 +49,9 @@ class FakeDiscord:
     approve: dict[str, list[dict[str, str | bool]]] = field(default_factory=dict)
     cancel: dict[str, list[dict[str, str | bool]]] = field(default_factory=dict)
     deleted: set[str] = field(default_factory=set)
+    threads: list[str] = field(default_factory=list)
+    #: 만들어진 요청별 스레드 id → 만들 때 쓴 이름(실제 Discord 가 그렇게 기술한다).
+    thread_names: dict[str, str] = field(default_factory=dict)
     posts: int = 0
 
     def __call__(
@@ -60,6 +65,14 @@ class FakeDiscord:
             return {"id": CHANNEL_ID}
         if method == "GET" and path == f"/channels/{CHANNEL_ID}":
             return {"id": CHANNEL_ID, "name": "", "recipients": [{"id": OWNER_ID}], "type": 1}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_ID}/threads":
+            name = str((payload or {})["name"])
+            thread_id = str(int(REQUEST_THREAD_ID) + len(self.threads))
+            self.threads.append(name)
+            self.thread_names[thread_id] = name
+            return {"id": thread_id, "type": 11, "parent_id": AGENT_CHAT_ID}
+        if method == "GET" and len(parts) == 2 and parts[1] in self.thread_names:
+            return {"id": parts[1], "name": self.thread_names[parts[1]], "type": 11, "parent_id": AGENT_CHAT_ID}
         if method == "POST" and len(parts) == 3:
             self.posts += 1
             message_id = f"wiki-msg-{self.posts}"
@@ -95,7 +108,10 @@ class FakeDiscord:
 @pytest.fixture
 def fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeDiscord:
     interop = tmp_path / "interop.json"
-    interop.write_text(json.dumps({"owner_id": OWNER_ID}), encoding="utf-8")
+    interop.write_text(
+        json.dumps({"owner_id": OWNER_ID, "agent_chat_channel_id": AGENT_CHAT_ID}), encoding="utf-8",
+    )
+    monkeypatch.setenv("INTEROP_CONFIG", str(interop))
     monkeypatch.setenv("WIKI_ROOT", str(tmp_path / "wiki"))
     monkeypatch.setenv("WIKI_GATE_DIR", str(tmp_path / "gate"))
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
@@ -127,6 +143,106 @@ def _live_ids(records: list[dict]) -> list[str]:
     return [str(record["confirm_message_id"]) for record in records if record.get("confirm_message_id")]
 
 
+@dataclass
+class RecordingDirectory:
+    """Channel directory that records the per-request thread spec it was asked for."""
+
+    specs: list[tuple[object, object]] = field(default_factory=list)
+
+    def owner_dm(self) -> str:
+        return CHANNEL_ID
+
+    def skill_approvals(self) -> str:
+        raise AssertionError("a wiki approval never resolves the shared skill channel")
+
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_ID
+
+    def agent_chat_thread(self, kind: object) -> str:
+        raise AssertionError(f"a wiki request must not fall back to the per-kind thread: {kind}")
+
+    def agent_chat_request_thread(self, kind: object, request: object) -> str:
+        self.specs.append((kind, request))
+        return REQUEST_THREAD_ID
+
+    def describe(self, channel_id: str) -> object:
+        from automation.interop.approval_surface import ChannelFacts
+
+        if channel_id == CHANNEL_ID:
+            return ChannelFacts(1, "", (OWNER_ID,))
+        return ChannelFacts(11, "thread", (), AGENT_CHAT_ID)
+
+
+def test_new_binding_opens_a_request_thread_titled_by_the_draft_id_only(
+    fake: FakeDiscord,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a draft whose note title and body may never leave the approval body itself
+    import wiki_binding
+    from automation.interop.approval_surface import ApprovalKind, request_thread_name
+
+    draft = _draft(NOTE_A)
+    directory = RecordingDirectory()
+    monkeypatch.setattr(wiki_binding, "approval_directory", lambda: directory)
+
+    # When: the skill resolves the binding for a brand-new request
+    binding = wiki_binding.new_binding(draft)
+
+    # Then: it asked for THIS request's own thread, identified by the draft id alone
+    assert [kind for kind, _ in directory.specs] == [ApprovalKind.WIKI]
+    spec = directory.specs[0][1]
+    assert spec.title == draft["id"]
+    assert binding.channel_id == REQUEST_THREAD_ID
+
+    # And: the owner-visible thread name carries the id and no note title, body or slug
+    name = request_thread_name(ApprovalKind.WIKI, spec)
+    assert name == f"위키 · {draft['id']}"
+    for secret in ("Single Live", "본문 A", SLUG):
+        assert secret not in name
+
+
+def test_fresh_draft_posts_into_its_own_request_thread_on_the_live_path(
+    fake: FakeDiscord,
+    tmp_path: Path,
+) -> None:
+    # Given: a brand-new draft carrying only the instruction-channel sentinel
+    from automation.interop.approval_surface import POLICY_VERSION
+
+    draft = _draft(NOTE_A)
+
+    # When: the gate posts it through its real entry point (no binding injected)
+    posted = wiki_gate.post_confirm_message(draft)
+
+    # Then: the request's own thread was opened, titled by the draft id, and the
+    # confirm message and the persisted binding both live in it
+    assert fake.threads == [f"위키 · {draft['id']}"]
+    stored = _stored(tmp_path, draft["id"])
+    assert stored["channel_id"] == REQUEST_THREAD_ID
+    assert stored["approval_thread_id"] == REQUEST_THREAD_ID
+    assert (stored["surface"], stored["policy_version"]) == ("agent-chat-thread", POLICY_VERSION)
+    assert fake.channels[str(posted["confirm_message_id"])] == REQUEST_THREAD_ID
+
+
+def test_posting_persists_the_approval_thread_id_beside_the_unchanged_hash(
+    fake: FakeDiscord,
+    tmp_path: Path,
+) -> None:
+    # Given / When: one confirm message is posted for a fresh draft
+    draft = _draft(NOTE_A)
+    posted = wiki_gate.post_confirm_message(draft)
+
+    # Then: the pending record names the approval thread its message lives in
+    stored = _stored(tmp_path, draft["id"])
+    assert stored["approval_thread_id"] == stored["channel_id"]
+    assert fake.channels[str(posted["confirm_message_id"])] == stored["approval_thread_id"]
+
+    # And: the digest the reaction watcher binds against is untouched by the new field
+    assert stored["sha256"] == draft["sha256"]
+    content = fake.contents[str(posted["confirm_message_id"])]
+    assert content == f"저장 {draft['id']} sha256:{draft['sha256']}"
+    assert stored["approval_thread_id"] not in content
+
+
 def test_second_request_with_the_same_hash_posts_nothing_and_keeps_the_id(
     fake: FakeDiscord,
     tmp_path: Path,
@@ -145,6 +261,28 @@ def test_second_request_with_the_same_hash_posts_nothing_and_keeps_the_id(
     assert _stored(tmp_path, draft["id"])["confirm_message_id"] == "wiki-msg-1"
     assert [entry for entry in fake.log if entry.startswith(("POST:", "DELETE:"))] == []
     assert _live_ids(wiki_gate.list_drafts()) == ["wiki-msg-1"]
+
+
+def test_duplicate_and_superseding_requests_reuse_the_first_request_thread(
+    fake: FakeDiscord,
+    tmp_path: Path,
+) -> None:
+    # Given: one request of this wiki:{action}:{slug} already posted into its own thread
+    first = _draft(NOTE_A)
+    wiki_gate.post_confirm_message(first)
+
+    # When: the same content is requested again (same hash) and then superseded (new content)
+    wiki_gate.post_confirm_message(_draft(NOTE_A))
+    superseding = _draft(NOTE_B)
+    posted = wiki_gate.post_confirm_message(superseding)
+
+    # Then: one approval key keeps ONE thread — no empty orphan per re-request or supersede
+    assert fake.threads == [f"위키 · {first['id']}"]
+
+    # …and every confirm post of that key landed in that one thread
+    assert set(fake.channels.values()) == {REQUEST_THREAD_ID}
+    assert fake.channels[str(posted["confirm_message_id"])] == REQUEST_THREAD_ID
+    assert _stored(tmp_path, superseding["id"])["approval_thread_id"] == REQUEST_THREAD_ID
 
 
 def test_changed_content_deletes_the_old_message_before_dropping_the_record(

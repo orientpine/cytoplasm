@@ -43,6 +43,19 @@ class ResolvedAction:
 
 
 @dataclass(frozen=True, slots=True)
+class SpeakerRef:
+    """One transcript speaker label resolved to a person — `name` None means 미상.
+
+    Guessing a name is worse than admitting ignorance: the minutes header names who said
+    what, and a wrong name there propagates into artifacts authored from the minutes.
+    """
+
+    label: str
+    name: str | None = None
+    basis: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class MeetingHeader:
     """Metadata the minutes header shows — absent fields fall back at render time."""
 
@@ -80,7 +93,7 @@ class NextMeeting:
 
 @dataclass(frozen=True, slots=True)
 class Extraction:
-    """Validated extraction payload (v5 — every key past `others` is optional)."""
+    """Validated extraction payload (v6 — every key past `others` is optional)."""
 
     decisions: tuple[Decision, ...] = ()
     todos: tuple[ActionItem, ...] = ()
@@ -92,6 +105,7 @@ class Extraction:
     open_questions: tuple[OpenQuestion, ...] = ()
     next_meeting: NextMeeting | None = None
     resolved_actions: tuple[ResolvedAction, ...] = ()
+    speakers: tuple[SpeakerRef, ...] = ()
 
 
 def map_extraction(extraction: Extraction, clean: Callable[[str], str]) -> Extraction:
@@ -99,7 +113,8 @@ def map_extraction(extraction: Extraction, clean: Callable[[str], str]) -> Extra
 
     A resolved action's `id` is deliberately left alone: it is a key into the project's
     action-item database, not generated prose, and cleaning it would let a citation pass
-    rewrite which item a meeting closed.
+    rewrite which item a meeting closed. A speaker's `label` is the same kind of key —
+    it must keep matching the `화자N` written in the transcript body.
     """
     def item(value: ActionItem) -> ActionItem:
         return ActionItem(
@@ -142,4 +157,12 @@ def map_extraction(extraction: Extraction, clean: Callable[[str], str]) -> Extra
             else None
         ),
         tuple(ResolvedAction(value.id, clean(value.basis)) for value in extraction.resolved_actions),
+        tuple(
+            SpeakerRef(
+                value.label,
+                clean(value.name) if value.name else None,
+                clean(value.basis),
+            )
+            for value in extraction.speakers
+        ),
     )

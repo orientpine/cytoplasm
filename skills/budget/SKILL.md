@@ -1,7 +1,7 @@
 ---
 name: budget
-description: "과제비 원장(W0-10 Google Sheet) 조회 + 변경 감지 스킬 — 과제별×년도별 다중 시트 레지스트리(~/.hermes/budget/sheets.json) 지원. `!budget [항목]`은 게이트 없이 즉시 조회. 변경 감지 cron(30분)이 잔액 탭을 SQLite 스냅샷과 diff해 변경 시 규정 요청메일 초안을 만들고, 발송은 반드시 행위 봇의 소유자 DM 승인 메시지에서 cha 본인의 ✅/⛔ 리액션 확인(봇이 두 반응을 미리 추가, 제약 1) 이후에만 일어난다. 승인 표면은 `approval_surface.py` 정책과 초안에 저장된 바인딩으로 결정된다. W4-3."
-version: 1.5.0
+description: "과제비 원장(W0-10 Google Sheet) 조회 + 변경 감지 스킬 — 과제별×년도별 다중 시트 레지스트리(~/.hermes/budget/sheets.json) 지원. `!budget [항목]`은 게이트 없이 즉시 조회. 변경 감지 cron(30분)이 잔액 탭을 SQLite 스냅샷과 diff해 변경 시 규정 요청메일 초안을 만들고, 발송은 반드시 그 요청 전용 승인 스레드(`과제비 메일 · <제목>`)의 승인 메시지에서 cha 본인의 ✅/⛔ 리액션 확인(봇이 두 반응을 미리 추가, 제약 1) 이후에만 일어난다. 승인 표면은 `approval_surface.py` 정책과 초안에 저장된 바인딩으로 결정된다. W4-3."
+version: 1.5.3
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -20,7 +20,7 @@ cha의 과제비 원장 Sheet를 비공개 런타임 설정으로 지정해 gws 
 `BUDGET_SHEET_ID` 단일 시트 모드다(완전 호환). 레지스트리가 있는데 `BUDGET_SHEET_ID`가
 미등재면 fail-closed(exit 3)다. `configs/budget-sheet.md`·`configs/budget-sheets.example.json`
 에는 공개용 형식 예시만 둔다. Sheet는 읽기 전용 — 값 수정 권한은 오너(cha)에게만 있다.
-설정이 없으면 조회·감지는 fail-closed로 중단된다.
+설정이 없으면 조회·감지는 fail-closed로 중단된다. 변경(mutating) 명령은 `/srv/autophagy-skills/live/budget/scripts/` 밖의 사본에서 `STALE-SKILL-COPY-BLOCK`으로 실행을 거부한다.
 
 ## 절대 규칙 (안전)
 
@@ -33,15 +33,15 @@ cha의 과제비 원장 Sheet를 비공개 런타임 설정으로 지정해 gws 
 3. **금액을 공개 채널에 올리지 마라**: 조회 결과(금액/잔액)는 cha의 DM으로만
    전달한다. 승인 요청 메시지의 금액은 CLI가 자동 마스킹한다.
 
-## 명령 (CLI = `python3 ~/.hermes/skills/budget/scripts/budget_cli.py …`)
+## 명령 (CLI = `python3 /srv/autophagy-skills/live/budget/scripts/budget_cli.py …`)
 
 ### 1) `!budget [항목]` — cha가 DM으로 물어볼 때 (게이트 불요, 즉시)
 
 ```bash
-python3 ~/.hermes/skills/budget/scripts/budget_cli.py query            # 전체 항목
-python3 ~/.hermes/skills/budget/scripts/budget_cli.py query --item 재료비
-python3 ~/.hermes/skills/budget/scripts/budget_cli.py query --project 무인굴착기 --year 2026
-python3 ~/.hermes/skills/budget/scripts/budget_cli.py sheets           # 활성 시트 목록 (ID 마스킹)
+python3 /srv/autophagy-skills/live/budget/scripts/budget_cli.py query            # 전체 항목
+python3 /srv/autophagy-skills/live/budget/scripts/budget_cli.py query --item 재료비
+python3 /srv/autophagy-skills/live/budget/scripts/budget_cli.py query --project 무인굴착기 --year 2026
+python3 /srv/autophagy-skills/live/budget/scripts/budget_cli.py sheets           # 활성 시트 목록 (ID 마스킹)
 ```
 
 레지스트리 모드에서는 `--project`로 과제를 고른다 — 다과제인데 지정하지 않으면 exit 2로
@@ -56,8 +56,8 @@ Sheet 접근 실패이니 stderr의 `SHEET-FAIL …` 내용을 그대로 cha에�
 ### 2) 변경 감지 파이프라인 — cron이 자동 수행 (30분, budget-watch)
 
 `snapshot [--origin-channel-id <채널ID>] [--origin-message-id <메시지ID>]`이 잔액 탭(7행 이후)을
-SQLite 이전 스냅샷과 diff하고, 변경이 있으면 규정 요청메일 초안을 만들어 **소유자 DM에
-마스킹된 승인 요청을 게시**한다(origin 인자는 결과 통지 목적지 — §3).
+SQLite 이전 스냅샷과 diff하고, 변경이 있으면 규정 요청메일 초안을 만들어 **그 요청 전용
+스레드에 마스킹된 승인 요청을 게시**한다(origin 인자는 스레드 앵커이자 결과 통지 목적지 — §3).
 같은 변경은 claim 키로 멱등 — 초안이 중복 생성되지 않는다.
 
 레지스트리 모드에서는 tick이 **등록된 전 시트**를 순회한다. 스냅샷 스트림·claim 키·승인
@@ -71,27 +71,32 @@ SQLite 이전 스냅샷과 diff하고, 변경이 있으면 규정 요청메일 �
 해시의 재요청은 아무것도 게시하지 않고, 더 최신 원장 변경이 오면 옛 메시지를 **먼저 삭제한
 뒤** 그 초안을 superseded로 내리고 새로 1건만 게시하며, 메시지가 사라졌으면 재게시한다.
 cha가 이미 ✅/⛔ 한 요청은 파괴하지 않고 다음 tick이 소비하도록 연기한다. 초안의
-`message_id`와 승인 바인딩(`surface`/`channel_id`/`policy_version`)은 이 게이트의 commit만
-기록하고, 초안을 읽지 못하면 거부한다(fail-closed). 새 요청은 소유자 DM에 게시되고,
-v1·v2에 저장된 기존 초안은 원래 개인 서버 `#approvals`에서 계속 소비된다.
+`message_id`와 승인 바인딩(`surface`/`channel_id`/`policy_version`/`approval_thread_id`)은 이
+게이트의 commit만 기록하고, 초안을 읽지 못하면 거부한다(fail-closed). **새 요청은 요청마다
+자기 스레드를 연다** — 이름은 `과제비 메일 · <메일 제목>`(금액·잔액 없음)이고, 지시가 승인
+채널에서 왔고 `--origin-message-id`를 넘겼으면 그 지시 메시지에 앵커한다. 이전 정책 버전에
+저장된 초안은 레코드에 적힌 원래 표면에서 그대로 소비된다.
 에이전트 턴과 30분 `budget-watch` tick은 `~/.hermes/budget-gate/approval-leases/`의 flock으로
 직렬화된다 — 진 쪽은 아무것도 바꾸지 않고 `deferred:lease-held`로 물러난다.
 
-### 3) 반응 확인과 발송 — cha가 소유자 DM 메시지에 ✅/⛔ 리액션
+### 3) 반응 확인과 발송 — cha가 요청 스레드의 승인 메시지에 ✅/⛔ 리액션
 
 초안 게시 직후 봇이 해당 승인 메시지에 ✅와 ⛔를 이 순서로 미리 추가한다.
 cha는 **그 메시지에** ✅로 확정하거나 ⛔로 취소한다. 다음 cron tick의 `watch`가
 소유자 반응(봇/타인 거부), 초안 sha256 결합, ⛔ 우선을 독립 재검증한다. ✅만 유효하면
 approvals.jsonl 기록 후 `gws gmail +send`를 실행하며, 유효한 ⛔면 초안을 폐기한다.
 
-**결과 통지 (2026-08-23, 소유자 지시 — 전 스킬 공통 프로세스)**: 발송 완료/취소 결과는
+**결과 통지 (2026-09-01, 소유자 지시 — 전 스킬 공통 프로세스)**: 발송 완료/취소 결과는
 제목·수신자·draft id·사유를 담아 통지한다(`✉️ 발송 완료: <제목> → <수신자> (draft <id>)` /
-`⛔ 발송 취소: …`; 금액·잔액은 싣지 않는다). cha가 **채널(예: agent-chat)에서 요청**해
-에이전트가 `snapshot`을 실행하는 경우 `--origin-channel-id <채널ID>`(지시 메시지 id를 알면
-`--origin-message-id`도)를 전달한다 — 결과는 그 채널의 스레드(지시 메시지 앵커 우선)에
-게시되고 **DM은 승인(✅/⛔) 전용**으로 남는다. origin 미지정(cron tick·DM 지시)이면 기존대로
-소유자 DM 통지. 스레드 게시 실패는 `NOTIFY-THREAD-FAIL` 후 DM 폴백이며 어떤 통지 실패도
-tick을 깨지 않는다.
+`⛔ 발송 취소: …`; 금액·잔액은 싣지 않는다). 결과는 **승인 요청이 있던 바로 그 요청 스레드**
+(`approval_thread_id`)에 게시되고, 그 스레드는 상태 접두어로 이름이 바뀐 뒤(`✅ 완료 · …` /
+`⛔ 취소 · …`) 아카이브된다 — 열려 있는 스레드 목록이 곧 진행 중인 요청 목록이다. 만료된
+요청은 승인 스레드를 `⌛ 만료 · …`로 닫는다. cha가
+**채널에서 요청**해 에이전트가 `snapshot`을 실행하는 경우 `--origin-channel-id <채널ID>`(지시
+메시지 id를 알면 `--origin-message-id`도)를 전달한다 — 그 지시 메시지가 승인 채널에 있으면
+요청 스레드가 거기에 앵커된다. 스레드가 없는 옛 초안은 origin 스레드, 그마저 없으면 기존
+소유자 통지 경로로 폴백한다. 스레드 게시 실패는 `NOTIFY-THREAD-FAIL` 후 폴백이고 이름 변경·
+아카이브 실패는 `THREAD-CLOSE-FAIL`이며, 어떤 통지 실패도 tick을 깨지 않는다.
 
 승인이 없으면 pending 상태이며 **아무것도 발송되지 않는다**. CTA의
 `실행/취소 <id>`는 문서화된 대체 수단일 뿐, 기본 확인은 리액션이다. 소유자에게

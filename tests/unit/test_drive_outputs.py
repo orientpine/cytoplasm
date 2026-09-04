@@ -105,6 +105,8 @@ class FakeGws:
             if params.get("alt") == "media":
                 Path(argv[argv.index("-o") + 1]).write_bytes(self.file_bytes[file_id])
                 return {}
+            if params.get("fields") == "id,trashed,parents":
+                return {"id": file_id, "trashed": False, "parents": ["root"]}
             return {"webViewLink": f"https://drive.google.test/{file_id}"}
 
         raise AssertionError(f"unexpected argv: {argv}")
@@ -298,7 +300,11 @@ def test_environment_client_honors_gws_precedence_cache_and_cached_folder_ids(
     fake = FakeGws()
     cached = DriveClient(configured.gws_bin, configured.folder_cache, runner=fake)
     assert cached.ensure_folder_path(("Root",)) == "cached-root"
-    assert fake.calls == []
+    assert len(fake.calls) == 1
+    assert json.loads(fake.calls[0][fake.calls[0].index("--params") + 1]) == {
+        "fileId": "cached-root",
+        "fields": "id,trashed,parents",
+    }
 
     monkeypatch.delenv("DRIVE_GWS_BIN")
     assert client_from_environment().gws_bin == "legacy-gws"

@@ -127,7 +127,9 @@ def test_watch_when_an_old_pending_draft_is_404_then_the_next_draft_still_sends(
     monkeypatch.setattr(
         triage_confirm, "_api", _api_with_one_missing_message((stale, live), STALE_MESSAGE)
     )
-    monkeypatch.setattr(triage_confirm, "notify_result", lambda _draft, _content: "notified")
+    monkeypatch.setattr(
+        triage_confirm, "notify_result", lambda _draft, _content, **_outcome: "notified"
+    )
     monkeypatch.setattr(triage_gate, "list_drafts", lambda: [stale, live])
     monkeypatch.setattr(
         triage_gate,

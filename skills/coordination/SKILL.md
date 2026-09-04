@@ -1,7 +1,7 @@
 ---
 name: coordination
 description: "에이전트간 일정 조율 스킬 (W3-3). cha가 'OO님과 미팅 잡아줘'라고 하면 상대 에이전트에 §2 가용시간 질의 → 교집합 후보 ≤3개를 조회한다. 공개 v1에서는 상대 소유자 승인 경로가 없어 자동 합의·캘린더 등록을 하지 않으며, 실제 양측 승인 흐름은 W-F2.5-D(v2) 범위다. §2 조율 봉투(envelope)는 #autophagy-agents(인터롭 채널)에서 오가며, #team에는 간결한 확정 통지만 게시된다. 10분 무응답/후보 0개는 에스컬레이션 DM 후 종료(캘린더 쓰기 0건). 거절은 재협상 1회 후 종료. 조율은 피어+시간 범위(예: '오전') 요청 전용 — 피어가 명시돼도 '정확한 단일 시각'이면 본인 단독 일정이므로 request 진입 즉시 ROUTING-REJECT(exit 2)로 calendar로 되돌린다(피어 질의 전 차단). 상대 미지정 요청은 calendar 소유."
-version: 1.2.0
+version: 1.2.3
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -13,6 +13,8 @@ prerequisites:
 ---
 
 # 에이전트간 일정 조율 (coordination)
+
+변경을 수행하는 명령은 `/srv/autophagy-skills/live/coordination/scripts/` 밖의 사본에서 실행하지 않으며 `STALE-SKILL-COPY-BLOCK`으로 거부한다.
 
 cha의 "OO님과 미팅 잡아줘" 요청을 인터롭 규약 §2.3(조율 프로토콜)으로 처리한다.
 
@@ -33,16 +35,21 @@ cha의 "OO님과 미팅 잡아줘" 요청을 인터롭 규약 §2.3(조율 프�
    없이 단일 슬롯이면 exit 2 `ROUTING-REJECT`로 calendar 스킬을 안내하고 종료한다 —
    피어 네트워크 I/O 전에 차단(선례 사고 2026-07-20: `오전 10시` 고정 요청이 07-29 09:00
    조율로 표류). 캘린더 쓰기 0건.
-6. **결과는 지시가 온 채널의 스레드로**(2026-08-23 소유자 지시): 승인 표면(✅/⛔)은
-   승인 전용으로 남고, 완료·취소·만료 **결과**는 `request`에 넘긴
-   `--origin-channel-id`/`--origin-message-id`(pending 레코드에 저장됨)가 있으면 그
-   메시지의 스레드로, 없으면 기존 소유자 통지 경로로 간다. 그 스레드는 cha의 지시가
-   이미 놓인 자리이므로 완료 통지는 전문 그대로 보낸다 — 3번 규칙(#team·§2 봉투에는
-   제목 금지)은 그대로다. 스레드 게시 실패는 `NOTIFY-THREAD-FAIL`을 남기고 소유자
-   통지로 폴백하며, 결과 통지 실패가 CLI 종료코드나 watcher tick을 바꾸지 않는다
-   (라우팅은 `automation.interop.origin_notice.deliver` 공유 구현이 소유).
+6. **요청 하나 = 스레드 하나**(2026-09-01 소유자 결정, 2026-08-23 지시의 후속): 조율
+   승인 요청은 자기 스레드(`일정 조율 · <조율 라벨>` — #team 확정 통지가 이미 쓰는
+   correlation, 없으면 pending id)에 게시되고, 완료·취소·만료 **결과**도 그 스레드로
+   돌아간 뒤 이름 앞에 상태(`✅ 완료`/`⛔ 취소`/`⌛ 만료`)를 붙여 아카이브된다 — 열려
+   있는 스레드 목록이 곧 진행 중인 조율 목록이다. `request`에 넘긴
+   `--origin-channel-id`/`--origin-message-id`(pending 레코드에 저장됨)는 지시가 승인
+   채널에서 왔을 때 그 메시지에 스레드를 앵커하고, 아니면 결과가 그 채널의 스레드로
+   간다. 스레드가 없는 옛 레코드는 기존 소유자 통지 경로 그대로다. 그 스레드는 cha의
+   승인 자리이므로 완료 통지는 전문 그대로 보낸다 — 3번 규칙(#team·§2 봉투에는 제목
+   금지)은 그대로다. 스레드 게시 실패는 `NOTIFY-THREAD-FAIL`을 남기고 소유자 통지로
+   폴백하고, 종결 표시 실패는 `THREAD-CLOSE-FAIL`만 남긴다. 결과 통지 실패가 CLI
+   종료코드나 watcher tick을 바꾸지 않는다(라우팅은
+   `automation.interop.origin_notice.deliver` 공유 구현이 소유).
 
-## 사용 (CLI = `python3 ~/.hermes/skills/coordination/scripts/coordinate_cli.py …`)
+## 사용 (CLI = `python3 /srv/autophagy-skills/live/coordination/scripts/coordinate_cli.py …`)
 
 ### 1) cha가 "피어와 내일 미팅 잡아줘" 요청 시
 
@@ -51,16 +58,17 @@ cha의 "OO님과 미팅 잡아줘" 요청을 인터롭 규약 §2.3(조율 프�
 (예: "내일 몇 시부터 몇 시 사이가 좋으세요? 길이는 30분?"), 실행:
 
 ```bash
-python3 ~/.hermes/skills/coordination/scripts/coordinate_cli.py request \
+python3 /srv/autophagy-skills/live/coordination/scripts/coordinate_cli.py request \
   --peer peer-test --summary "피어 미팅" \
   --when "내일 오후" \
   --duration-min 30 \
   --origin-channel-id <지시가 온 채널 id> --origin-message-id <지시 메시지 id>
 ```
 
-`--origin-*`는 cha의 지시가 온 채널/메시지를 그대로 넘긴다 — 결과(완료·취소·만료)가
-그 메시지의 스레드로 돌아간다. 채널에서 시작된 지시라면 항상 넘겨라. 생략하면 결과는
-기존 소유자 통지로 간다.
+`--origin-*`는 cha의 지시가 온 채널/메시지를 그대로 넘긴다 — 지시가 승인 채널에서 온
+것이면 요청 스레드가 그 메시지에 걸리고, 아니면 결과(완료·취소·만료)가 그 채널의
+스레드로 돌아간다. 채널에서 시작된 지시라면 항상 넘겨라. 생략해도 요청은 자기 스레드를
+열고 결과는 거기서 종결된다.
 
 `--when`은 calendar 스킬의 KST 날짜 해석으로 결정론적으로 범위로 바뀐다
 (오전 09:00–12:00, 오후 12:00–18:00, 저녁 18:00–21:00, 종일/미지정
@@ -86,13 +94,15 @@ python3 ~/.hermes/skills/coordination/scripts/coordinate_cli.py request \
 - ⛔ (`\u26d4`, `:no_entry:`): 취소. ⛔가 ✅보다 우선하며 `calendar_cli.py discard --draft`
   로 초안을 폐기한다.
 - 24시간이 지나면 watcher가 초안을 폐기하고 만료를 알린다.
-- ✅/⛔ 처리 결과와 만료 통지는 저장된 origin이 있으면 원 채널 스레드로,
-  없으면 소유자 통지로 간다. 확정 요청 메시지 자체(승인 표면)는 그대로 둔다.
+- ✅/⛔ 처리 결과와 만료 통지는 승인이 게시된 그 요청 스레드(`approval_thread_id`)로
+  가고, 그 스레드는 상태 접두어가 붙어 아카이브된다. 스레드가 없는 옛 레코드는 저장된
+  origin의 채널 스레드로, 그것도 없으면 소유자 통지로 간다. 확정 요청 메시지 자체
+  (승인 표면)는 그대로 둔다.
 
 ### 3) 텍스트 fallback: cha가 `실행 <draft-id>` 라고 DM 답장한 뒤에만
 
 ```bash
-python3 ~/.hermes/skills/coordination/scripts/coordinate_cli.py finalize \
+python3 /srv/autophagy-skills/live/coordination/scripts/coordinate_cli.py finalize \
   --draft <draft-id> --slot <승인된 ISO 슬롯> --summary "피어 미팅" \
   --duration-min 30 --correlation <coord-id>
 ```

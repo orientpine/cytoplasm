@@ -28,6 +28,7 @@ APPROVALS_CHANNEL = "1528936606856122421"  # digit-only: bindings refuse a place
 OWNER_DM_CHANNEL = "1526487935975952385"  # the DM this bot opens with the owner
 AGENT_CHAT_CHANNEL = "1526487935975952390"
 AGENT_CHAT_THREAD = "1526487935975952391"
+REQUEST_THREAD = "1526487935975952392"
 NOW = 1_800_000_000
 
 
@@ -38,7 +39,13 @@ class FakeDiscord:
         self.calls: list[str] = []
         self.messages: dict[str, str] = {}
         self.reactions: dict[tuple[str, str], list[dict[str, str | bool]]] = {}
+        self.threads: list[str] = []
+        self.post_channels: list[str] = []
         self.posts = 0
+
+    def request_thread_id(self, index: int) -> str:
+        """Every created request thread is a DISTINCT snowflake, as Discord returns."""
+        return f"{int(REQUEST_THREAD) + index}"
 
     def api(
         self, method: str, path: str, payload: dict[str, str] | None = None
@@ -58,6 +65,10 @@ class FakeDiscord:
                     "name": "승인-patent-export",
                     "parent_id": AGENT_CHAT_CHANNEL,
                 }
+            for index, name in enumerate(self.threads):
+                if parts[1] == self.request_thread_id(index):
+                    # A request thread is described by the name it was created with.
+                    return {"id": parts[1], "type": 11, "name": name, "parent_id": AGENT_CHAT_CHANNEL}
             return {"id": parts[1], "type": 0, "name": "approvals"}
         if method == "GET" and path == "/guilds/guild/threads/active":
             return {"threads": [{
@@ -66,8 +77,12 @@ class FakeDiscord:
                 "name": "승인-patent-export",
                 "parent_id": AGENT_CHAT_CHANNEL,
             }]}
+        if method == "POST" and path.endswith("/threads"):
+            self.threads.append(str((payload or {})["name"]))
+            return {"id": self.request_thread_id(len(self.threads) - 1)}
         if method == "POST" and path.endswith("/messages"):
             self.posts += 1
+            self.post_channels.append(parts[1])
             message_id = f"msg-{self.posts}"
             self.messages[message_id] = str((payload or {})["content"])
             self.calls.append(f"POST:{message_id}")
@@ -178,6 +193,19 @@ def test_changed_authorization_deletes_before_supersede_and_leaves_one_live(
     # replacement is now legal only after the old approval surface was deleted first.
     assert "msg-1" not in manifest.manifest_path(SLUG).read_text(encoding="utf-8")
     assert len(list(env.export_root.glob("*.json"))) == 1
+
+
+def test_duplicate_and_superseding_requests_reuse_the_first_request_thread(env: PatentEnv) -> None:
+    # Given: one export request already posted into its own thread
+    patent_export.prepare_export(env.paths, SLUG, mode="enc")
+
+    # When: the same export is requested again (same hash → PENDING) and then superseded
+    patent_export.prepare_export(env.paths, SLUG, mode="enc")
+    patent_export.prepare_export(env.paths, SLUG, mode="plaintext")
+
+    # Then: one approval key keeps ONE thread — no empty orphan per retry or supersede
+    assert env.fake.threads == [f"특허 반출 · {SLUG}"]
+    assert env.fake.post_channels == [env.fake.request_thread_id(0)] * 2
 
 
 def test_approved_manifest_defers_without_transition_or_delete(env: PatentEnv) -> None:

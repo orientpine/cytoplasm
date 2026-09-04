@@ -286,6 +286,26 @@ def test_an_already_approved_request_resumes_straight_to_the_tag(tmp_path: Path)
     assert "request" not in _calls(tmp_path)
 
 
+def test_a_rerun_after_the_tag_was_cut_resumes_the_deployment_under_the_same_version(
+    tmp_path: Path,
+) -> None:
+    """2026-09-03 완결기 attempt 2 의 모양 — 태그는 잘렸고 deploy_all 이 실패한 뒤의 재실행은
+    HEAD 에 이미 붙은 태그를 그대로 쓴다. 다음 버전을 새로 계산하면 이름 불일치 검사가
+    자기 릴리스(v1.1.1 vs 요청 v1.1.2)를 거부해 "재실행이 재개다" 가 깨진다."""
+    _origin, work = _origin_with_commits(tmp_path)
+    head = _git(work, "rev-parse", "HEAD")
+    first = _run(tmp_path, work, decisions="0", deploy_all_rc="1")
+    assert first.returncode == 10, first.stdout + first.stderr
+
+    second = _run(tmp_path, work, decisions="0")
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    tags = _origin_tags(work)
+    assert f"{head}\trefs/tags/v1.0.0^{{}}" in tags
+    assert "refs/tags/v1.0.1" not in tags
+    assert _calls(tmp_path).count("deploy-all") == 2
+
+
 def _abandons(tmp_path: Path) -> list[str]:
     """stub 이 실제 인자와 함께 기록한 abandon 호출 — 이름만 찍힌 줄은 세지 않는다."""
     return [line for line in _call_lines(tmp_path) if line.startswith("abandon --")]

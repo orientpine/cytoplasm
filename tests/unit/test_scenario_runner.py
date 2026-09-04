@@ -52,7 +52,11 @@ def test_skill_review_and_peer_attest_supply_byte_identical_scenario_environment
     assert set(comparable[0]) == {
         "AUTOPHAGY_DEMO_SECRET",
         "AUTOPHAGY_REPO_ROOT",
+        "AUTOPHAGY_SKILL_LIVE_ROOT",
         "INTEROP_RUNTIME",
         "PATH",
     }
     assert comparable[0]["INTEROP_RUNTIME"] == str(tmp_path / "interop-runtime")
+    # The staged skill is a copy; declaring its parent as the live root is what lets the
+    # governed-copy guard accept the review run instead of refusing a "stale copy".
+    assert comparable[0]["AUTOPHAGY_SKILL_LIVE_ROOT"] == str(skill_dir.resolve().parent)

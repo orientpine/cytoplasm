@@ -91,7 +91,7 @@ def confirm_intent(
     digest = draft.get("sha256")
     if not isinstance(digest, str) or not digest:
         raise calendar_gate.GateError("드래프트 sha256 누락 — 승인 게시 거부", 3)
-    resolved = binding or calendar_binding.new_binding()
+    resolved = binding or calendar_binding.new_binding(draft)
     return lifecycle().ApprovalIntent(
         key=approval_key(draft), action_hash=digest, channel_id=resolved.channel_id
     )
@@ -227,7 +227,7 @@ class CalendarApprovalGate:
         )
 
     def _binding_for(self, intent: ApprovalIntent) -> calendar_binding.ApprovalBindingLike:
-        binding = self.binding or calendar_binding.new_binding()
+        binding = self.binding or calendar_binding.new_binding(self.draft or {})
         if intent.channel_id != binding.channel_id:
             raise lifecycle().ApprovalSurfaceError("calendar approval intent binding changed")
         return binding
@@ -247,7 +247,9 @@ class CalendarApprovalGate:
 def request_confirmation(draft: DraftRecord) -> PendingConfirm:
     facade = lifecycle()
     store = PendingConfirmStore()
-    binding = calendar_binding.new_binding()
+    binding = calendar_binding.reusable_binding(store, approval_key(draft)) or calendar_binding.new_binding(draft)
+    # 이 요청의 스레드를 초안에 새긴다 — 실행·취소·만료 통지가 같은 스레드로 돌아간다.
+    draft = calendar_gate.bind_approval_thread(draft, binding.channel_id)
     verdict = facade.request_owner_approval(
         confirm_intent(draft, binding),
         CalendarApprovalGate(draft, store, calendar_confirm.owner_id(), binding),

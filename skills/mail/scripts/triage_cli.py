@@ -39,6 +39,7 @@ import triage_gate
 import triage_llm
 import triage_mode
 import mail_quote
+import mail_runtime
 import triage_pipeline
 import mail_preflight
 import triage_sensitivity
@@ -229,6 +230,7 @@ def _notify_sent(draft: dict, method: str) -> None:
             draft,
             f"✉️ 발송 완료: {draft['subject']} → {draft['to']} (draft {draft['id']})\n"
             "소유자 ✅ 승인으로 발송되었습니다.",
+            outcome=triage_confirm.SENT_OUTCOME,
         )
     except Exception as error:  # noqa: BLE001 — notification must never break the tick
         print(f"NOTIFY-FAIL draft={draft['id']} "
@@ -247,6 +249,7 @@ def _notify_cancelled(draft: dict) -> None:
             draft,
             f"⛔ 발송 취소: {draft['subject']} → {draft['to']} (draft {draft['id']})\n"
             "소유자 ⛔ 리액션으로 취소되어 메일은 발송되지 않았습니다.",
+            outcome=triage_confirm.CANCELLED_OUTCOME,
         )
     except Exception as error:  # noqa: BLE001 — notification must never break the tick
         print(f"NOTIFY-FAIL draft={draft['id']} "
@@ -457,9 +460,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# 읽기 전용 서브커맨드 — 낡은 사본이 읽어도 외부효과가 없다. 나머지는 관리자 배포본에서만 돈다.
+_READ_ONLY_COMMANDS = (cmd_mode, cmd_list_drafts, cmd_digest_items, cmd_evidence)
+
+
 def main() -> int:
     args = build_parser().parse_args()
     try:
+        if args.func not in _READ_ONLY_COMMANDS:
+            refusal = mail_runtime.governed_copy_refusal(Path(__file__))
+            if refusal:
+                raise triage_gate.GateError(refusal, 3)
         if args.func is cmd_watch:
             config_module = triage_approval._repo_module("approval_reminder_config")
             args.reminder_config = config_module.load_approval_reminder_config()

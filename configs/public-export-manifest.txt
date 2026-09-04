@@ -131,3 +131,9 @@ configs/public-export-grandfathered.txt
 docs/guide/kd-at-두-저장소-운영.md
 automation/proposal_engine_provision.sh
 tests/unit/test_proposal_engine_provision.py
+
+# Follow-up sweep 4 feature notes contain personal operational details and are not public-safe.
+docs/기능소개/obsidian-write-클론-위생.md
+docs/기능소개/배포-미선언-홈-산출물-관측.md
+docs/기능소개/실행경로-가드-일반화.md
+docs/기능소개/전사본-화자-경계-문장-분할.md

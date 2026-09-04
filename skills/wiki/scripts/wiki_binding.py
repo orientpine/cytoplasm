@@ -81,17 +81,56 @@ def approval_directory() -> OwnerDmDirectory:
     )
 
 
-def new_binding() -> ApprovalBindingLike:
-    """Resolve the one binding stamped on every new wiki approval."""
+def _request_thread(record: Mapping[str, str | int | None], surface: ModuleType) -> object:
+    """This request's thread spec — the draft id ONLY, never a note title or body.
+
+    위키 본문·제목은 승인 본문 밖으로 나가면 안 되므로(skills/AGENTS.md) 스레드 이름에
+    들어가는 값은 초안 id 하나뿐이다. 지시 메시지 좌표는 있으면 넘겨 앵커로만 쓴다.
+    """
+    draft_id = record.get("id")
+    if not isinstance(draft_id, str) or not draft_id:
+        raise wiki_gate.GateError("초안 id 없이 승인 스레드를 열 수 없음 — 게시 거부", 3)
+    origin_channel = record.get("origin_channel_id")
+    origin_message = record.get("origin_message_id")
+    return surface.RequestThread(
+        title=draft_id,
+        origin_channel_id=origin_channel if isinstance(origin_channel, str) else "",
+        origin_message_id=origin_message if isinstance(origin_message, str) else "",
+    )
+
+
+def new_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLike:
+    """Resolve the one binding stamped on every new wiki approval — its own thread."""
     surface = _surface()
     try:
         return surface.resolve_new_binding(
             surface.ApprovalKind.WIKI,
             approval_directory(),
             wiki_gate.owner_id(),
+            request=_request_thread(record, surface),
         )
     except surface.ApprovalSurfaceError as error:
         raise wiki_gate.GateError(f"승인 표면 해석 실패 — 게시 거부: {error}", 3) from error
+
+
+def live_request_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLike | None:
+    """The thread a LIVE request of this same approval key already opened, if any.
+
+    한 승인 키(`wiki:{action}:{slug}`)는 스레드 하나다 — 같은 슬러그를 다시 편집하면
+    초안은 새로 생기지만 키는 그대로라, 재요청(PENDING)·대체(supersede)마다 빈 스레드가
+    하나씩 남던 것을 없앤다. 살아 있는 요청은 게이트의 ``outstanding`` 과 똑같이 읽는다.
+    읽을 수 없는 레코드는 여기서 판정하지 않는다 — 파사드/게이트가 그대로 거부한다.
+    """
+    approval = importlib.import_module("wiki_approval")  # 지연 임포트: 순환 회피
+    surface = _surface()
+    try:
+        gate = approval.WikiApprovalGate(draft=dict(record))
+        outstanding = gate.outstanding(approval.approval_key(dict(record)))
+        return surface.reuse_request_thread(
+            surface.ApprovalKind.WIKI, outstanding, approval_directory(), wiki_gate.owner_id()
+        )
+    except RuntimeError:  # GateError·ApprovalRecordsError 포함 — 재사용만 포기한다
+        return None
 
 
 def stored_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLike:
@@ -127,23 +166,21 @@ def stored_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLik
         except (surface_module.ApprovalSurfaceError, TypeError, ValueError) as error:
             raise wiki_gate.GateError(f"저장된 승인 표면 검증 실패 — 거부: {error}", 1) from error
 
-    directory = approval_directory()
+    if not (isinstance(record_surface, str) and type(version) is int and isinstance(channel_id, str)):
+        # 아직 게시된 적 없는 초안: 레코드의 channel_id 는 지시 채널 표식이지 승인 바인딩이
+        # 아니다. 2026-09-01 전에는 여기서 legacy_binding(정책 0=DM)으로 빠져 v7 이관이
+        # 위키의 실제 게시 경로에는 닿지 않았다 — 이제 같은 키의 살아 있는 요청이 연
+        # 스레드를 재사용하고, 없을 때만 이 요청의 스레드를 새로 연다.
+        return live_request_binding(record) or new_binding(record)
     try:
-        if isinstance(record_surface, str) and type(version) is int and isinstance(channel_id, str):
-            return surface_module.validate_stored_binding(
-                surface_module.ApprovalBinding(
-                    kind,
-                    surface_module.ApprovalSurface(record_surface),
-                    channel_id,
-                    version,
-                ),
-                directory,
-                wiki_gate.owner_id(),
-            )
-        return surface_module.legacy_binding(
-            kind,
-            channel_id if isinstance(channel_id, str) else None,
-            directory,
+        return surface_module.validate_stored_binding(
+            surface_module.ApprovalBinding(
+                kind,
+                surface_module.ApprovalSurface(record_surface),
+                channel_id,
+                version,
+            ),
+            approval_directory(),
             wiki_gate.owner_id(),
         )
     except (surface_module.ApprovalSurfaceError, TypeError, ValueError) as error:

@@ -1,7 +1,7 @@
 ---
 name: doctype
 description: "문서(.docx/.hwpx/.md/.txt)의 ‘등록/스킬화/저장/개선/문서종류화’ 액션은 주제와 무관하게 항상 doctype이 수행한다. 작성/초안(draft)은 레지스트리에 등록된 이름으로 요청될 때만 doctype 소유이며, 미등록된 제안서 작성은 proposal, 개인 노트 기반 보고서/슬라이드/대본은 report, 발명신고서/선행기술은 patent-prep 스킬로 넘긴다."
-version: 1.3.3
+version: 1.3.7
 author: autophagy-agents
 license: MIT
 metadata:
@@ -12,6 +12,8 @@ prerequisites:
 ---
 
 # doctype — 자가개선 서류 종류 라이브러리
+
+변경 명령은 `/srv/autophagy-skills/live/doctype/scripts/`에서만 실행하며, 낡은 사본은 `STALE-SKILL-COPY-BLOCK`으로 거부한다.
 
 새 예시 서류의 제목·구성·항목을 결정적으로 읽고, 작성 목적·톤·논증 방식을 `openai-codex/gpt-5.4`로
 분석해 재사용 가능한 **서류 종류**로 등록한다. 문서의 도메인이 구매/용역이어도 등록·개선·서류 종류화는
@@ -46,7 +48,7 @@ prerequisites:
 `--mode slot-fill|narrative|hybrid`를 추가한다.
 
 ```bash
-CLI="$HOME/.hermes/skills/doctype/scripts/doctype_cli.py"
+CLI="/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py"
 if python3 "$CLI" show --name "<사용자가 말한 종류명>" >/dev/null; then
   python3 "$CLI" refine --name "<사용자가 말한 종류명>" --approved "<gateway-첨부파일경로>"
 else
@@ -60,9 +62,9 @@ python3 "$CLI" show --name "<사용자가 말한 종류명>"
 개선된 승인 문서를 첨부했을 때만 실행한다. 사용자가 이유를 명시한 경우에만 `--note`를 추가한다.
 
 ```bash
-python3 "$HOME/.hermes/skills/doctype/scripts/doctype_cli.py" refine \
+python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" refine \
   --name "<종류>" --approved "<gateway-첨부파일경로>"
-python3 "$HOME/.hermes/skills/doctype/scripts/doctype_cli.py" show --name "<종류>"
+python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" show --name "<종류>"
 ```
 
 ### 3. `<종류> 작성` 또는 `초안`
@@ -72,17 +74,17 @@ cha가 준 사실을 사설 JSON 파일에만 담고 그 경로를 `--inputs-jso
 repo나 채팅 첨부 경로를 사용하지 않는다.
 
 ```bash
-python3 "$HOME/.hermes/skills/doctype/scripts/doctype_cli.py" draft \
+python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" draft \
   --name "<종류>" --inputs-json "<private-inputs.json>" \
   --out "$HOME/.hermes/doctype/drafts/<파일명>"
-python3 "$HOME/.hermes/skills/doctype/scripts/doctype_cli.py" show --name "<종류>"
+python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" show --name "<종류>"
 ```
 
 ### 4. 메타데이터 조회
 
 ```bash
-python3 "$HOME/.hermes/skills/doctype/scripts/doctype_cli.py" list
-python3 "$HOME/.hermes/skills/doctype/scripts/doctype_cli.py" show --name "<종류>"
+python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" list
+python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" show --name "<종류>"
 ```
 
 바이너리 `.hwp`와 잘못된 컨테이너는 표준 `CONVERSION-REQUEST`로 거부한다. 모든 경로는 E5의
@@ -97,6 +99,8 @@ private roots, stubs, and drafts only under `mktemp`, then removes them.
 
 ## 저장 어댑터 운영 설정
 Obsidian 저장은 `OBSIDIAN_WRITE_CONFIG`(기본 `~/.hermes/obsidian-write/config.json`)가 가리키는 설정의 전용 `clone_dir`, 읽기 가능한 `ssh_key_path`(쓰기 전용 deploy key), `repo_url`, `branch`를 사용한다. 쓰기 클론은 RAG 읽기 미러와 달라야 하며, key·승인 레코드가 없으면 push 전에 fail-closed한다.
+
+Obsidian 쓰기의 소유자 승인 요청은 cha의 agent-chat 채널 아래 **요청 전용 스레드**에서 열린다 — 스레드 이름은 `옵시디언 · <pending-id>`로 **레코드 id 하나뿐**이며, 노트 제목·경로·본문은 이름에 들어가지 않는다(내용은 스레드 안 승인 본문에만 있다). 대기 레코드는 그 스레드를 `approval_thread_id`로 기록한다.
 
 Drive 저장은 공용 `automation.drive_outputs` 파사드를 통해 `autophagy/문서/<YYYY>/<YYYY-MM-DD>_<원제목>.<확장자>`에 이름+부모 기준 upsert한다. 날짜는 최초 저장일로 고정되므로 같은 문서를 다시 저장해도 사본이 아니라 기존 파일이 갱신된다. owner-only permission과 재다운로드 SHA-256를 모두 확인해야 성공이다. 규약 정본: `docs/guide/drive-publish.md`.
 

@@ -1,15 +1,7 @@
 """Local transcription through a self-contained whisper.cpp binary.
 
-Why this exists and why it is the default when available: the meeting skill's
-sensitivity gate only ever sees **text**, so a cloud transcription would have
-already shipped the raw audio of a patent-sensitive meeting to a shared
-provider before any gate could look at it. Running the model on the node closes
-that window — and it costs nothing per minute.
-
-Integration follows the ``pdftotext`` precedent already in this repo: a plain
-binary invoked through ``subprocess``, so the stdlib-only policy holds (no
-torch, no transformers, no Python ASR dependency). whisper.cpp only accepts
-16 kHz mono signed-16-bit PCM, so ffmpeg normalizes the input first.
+The sensitivity gate sees text too late to protect cloud-bound audio, so local is
+preferred. ffmpeg normalizes input to whisper.cpp's 16 kHz mono PCM contract.
 """
 
 from __future__ import annotations
@@ -26,8 +18,10 @@ from pathlib import Path
 from typing import Final
 
 import stt_audio
+import stt_blocks
 import stt_client
 import stt_coverage
+import stt_diarize
 import stt_media
 
 DEFAULT_LANGUAGE: Final = "ko"
@@ -130,7 +124,12 @@ def _run(argv: list[str], stage: str, timeout: float) -> None:
 
 
 def transcribe(
-    audio: stt_audio.CheckedAudio, toolchain: LocalToolchain, *, prompt: str = ""
+    audio: stt_audio.CheckedAudio,
+    toolchain: LocalToolchain,
+    *,
+    prompt: str = "",
+    diarizer: stt_diarize.DiarizeToolchain | None = None,
+    num_speakers: int | None = None,
 ) -> stt_client.Transcription:
     """Transcribe ``audio`` on this machine; the bytes never leave it.
 
@@ -170,7 +169,15 @@ def transcribe(
             data = json.loads(payload.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as failure:
             raise stt_client.SttError("로컬 전사 결과를 읽지 못했습니다.") from failure
-    segments = data.get("transcription", []) if isinstance(data, dict) else []
+        segments = data.get("transcription", []) if isinstance(data, dict) else []
+        sentences = stt_blocks.sentences_from_words(stt_blocks.words_from_whisper(segments))
+        if diarizer is not None:
+            try:
+                turns = stt_diarize.diarize(wav, diarizer, num_speakers=num_speakers)
+            except stt_diarize.DiarizeError as failure:
+                print(f"DIARIZE-FAIL {failure}", file=sys.stderr)
+            else:
+                sentences = stt_diarize.assign(sentences, turns)
     joined = " ".join(
         str(segment.get("text", "")).strip()
         for segment in segments
@@ -186,6 +193,7 @@ def transcribe(
         model=f"local:{toolchain.model.stem}",
         endpoint="local",
         coverage=coverage,
+        sentences=sentences,
     )
 
 
@@ -205,7 +213,6 @@ def _assert_not_collapsed(text: str, toolchain: LocalToolchain) -> None:
 
 
 def _spans(segments: object) -> tuple[tuple[int, int], ...]:
-    """Segment timings from whisper.cpp full JSON, in milliseconds."""
     found: list[tuple[int, int]] = []
     for segment in segments if isinstance(segments, list) else []:
         offsets = segment.get("offsets") if isinstance(segment, dict) else None
@@ -220,7 +227,6 @@ def _spans(segments: object) -> tuple[tuple[int, int], ...]:
 def _coverage(
     audio: stt_audio.CheckedAudio, segments: object, toolchain: LocalToolchain
 ) -> stt_coverage.Coverage | None:
-    """Refuse a transcript that demonstrably stopped short of the recording."""
     if toolchain.ffprobe is None:
         print("COVERAGE-UNKNOWN reason=no-ffprobe", file=sys.stderr)
         return None

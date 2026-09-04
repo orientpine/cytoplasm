@@ -134,6 +134,7 @@ class TodoApprovalStore:
             policy_version=spec.policy_version,
             origin_channel_id=spec.origin_channel_id,
             origin_message_id=spec.origin_message_id,
+            approval_thread_id=spec.approval_thread_id,
             tasklist=spec.tasklist,
             title=spec.title,
             notes=spec.notes,

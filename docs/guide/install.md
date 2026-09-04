@@ -197,6 +197,18 @@ python3 automation/install/discord_check.py --config ~/.hermes/interop/config.js
 
 토큰이 비어 있으면 rc 2로 사용법 오류를 낸다. 채널 3종의 의미는 전제 문서 §1.5에 있다.
 
+### 5.1 승인 표면 필수 키: `agent_chat_channel_id`
+
+정책 v7(첫 태그 v1.0.71)부터 소유자 승인은 `#agent-chat` 아래의 요청별 스레드에 게시된다. 이 채널 ID는 `~/.hermes/interop/config.json`의 `agent_chat_channel_id`에 둔다.
+
+키가 없으면 승인은 fail-closed로 게시를 거부하며, 오류는 정확히 다음과 같다.
+
+```
+ApprovalSurfaceError: agent_chat_channel_id is not configured in the interop config
+```
+
+이 경우 승인 게시만 멈추고 다른 기능은 계속 동작한다. `agent_chat_channel_id`에 채널 ID를 설정하면 재시작할 필요 없이 다음 승인 게시부터 정상 동작한다.
+
 ---
 
 ## 6. 실제 설치

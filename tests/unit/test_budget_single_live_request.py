@@ -39,6 +39,8 @@ APPROVALS_CHANNEL = "1528936606856122421"
 DM_CHANNEL = "1526487935975952385"
 AGENT_CHAT_CHANNEL = "1526487935975952390"
 AGENT_CHAT_THREAD = "1526487935975952391"
+#: 첫 요청이 여는 자기 전용 스레드 — 요청 하나가 스레드 하나다.
+REQUEST_THREAD = "1526487935975952392"
 MAIL_TO = "office@example.invalid"
 # IPC 대기 상한 — 불변식이 아니라 hang 방지용이다. 직렬화 판정은 결과 단언(정확히 1 POST +
 # 나머지 defer)이 한다.
@@ -59,6 +61,8 @@ class FakeDiscord:
         self.contents: dict[str, str] = {}
         self.approved: set[str] = set()
         self.posts = 0
+        self.thread_names: dict[str, str] = {}
+        self.post_channels: list[str] = []
 
     def api(self, method: str, path: str, payload: dict | None = None):
         parts = path.strip("/").split("/")
@@ -77,7 +81,16 @@ class FakeDiscord:
             }]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
             return {"id": AGENT_CHAT_THREAD, "type": 11, "name": "승인-budget-mail", "parent_id": AGENT_CHAT_CHANNEL}
+        if method == "POST" and parts[-1] == "threads":
+            thread_id = str(int(AGENT_CHAT_THREAD) + len(self.thread_names) + 1)
+            self.thread_names[thread_id] = str((payload or {}).get("name", ""))
+            return {"id": thread_id, "type": 11, "name": self.thread_names[thread_id],
+                    "parent_id": AGENT_CHAT_CHANNEL}
+        if method == "GET" and len(parts) == 2 and parts[1] in self.thread_names:
+            return {"id": parts[1], "type": 11, "name": self.thread_names[parts[1]],
+                    "parent_id": AGENT_CHAT_CHANNEL}
         if method == "POST" and parts[-1] == "messages":
+            self.post_channels.append(parts[1])
             self.posts += 1
             message_id = f"m-{self.posts}"
             self.contents[message_id] = str((payload or {}).get("content", ""))
@@ -210,6 +223,10 @@ def _producer(draft: dict, barrier: ProcessBarrier, pipes: tuple[int, int, int])
             _wait_byte(release)
         return original()
 
+    # 스레드 재사용 읽기는 lease 밖의 기회적 읽기이고, 이 초안에는 살아 있는 요청이 없어
+    # 언제나 빈 튜플이다. 그대로 두면 아래 one-shot 동기화 훅을 그 읽기가 먼저 소비해 두
+    # 프로세스가 lease 경합 전에 멈춘다 — 이 테스트가 재는 것은 lease 직렬화다.
+    budget_approval._live_requests = lambda _key: ()
     budget_approval._pending_drafts = blocking
     verdict = budget_approval.request_approval(draft)
     reason = verdict.reason.value if verdict.reason is not None else "none"
@@ -249,6 +266,21 @@ def test_changed_content_deletes_the_message_before_dropping_the_record(
     assert fake.posts == 2
     assert _live() == ["m-2"]
     assert _stored(drafts, stale["id"])["message_id"] == ""
+
+
+def test_duplicate_and_superseding_requests_reuse_the_first_request_thread(
+    budget_env: tuple[FakeDiscord, list[str], Path],
+) -> None:
+    # Given: one request already posted into its own thread
+    fake, _calls, _drafts = budget_env
+    record = _draft()
+    assert budget_approval.post_for_approval(record) == "m-1"
+    # When: the same key is re-requested (same hash) and then superseded (new ledger change)
+    assert budget_approval.post_for_approval(record) == "m-1"
+    assert budget_approval.post_for_approval(_draft(new_hash="q" * 64, claim_key="k-2")) == "m-2"
+    # Then: one approval key keeps ONE thread — no empty orphan per retry or supersede
+    assert list(fake.thread_names) == [REQUEST_THREAD]
+    assert fake.post_channels == [REQUEST_THREAD, REQUEST_THREAD]
 
 
 def test_owner_approved_request_is_deferred_without_deleting_or_touching_it(
@@ -366,7 +398,8 @@ def test_the_commit_persists_the_surface_the_message_was_posted_to(
     assert stored["message_id"] == "m-1"
     assert stored["kind"] == "budget-mail"
     assert stored["surface"] == "agent-chat-thread"
-    assert stored["channel_id"] == AGENT_CHAT_THREAD
+    assert stored["channel_id"] == REQUEST_THREAD
+    assert stored["approval_thread_id"] == REQUEST_THREAD
     assert stored["policy_version"] == POLICY_VERSION
 
 
@@ -380,5 +413,6 @@ def test_a_stale_writer_cannot_drop_the_stored_binding(
     # When: a later caller re-binds the same message id from that stale record
     budget_gate.set_message_id(record, "m-1")
     # Then: the stored binding survives, so the owner's ✅ stays findable
-    assert _stored(drafts, record["id"])["channel_id"] == AGENT_CHAT_THREAD
+    assert _stored(drafts, record["id"])["channel_id"] == REQUEST_THREAD
+    assert _stored(drafts, record["id"])["approval_thread_id"] == REQUEST_THREAD
     assert _stored(drafts, record["id"])["policy_version"] == POLICY_VERSION

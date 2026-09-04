@@ -161,7 +161,9 @@ def test_probe_observations_round_trip_clean(tmp_path: Path) -> None:
     source_sha = hashlib.sha256(
         (runtime / "automation" / "pkg" / "w.py").read_bytes()
     ).hexdigest()
-    lines = observations(runtime, live, lambda _account, _dest: source_sha)
+    lines = observations(
+        runtime, live, lambda _account, _dest: source_sha, lambda _account: ()
+    )
     plan = parse_observations(lines)
     assert plan.clean
     assert plan.release_sha == "runtime"
@@ -169,7 +171,9 @@ def test_probe_observations_round_trip_clean(tmp_path: Path) -> None:
 
 def test_probe_reports_a_stale_wrapper(tmp_path: Path) -> None:
     runtime, live = _runtime_fixture(tmp_path)
-    lines = observations(runtime, live, lambda _account, _dest: "0" * 64)
+    lines = observations(
+        runtime, live, lambda _account, _dest: "0" * 64, lambda _account: ()
+    )
     plan = parse_observations(lines)
     assert not plan.clean
     assert plan.packages_to_deploy == ("automation/pkg",)

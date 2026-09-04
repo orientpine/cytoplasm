@@ -7,7 +7,8 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Protocol, TypeAlias, override
+from typing import Final, Protocol, TypeAlias
+from automation.typing_compat import override
 
 from automation.managed_skills.manifest import (
     MANAGED_PREFIX,

@@ -243,6 +243,26 @@ def test_deploy_when_running_the_post_mount_smoke_then_uses_a_disposable_home() 
     assert r'env -i HOME=\"\$SH\"' in statement
 
 
+def test_deploy_when_running_the_sandbox_scenario_then_declares_the_staged_root_as_live_root() -> None:
+    """The staged copy under the peer home must pass the governed-copy guard.
+
+    Every mutating CLI refuses to run from a copy whose directory is not the live mount
+    (``skill_mount.governed_copy_refusal``). The sandbox IS a copy, so it declares its own
+    root through ``AUTOPHAGY_SKILL_LIVE_ROOT`` — otherwise the guard blocks stage 1 for every
+    guarded skill (2026-09-03: 13 skills stayed SKILL-STALE behind v1.1.0).
+    """
+    # Given
+    script = DEPLOY.read_text(encoding="utf-8")
+
+    # When
+    start = script.index("SCENARIO_OUT=")
+    end = script.index('|| sandbox_block "scenario failed under dummy secrets"', start)
+    statement = script[start:end]
+
+    # Then
+    assert r'AUTOPHAGY_SKILL_LIVE_ROOT=\"\$REAL_HOME/.hermes/skills\"' in statement
+
+
 def test_deploy_when_isolating_the_scenario_home_then_still_forwards_interop_runtime() -> None:
     # Given
     script = DEPLOY.read_text(encoding="utf-8")

@@ -15,22 +15,21 @@ meeting skill's job and this module does not reach into it.
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import stt_blocks
+
 GLOSSARY_ENV: Final = "SPEECHTOTEXT_GLOSSARY"
 DEFAULT_GLOSSARY: Final = "~/.hermes/speechtotext/glossary.txt"
 
-_SENTENCE_END: Final = re.compile(r"(?<=[.!?\u2026])\s+")
-_WHITESPACE: Final = re.compile(r"\s+")
 _RULE_LINE: Final = re.compile(r"(?m)^---\s*$\n?")
-# A paragraph closes once it is both long enough to be a paragraph and short
-# enough to stay one — whichever bound is reached last.
-_MIN_SENTENCES: Final = 4
-_MIN_CHARS: Final = 180
+# The body's grammar (sentence boundary, block size, header) lives in one place so
+# that writing a transcript and reading it back cannot drift apart.
+_MIN_SENTENCES: Final = stt_blocks.MIN_SENTENCES
+_MIN_CHARS: Final = stt_blocks.MIN_CHARS
 
 Glossary = Sequence[tuple[str, str]]
 
@@ -44,6 +43,8 @@ class Polished:
     paragraphs: int
     collapsed: int
     substitutions: int
+    blocks: tuple[stt_blocks.Block, ...] = ()
+    timed: tuple[stt_blocks.TimedSentence, ...] = ()
 
     def summary(self) -> str:
         """What the document IS — never what this pass did.
@@ -98,16 +99,13 @@ def prompt_hint(glossary: Glossary) -> str:
 
 
 def normalize(text: str) -> str:
-    return _WHITESPACE.sub(" ", unicodedata.normalize("NFC", text)).strip()
+    return stt_blocks.normalize(text)
 
 
 def split_sentences(text: str) -> tuple[str, ...]:
     """Split on sentence enders only — a break needs punctuation AND whitespace,
     so `1.2%` and `27년 10월` stay whole."""
-    normalized = normalize(text)
-    if not normalized:
-        return ()
-    return tuple(part for part in _SENTENCE_END.split(normalized) if part)
+    return stt_blocks.split_sentences(text)
 
 
 def apply_glossary(text: str, glossary: Glossary) -> tuple[str, int]:
@@ -152,18 +150,56 @@ def paragraphs(sentences: Sequence[str]) -> tuple[str, ...]:
     return tuple(blocks)
 
 
-def polish(text: str, *, glossary: Glossary = ()) -> Polished:
-    """Readable body + the receipt of what changed. Nothing but exact repeats is lost."""
-    substituted, substitutions = apply_glossary(normalize(text), glossary)
-    sentences, collapsed = collapse_repeats(split_sentences(substituted))
-    blocks = paragraphs(sentences)
+def polish_sentences(
+    sentences: Sequence[stt_blocks.TimedSentence],
+    *,
+    glossary: Glossary = (),
+    names: Mapping[str, str] = stt_blocks.NO_NAMES,
+) -> Polished:
+    """Tidy sentences that already know when they were said and by whom.
+
+    Correction and collapse happen per sentence rather than over one joined string,
+    which is what keeps each line's timing attached to the words it belongs to.
+    """
+    substitutions = 0
+    corrected: list[stt_blocks.TimedSentence] = []
+    for sentence in sentences:
+        text, hits = apply_glossary(sentence.text, glossary)
+        substitutions += hits
+        corrected.append(
+            stt_blocks.TimedSentence(
+                text=text,
+                start_ms=sentence.start_ms,
+                end_ms=sentence.end_ms,
+                speaker=sentence.speaker,
+            )
+        )
+    kept: list[stt_blocks.TimedSentence] = []
+    collapsed = 0
+    for sentence in corrected:
+        if kept and sentence.text == kept[-1].text:
+            collapsed += 1
+            continue
+        kept.append(sentence)
+    blocks = stt_blocks.group(kept)
     return Polished(
-        body="\n\n".join(blocks),
-        sentences=len(sentences),
+        body=stt_blocks.render(blocks, names),
+        sentences=len(kept),
         paragraphs=len(blocks),
         collapsed=collapsed,
         substitutions=substitutions,
+        blocks=blocks,
+        timed=tuple(kept),
     )
+
+
+def polish(text: str, *, glossary: Glossary = ()) -> Polished:
+    """Readable body + the receipt of what changed. Nothing but exact repeats is lost.
+
+    The text handed in may be a legacy space-joined paragraph body or an already
+    tidied one; both are read through the same grammar, so tidying settles.
+    """
+    return polish_sentences(stt_blocks.parse(text), glossary=glossary)
 
 
 def split_document(markdown: str) -> tuple[str, str]:

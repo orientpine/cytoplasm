@@ -58,8 +58,8 @@ private_name="$(python3 -I - "$stub" "$script_dir" <<'PY'
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(sys.argv[2]).resolve().parents[2]))
-from skills.prompt.scripts import prompt_schema
+sys.path.insert(0, sys.argv[2])  # scripts dir: the live mount has no `skills` package above it
+import prompt_schema
 
 metadata, body = prompt_schema.parse_entry(Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert body == ""

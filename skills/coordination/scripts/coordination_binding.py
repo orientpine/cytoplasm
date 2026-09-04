@@ -4,13 +4,13 @@ from __future__ import annotations
 import importlib
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Protocol
 
 import coordinate_io as io
-from coordination_pending import PendingConfirmStore
+from coordination_pending import PendingConfirmError, PendingConfirmStore
 
 LEASE_DIRNAME = "approval-leases"
 JOURNAL_DIRNAME = "posting-journal"
@@ -40,6 +40,15 @@ class PendingApproval(Protocol):
 
 class OwnerDmDirectory(Protocol):
     def owner_dm(self) -> str: ...
+
+
+class RequestPayload(Protocol):
+    """What names and places one request's approval thread (the producer's payload)."""
+
+    correlation: str
+    draft: Mapping[str, object]
+    origin_channel_id: str
+    origin_message_id: str
 
 
 def repo_root() -> Path:
@@ -113,14 +122,27 @@ def approval_directory(owner_id: str | None = None) -> OwnerDmDirectory:
     )
 
 
-def new_binding(owner_id: str | None = None) -> ApprovalBindingLike:
-    """Resolve the one binding stamped on every new coordination approval."""
+def new_binding(
+    owner_id: str | None = None, payload: RequestPayload | None = None
+) -> ApprovalBindingLike:
+    """Resolve this ONE request's binding — its own thread, labelled as #team labels it.
+
+    스레드 이름은 조율 라벨(correlation, #team 확정 통지가 이미 공개하는 값)이고,
+    라벨이 없으면 pending id 로 떨어진다. origin 쌍은 지시 메시지에 스레드를 앵커하는
+    데만 쓰이며 승인 표면 자체는 바꾸지 않는다.
+    """
     surface = _surface()
+    request = surface.RequestThread(
+        title="" if payload is None else payload.correlation or str(payload.draft.get("id", "")),
+        origin_channel_id="" if payload is None else payload.origin_channel_id,
+        origin_message_id="" if payload is None else payload.origin_message_id,
+    )
     try:
         return surface.resolve_new_binding(
             surface.ApprovalKind.COORDINATION,
             approval_directory(owner_id),
             owner_id or io.interop_config()["owner_id"],
+            request=request,
         )
     except surface.ApprovalSurfaceError as error:
         raise io.CoordinationError(f"승인 표면 해석 실패 — 게시 거부: {error}", 3) from error
@@ -158,6 +180,30 @@ def stored_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLik
         )
     except (surface.ApprovalSurfaceError, TypeError, ValueError) as error:
         raise io.CoordinationError(f"저장된 승인 표면 검증 실패 — 거부: {error}", 1) from error
+
+
+def reusable_binding(store: PendingConfirmStore, key: str) -> ApprovalBindingLike | None:
+    """The thread an earlier post of this same request already opened, if any.
+
+    한 승인 키는 스레드 하나다 — 같은 해시의 재요청도, 내용이 바뀐 재요청도 첫 게시가 연
+    스레드로 돌아간다. 폐지된 표면(옛 DM 바인딩)은 재사용하지 않는다. 읽을 수 없는
+    저장소는 여기서 판정하지 않는다 — 파사드가 store-unreadable 로 거부한다.
+    """
+    try:
+        entries: Iterable[PendingApproval] = store.load()
+    except PendingConfirmError:
+        return None
+    surface = _surface()
+    required = surface.required_surface(surface.ApprovalKind.COORDINATION).value
+    for entry in entries:
+        if (
+            entry.key == key
+            and entry.surface == required
+            and entry.channel_id
+            and entry.policy_version is not None
+        ):
+            return binding_for_entry(entry)
+    return None
 
 
 def binding_for_entry(entry: PendingApproval) -> ApprovalBindingLike:

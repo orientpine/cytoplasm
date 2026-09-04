@@ -13,12 +13,13 @@
 
 | 버전 | 어디에 있나 | 현재 값 | 누가 올리나 |
 |---|---|---|---|
-| **코드 릴리스 버전** | 공개 저장소의 서명된 릴리스 태그(`v1.0.0` …) | `v1.0.0` (2026-08-15, `orientpine/cytoplasm`) | 업스트림 유지보수자 |
+| **코드 릴리스 버전** | 공개 저장소의 서명된 릴리스 태그 | `git tag --sort=-v:refname \| head -1`의 출력 | 업스트림 유지보수자 |
 | **roster 스키마** | `automation/group_roster/schema.py`의 `SCHEMA_VERSION` | `1` | 업스트림 |
 | **관리형 스킬 매니페스트 스키마** | `automation/managed_skills/manifest.py`의 `SCHEMA_VERSION` | `1` | 업스트림 |
 | **managed-sync 런타임 상태 스키마** | `automation/managed_sync/state.py`의 `_SCHEMA_VERSION` | `1` | 업스트림 |
 | **메모리 큐레이터 상태 버전** | `automation/memory_curator/state.py`의 `_VERSION` | `3` | 업스트림 |
 | **노드 설정 필드 집합** | `automation/node_config.py`의 `_FIELD_NAMES` | 정수 버전 없음 — 필드 집합 자체가 계약 | 업스트림 |
+| **승인 표면 인터롭 설정** | `~/.hermes/interop/config.json` | `automation/interop/approval_directory.py`가 읽는 필수 키 `agent_chat_channel_id` (정책 v7 / v1.0.71부터); 없으면 `ApprovalSurfaceError: agent_chat_channel_id is not configured in the interop config` | 업스트림 |
 | **관리형 스킬 릴리스 순번** | 매니페스트의 `release_sequence` | 스킬마다 다름 | **그룹 관리자** |
 | **스킬 내용 정체성** | 매니페스트의 `skill_sha256` | 릴리스마다 다름 | 그룹 관리자 |
 
@@ -83,6 +84,8 @@
 
 즉 **운영자가 손을 대야 하면 MAJOR**다. 스키마 상승이 MINOR로 조용히 들어오면
 자동 업데이트가 노드를 멈춰 세우는데, 릴리스 번호만 보고는 그것을 예상할 수 없다.
+
+`automation/release.sh --bump {major,minor,patch}`는 기본으로 `patch`를 쓰되, `base..head`의 `POLICY_VERSION`·`SCHEMA_VERSION` 상수, `node_config` 필수 필드, 인터롭 필수 키 변경이 있으면 patch를 exit 4로 거부하고, `--bump major`의 승인 노트에는 `MAJOR: 운영자 조치 필요`를 넣는다.
 
 MAJOR 릴리스 노트에는 다음을 반드시 적는다: 무엇이 거부되는가, 어떤 오류 문자열이
 보이는가, 운영자가 무엇을 하면 되는가.

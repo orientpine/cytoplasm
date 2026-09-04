@@ -13,7 +13,6 @@ part that keeps prod correct. Wiring it is a separate, measured step (plan MD-2)
 """
 from __future__ import annotations
 
-import shlex
 import subprocess
 import sys
 import time
@@ -22,13 +21,17 @@ from pathlib import Path
 from typing import Final
 
 from automation.deploy_reconcile import reconcile_tick
+from automation.deploy_reconcile_mirror import (
+    mirror_state_from_verdict,
+    probe_mirror_verdict,
+    sync_mirror as _sync_mirror,
+)
 from automation.deploy_reconcile_state import DEFAULT_STATE_PATH, load_state, save_state
 from automation.deploy_reconcile_unsigned import IncidentRecorder, raw_remote_main_sha, unreleased_commit_count
 from automation.deploy_update_channel import (
     UpdateChannelSource,
     read_roster_update_channel,
     save_update_channel_binding as _save_update_channel_binding,
-    with_update_channel,
 )
 from automation.node_config import load_node_config
 from automation.node_config_state import unconfigured_reason
@@ -187,15 +190,13 @@ def mirror_verdict(
     update_channel: str | None = None,
 ) -> str:
     """The shared shell verdict for the checkout, or "" when it could not be taken."""
-    source, target = shlex.quote(str(probe)), shlex.quote(str(mirror))
-    completed = _run(
-        with_update_channel(
-            ("bash", "-c", f"source {source} && checkout_mirror_verdict {target}"),
-            update_channel,
-        ),
-        _VERDICT_TIMEOUT,
+    return probe_mirror_verdict(
+        mirror, probe, update_channel=update_channel, run=_run, timeout=_VERDICT_TIMEOUT
     )
-    return "" if completed is None else completed.stdout.strip()
+
+
+def _observe_mirror_verdict(mirror: Path, probe: Path, update_channel: str | None) -> str:
+    return mirror_verdict(mirror, probe, update_channel=update_channel)
 
 
 def sync_mirror(
@@ -206,37 +207,24 @@ def sync_mirror(
     probe: Path = _MIRROR_PROBE,
     update_channel: str | None = None,
 ) -> str:
-    """Carry the observation checkout forward. Best effort, and deliberately narrow.
-
-    Converging the release never moves this checkout's HEAD — the snapshot is built in a
-    detached worktree — so before this every landing left it behind until a human ran
-    ``land.sh``, which branch work reaching main by PR never does.
-
-    Two refusals are the point of the function:
-    * anything but ``mirror-behind`` is left exactly as found. Dirty or ahead means work
-      that exists nowhere else (2026-07-27 선례), and a timer that resolved it would be
-      the destructive repair ``checkout_mirror_guidance`` exists to forbid.
-    * while prod has not reached origin/main, the lag IS the healthcheck's evidence of a
-      stale release. Erasing it would make a broken convergence look like a healthy node.
-    """
-    if current_release_sha(pointer) != origin_sha:
-        return f"{MIRROR_PROD_STALE}: prod has not reached origin/main yet"
-    head = _run(("git", "-C", str(mirror), "rev-parse", "HEAD"), _GIT_TIMEOUT)
-    if head is not None and head.returncode == 0 and head.stdout.strip() == origin_sha:
-        return MIRROR_IN_SYNC
-    verdict = mirror_verdict(mirror, probe, update_channel=update_channel)
-    if verdict != _BEHIND:
-        return f"untouched: {verdict or 'verdict unavailable'}"
-    pulled = _run(
-        with_update_channel(
-            ("git", "-C", str(mirror), "pull", "--ff-only"),
-            update_channel,
-        ),
-        _FF_PULL_TIMEOUT,
+    """Carry the observation checkout forward without bypassing its safety verdict."""
+    return _sync_mirror(
+        origin_sha,
+        mirror=mirror,
+        pointer=pointer,
+        probe=probe,
+        update_channel=update_channel,
+        current_release_sha=current_release_sha,
+        run=_run,
+        mirror_verdict=_observe_mirror_verdict,
+        behind=_BEHIND,
+        in_sync=MIRROR_IN_SYNC,
+        pulled=MIRROR_PULLED,
+        pull_failed=MIRROR_PULL_FAILED,
+        prod_stale=MIRROR_PROD_STALE,
+        git_timeout=_GIT_TIMEOUT,
+        ff_pull_timeout=_FF_PULL_TIMEOUT,
     )
-    if pulled is None or pulled.returncode != 0:
-        return MIRROR_PULL_FAILED
-    return MIRROR_PULLED
 
 
 def _incidents() -> IncidentRecorder:
@@ -267,7 +255,17 @@ def main() -> int:
         )
         if remote_head:
             current = current_release_sha()
-            _incidents().unsigned(remote_head, current, unreleased_commit_count(MIRROR, current, remote_head))
+            verdict = (
+                mirror_verdict()
+                if update_channel is None
+                else mirror_verdict(update_channel=update_channel)
+            )
+            _incidents().unsigned(
+                remote_head,
+                current,
+                unreleased_commit_count(MIRROR, current, remote_head),
+                mirror_state_from_verdict(verdict),
+            )
         else:
             _incidents().skip("update-trust-block")
         return 0

@@ -22,6 +22,10 @@ secret="${AUTOPHAGY_DEMO_SECRET:-}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
+# The copy under test IS the governed one for this run: on a node the real mount
+# (/srv/autophagy-skills/live/mail) exists beside this sandbox copy, and
+# mail_runtime.governed_copy_refusal would otherwise refuse every mutating leg.
+export AUTOPHAGY_SKILL_LIVE_ROOT="$(cd "$script_dir/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'cd / && rm -rf "$work"' EXIT
 cd "$work"  # sandbox cwd may be unreadable to this account

@@ -41,6 +41,11 @@ def decode(raw: str) -> TodoApprovalRecord:
         origin_message_id = payload.get("origin_message_id") or ""
         if not isinstance(origin_channel_id, str) or not isinstance(origin_message_id, str):
             raise TodoApprovalStoreError("approval origin binding is invalid")
+        # 요청별 승인 스레드가 생기기 전에 쓰인 레코드는 이 열이 없다 — 빈 값으로 읽고
+        # 결과 통지는 예전처럼 origin/저장된 채널로 간다.
+        approval_thread_id = payload.get("approval_thread_id") or ""
+        if not isinstance(approval_thread_id, str):
+            raise TodoApprovalStoreError("approval thread binding is invalid")
         tasklist = payload.get("tasklist") or ""
         title = payload.get("title") or ""
         if not isinstance(tasklist, str) or not isinstance(title, str):
@@ -63,6 +68,7 @@ def decode(raw: str) -> TodoApprovalRecord:
             policy_version,
             origin_channel_id=origin_channel_id,
             origin_message_id=origin_message_id,
+            approval_thread_id=approval_thread_id,
             tasklist=tasklist,
             title=title,
             notes=notes,
@@ -133,6 +139,7 @@ def _payload(record: TodoApprovalRecord) -> dict[str, JsonValue]:
         "policy_version": record.policy_version,
         "origin_channel_id": record.origin_channel_id,
         "origin_message_id": record.origin_message_id,
+        "approval_thread_id": record.approval_thread_id,
         "tasklist": record.tasklist,
         "title": record.title,
         "notes": record.notes,

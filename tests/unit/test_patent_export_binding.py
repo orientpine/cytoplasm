@@ -33,7 +33,10 @@ RESOLVER_CHANNEL: Final = "1999999999999999999"
 OWNER_DM: Final = "1526487935975952385"
 AGENT_CHAT_CHANNEL: Final = "1526487935975952390"
 AGENT_CHAT_THREAD: Final = "1526487935975952391"
+REQUEST_THREAD: Final = "1526487935975952392"
 SLUG: Final = "binding-slug"
+DOC_TITLE: Final = "발명의 명칭 초음파 기반 3차원 스캐너"
+DOC_BODY: Final = "청구항 1 본문 비밀"
 NOW: Final = 1_800_000_000
 SHA: Final = "sha256:" + "a" * 64
 FOLDER: Final = "folder-bound"
@@ -56,6 +59,7 @@ class FakeDiscord:
     messages: dict[str, tuple[str, str]] = field(default_factory=dict)
     reactions: dict[tuple[str, str], list[dict[str, object]]] = field(default_factory=dict)
     touched: list[tuple[str, str]] = field(default_factory=list)
+    threads: list[str] = field(default_factory=list)
     posted: int = 0
 
     def api(self, method: str, path: str, payload: dict | None = None) -> object:
@@ -75,6 +79,9 @@ class FakeDiscord:
         self.touched.append((method, channel))
         if len(parts) == 2:
             return self._describe(channel)
+        if method == "POST" and parts[-1] == "threads":
+            self.threads.append(str((payload or {})["name"]))
+            return {"id": REQUEST_THREAD}
         if method == "POST" and parts[-1] == "messages":
             self.posted += 1
             message_id = f"msg-{self.posted}"
@@ -101,6 +108,13 @@ class FakeDiscord:
                 "id": channel,
                 "type": 11,
                 "name": "승인-patent-export",
+                "parent_id": AGENT_CHAT_CHANNEL,
+            }
+        if channel == REQUEST_THREAD:
+            return {
+                "id": channel,
+                "type": 11,
+                "name": self.threads[-1] if self.threads else "",
                 "parent_id": AGENT_CHAT_CHANNEL,
             }
         return {"id": channel, "type": 0, "name": "approvals"}
@@ -231,12 +245,51 @@ def test_new_export_request_posts_to_the_agent_chat_thread(env: BindingEnv) -> N
     # Given / When: a brand-new export approval is requested under current policy.
     patent_export.prepare_export(env.paths, SLUG, mode="enc")
 
-    # Then: it lives in the patent-export thread under #agent-chat, while the shared
-    # guild #approvals — which the peer attestation bot can also read — gains nothing.
+    # Then: it lives in the thread opened for THIS request, while the shared
+    # guild #approvals — which the peer attestation bot can also read — gains nothing,
+    # and the per-kind thread that used to collect every export is not reused.
     stored = manifest.load_manifest(SLUG)
-    assert (stored.surface, stored.channel_id) == ("agent-chat-thread", AGENT_CHAT_THREAD)
-    assert env.fake.messages[str(stored.message_id)][0] == AGENT_CHAT_THREAD
+    assert (stored.surface, stored.channel_id) == ("agent-chat-thread", REQUEST_THREAD)
+    assert env.fake.messages[str(stored.message_id)][0] == REQUEST_THREAD
     assert GUILD_APPROVALS not in env.fake.channels()
+    assert AGENT_CHAT_THREAD not in env.fake.channels()
+
+
+def test_new_export_request_names_its_thread_with_the_export_id_only(env: BindingEnv) -> None:
+    # Given: a draft whose document title and body are the masked content.
+    storage.write_private(
+        env.paths.workspace_root / SLUG / "draft.md",  # type: ignore[attr-defined]
+        f"{DOC_TITLE}\n{DOC_BODY}\n",
+    )
+
+    # When: a brand-new export approval is requested.
+    patent_export.prepare_export(env.paths, SLUG, mode="enc")
+
+    # Then: exactly one thread was opened, named by the export id and nothing else.
+    assert env.fake.threads == [f"특허 반출 · {SLUG}"]
+    for secret in (DOC_TITLE, DOC_BODY, "draft.md", SHA):
+        assert secret not in env.fake.threads[0]
+
+
+def test_a_new_request_persists_the_approval_thread_it_was_posted_in(env: BindingEnv) -> None:
+    # Given / When: a brand-new export approval is requested.
+    patent_export.prepare_export(env.paths, SLUG, mode="enc")
+
+    # Then: the manifest names the approval thread, and the content the gate binds
+    # against (sha/dest/expiry/mode) is unchanged by the added field.
+    stored = manifest.load_manifest(SLUG)
+    content = env.fake.messages[str(stored.message_id)][1]
+    assert stored.approval_thread_id == stored.channel_id == REQUEST_THREAD
+    assert gate.approval_binding_matches(stored, content)
+    assert "approval_thread_id" not in content
+
+
+def test_a_legacy_manifest_without_an_approval_thread_id_still_loads(env: BindingEnv) -> None:
+    # Given: a manifest written before the request-thread schema.
+    _persist(env, kind="patent-export", surface="skill-approvals", channel_id=GUILD_APPROVALS, policy_version=1)
+
+    # When / Then: it loads with no thread id instead of refusing.
+    assert manifest.load_manifest(SLUG).approval_thread_id is None
 
 
 def test_the_approval_message_carries_the_policy_reaction_line(env: BindingEnv) -> None:
@@ -283,7 +336,7 @@ def test_supersede_deletes_from_the_manifest_channel_not_the_current_policy(
     assert ("DELETE", GUILD_APPROVALS) in env.fake.touched
     assert not [channel for method, channel in env.fake.touched if method == "DELETE" and channel != GUILD_APPROVALS]
     replacement = manifest.load_manifest(SLUG)
-    assert env.fake.messages[str(replacement.message_id)][0] == AGENT_CHAT_THREAD
+    assert env.fake.messages[str(replacement.message_id)][0] == REQUEST_THREAD
 
 
 def test_the_manifests_default_kind_still_names_the_policy_enum() -> None:

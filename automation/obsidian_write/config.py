@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Protocol
 
+#: 120 s covers local git calls but killed every real fetch of the ~770 MB vault.
+DEFAULT_FETCH_TIMEOUT_SECONDS: Final = 900.0
+FETCH_TIMEOUT_ENV: Final = "OBSIDIAN_WRITE_FETCH_TIMEOUT"
 DEFAULT_CONFIG_PATH: Final = Path.home() / ".hermes" / "obsidian-write" / "config.json"
 DEFAULT_WRITE_CLONE_DIR: Final = Path.home() / ".hermes" / "obsidian-write"
 DEFAULT_WRITE_KEY_PATH: Final = Path.home() / ".ssh" / "obsidian_write_key"
@@ -39,6 +44,8 @@ class ObsidianWriteConfig:
     clone_dir: Path = DEFAULT_WRITE_CLONE_DIR
     ssh_key_path: Path = DEFAULT_WRITE_KEY_PATH
     branch: str = DEFAULT_BRANCH
+    #: Budget for fetch and clone only; local git calls keep the short timeout.
+    fetch_timeout_seconds: float = DEFAULT_FETCH_TIMEOUT_SECONDS
     push_guard: PushGuard | None = field(default=None, repr=False, compare=False)
 
 
@@ -57,7 +64,27 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> ObsidianWriteConfig:
     ssh_key_path = Path(_required_string(payload, "ssh_key_path")).expanduser()
     branch = _required_string(payload, "branch")
     _validate_branch(branch)
-    return ObsidianWriteConfig(repo_url, clone_dir, ssh_key_path, branch)
+    return ObsidianWriteConfig(repo_url, clone_dir, ssh_key_path, branch, _fetch_timeout())
+
+
+def _fetch_timeout() -> float:
+    """Resolve the fetch/clone budget, which the owner may raise for a cold vault.
+
+    This stays an environment override instead of a ``config.json`` key because the
+    right value follows the machine's link speed, not the owner's vault provisioning.
+    A malformed override fails closed: silently falling back to a short timeout is how
+    the write clone spent a month killing its own fetches.
+    """
+    raw = os.environ.get(FETCH_TIMEOUT_ENV)
+    if raw is None:
+        return DEFAULT_FETCH_TIMEOUT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError as error:
+        raise ObsidianWriteError("Obsidian write fetch timeout is not a number", False) from error
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ObsidianWriteError("Obsidian write fetch timeout must be positive", False)
+    return seconds
 
 
 def _required_string(payload: dict[str, object], key: str) -> str:

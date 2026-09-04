@@ -100,6 +100,7 @@ def test_ledger_when_nothing_changed_then_produces_no_delta_and_no_dm(
     _skill(home, "agent-notes", "---\nname: agent-notes\n---\nstable\n")
     _usage(home, {"agent-notes": {"created_by": "agent", "agent_created": True, "pinned": False, "archived_at": None}})
     sent: list[str] = []
+    monkeypatch.setenv("HERMES_STATE_ROOT", str(tmp_path / "state"))
     monkeypatch.setattr(report, "notify_owner", lambda body: sent.append(body) is None or True)
     assert report.run_once(home=home, account_label="agent", now=_NOW) == 0
     sent.clear()
@@ -112,6 +113,15 @@ def test_ledger_when_nothing_changed_then_produces_no_delta_and_no_dm(
     assert result.deltas == ()
     assert exit_code == 0
     assert sent == []
+    log_path = tmp_path / "state" / "logs" / "selfskill-audit" / "2026-08.jsonl"
+    assert json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1]) == {
+        "account": "agent",
+        "delta_counts": {"archived": 0, "created": 0, "edited": 0, "removed": 0, "restored": 0},
+        "notified": False,
+        "overlaps": [],
+        "shadowed": [],
+        "ts": "2026-08-15T00:00:00Z",
+    }
 
 
 def test_ledger_when_a_skill_is_archived_then_records_the_archive_delta(tmp_path: Path) -> None:

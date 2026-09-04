@@ -30,7 +30,7 @@ else:
         sys.modules["skills.prompt"] = _sk
         setattr(sys.modules["skills"], "prompt", _sk)
 
-from skills.prompt.scripts import prompt_schema, prompt_store  # noqa: E402
+from skills.prompt.scripts import prompt_governed, prompt_schema, prompt_store  # noqa: E402
 
 
 class PromptCliError(ValueError):
@@ -203,8 +203,18 @@ def main(argv: list[str] | None = None) -> int:
             case "search":
                 return _cmd_search(_parse_search(arguments))
             case "get":
-                return _cmd_get(_parse_get(arguments))
+                request = _parse_get(arguments)
+                if request.write_body is not None:
+                    message = prompt_governed.refusal(Path(__file__))
+                    if message:
+                        print(message, file=sys.stderr)
+                        return 3
+                return _cmd_get(request)
             case "add":
+                message = prompt_governed.refusal(Path(__file__))
+                if message:
+                    print(message, file=sys.stderr)
+                    return 3
                 return _cmd_add(_parse_add(arguments))
             case _:
                 raise PromptCliError(f"unknown command: {command}")

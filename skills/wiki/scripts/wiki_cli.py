@@ -11,6 +11,7 @@ from typing import Any
 
 wiki_evidence = import_module(".wiki_evidence", __package__) if __package__ else import_module("wiki_evidence")
 wiki_gate = import_module(".wiki_gate", __package__) if __package__ else import_module("wiki_gate")
+wiki_governed = import_module(".wiki_governed", __package__) if __package__ else import_module("wiki_governed")
 wiki_store = import_module(".wiki_store", __package__) if __package__ else import_module("wiki_store")
 
 WIKI_ROOT = Path(os.environ.get("WIKI_ROOT", "~/wiki")).expanduser()
@@ -283,6 +284,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.command in {"draft", "confirm", "discard", "sign"}:
+        refusal = wiki_governed.refusal(Path(__file__))
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return 3
     try:
         return int(args.func(args))
     except wiki_store.SchemaError as error:

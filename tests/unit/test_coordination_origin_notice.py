@@ -329,6 +329,131 @@ def test_watcher_falls_back_to_owner_notice_when_the_thread_fails(
     assert "NOTIFY-THREAD-FAIL" in capsys.readouterr().err
 
 
+# ------------------------------------------- per-request approval thread closing
+
+APPROVAL_THREAD = "300000000000000091"
+APPROVAL_THREAD_NAME = "일정 조율 · coord-123"
+
+
+def _approval_thread_api(patches: list[dict]):
+    """Serve only what closing an existing approval thread needs — never /threads."""
+
+    def api(method: str, path: str, payload: dict | None = None):
+        if method == "GET" and path == f"/channels/{APPROVAL_THREAD}":
+            return {"id": APPROVAL_THREAD, "name": APPROVAL_THREAD_NAME}
+        if method == "PATCH" and path == f"/channels/{APPROVAL_THREAD}":
+            patches.append(dict(payload or {}))
+            return {"id": APPROVAL_THREAD}
+        raise AssertionError(f"unexpected Discord call: {method} {path}")
+
+    return api
+
+
+@pytest.mark.usefixtures("runtime")
+def test_completion_result_closes_the_request_thread_it_was_approved_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: an executed coordination approved in its own request thread
+    spy = _ThreadSpy()
+    patches: list[dict] = []
+    team_posts: list[tuple[str, str]] = []
+    dm_notices: list[tuple[str, str]] = []
+    monkeypatch.setattr(io, "api", _approval_thread_api(patches))
+    monkeypatch.setattr(io, "team_channel_id", lambda: "team-chan")
+    monkeypatch.setattr(
+        io, "post_message",
+        lambda channel_id, content: (team_posts.append((channel_id, content)), "msg-9")[1],
+    )
+    monkeypatch.setattr(
+        lifecycle, "send_owner_dm",
+        lambda owner_id, content: (dm_notices.append((owner_id, content)), ("dm", "m"))[1],
+    )
+    monkeypatch.setattr(lifecycle, "_thread_transport", spy.factory)
+
+    # When: the lifecycle finishes the run
+    exit_code = lifecycle.finish(
+        {"agent_id": "agent-me", "owner_id": OWNER}, "coord-test123", _executed_commands(),
+        "2026-07-18 (토) 09:00~09:30 KST", "피어 미팅", "event-abc123",
+        record={
+            "id": "abc123",
+            "approval_thread_id": APPROVAL_THREAD,
+            "origin_channel_id": ORIGIN_CHANNEL,
+            "origin_message_id": ORIGIN_MESSAGE,
+        },
+    )
+
+    # Then: the completion lands in the approval thread, which then closes as done
+    assert exit_code == 0
+    assert [channel for channel, _content in spy.posts] == [APPROVAL_THREAD]
+    assert patches == [{"archived": True, "name": f"✅ 완료 · {APPROVAL_THREAD_NAME}"}]
+    assert dm_notices == []
+    # …and the #team notice is unchanged by the thread closing
+    assert [channel for channel, _content in team_posts] == ["team-chan"]
+
+
+def _run_approval_watch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reactions: dict[str, tuple[dict[str, str | bool], ...]],
+    *,
+    now: datetime,
+) -> tuple[FakeDiscord, FakeCommands, _ThreadSpy, list[dict]]:
+    monkeypatch.setenv("INTEROP_RUNTIME", str(_REPO))
+    spy = _ThreadSpy()
+    patches: list[dict] = []
+    monkeypatch.setattr(io, "api", _approval_thread_api(patches))
+    monkeypatch.setattr(lifecycle, "_thread_transport", spy.factory)
+    store = PendingConfirmStore(tmp_path / "pending-confirms.jsonl")
+    entry = _entry()
+    store.append(
+        PendingConfirm(
+            draft_id=entry.draft_id, sha256=entry.sha256, dm_channel_id=entry.dm_channel_id,
+            dm_message_id=entry.dm_message_id, slot=entry.slot, summary=entry.summary,
+            correlation=entry.correlation, duration_min=entry.duration_min,
+            created=entry.created, origin_channel_id=entry.origin_channel_id,
+            origin_message_id=entry.origin_message_id, approval_thread_id=APPROVAL_THREAD,
+        )
+    )
+    discord = FakeDiscord(reactions)
+    commands = FakeCommands()
+    watch.run_once(
+        store=store, owner_id=OWNER, discord=discord, commands=commands,
+        draft_sha256=lambda _draft_id: "sha-123", now=now,
+    )
+    return discord, commands, spy, patches
+
+
+def test_watcher_cancel_closes_the_request_thread_as_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: an approval-thread-bound pending confirmation the owner cancels with ⛔
+    discord, commands, spy, patches = _run_approval_watch(
+        tmp_path, monkeypatch, {"⛔": ({"id": OWNER, "bot": False},)},
+        now=datetime(2026, 7, 17, 12, 0, tzinfo=UTC),
+    )
+
+    # Then: the notice lands in the approval thread, which closes as cancelled
+    assert commands.discarded == ["abc123"]
+    assert discord.sent_messages == []
+    assert [channel for channel, _content in spy.posts] == [APPROVAL_THREAD]
+    assert patches == [{"archived": True, "name": f"⛔ 취소 · {APPROVAL_THREAD_NAME}"}]
+
+
+def test_watcher_expiry_closes_the_request_thread_as_expired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: an approval-thread-bound pending confirmation that outlived its window
+    discord, commands, spy, patches = _run_approval_watch(
+        tmp_path, monkeypatch, {}, now=datetime(2026, 7, 19, 12, 0, tzinfo=UTC),
+    )
+
+    # Then: the expiry notice closes the same thread
+    assert commands.discarded == ["abc123"]
+    assert discord.sent_messages == []
+    assert [channel for channel, _content in spy.posts] == [APPROVAL_THREAD]
+    assert patches == [{"archived": True, "name": f"⌛ 만료 · {APPROVAL_THREAD_NAME}"}]
+
+
 def test_notify_result_falls_back_to_caller_when_helper_is_unavailable(monkeypatch, capsys):
     # Given: the interop runtime lacks origin_notice (stale runtime / sandbox)
     import coordination_lifecycle

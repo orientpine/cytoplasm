@@ -35,6 +35,9 @@ ORIGIN_CHANNEL = "200000000000000001"
 ORIGIN_MESSAGE = "origin-message-1"
 THREAD_ID = "300000000000000001"
 APPROVAL_CHANNEL = "1526487935975952385"
+#: 요청별 승인 스레드 — 승인 카드가 여기 있었고 결과도 여기서 끝난다.
+REQUEST_THREAD = "400000000000000001"
+REQUEST_THREAD_NAME = "할 일 · 장보기"
 NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
 
 
@@ -57,6 +60,15 @@ def _origin_spec() -> TodoApprovalSpec:
     return _spec(origin_channel_id=ORIGIN_CHANNEL, origin_message_id=ORIGIN_MESSAGE)
 
 
+def _thread_spec() -> TodoApprovalSpec:
+    """The spec of a request whose approval card lives in its own thread."""
+    return _spec(
+        origin_channel_id=ORIGIN_CHANNEL,
+        origin_message_id=ORIGIN_MESSAGE,
+        approval_thread_id=REQUEST_THREAD,
+    )
+
+
 class _SentChunk:
     def __init__(self, message_id: str) -> None:
         self.message_id = message_id
@@ -66,12 +78,17 @@ class _FakeTransport:
     def __init__(self, *, thread_fail: bool = False) -> None:
         self.posts: list[tuple[str, str]] = []
         self.api_calls: list[tuple[str, str]] = []
+        self.payloads: list[tuple[str, dict]] = []
         self.thread_fail = thread_fail
 
     def api(self, method: str, path: str, payload: dict | None = None):
         self.api_calls.append((method, path))
+        if payload is not None:
+            self.payloads.append((path, payload))
         if self.thread_fail:
             raise RuntimeError("thread api down")
+        if method == "GET":
+            return {"id": REQUEST_THREAD, "name": REQUEST_THREAD_NAME}
         return {"id": THREAD_ID}
 
     def post_message(self, channel_id: str, content: str) -> str:
@@ -297,12 +314,19 @@ def test_watch_cancel_notice_failure_keeps_the_archive(tmp_path: Path, capsys) -
 
 
 def test_watch_cancel_notice_routes_to_the_origin_thread(tmp_path: Path) -> None:
+    # Given: a legacy generation with no request thread of its own, only the origin anchor
     store = TodoApprovalStore(tmp_path)
     record = store.bind_message(store.prepare(_origin_spec(), NOW), "m-1")
     transport = _FakeTransport()
     posts: list[tuple[str, str]] = []
+    # When: the watcher reports the owner's ⛔
     watch._notify_cancelled(record, transport, transport_factory=_thread_factory(posts))
-    assert transport.api_calls == [("POST", f"/channels/{ORIGIN_CHANNEL}/messages/{ORIGIN_MESSAGE}/threads")]
+    # Then: the notice still anchors on the instruction message, and that thread is closed
+    assert transport.api_calls == [
+        ("POST", f"/channels/{ORIGIN_CHANNEL}/messages/{ORIGIN_MESSAGE}/threads"),
+        ("GET", f"/channels/{THREAD_ID}"),
+        ("PATCH", f"/channels/{THREAD_ID}"),
+    ]
     assert [channel for channel, _ in posts] == [THREAD_ID]
     assert "할일 등록 취소" in posts[0][1]
     assert transport.posts == []
@@ -329,3 +353,116 @@ def test_notify_result_falls_back_to_the_stored_channel_when_helper_is_unavailab
     )
     assert transport.posts == [(APPROVAL_CHANNEL, "결과")]
     assert "NOTIFY-HELPER-MISSING" in capsys.readouterr().err
+
+
+# ------------------------------------------------------- per-request approval thread
+
+
+def test_spec_record_and_payload_carry_the_approval_thread(tmp_path: Path) -> None:
+    # Given: an approval whose card lives in its own request thread
+    store = TodoApprovalStore(tmp_path)
+    # When: the pending generation is prepared
+    record = store.prepare(_thread_spec(), NOW)
+    # Then: record, durable payload and decode all carry the thread the result goes back to
+    assert record.approval_thread_id == REQUEST_THREAD
+    payload = json.loads(store.pending_path(record.key).read_text(encoding="utf-8"))
+    assert payload["approval_thread_id"] == REQUEST_THREAD
+    assert store_io.decode(json.dumps(payload)) == record
+
+
+def test_legacy_payload_without_approval_thread_decodes_to_empty(tmp_path: Path) -> None:
+    # Given: a pending payload written before the request thread existed
+    store = TodoApprovalStore(tmp_path)
+    record = store.prepare(_thread_spec(), NOW)
+    payload = json.loads(store.pending_path(record.key).read_text(encoding="utf-8"))
+    payload.pop("approval_thread_id", None)
+    # When: it is decoded
+    decoded = store_io.decode(json.dumps(payload))
+    # Then: the thread is empty, never guessed, and the record is otherwise intact
+    assert decoded.approval_thread_id == ""
+    assert decoded.action_hash == "sha256:fixture"
+
+
+def test_origin_record_carries_the_approval_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: the ✅-archived generation of a request that had its own thread
+    monkeypatch.setenv("TODO_APPROVAL_ROOT", str(tmp_path))
+    store = TodoApprovalStore(tmp_path)
+    record = store.bind_message(store.prepare(_thread_spec(), NOW), "m-1")
+    store.archive(record, ApprovalState.ARCHIVED, "approved")
+    # When: the notice routing facts are read back
+    routing = todo_approval_runtime.origin_record("sha256:fixture")
+    # Then: they name that thread, so the result never opens a new one
+    assert routing is not None
+    assert routing["approval_thread_id"] == REQUEST_THREAD
+    assert routing["channel_id"] == APPROVAL_CHANNEL
+
+
+def test_notify_result_closes_the_request_thread_on_a_terminal_outcome() -> None:
+    # Given: a result bound to the request thread its approval lived in
+    transport = _FakeTransport()
+    posts: list[tuple[str, str]] = []
+    # When: the terminal notice is delivered
+    todo_approval_runtime.notify_result(
+        {
+            "id": "fixture", "channel_id": APPROVAL_CHANNEL,
+            "origin_channel_id": ORIGIN_CHANNEL, "origin_message_id": ORIGIN_MESSAGE,
+            "approval_thread_id": REQUEST_THREAD,
+        },
+        "✅ 할일 등록 완료: 장보기 (task t-1)",
+        thread_name="할일: 장보기",
+        transport=transport,
+        transport_factory=_thread_factory(posts),
+        outcome=todo_approval_runtime.OUTCOME_DONE,
+    )
+    # Then: it lands in that thread without creating one, which is then closed as 완료
+    assert [channel for channel, _body in posts] == [REQUEST_THREAD]
+    assert transport.api_calls == [
+        ("GET", f"/channels/{REQUEST_THREAD}"),
+        ("PATCH", f"/channels/{REQUEST_THREAD}"),
+    ]
+    assert transport.payloads == [(
+        f"/channels/{REQUEST_THREAD}",
+        {"archived": True, "name": f"✅ 완료 · {REQUEST_THREAD_NAME}"},
+    )]
+    assert transport.posts == []
+
+
+def test_create_notice_asks_to_close_the_request_thread_as_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: the ✅-archived generation that carries its request thread
+    monkeypatch.setenv("TODO_APPROVAL_ROOT", str(tmp_path))
+    store = TodoApprovalStore(tmp_path)
+    record = store.bind_message(store.prepare(_thread_spec(), NOW), "m-1")
+    store.archive(record, ApprovalState.ARCHIVED, "approved")
+    captured: list[tuple[dict, dict]] = []
+    monkeypatch.setattr(
+        todo_approval_runtime, "notify_result",
+        lambda record_like, _content, **kwargs: captured.append((record_like, kwargs)),
+    )
+    # When: the verified write reports its result
+    todo_cli._notify_created("sha256:fixture", "task-1", "장보기", _context())
+    # Then: the notice is routed into that thread and asks for the 완료 close
+    [(record_like, kwargs)] = captured
+    assert record_like["approval_thread_id"] == REQUEST_THREAD
+    assert kwargs["outcome"] == todo_approval_runtime.OUTCOME_DONE
+
+
+def test_watch_cancel_notice_closes_the_request_thread_as_cancelled(tmp_path: Path) -> None:
+    # Given: a bound pending generation posted in its own request thread
+    store = TodoApprovalStore(tmp_path)
+    record = store.bind_message(store.prepare(_thread_spec(), NOW), "m-1")
+    transport = _FakeTransport()
+    posts: list[tuple[str, str]] = []
+    # When: the watcher reports the owner's ⛔
+    watch._notify_cancelled(record, transport, transport_factory=_thread_factory(posts))
+    # Then: the ⛔ notice lands in that thread, which is closed as 취소
+    assert [channel for channel, _body in posts] == [REQUEST_THREAD]
+    assert "할일 등록 취소" in posts[0][1]
+    assert transport.payloads == [(
+        f"/channels/{REQUEST_THREAD}",
+        {"archived": True, "name": f"⛔ 취소 · {REQUEST_THREAD_NAME}"},
+    )]
+    assert transport.posts == []

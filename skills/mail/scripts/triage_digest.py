@@ -32,6 +32,7 @@ import triage_approval
 import triage_core
 import triage_gate
 import triage_llm
+import triage_llm_routing
 import triage_sensitivity
 import triage_recipient
 import triage_store
@@ -93,53 +94,82 @@ def select_new_mails(
 
 
 def build_item(
-    mail_detail: dict, item_no: int, *, rules: tuple[triage_sensitivity.TagRule, ...]
+    mail_detail: dict, item_no: int, *, rules: tuple[triage_sensitivity.TagRule, ...],
+    latch: triage_llm_routing.GlmLatch | None = None,
 ) -> tuple[dict, dict]:
     """Gate → classify → summarize one mail; return ``(owner_item, store_item)``.
 
     ``owner_item`` carries the real subject/summary for the owner message;
     ``store_item`` follows the ``digest_items`` contract and, when the gate
     hits, persists only the masked subject and an empty summary (constraint 7).
-    A summarize failure keeps the item with a fallback summary, and a classify
-    failure (slow/unparseable glm-5.2 output) is retried once before falling open
-    to a conservative 중요 verdict with NO actionable flags plus a
-    ``classification_failed`` marker (fail-open listing — one bad mail must not
-    silently strand the whole digest).
+    Both LLM steps are retried once. When a NON-sensitive step then fails because
+    ``glm-main`` itself is unavailable, ``latch`` (the run-scoped state from
+    ``run_digest``) records the outage and the same prompt reruns on the non-GLM
+    tier — an outage costs quality, not the whole digest. Only if that tier fails
+    too do the old fallbacks apply: a summarize failure keeps the item with a
+    fallback summary and records the masked reason via ``triage_llm.log_failure``
+    (the cron drops stderr, so that line is the only trace), and a classify
+    failure falls open to a conservative 중요 verdict with NO actionable flags
+    plus a ``classification_failed`` marker (fail-open listing — one bad mail
+    must not silently strand the whole digest).
     """
     uid = str(mail_detail.get("uid") or "")
     subject = str(mail_detail.get("subject") or "")
     sender = str(mail_detail.get("sender") or "")
     body = str(mail_detail.get("body") or "")
     uid_opaque = triage_core.mask_value(uid)
+    run_latch = triage_llm_routing.GlmLatch() if latch is None else latch
     gate = triage_sensitivity.evaluate("\n".join((subject, sender, body)), rules)  # ① FIRST
-    for attempt in range(2):
-        try:
-            cls, _provider = triage_llm.classify(  # ② routed by the step-① verdict
-                subject=subject, sender=sender, body=body, sensitive=gate.sensitive,
-                uid_opaque=uid_opaque,
-                prompt_path=triage_transport._env_path(
-                    "TRIAGE_CLASSIFY_PROMPT",
-                    str(triage_transport.SKILL_DIR / "prompts/triage-classify-v1.md"),
-                ),
-            )
-        except (triage_llm.LlmCallError, triage_core.LlmParseError):
-            if attempt == 0:
-                continue
-            cls, classify_failed = _CLASSIFY_FALLBACK, True
-        else:
-            classify_failed = False
-        break
+
+    def classify_step(force_codex: bool) -> tuple[triage_core.Classification, str]:
+        return triage_llm.classify(  # ② routed by the step-① verdict
+            subject=subject, sender=sender, body=body, sensitive=gate.sensitive,
+            uid_opaque=uid_opaque,
+            prompt_path=triage_transport._env_path(
+                "TRIAGE_CLASSIFY_PROMPT",
+                str(triage_transport.SKILL_DIR / "prompts/triage-classify-v1.md"),
+            ),
+            force_codex=force_codex,
+        )
+
     try:
-        summary = triage_llm.summarize(  # constraint-6 routing lives inside summarize
+        cls, _provider = triage_llm_routing.call_with_fallback(
+            classify_step, latch=run_latch, sensitive=gate.sensitive,
+            retry_on=(triage_llm.LlmCallError, triage_core.LlmParseError),
+        )
+    except (triage_llm.LlmCallError, triage_core.LlmParseError) as error:
+        cls, classify_failed = _CLASSIFY_FALLBACK, True
+        triage_llm.log_failure(
+            purpose="classify", uid_opaque=uid_opaque,
+            sensitive=gate.sensitive, error=error,
+        )
+    else:
+        classify_failed = False
+
+    def summarize_step(force_codex: bool) -> str:
+        return triage_llm.summarize(  # constraint-6 routing lives inside summarize
             subject=subject, sender=sender, body=body, sensitive=gate.sensitive,
             uid_opaque=uid_opaque,
             prompt_path=triage_transport._env_path(
                 "TRIAGE_DIGEST_PROMPT",
                 str(triage_transport.SKILL_DIR / "prompts/digest-summary-v1.md"),
             ),
+            force_codex=force_codex,
         )
-    except Exception:  # noqa: BLE001 — fail-open listing: keep the item, mark the failure
+
+    try:
+        summary = triage_llm_routing.call_with_fallback(
+            summarize_step, latch=run_latch, sensitive=gate.sensitive,
+            retry_on=(Exception,),
+        )
+    except Exception as error:  # noqa: BLE001 — fail-open listing: keep the item, mark the failure
         summary = SUMMARY_FALLBACK
+        triage_llm.log_failure(  # cron drops stderr — the log line is the only trace
+            purpose="digest_summary", uid_opaque=uid_opaque,
+            sensitive=gate.sensitive, error=error,
+        )
+    if run_latch.tripped and not gate.sensitive:
+        run_latch.count_degraded_mail()  # this mail was handled off the GLM tier
     owner = triage_recipient.owner_address()
     role = triage_recipient.recipient_role(body, owner)
     _to_addresses, cc_addresses = triage_recipient.parse_recipients(body)
@@ -291,6 +321,7 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
     leaving every listed mail undigested so the next tick retries.
     """
     rules = triage_sensitivity.load_rules(triage_transport._rules_path())
+    latch = triage_llm_routing.GlmLatch()  # per-run, never module state
     db = triage_gate.db_path()
     digested = triage_store.digested_uids(db)
     processed = {row[0] for row in triage_store.processed_rows(db)}
@@ -309,12 +340,15 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
         uid = str(mail.get("uid") or "")
         detail = {**mail, **triage_transport._get_mail(uid), "uid": uid}
         try:
-            dm_item, store_item = build_item(detail, item_no, rules=rules)
+            dm_item, store_item = build_item(detail, item_no, rules=rules, latch=latch)
         except Exception as error:  # noqa: BLE001 — cron alert needs one structured marker
             raise triage_gate.GateError(_fail_marker("build", "llm_call_failed", error), 4) from error
         dm_items.append(dm_item)
         store_items.append(store_item)
     body = render_digest_dm(dm_items, kst_now=datetime.now(ZoneInfo("Asia/Seoul")))
+    notice = latch.notice_line()  # '' while glm-main was healthy — exactly one line otherwise
+    if notice:
+        body = notice + "\n" + body
     if sync_failed:
         body = "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)\n" + body
     if dry_run:

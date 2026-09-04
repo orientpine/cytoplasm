@@ -19,13 +19,15 @@ import json
 import os
 import sys
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 import time
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+import budget_gate
 from budget_gate import GateError, write_json
 
 API = "https://discord.com/api/v10"
@@ -163,12 +165,28 @@ def _thread_transport(channel_id: str):
     return DiscordTransport(token=bot_token(), channel_id=channel_id)
 
 
-def notify_result(draft: dict, content: str) -> str:
-    """Route a send/cancel result: origin-channel thread first, owner fallback.
+#: 종결 결과의 상태어 이름 — 공유 `origin_notice.ThreadOutcome` 멤버를 가리킨다.
+OUTCOME_DONE = "DONE"
+OUTCOME_CANCELLED = "CANCELLED"
+OUTCOME_EXPIRED = "EXPIRED"
+#: todo의 TODO_APPROVAL_TTL과 같은 24시간 — budget 초안도 그 뒤에는 재게시하지 않는다.
+BUDGET_APPROVAL_TTL: Final = timedelta(hours=24)
+
+
+def _thread_outcome(origin_notice, outcome: str):
+    """The shared terminal marker, or None when the runtime predates it (best-effort)."""
+    if not outcome:
+        return None
+    return getattr(getattr(origin_notice, "ThreadOutcome", None), outcome, None)
+
+
+def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
+    """Route a send/cancel result: the request's approval thread first, owner fallback.
 
     라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
     `automation.interop.origin_notice.deliver`가 소유한다(2026-08-23 전 스킬
-    공통화). 금액·잔액은 결과 문구에 싣지 않는다 — SKILL.md 민감도 규칙.
+    공통화). 레코드의 `approval_thread_id` 가 목적지이고, 종결 결과면 그 스레드를
+    상태어로 이름 바꿔 닫는다. 금액·잔액은 결과 문구에 싣지 않는다 — SKILL.md 민감도 규칙.
     """
     try:
         origin_notice = _origin_notice()
@@ -178,6 +196,7 @@ def notify_result(draft: dict, content: str) -> str:
             file=sys.stderr,
         )
         return dm_owner(content)
+    marker = _thread_outcome(origin_notice, outcome)
     return origin_notice.deliver(
         api=_api,
         transport_factory=_thread_transport,
@@ -185,7 +204,61 @@ def notify_result(draft: dict, content: str) -> str:
         thread_name=f"과제비: {draft['subject']} (draft {draft['id']})",
         content=content,
         fallback=dm_owner,
+        **({} if marker is None else {"outcome": marker}),
     )
+
+
+def _created_at(draft: dict) -> datetime:
+    """저장된 생성 시각을 UTC로 고정해 cron 노드의 로컬 시간에 만료가 흔들리지 않게 한다."""
+    value = draft.get("created")
+    if not isinstance(value, str):
+        raise GateError("드래프트 created 누락 — 만료 판정 불가", 3)
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        raise GateError("드래프트 created 형식 오류 — 만료 판정 불가", 3) from None
+
+
+def _archive_expired_draft(draft: dict) -> None:
+    """pending 원본을 지운 뒤에도 만료 이유를 보존해 다음 tick의 재게시를 막는다."""
+    draft_id = str(draft["id"])
+    root = budget_gate.gate_dir()
+    archive = root / "archives" / f"{draft_id}.json"
+    budget_gate.write_json(archive, {**draft, "status": "expired"})
+    (root / "drafts" / f"{draft_id}.json").unlink()
+
+
+def expire_pending_drafts(now: datetime) -> None:
+    """TTL을 지난 승인 요청을 같은 lease 아래 archive하고 스레드를 닫는다.
+
+    요청·리마인더·리액션 판정은 공용 lifecycle의 소유권이므로 여기서는 만료된 pending
+    generation만 종결한다. 통지 실패는 archive 뒤에만 처리해 cron 종료 상태를 바꾸지 않는다.
+    """
+    import budget_approval
+
+    moment = now.astimezone(UTC)
+    for draft in budget_gate.list_drafts():
+        if not draft.get("message_id") or moment - _created_at(draft) < BUDGET_APPROVAL_TTL:
+            continue
+        with budget_approval.confirm_lease().hold(budget_approval.approval_key(draft)) as owned:
+            if not owned:
+                continue
+            try:
+                current = budget_gate.load_draft(str(draft["id"]))
+            except GateError:
+                continue
+            if not current.get("message_id") or moment - _created_at(current) < BUDGET_APPROVAL_TTL:
+                continue
+            _archive_expired_draft(current)
+            try:
+                notify_result(
+                    current,
+                    f"⌛ 과제비 메일 승인 만료: {current['subject']} (draft {current['id']})\\n"
+                    f"승인 TTL {int(BUDGET_APPROVAL_TTL.total_seconds())}초가 지나 메일을 발송하지 않았습니다.",
+                    outcome=OUTCOME_EXPIRED,
+                )
+            except Exception as error:  # noqa: BLE001 — 통지 실패가 만료 archive를 되돌려서는 안 된다
+                print(f"NOTIFY-FAIL draft={current['id']} err={type(error).__name__}", file=sys.stderr)
 
 
 def _owner_reacted(users: list[dict], owner: str) -> bool:

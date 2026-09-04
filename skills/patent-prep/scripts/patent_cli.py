@@ -19,6 +19,7 @@ from .patent_storage import ChecklistState, PatentPaths, PatentStorageError, loa
 from . import patent_export  # noqa: E402
 from . import patent_export_gate  # noqa: E402
 from . import patent_export_manifest  # noqa: E402
+from . import patent_prep_governed  # noqa: E402
 
 
 def _paths() -> PatentPaths:
@@ -112,6 +113,11 @@ def main(argv: list[str] | None = None) -> int:
     """Run the CLI without echoing private material on failure."""
     args = build_parser().parse_args(argv)
     try:
+        if args.command in {"create", "checklist", "draft", "export-prepare", "export-execute"}:
+            message = patent_prep_governed.refusal(Path(__file__))
+            if message:
+                print(message, file=sys.stderr)
+                return 3
         return int(args.func(args))
     except (
         OSError,

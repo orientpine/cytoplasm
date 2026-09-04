@@ -19,14 +19,19 @@ release_tag_log() { printf '[release-tag] %s\n' "$*" >&2; }
 #: MD-1 이 막으려던 그 escalation 이 그대로 되살아난다(AGENTS.md 「공개 릴리스 규칙」).
 : "${UPDATE_TRUST_SIGNING_KEY:=$HOME/.ssh/autophagy_update_trust.pub}"
 
-next_release_tag() { # next_release_tag <repo_root>
-  local latest major minor patch
+next_release_tag() { # next_release_tag <repo_root> [major|minor|patch]
+  local latest major minor patch bump="${2:-patch}"
+  case "$bump" in major|minor|patch) ;; *) return 1 ;; esac
   latest="$(git -C "$1" ls-remote --tags --refs origin 'refs/tags/v*' 2>/dev/null \
-    | sed 's#.*refs/tags/##' | sort -V | tail -n 1)"
+    | awk '{ sub("refs/tags/", "", $2); if ($2 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/) print $2 }' \
+    | sort -V | tail -n 1)"
   [[ -n "$latest" ]] || { printf 'v1.0.0\n'; return 0; }
   IFS=. read -r major minor patch <<<"${latest#v}"
-  [[ "$major$minor$patch" =~ ^[0-9]+$ ]] || return 1
-  printf 'v%s.%s.%s\n' "$major" "$minor" "$((patch + 1))"
+  case "$bump" in
+    major) printf 'v%s.0.0\n' "$((major + 1))" ;;
+    minor) printf 'v%s.%s.0\n' "$major" "$((minor + 1))" ;;
+    patch) printf 'v%s.%s.%s\n' "$major" "$minor" "$((patch + 1))" ;;
+  esac
 }
 
 latest_release_base() { # latest_release_base <repo_root> — the sha the newest release tag peels to
@@ -41,13 +46,33 @@ released_tag_at() { # released_tag_at <repo_root> <sha> — the tag already peel
     | head -n 1
 }
 
-ensure_signed_tag() { # ensure_signed_tag <repo_root> <sha>
-  local existing tag
+release_version_for() { # release_version_for <repo_root> <sha> [major|minor|patch]
+  #: HEAD 에 이미 릴리스 태그가 있으면 그것이 이 릴리스의 버전이다 — 완결기·재실행은 태그 컷
+  #: 뒤의 deploy 를 재개하는 것이지 다음 버전을 여는 것이 아니다(2026-09-03: next 를 다시
+  #: 계산해 v1.1.2 를 요청하자 ensure_signed_tag 의 이름 불일치 검사가 자기 태그 v1.1.1 을 거부했다).
+  local existing
   existing="$(released_tag_at "$1" "$2")"
-  if [[ -n "$existing" ]]; then release_tag_log "already released as $existing"; return 0; fi
+  if [[ -n "$existing" ]]; then printf '%s\n' "$existing"; return 0; fi
+  next_release_tag "$1" "${3:-patch}"
+}
+
+ensure_signed_tag() { # ensure_signed_tag <repo_root> <sha> [requested_version]
+  local existing tag="${3:-}"
+  existing="$(released_tag_at "$1" "$2")"
+  if [[ -n "$existing" ]]; then
+    if [[ -n "$tag" && "$existing" != "$tag" ]]; then
+      release_tag_log "tag at HEAD is $existing, not requested $tag"
+      return 1
+    fi
+    release_tag_log "already released as $existing"
+    return 0
+  fi
   [[ -f "$UPDATE_TRUST_SIGNING_KEY" ]] \
     || { release_tag_log "no update-trust signing key at $UPDATE_TRUST_SIGNING_KEY"; return 1; }
-  tag="$(next_release_tag "$1")" || { release_tag_log "could not read the released tag series"; return 1; }
+  if [[ -z "$tag" ]]; then
+    tag="$(next_release_tag "$1")" \
+      || { release_tag_log "could not read the released tag series"; return 1; }
+  fi
   git -C "$1" -c gpg.format=ssh -c "user.signingkey=$UPDATE_TRUST_SIGNING_KEY" \
       tag -s "$tag" -m "release: $tag" "$2" >/dev/null 2>&1 \
     || { release_tag_log "signing tag $tag failed"; return 1; }

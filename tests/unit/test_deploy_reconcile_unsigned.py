@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 import automation.deploy_reconcile_cli as reconcile_cli
-from automation.deploy_reconcile import FAILURE_NOTICE_THRESHOLD
+from automation.deploy_reconcile import (
+    BACKLOG_NOTICE_SECONDS,
+    FAILURE_NOTICE_THRESHOLD,
+    ReconcileState,
+    reconcile_unsigned_head,
+)
 from automation.deploy_reconcile_unsigned import raw_remote_main_sha
 from automation.git_tag_signature import GitRunner
 from automation.update_trust import UpdateTrustError
@@ -84,6 +89,82 @@ def test_raw_remote_main_sha_rejects_malformed_results(
     assert raw_remote_main_sha(tmp_path, runner=_runner(stdout)) == ""
 
 
+@pytest.mark.parametrize("mirror_state", ("dirty", "ahead"))
+def test_backlog_digest_explains_a_frozen_observation_mirror(mirror_state: str) -> None:
+    notices: list[str] = []
+    state = reconcile_unsigned_head(
+        ReconcileState(),
+        remote_head=_B,
+        current_sha=_A,
+        now=0.0,
+        deliver=lambda notice: not notices.append(notice),
+        mirror_state=mirror_state,
+    )
+
+    _ = reconcile_unsigned_head(
+        state,
+        remote_head=_B,
+        current_sha=_A,
+        now=BACKLOG_NOTICE_SECONDS + 1.0,
+        deliver=lambda notice: not notices.append(notice),
+        mirror_state=mirror_state,
+    )
+
+    assert len(notices) == 1
+    assert "관측 미러 `/srv/autophagy-agents`가 미커밋/미푸시 작업으로 동결되어" in notices[0]
+    assert "git format-patch" in notices[0]
+    assert "git reset --hard" in notices[0]
+
+
+def test_backlog_digest_says_a_behind_mirror_will_follow_after_release() -> None:
+    notices: list[str] = []
+    state = reconcile_unsigned_head(
+        ReconcileState(),
+        remote_head=_B,
+        current_sha=_A,
+        now=0.0,
+        deliver=lambda notice: not notices.append(notice),
+        mirror_state="behind",
+    )
+
+    _ = reconcile_unsigned_head(
+        state,
+        remote_head=_B,
+        current_sha=_A,
+        now=BACKLOG_NOTICE_SECONDS + 1.0,
+        deliver=lambda notice: not notices.append(notice),
+        mirror_state="behind",
+    )
+
+    assert len(notices) == 1
+    assert "릴리스 후 origin/main을 따라갑니다." in notices[0]
+    assert "미커밋/미푸시 작업으로 동결" not in notices[0]
+
+
+def test_clean_and_unknown_mirror_states_leave_the_backlog_digest_unchanged() -> None:
+    notices: list[str] = []
+    for mirror_state in ("clean", "unknown"):
+        state = reconcile_unsigned_head(
+            ReconcileState(),
+            remote_head=_B,
+            current_sha=_A,
+            now=0.0,
+            deliver=lambda notice: not notices.append(notice),
+            mirror_state=mirror_state,
+        )
+        _ = reconcile_unsigned_head(
+            state,
+            remote_head=_B,
+            current_sha=_A,
+            now=BACKLOG_NOTICE_SECONDS + 1.0,
+            deliver=lambda notice: not notices.append(notice),
+            mirror_state=mirror_state,
+        )
+
+    assert len(notices) == 2
+    assert notices[0] == notices[1]
+
+
 def test_main_unsigned_head_records_backlog_without_paging(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -93,6 +174,7 @@ def test_main_unsigned_head_records_backlog_without_paging(
     # (머지=축적) this is the NORMAL state between releases, not an incident.
     calls: list[str] = []
     notices: list[str] = []
+    observed_mirrors: list[str] = []
 
     def blocked_target() -> str:
         raise UpdateTrustError("UNSIGNED-HEAD", "origin/main lacks a signed release tag")
@@ -100,6 +182,10 @@ def test_main_unsigned_head_records_backlog_without_paging(
     def unexpected_release(_target: str, _prior: str) -> int:
         calls.append("release")
         return 0
+
+    def dirty_mirror_verdict() -> str:
+        observed_mirrors.append("observed")
+        return "mirror-dirty"
 
     monkeypatch.setattr(reconcile_cli, "candidate_update_sha", blocked_target)
     monkeypatch.setattr(
@@ -110,6 +196,7 @@ def test_main_unsigned_head_records_backlog_without_paging(
     monkeypatch.setattr(
         reconcile_cli, "unreleased_commit_count", lambda _mirror, _current, _head: 4
     )
+    monkeypatch.setattr(reconcile_cli, "mirror_verdict", dirty_mirror_verdict)
     monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
     monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
     monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
@@ -129,6 +216,8 @@ def test_main_unsigned_head_records_backlog_without_paging(
     assert state.skip_reason == "release-backlog"
     assert state.notified_target is None
     assert state.consecutive_failures == FAILURE_NOTICE_THRESHOLD
+    assert state.mirror_state == "dirty"
+    assert observed_mirrors == ["observed"] * FAILURE_NOTICE_THRESHOLD
     assert "UPDATE-TRUST-BLOCK UNSIGNED-HEAD" in capsys.readouterr().err
 
 

@@ -135,7 +135,22 @@ def _header(
     lines = [f"# {heading}", "", "| 항목 | 내용 |", "| --- | --- |"]
     lines += [f"| {name} | {_cell(value)} |" for name, value in rows]
     lines.append("")
+    lines += _speakers(extraction)
     return lines
+
+
+def _speakers(extraction: Extraction) -> list[str]:
+    """`- 화자: 화자1=김민수 · 화자2=미상` — 본문 블록 헤더의 라벨을 읽는 범례.
+
+    표 밖 한 줄로 둔다: 표 안에 넣으면 라벨이 많은 회의에서 셀 하나가 줄바꿈 없이 늘어나
+    머리말이 읽히지 않는다. 이름을 모르는 라벨도 적는다 — 누락과 미상은 다른 사실이다.
+    """
+    if not extraction.speakers:
+        return []
+    entries = " · ".join(
+        f"{speaker.label}={speaker.name or '미상'}" for speaker in extraction.speakers
+    )
+    return [f"- 화자: {entries}", ""]
 
 
 def _summary(extraction: Extraction) -> list[str]:

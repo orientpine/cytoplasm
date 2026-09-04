@@ -54,12 +54,23 @@ class HomeState:
 
 
 @dataclass(frozen=True, slots=True)
+class UndeclaredState:
+    """배포기가 소유하지 않으므로 기본 판정은 경고만 하는 노드 홈 파일이다."""
+
+    account: str
+    destination: str
+    sha256_prefix: str
+
+
+@dataclass(frozen=True, slots=True)
 class Plan:
     release_sha: str
     mount_stale: tuple[tuple[str, str, str], ...]
     mount_unmounted: tuple[str, ...]
     mount_orphaned: tuple[str, ...]
     home: tuple[HomeState, ...]
+    undeclared: tuple[UndeclaredState, ...]
+    strict_undeclared: bool = False
 
     @property
     def home_defects(self) -> tuple[HomeState, ...]:
@@ -87,12 +98,15 @@ class Plan:
 
     @property
     def clean(self) -> bool:
-        return not (
+        defects = (
             self.mount_stale or self.mount_unmounted or self.mount_orphaned or self.home_defects
         )
+        return not defects and not (self.strict_undeclared and self.undeclared)
 
 
-def parse_observations(lines: Iterable[str]) -> Plan:
+def parse_observations(
+    lines: Iterable[str], *, strict_undeclared: bool = False
+) -> Plan:
     """관측 줄을 엄격하게 접는다. `OBS|end` 가 없으면 잘린 것이고, 잘린 것은 판정이 아니다."""
     release_sha = ""
     mounts_judged = False
@@ -101,6 +115,7 @@ def parse_observations(lines: Iterable[str]) -> Plan:
     mount_unmounted: list[str] = []
     mount_orphaned: list[str] = []
     home: list[HomeState] = []
+    undeclared: list[UndeclaredState] = []
     for raw in lines:
         line = raw.strip()
         if not line.startswith("OBS|"):
@@ -119,6 +134,8 @@ def parse_observations(lines: Iterable[str]) -> Plan:
             mount_orphaned.append(parts[2])
         elif kind == "home" and len(parts) == 8:
             home.append(HomeState(parts[2], parts[3], parts[4], parts[5], parts[6], parts[7]))
+        elif kind == "undeclared" and len(parts) == 5 and parts[4]:
+            undeclared.append(UndeclaredState(parts[2], parts[3], parts[4]))
         elif kind == "end" and len(parts) == 2:
             ended = True
         else:
@@ -137,12 +154,14 @@ def parse_observations(lines: Iterable[str]) -> Plan:
         mount_unmounted=tuple(mount_unmounted),
         mount_orphaned=tuple(mount_orphaned),
         home=tuple(home),
+        undeclared=tuple(undeclared),
+        strict_undeclared=strict_undeclared,
     )
 
 
 def render_plan(plan: Plan) -> str:
     header = f"DEPLOY-ALL: release {plan.release_sha[:16]}"
-    if plan.clean:
+    if plan.clean and not plan.undeclared:
         return f"{header} — 전량 일치, 할 일 없음"
     lines = [header]
     for skill, expected, mounted in plan.mount_stale:
@@ -163,6 +182,13 @@ def render_plan(plan: Plan) -> str:
             lines.append(
                 f"  HOME-{state.status.upper()} {state.account}:{state.destination}"
                 f" → {state.owning_package}/deploy.sh"
+            )
+    if plan.undeclared:
+        suffix = " (STRICT: drift)" if plan.strict_undeclared else ""
+        lines.append(f"  UNDECLARED HOME WARNINGS:{suffix}")
+        for state in plan.undeclared:
+            lines.append(
+                f"    {state.account}:{state.destination} sha256={state.sha256_prefix}…"
             )
     if plan.gateway_restart_needed:
         lines.append("  GATEWAY-RESTART 필요: 플러그인 갱신은 agent+peer 재시동까지가 반영이다")
@@ -202,5 +228,13 @@ def render_receipt(plan: Plan, *, verified_at: str) -> str:
             },
         },
         "delegated": list(DELEGATED_SURFACES),
+        "undeclared": [
+            {
+                "account": state.account,
+                "destination": state.destination,
+                "sha256_prefix": state.sha256_prefix,
+            }
+            for state in plan.undeclared
+        ],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

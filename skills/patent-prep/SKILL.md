@@ -1,7 +1,7 @@
 ---
 name: patent-prep
 description: "발명 신고서와 선행기술 체크리스트를 보호된 개인 워크스페이스에서 준비하고, GLM을 절대 거치지 않는 Codex 전용 초안을 생성한다. W5-5."
-version: 1.1.0
+version: 1.1.3
 author: autophagy-agents
 license: MIT
 metadata:
@@ -12,6 +12,8 @@ prerequisites:
 ---
 
 # patent-prep — 발명 신고·선행기술 준비
+
+변경 명령은 `/srv/autophagy-skills/live/patent-prep/scripts/`에서만 실행하며, 낡은 사본은 STALE-SKILL-COPY-BLOCK으로 거부한다.
 
 모든 원문·입력·체크리스트·초안은 `~/patent-drafts/<slug>/`(0700)와 하위 0600 파일에만
 보관한다. `PATENT_STATUS_ROOT`는 `slug`, `checklist_state`, `percent_complete`만 가진
@@ -43,24 +45,24 @@ prerequisites:
 
 ```bash
 # 0700 workspace, disclosure form, prior-art checklist, content-free progress metadata
-python3 ~/.hermes/skills/patent-prep/scripts/patent_cli.py create --slug <kebab-slug>
+python3 /srv/autophagy-skills/live/patent-prep/scripts/patent_cli.py create --slug <kebab-slug>
 
 # checklist progress only
-python3 ~/.hermes/skills/patent-prep/scripts/patent_cli.py checklist \
+python3 /srv/autophagy-skills/live/patent-prep/scripts/patent_cli.py checklist \
   --slug <kebab-slug> --state in-progress
 
 # brief file must already be inside ~/patent-drafts/<slug>/
-python3 ~/.hermes/skills/patent-prep/scripts/patent_cli.py draft \
+python3 /srv/autophagy-skills/live/patent-prep/scripts/patent_cli.py draft \
   --slug <kebab-slug> --brief-file ~/patent-drafts/<kebab-slug>/brief.md
 
 # safe progress metadata only
-python3 ~/.hermes/skills/patent-prep/scripts/patent_cli.py status --slug <kebab-slug>
+python3 /srv/autophagy-skills/live/patent-prep/scripts/patent_cli.py status --slug <kebab-slug>
 
 # 소유자 ✅ 승인형 암호화 백업 요청 — draft.md를 cha 본인 Drive 고정 폴더로 (소유자 DM 게시, 업로드 없음)
-python3 ~/.hermes/skills/patent-prep/scripts/patent_cli.py export-prepare --slug <kebab-slug>
+python3 /srv/autophagy-skills/live/patent-prep/scripts/patent_cli.py export-prepare --slug <kebab-slug>
 
 # (✅ 후 소유자가 직접 실행) age 암호화 + pre-flight ACL + 업로드; ⛔·무반응·만료 = 업로드 안 함
-python3 ~/.hermes/skills/patent-prep/scripts/patent_cli.py export-execute --slug <kebab-slug>
+python3 /srv/autophagy-skills/live/patent-prep/scripts/patent_cli.py export-execute --slug <kebab-slug>
 ```
 
 `scripts/scenario.sh` uses only a temporary workspace and a dummy secret. It never invokes an
@@ -77,10 +79,13 @@ and automatic `patent-sensitive` attachment.
 두 개의 **수동** 명령(워처가 업로드하지 않는다):
 
 1. `export-prepare --slug S` (cha 실행) — `draft.md` 평문 SHA-256 계산 → 공유 승인 생명주기의
-   `patent:S` 키로 **행위 봇의 소유자 DM**에 **본문 없는** 요청(slug·sha256·폴더ID·만료·mode)과
-   ✅/⛔를 게시한다. 게시 표면은 `automation/interop/approval_surface.py` 정책이 결정하고,
-   매니페스트가 그 바인딩(`kind`/`surface`/`channel_id`/`policy_version`)을 기록한다. 정책 v4
-   이전에 저장된 요청은 원래 개인 서버 `#approvals`의 메시지에서 그대로 소비된다(재조준 없음).
+   `patent:S` 키로 **본문 없는** 요청(slug·sha256·폴더ID·만료·mode)과 ✅/⛔를 게시한다.
+   요청 1건은 cha의 agent-chat 채널 아래 **자기 전용 스레드**에서 열리며, 스레드 이름은
+   `특허 반출 · <slug>`로 **반출 id 하나뿐**이다 — 발명의 명칭·문서 파일명·본문 발췌는
+   이름에 절대 들어가지 않는다. 게시 표면은 `automation/interop/approval_surface.py`
+   정책이 결정하고, 매니페스트가 그 바인딩(`approval_thread_id`/`kind`/`surface`/
+   `channel_id`/`policy_version`)을 기록한다. 정책 v4 이전에 저장된 요청은 원래 메시지가
+   있는 채널에서 그대로 소비된다(재조준 없음).
    commit에서만 0600 매니페스트
    `{slug, plaintext_sha256, dest_folder_id, mode(enc|plaintext), expiry_ts, nonce, state=PENDING,
    message_id}`를 쓴다. 같은 승인 내용의 PENDING은 기존 message id와 nonce를 재사용하고,

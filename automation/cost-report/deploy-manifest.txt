@@ -1,0 +1,2 @@
+# 일일 비용 보고는 agent no-agent cron이 계정 홈 스크립트를 직접 실행한다.
+agent|automation/cost-report/send_cost_report.py|.hermes/scripts/send_cost_report.py|required

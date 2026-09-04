@@ -251,7 +251,9 @@ def test_personal_note_when_routed_then_commits_pushes_and_verifies_obsidian_onl
 
     # Then
     assert route == SaveRoute(("obsidian",), "personal-note", False)
-    assert [call[1] for call in harness.git.calls] == ["fetch", "reset", "add", "commit", "push", "fetch", "show"]
+    # `config` is one-off partial-clone setup, not part of the save path itself.
+    saving = [call[1] for call in harness.git.calls if call[1] != "config"]
+    assert saving == ["fetch", "reset", "add", "commit", "push", "fetch", "show"]
     assert tuple(harness.clone_dir.rglob("*.md")) == (
         harness.clone_dir / "000_PARA/Resource/weekly-report--94cc4e792f0a.md",
     )

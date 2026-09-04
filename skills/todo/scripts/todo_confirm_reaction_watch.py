@@ -165,8 +165,13 @@ def _expire(store: TodoApprovalStore, lease: ApprovalLease, record: TodoApproval
         if not owned:
             return
         current = store.active(record.key)
-        if current == record:
-            store.archive(record, ApprovalState.EXPIRED, None)
+        if current != record:
+            return
+        store.archive(record, ApprovalState.EXPIRED, None)
+        try:
+            importlib.import_module("todo_approval_runtime").notify_expired(record)
+        except Exception as error:  # noqa: BLE001 — 통지 실패가 만료 archive를 되돌려서는 안 된다
+            print(f"NOTIFY-FAIL key={record.key} err={type(error).__name__}", file=sys.stderr)
 
 
 def _request(record: TodoApprovalRecord) -> ApprovalRequest:
@@ -198,7 +203,7 @@ def _intent(record: TodoApprovalRecord) -> TodoApprovalIntent:
 def _notify_cancelled(
     record: TodoApprovalRecord, transport: object, *, transport_factory: object | None = None
 ) -> None:
-    """⛔ notice for the archived generation — origin thread first, stored channel fallback."""
+    """⛔ notice for the archived generation — the request thread, then origin, then fallback."""
     runtime = importlib.import_module("todo_approval_runtime")
     runtime.notify_result(
         {
@@ -206,12 +211,14 @@ def _notify_cancelled(
             "channel_id": record.channel_id,
             "origin_channel_id": record.origin_channel_id,
             "origin_message_id": record.origin_message_id,
+            "approval_thread_id": record.approval_thread_id,
         },
         f"⛔ 할일 등록 취소 (승인 {record.action_hash[:19]}) — 소유자 ⛔ 리액션으로 취소되어 "
         "Google Tasks에 등록되지 않았습니다.",
         thread_name="할일 등록",
         transport=transport,
         transport_factory=transport_factory,
+        outcome=runtime.OUTCOME_CANCELLED,
     )
 
 

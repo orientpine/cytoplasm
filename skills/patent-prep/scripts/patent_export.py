@@ -161,7 +161,7 @@ def prepare_export(paths: PatentPaths, slug: str, *, mode: str) -> str:
         created_ts=now,
     )
     facade = patent_export_approval.lifecycle()
-    binding = patent_export_binding.new_binding()
+    binding = patent_export_binding.new_binding(slug)
     channel_id = binding.channel_id
     adapter = patent_export_approval.PatentApprovalGate(payload, binding)
     intent = facade.ApprovalIntent(

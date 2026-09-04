@@ -82,7 +82,7 @@ def test_meeting_rules_defaults_when_env_absent_then_both_use_live_config() -> N
 
 def test_meeting_prompt_default_when_env_absent_then_uses_live_prompt() -> None:
     source = _source("skills/meeting/scripts/meeting_cli.py")
-    assert f'"{_LIVE_ROOT}/meeting/prompts/meeting-extraction-v5.md"' in source
+    assert f'"{_LIVE_ROOT}/meeting/prompts/meeting-extraction-v6.md"' in source
 
 
 def test_patent_watch_default_when_env_absent_then_uses_live_scripts() -> None:

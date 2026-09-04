@@ -159,6 +159,8 @@ def _setup(work: Path, root: Path) -> tuple[dict[str, str], str]:
         "TRIAGE_DM_FULLTEXT": "0",
         "INTEROP_RUNTIME": str(root),
         "INTEROP_CONFIG": str(work / "interop-config.json"),
+        # This checkout copy is the governed one for the run (mail_runtime.governed_copy_refusal).
+        "AUTOPHAGY_SKILL_LIVE_ROOT": str(root / "skills"),
     }
     (work / "home").mkdir()
     return env, canary

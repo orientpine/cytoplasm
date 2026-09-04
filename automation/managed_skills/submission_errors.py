@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import override
+from automation.typing_compat import override
 
 
 @dataclass(frozen=True, slots=True)

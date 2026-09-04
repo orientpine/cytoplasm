@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Final, Protocol
@@ -26,8 +27,11 @@ FILE_MODE: Final = 0o600
 
 
 class TranscriptionLike(Protocol):
-    text: str
-    model: str
+    @property
+    def text(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
 
 
 def safe_label(label: str) -> str:
@@ -48,36 +52,52 @@ def render(
     transcription: TranscriptionLike,
     now: datetime,
     polish: stt_polish.Polished | None = None,
+    extra_lines: Sequence[str] = (),
 ) -> str:
-    """Provenance header + the spoken text — tidied into paragraphs when asked."""
+    """Provenance header + the spoken text — tidied into blocks when asked.
+
+    ``extra_lines`` are pre-formatted header lines (the speaker legend, today) that
+    belong to whoever computed them; this module only decides where they sit.
+    """
     coverage = getattr(transcription, "coverage", None)
     coverage_line = f"- 전사 커버리지: {coverage.summary()}\n" if coverage is not None else ""
     tidy_line = f"{TIDY_PREFIX} {polish.summary()}\n" if polish is not None else ""
+    extras = "".join(f"{line}\n" for line in extra_lines)
     body = polish.body if polish is not None else transcription.text.strip()
     return (
         f"# {label} 전사본\n\n"
         f"- 원본 음성: {source_name}\n"
         f"- 전사 시각: {now:%Y-%m-%d %H:%M} KST\n"
         f"- 전사 모델: {transcription.model}\n"
-        f"{coverage_line}{tidy_line}\n"
+        f"{coverage_line}{tidy_line}{extras}\n"
         "---\n\n"
         f"{body}\n"
     )
 
 
-def rewrite(header: str, polish: stt_polish.Polished, *, label: str) -> str:
+def rewrite(
+    header: str,
+    polish: stt_polish.Polished,
+    *,
+    label: str,
+    extra_lines: Sequence[str] = (),
+    managed_prefixes: Sequence[str] = (TIDY_PREFIX,),
+) -> str:
     """Re-tidy an existing transcript, keeping its provenance header intact.
 
-    The tidying line is replaced rather than appended, so running this twice returns
-    the same document — the transcript already on disk was written before tidying
-    existed and must be repairable without re-paying for transcription.
+    Every line this pass owns is replaced rather than appended, so running it twice
+    returns the same document — the transcript already on disk was written before
+    tidying existed and must be repairable without re-paying for transcription.
     """
     lines = [
-        line for line in header.rstrip("\n").splitlines() if not line.startswith(TIDY_PREFIX)
+        line
+        for line in header.rstrip("\n").splitlines()
+        if not any(line.startswith(prefix) for prefix in managed_prefixes)
     ]
     if not lines:
         lines = [f"# {label} 전사본", ""]
     lines.append(f"{TIDY_PREFIX} {polish.summary()}")
+    lines.extend(extra_lines)
     return "\n".join(lines) + "\n\n---\n\n" + polish.body + "\n"
 
 
@@ -89,6 +109,7 @@ def write_transcript(
     transcription: TranscriptionLike,
     now: datetime,
     polish: stt_polish.Polished | None = None,
+    extra_lines: Sequence[str] = (),
 ) -> Path:
     """Write the transcript owner-only; returns the path meeting will ingest."""
     directory.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)
@@ -97,7 +118,7 @@ def write_transcript(
     target.write_text(
         render(
             label=label, source_name=source_name, transcription=transcription,
-            now=now, polish=polish,
+            now=now, polish=polish, extra_lines=extra_lines,
         ),
         encoding="utf-8",
     )

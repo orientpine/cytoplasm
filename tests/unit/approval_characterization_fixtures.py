@@ -45,6 +45,7 @@ class _FakeDirectory:
         self.approvals_calls = 0
         self.dm_calls = 0
         self.thread_calls = 0
+        self.thread_requests: list[tuple[object, object]] = []
         self.described: list[str] = []
 
     def owner_dm(self) -> str:
@@ -60,6 +61,11 @@ class _FakeDirectory:
 
     def agent_chat_thread(self, kind: object) -> str:
         self.thread_calls += 1
+        return AGENT_CHAT_THREAD_ID
+
+    def agent_chat_request_thread(self, kind: object, request: object) -> str:
+        self.thread_calls += 1
+        self.thread_requests.append((kind, request))
         return AGENT_CHAT_THREAD_ID
 
     def describe(self, channel_id: str) -> ChannelFacts:

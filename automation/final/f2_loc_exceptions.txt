@@ -11,7 +11,6 @@ automation/hermes_compat/patch_public_message_policy.py | Compatibility patch ca
 automation/install/discord_check.py | Read-only Discord prerequisite checker; application, intent, guild, channel, and permission probes share one diagnostic contract.
 automation/install/plan.py | Install desired-state planner; account, directory, key, repository, and trust-check actions share one deterministic plan contract.
 automation/managed_sync/cli.py | Managed-skill sync CLI; fetch, verify, quarantine, and activation dispatch share one fail-closed command contract.
-automation/memory_relocate/effects_live.py | Owner-approved relocation effects; write, RAG verification, and native deletion are one composite action boundary.
 automation/openclaw-arm64-smoke.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
 automation/provision-agent.sh | Shell provisioner crossed the threshold only by rendering the three non-secret reminder defaults; splitting config rendering would fragment its atomic desired-state output.
 automation/public_export.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.

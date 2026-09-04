@@ -27,6 +27,7 @@ class FakeGws:
         self.calls: list[list[str]] = []
         self.permissions: list[dict[str, object]] = [{"id": "p-own", "type": "user", "role": "owner"}]
         self.remote_bytes = b""
+        self.trashed_ids: set[str] = set()
         self._n = 0
 
     def _new(self, prefix: str) -> str:
@@ -66,6 +67,12 @@ class FakeGws:
             if params.get("alt") == "media":
                 Path(argv[argv.index("-o") + 1]).write_bytes(self.remote_bytes)
                 return {}
+            if params.get("fields") == "id,trashed,parents":
+                return {
+                    "id": params["fileId"],
+                    "trashed": params["fileId"] in self.trashed_ids,
+                    "parents": ["root"],
+                }
             return {"webViewLink": f"https://drive.google.com/file/d/{params['fileId']}/view"}
         raise AssertionError(f"unexpected argv {argv}")
 
@@ -93,6 +100,34 @@ def test_ensure_folder_path_is_idempotent(tmp_path: Path) -> None:
     second = client.ensure_folder_path(("Root", "plans"))
     assert first == second
     assert _creates(fake) == creates_after_first  # cache hit → no new folder created
+
+
+def test_ensure_folder_path_replaces_a_trashed_cached_folder(tmp_path: Path) -> None:
+    fake = FakeGws()
+    fake.trashed_ids.add("old-root")
+    cache = tmp_path / "folders.json"
+    cache.write_text(json.dumps({"Root": "old-root", "Root/plans": "old-plans"}), encoding="utf-8")
+    fake.folders[("Root", "root")] = "new-root"
+
+    assert _client(tmp_path, fake).ensure_folder_path(("Root", "plans")) == "fold1"
+
+    assert len(_calls_of(fake, "files", "list")) == 2
+    assert json.loads(cache.read_text(encoding="utf-8")) == {
+        "Root": "new-root",
+        "Root/plans": "fold1",
+    }
+
+
+def test_ensure_folder_path_keeps_an_alive_cached_folder(tmp_path: Path) -> None:
+    fake = FakeGws()
+    cache = tmp_path / "folders.json"
+    cache.write_text(json.dumps({"Root": "live-root"}), encoding="utf-8")
+
+    assert _client(tmp_path, fake).ensure_folder_path(("Root",)) == "live-root"
+
+    assert len(_calls_of(fake, "files", "get")) == 1
+    assert not _calls_of(fake, "files", "list")
+    assert not _calls_of(fake, "files", "create")
 
 
 def test_upsert_file_creates_then_updates(tmp_path: Path) -> None:

@@ -213,7 +213,7 @@ curl -sf -H "Authorization: Bearer $YOUR_KEY" http://127.0.0.1:4000/v1/models | 
 PATH="$HOME/.local/bin:$PATH" hermes --version
 ```
 
-- 설치기(W-F1-B)가 이 값을 읽어 핀 범위와 대조하고, 벗어나면 **경고 후 사용자 확인**을 요구한다.
+- 설치기는 Hermes CLI의 존재와 게이트웨이 유닛의 활성 여부만 확인한다. 버전 핀 범위 검증은 아직 구현되지 않았으며 추후 추가할 계획이다.
 - 상위 버전으로 올릴 때는 `automation/hermes_compat/`의 패치가 **전부 재적용되어야 한다**
   (`hermes update`는 패치를 되돌린다). 게이트웨이 버전 이동은 이 저장소에서 가장 깨지기 쉬운
   경계이므로, 올린 직후 `automation/healthcheck.sh`를 돌려 전부 PASS인지 확인한다.

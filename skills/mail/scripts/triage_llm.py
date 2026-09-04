@@ -26,6 +26,7 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -44,6 +45,17 @@ class LlmCallError(RuntimeError):
     """Raised when an LLM call fails at the transport level."""
 
 
+class LlmUnavailableError(LlmCallError):
+    """Raised when the GLM tier itself is unavailable, not this one request.
+
+    HTTP 429/5xx and connection/timeout failures mean every following call would
+    fail the same way (2026-09-03: the provider behind ``glm-main`` answered 429
+    "Insufficient balance" to all 15 non-sensitive mails of one digest run). The
+    caller degrades to the non-GLM tier on this type only — a 400/403 is this
+    request's own problem and must never trigger a run-wide degrade.
+    """
+
+
 def codex_model() -> str:
     return os.environ.get("TRIAGE_CODEX_MODEL", "gpt-5.4")
 
@@ -54,9 +66,27 @@ def _log_path() -> Path:
     ).expanduser()
 
 
-def _log_call(*, provider: str, model: str, purpose: str, uid_opaque: str, sensitive: bool) -> None:
+def _append_record(record: dict) -> None:
+    """Append one masked JSON line to the routing log (0600, flock-serialized)."""
     path = _log_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    path.chmod(0o600)
+
+
+def _log_call(
+    *, provider: str, model: str, purpose: str, uid_opaque: str, sensitive: bool,
+    fallback_from: str = "",
+) -> None:
+    """Append one masked routing line; ``fallback_from`` marks a degraded call.
+
+    A degrade is a routing exception, so it must be visible in the audit surface:
+    the line keeps its normal purpose (``classify``/``digest_summary``) and adds
+    ``"fallback_from": "glm-main"`` — countable without parsing free-form text.
+    """
     record = {
         "model": model,
         "provider": provider,
@@ -65,11 +95,27 @@ def _log_call(*, provider: str, model: str, purpose: str, uid_opaque: str, sensi
         "timestamp": triage_core.utc_now(),
         "uid": uid_opaque,
     }
-    with path.open("a", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n")
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    path.chmod(0o600)
+    if fallback_from:
+        record["fallback_from"] = fallback_from
+    _append_record(record)
+
+
+def log_failure(*, purpose: str, uid_opaque: str, sensitive: bool, error: BaseException) -> None:
+    """Record one masked ``<purpose>_failed`` line next to the successful calls.
+
+    The digest runs under a no-agent cron that drops stderr, so this line is the
+    only forensic trace of a per-mail LLM failure. Only the exception class and a
+    redacted, clipped message are kept — never subject, sender, body or addresses.
+    """
+    _append_record(
+        {
+            "error": f"{type(error).__name__}: {triage_core.redact(str(error))[:160]}",
+            "purpose": f"{purpose}_failed",
+            "sensitive": sensitive,
+            "timestamp": triage_core.utc_now(),
+            "uid": uid_opaque,
+        }
+    )
 
 
 def _litellm_key() -> str:
@@ -120,8 +166,18 @@ def call_glm(prompt: str, *, sensitive: bool, timeout: float = 180.0) -> str:
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
-    except OSError as error:
-        raise LlmCallError(f"glm-main 호출 실패: {triage_core.redact(str(error))[:200]}") from None
+    except urllib.error.HTTPError as error:
+        # 429/5xx = the tier is out (quota, upstream down) → every following call
+        # fails identically, so the caller may degrade the whole run. Any other
+        # status is about THIS request (bad body, patent blocker 403) and must
+        # stay a plain call error.
+        unavailable = error.code == 429 or 500 <= error.code < 600
+        failure = LlmUnavailableError if unavailable else LlmCallError
+        raise failure(f"glm-main 호출 실패: {triage_core.redact(str(error))[:200]}") from None
+    except OSError as error:  # URLError, socket timeout, reset — gateway unreachable
+        raise LlmUnavailableError(
+            f"glm-main 호출 실패: {triage_core.redact(str(error))[:200]}"
+        ) from None
     return payload["choices"][0]["message"]["content"]
 
 
@@ -148,19 +204,26 @@ def call_codex(prompt: str, *, timeout: float = 600.0) -> str:
 
 
 def classify(
-    *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path
+    *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path,
+    force_codex: bool = False,
 ) -> tuple[triage_core.Classification, str]:
-    """Step-2 classification. Route by the step-1 sensitivity verdict."""
+    """Step-2 classification. Route by the step-1 sensitivity verdict.
+
+    ``force_codex`` is the availability degrade path: the caller judged
+    ``glm-main`` unavailable and runs the SAME prompt on the non-GLM tier. It can
+    only widen the sensitive routing (codex), never narrow it.
+    """
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    if sensitive:
+    if sensitive or force_codex:
         raw, provider, model = call_codex(prompt), NON_GLM_PROVIDER, codex_model()
     else:
         raw, provider, model = call_glm(prompt, sensitive=False), GLM_MODEL, GLM_MODEL
     _log_call(provider=provider, model=model, purpose="classify",
-              uid_opaque=uid_opaque, sensitive=sensitive)
+              uid_opaque=uid_opaque, sensitive=sensitive,
+              fallback_from=GLM_MODEL if force_codex and not sensitive else "")
     return triage_core.parse_classification(raw), provider
 
 
@@ -182,17 +245,23 @@ def draft_reply(
 
 
 def summarize(
-    *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path
+    *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path,
+    force_codex: bool = False,
 ) -> str:
-    """One-line Korean digest summary. Route by the step-1 sensitivity verdict."""
+    """One-line Korean digest summary. Route by the step-1 sensitivity verdict.
+
+    ``force_codex`` mirrors ``classify``: the availability degrade path onto the
+    non-GLM tier, marked as such in the routing log.
+    """
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    if sensitive:
+    if sensitive or force_codex:
         raw, provider, model = call_codex(prompt), NON_GLM_PROVIDER, codex_model()
     else:
         raw, provider, model = call_glm(prompt, sensitive=False), GLM_MODEL, GLM_MODEL
     _log_call(provider=provider, model=model, purpose="digest_summary",
-              uid_opaque=uid_opaque, sensitive=sensitive)
+              uid_opaque=uid_opaque, sensitive=sensitive,
+              fallback_from=GLM_MODEL if force_codex and not sensitive else "")
     return triage_core.parse_digest_summary(raw)

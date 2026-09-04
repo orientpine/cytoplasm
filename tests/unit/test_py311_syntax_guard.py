@@ -112,6 +112,60 @@ def test_deployed_scripts_parse_under_py311_grammar() -> None:
     assert not failures, "py3.12+-only syntax in hermes-executed scripts:\n" + "\n".join(failures)
 
 
+def test_no_deployed_source_imports_override_from_typing() -> None:
+    failures: list[str] = []
+    for path in _deployed_sources():
+        if (
+            path == _REPO / "automation/typing_compat.py"
+            or path.is_relative_to(_REPO / "skills/mail")
+            or path.is_relative_to(_REPO / "automation/memory_relocate")
+            or path.is_relative_to(_REPO / "automation/plaud_sync")
+        ):
+            continue
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, str(path), feature_version=(3, 11))
+        parents: dict[ast.AST, ast.AST] = {
+            child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
+        }
+
+        def in_type_checking(node: ast.AST) -> bool:
+            current = node
+            while current in parents:
+                parent = parents[current]
+                if isinstance(parent, ast.If) and isinstance(parent.test, ast.Name):
+                    if parent.test.id == "TYPE_CHECKING" and current in parent.body:
+                        return True
+                current = parent
+            return False
+
+        def in_runtime_fallback(node: ast.AST) -> bool:
+            current = node
+            while current in parents:
+                parent = parents[current]
+                if isinstance(parent, ast.Try) and current in parent.body:
+                    if any(
+                        isinstance(handler.type, ast.Name) and handler.type.id == "ImportError"
+                        for handler in parent.handlers
+                    ):
+                        return True
+                current = parent
+            return False
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "typing":
+                if any(alias.name == "override" for alias in node.names) and not (in_type_checking(node) or in_runtime_fallback(node)):
+                    failures.append(f"{path.relative_to(_REPO)}:{node.lineno}: from typing import override")
+            elif (
+                isinstance(node, ast.Attribute)
+                and node.attr == "override"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "typing"
+                and not (in_type_checking(node) or in_runtime_fallback(node))
+            ):
+                failures.append(f"{path.relative_to(_REPO)}:{node.lineno}: typing.override")
+    assert not failures, "py3.12+ typing.override in deployed modules:\n" + "\n".join(failures)
+
+
 def test_repair_report_consumer_does_not_import_py312_typing_names() -> None:
     unavailable = {"override"}
     failures: list[str] = []

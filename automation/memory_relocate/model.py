@@ -49,6 +49,9 @@ class RelocationRecord:
     rag_fingerprint: str | None
     backup_path: str | None
     last_block_reason: str | None
+    #: Thread this request's approval message lives in. Optional so a record written
+    #: before the per-request thread keeps parsing, and outside ``action_hash``.
+    approval_thread_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +96,9 @@ _RECORD_KEYS: Final = frozenset(
         "last_block_reason",
     }
 )
+#: Keys a record MAY carry — a row written before them still parses, and an
+#: unknown key outside this set is still an unreadable shape (fail-closed).
+_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id"})
 
 
 def _is_mapping(value: object) -> TypeGuard[dict[object, object]]:
@@ -172,7 +178,8 @@ def _relocation_status(value: object) -> RelocationStatus:
 
 def _parse_record(raw: object) -> RelocationRecord:
     payload = _mapping(raw, "relocation")
-    if frozenset(payload) != _RECORD_KEYS:
+    keys = frozenset(payload)
+    if not _RECORD_KEYS <= keys or not keys <= _RECORD_KEYS | _OPTIONAL_RECORD_KEYS:
         raise RelocationError("relocation record has an unknown shape")
     return RelocationRecord(
         version=_require_version(payload["version"], "record version"),
@@ -202,6 +209,9 @@ def _parse_record(raw: object) -> RelocationRecord:
         last_block_reason=_string_or_none(
             payload["last_block_reason"], "last_block_reason"
         ),
+        approval_thread_id=_string_or_none(
+            payload.get("approval_thread_id"), "approval_thread_id"
+        ),
     )
 
 
@@ -230,7 +240,13 @@ def parse_state(raw: object) -> RelocationState:
 
 
 def _serialize_record(record: RelocationRecord) -> dict[str, object]:
+    optional = (
+        {"approval_thread_id": record.approval_thread_id}
+        if record.approval_thread_id is not None
+        else {}
+    )
     return {
+        **optional,
         "version": record.version,
         "source_kind": record.source_kind,
         "entry_sha256": record.entry_sha256,

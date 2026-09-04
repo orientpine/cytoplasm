@@ -10,7 +10,8 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Final, Protocol, override
+from typing import Final, Protocol
+from automation.typing_compat import override
 
 from automation.git_tag_signature import (
     SignatureInvocation,

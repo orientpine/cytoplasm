@@ -21,6 +21,7 @@ from typing import Final, TypeAlias
 from urllib import error, request
 
 import stt_audio
+import stt_blocks
 import stt_coverage
 
 DEFAULT_BASE_URL: Final = "https://api.openai.com/v1"
@@ -48,6 +49,9 @@ class Transcription:
     model: str
     endpoint: str
     coverage: stt_coverage.Coverage | None = None
+    # Empty whenever the backend cannot say when a sentence was spoken (the API
+    # returns text only). The document then renders exactly as it does today.
+    sentences: tuple[stt_blocks.TimedSentence, ...] = ()
 
 
 def build_multipart(

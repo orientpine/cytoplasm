@@ -45,9 +45,17 @@ def test_round_trip_preserves_every_field(tmp_path: Path) -> None:
         pending_notice="queued",
         incident_open=True,
         skip_reason="update-target-unresolved",
+        mirror_state="dirty",
     )
     save_state(path, state)
     assert load_state(path) == state
+
+
+def test_old_state_without_mirror_state_loads_as_unknown(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    _ = path.write_text(json.dumps({"consecutive_failures": 1}), encoding="utf-8")
+
+    assert load_state(path) == ReconcileState(consecutive_failures=1, mirror_state="unknown")
 
 
 def test_state_file_is_owner_only(tmp_path: Path) -> None:

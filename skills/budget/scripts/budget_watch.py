@@ -20,10 +20,12 @@ governed live store — no import of it here, subprocess only
 """
 from __future__ import annotations
 
+import importlib
 import os
 import re
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
@@ -125,10 +127,25 @@ def _announce(*, ok: bool, detail: str = "") -> bool:
     return True
 
 
+def _expire_pending_requests() -> None:
+    """만료 처리는 watch 자식보다 먼저 끝내 재게시 경쟁을 막고, 실패는 tick을 바꾸지 않는다."""
+    if _SCRIPTS is None:
+        return
+    scripts = str(_SCRIPTS)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        budget_confirm = importlib.import_module("budget_confirm")
+        budget_confirm.expire_pending_drafts(datetime.now(UTC))
+    except Exception as error:  # noqa: BLE001 — 만료 보조 경로가 cron 종료를 바꿔서는 안 된다
+        print(f"BUDGET-EXPIRY-FAIL err={type(error).__name__}", file=sys.stderr)
+
+
 def main() -> int:
     _load_env_secrets()
     if CLI is None or not CLI.exists():
         return 0 if _announce(ok=False, detail="budget skill is not mounted") else 1
+    _expire_pending_requests()
     result = subprocess.run(  # noqa: S603 — fixed argv, agent-owned script
         [sys.executable, str(CLI), "watch"],
         capture_output=True, text=True, timeout=600, check=False,

@@ -16,11 +16,11 @@ from automation.git_remote_url import GitRemoteUrlError, validate_remote_url
 from automation.interop.external_effect_gate import ApprovalContext
 
 from .config import READ_ONLY_MIRROR_DIR, ObsidianWriteConfig, ObsidianWriteError
-from . import gate_binding
+from . import clone_lock, gate_binding
 from .note import NotePlan, render_note
 
 _GIT_TIMEOUT_SECONDS: Final = 120.0
-_GIT_CLONE_TIMEOUT_SECONDS: Final = 3600.0
+_BLOB_FILTER: Final = "--filter=" + clone_lock.BLOB_FILTER
 
 
 class _GitRunner(Protocol):
@@ -89,15 +89,31 @@ def write_note(
     *,
     approval_context: ApprovalContext | None = None,
 ) -> WriteReceipt:
-    """Upsert one note, push only it, then verify its remote content hash."""
+    """Upsert one note, push only it, then verify its remote content hash.
+
+    The whole fetch → upsert → commit → push → verify span runs under one clone-wide
+    lock: plaud_sync and memory_relocate drive this same clone from separate cron
+    ticks, and an interleaved ``reset --hard`` silently discards a staged note.
+    """
     _validate_write_target(config)
+    with clone_lock.hold(config.clone_dir):
+        return _write_locked(plan, config, runner, approval_context)
+
+
+def _write_locked(
+    plan: NotePlan,
+    config: ObsidianWriteConfig,
+    runner: _GitRunner,
+    approval_context: ApprovalContext | None,
+) -> WriteReceipt:
     context = _WriteContext(config, runner, _git_environment(config))
     _ensure_write_clone(context)
-    _ = context.run(
-        _GitInvocation(("git", "fetch", "origin", config.branch)),
-        config.clone_dir,
-        "fetch before upsert",
-    )
+
+    def step(argv: tuple[str, ...], name: str, /) -> str:
+        return context.run(_GitInvocation(argv), config.clone_dir, name).stdout
+
+    _ = clone_lock.ensure_blobless_fetch(step)
+    _fetch(context, "fetch before upsert")
     remote_ref = f"origin/{config.branch}"
     _ = context.run(
         _GitInvocation(("git", "reset", "--hard", remote_ref)),
@@ -118,27 +134,14 @@ def write_note(
             config.clone_dir,
             "stage note",
         )
+        message = f"obsidian-write: upsert {plan.relpath.name}"
         _ = context.run(
-            _GitInvocation(
-                (
-                    "git",
-                    "commit",
-                    "--only",
-                    "-m",
-                    f"obsidian-write: upsert {plan.relpath.name}",
-                    "--",
-                    relpath,
-                )
-            ),
+            _GitInvocation(("git", "commit", "--only", "-m", message, "--", relpath)),
             config.clone_dir,
             "commit note",
         )
         _push(context, plan, approval_context)
-    _ = context.run(
-        _GitInvocation(("git", "fetch", "origin", config.branch)),
-        config.clone_dir,
-        "fetch for verification",
-    )
+    _fetch(context, "fetch for verification")
     remote_content = context.run(
         _GitInvocation(("git", "show", f"{remote_ref}:{relpath}")),
         config.clone_dir,
@@ -152,6 +155,19 @@ def write_note(
     if hashlib.sha256(remote_content.encode("utf-8")).hexdigest() != content_sha256:
         raise ObsidianWriteError("Obsidian write remote verification did not match", True)
     return WriteReceipt(plan.relpath, content_sha256, remote_ref)
+
+
+def _fetch(context: _WriteContext, step: str) -> None:
+    """Clear dead fetch temporaries, then transfer under the fetch-only budget."""
+    _ = clone_lock.purge_stale_tmp_packs(context.config.clone_dir)
+    _ = context.run(
+        _GitInvocation(
+            ("git", "fetch", "origin", context.config.branch),
+            context.config.fetch_timeout_seconds,
+        ),
+        context.config.clone_dir,
+        step,
+    )
 
 
 def _validate_write_target(config: ObsidianWriteConfig) -> None:
@@ -194,12 +210,12 @@ def _ensure_write_clone(context: _WriteContext) -> None:
         repo_url = validate_remote_url(config.repo_url, label="Obsidian write repo_url")
     except GitRemoteUrlError as error:
         raise ObsidianWriteError("Obsidian write repository URL is unsafe", False) from error
+    # `--filter` leaves history's blobs on the server; `--` keeps a dash-leading URL
+    # out of git's option namespace.
+    destination = str(config.clone_dir)
+    argv = ("git", "clone", _BLOB_FILTER, "--branch", config.branch, "--", repo_url, destination)
     _ = context.run(
-        _GitInvocation(
-            # `--` keeps a dash-leading URL out of git's option namespace.
-            ("git", "clone", "--branch", config.branch, "--", repo_url, str(config.clone_dir)),
-            _GIT_CLONE_TIMEOUT_SECONDS,
-        ),
+        _GitInvocation(argv, config.fetch_timeout_seconds),
         None,
         "clone write repository",
     )

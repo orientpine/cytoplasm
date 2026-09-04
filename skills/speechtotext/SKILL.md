@@ -1,11 +1,13 @@
 ---
 name: speechtotext
 description: "Google Drive 폴더에 올려둔 음성 녹취를 전사본(.md)으로 만들고, 그 전사본을 meeting 스킬로 넘겨 회의록까지 잇는 스킬. 전사는 기본이 로컬(whisper.cpp)이고, 2시간이 넘는 단일 녹취도 누락 검증을 통과해야만 회의록으로 넘어간다."
-version: 1.0.0
+version: 1.1.2
 author: autophagy-agents
 ---
 
 # speechtotext — 음성 → 전사본(.md) → 회의록
+
+변경 명령은 `/srv/autophagy-skills/live/speechtotext/scripts/`에서만 실행하며, 낡은 사본은 `STALE-SKILL-COPY-BLOCK`으로 거부한다.
 
 소유자가 **감시 폴더에 녹취 파일을 놓으면** 5분 틱 워처가 그것을 집어 전사본을 만들고
 곧바로 `meeting` 스킬로 넘겨 회의록·칸반·마일스톤까지 잇는다. 폴더에 파일을 놓는 행위가
@@ -18,7 +20,7 @@ author: autophagy-agents
 2. 소유자가 **로컬 음성 파일 경로**를 대며 회의록을 요청하면 아래를 실행한다:
 
    ```bash
-   python3 ~/.hermes/skills/speechtotext/scripts/speechtotext_cli.py ingest \
+   python3 /srv/autophagy-skills/live/speechtotext/scripts/speechtotext_cli.py ingest \
      --file <음성경로> --label "<회의 라벨>"
    ```
 
@@ -70,17 +72,86 @@ author: autophagy-agents
 전사기는 모든 구간을 **한 줄**로 이어 붙인다 — 실제 94분 녹취가 38,216자 한 줄로 나왔다.
 충실한 전사본이지만 읽을 수 없는 문서다. 그래서 `.md` 로 쓰기 직전에 한 번 다듬는다:
 
-- 문장 경계로 나누고 문단으로 묶는다(문단은 4문장·180자를 모두 넘겨야 닫힌다).
+- 문장 경계로 나누고 블록으로 묶는다(아래 「문장 단위 출력」). 화자가 없으면 4문장·180자를 모두
+  넘겨야 블록이 닫힌다.
 - **연속으로 완전히 같은 문장**만 하나로 접는다. 나중에 다시 나오는 같은 말은 사람이 다시
   한 것이므로 남긴다 — 이 스킬의 반복 원칙 그대로, 중복은 불편이고 누락은 실패다.
 - 용어집으로 고유명사를 바로잡는다.
 - **요약하지 않는다.** 결정사항·액션아이템·마일스톤을 읽어내는 일은 meeting 의 몫이고
   이 경계를 넘지 않는다.
 
+## 문장 단위 출력
+
+전사본 본문은 **블록**의 나열이고, 블록은 빈 줄 하나로 갈린다. 블록 안에서는 **한 줄에 한 문장**만
+쓴다. 블록의 첫 줄은 헤더이며 `[HH:MM:SS] 화자N · 이름` 형식이다. 시각만 알면 `[HH:MM:SS]`,
+화자만 알면 `[--:--:--] 화자N`, 둘 다 모르면 헤더 없이 문장 줄만 남는다(레거시 문단을 다시 다듬으면
+이 모양이 된다).
+
+```
+[00:03:12] 화자1 · 김민수
+안녕하세요, 저는 김민수라고 합니다.
+오늘은 해양 계측 일정부터 보겠습니다.
+
+[00:03:41] 화자2 · 이영희
+계측기 납품이 2주 밀렸습니다.
+```
+
+**왜 바꿨나**: 94분 실측 녹취가 문단 140줄로 나왔고 가장 긴 줄이 1,137자였다. 충실하지만 소유자가
+그 안에서 아무것도 찾지 못했다. 같은 녹취를 문장 줄로 쓰면 735줄이 되고, 각 블록이 언제 시작했는지도
+줄 위에 적힌다. 사람이 읽는 단위가 문장이므로 문서의 줄도 문장이다.
+
+타임스탬프는 whisper.cpp 가 이미 토큰마다 보고하던 값이다. 예전 경로는 구간을 한 문자열로 이어붙이며
+그 값을 버렸다. 문법은 `stt_blocks.render()` 가 쓰고 `stt_blocks.parse()` 가 되읽으므로, 디스크에 이미
+있는 옛 전사본과 새로 다듬은 전사본이 같은 문서 형태로 수렴한다(`polish` 는 멱등).
+
+화자가 하나도 없으면 블록은 예전 문단 규칙(4문장·180자를 모두 넘겨야 닫힘)으로 끊고, 화자가 있으면
+**같은 화자가 이어지는 최대 구간**이 한 블록이다.
+
+## 화자 구분
+
+로컬 whisper.cpp 경로에서만 동작하며, 화자 분리는 **sherpa-onnx 바이너리를 노드에서 직접 실행**한다.
+음성은 어떤 경우에도 노드 밖으로 나가지 않는다(전사 백엔드를 로컬로 두는 이유와 같다). 분리 결과는
+`speaker_00` 같은 클러스터 번호이고, 이것을 전사본에 처음 나온 순서대로 `화자1`, `화자2` … 로 매긴다.
+문장은 겹침이 가장 큰 turn 에 붙고, 겹치는 turn 이 없으면 중점이 2초 이내인 가장 가까운 turn 에,
+그것도 없으면 직전 문장의 화자를 잇는다.
+화자를 붙이기 전에 문장을 먼저 쪼갠다 — 한 문장을 두 화자 이상이 각각 1초 넘게 나눠 가졌으면 화자가
+바뀌는 자리에서, whisper 가 구두점을 내지 않아 문장이 길어지면 15초마다, 가장 가까운 띄어쓰기에서
+자른다(문장 하나에는 화자 하나만 붙으므로, 쪼개지 않으면 4명이 말한 57초가 통째로 화자1 이 된다).
+
+- **fail-soft**: 도구·모델이 없거나 실행이 실패하면 stderr 에 `DIARIZE-FAIL <사유>` 를 찍고 **화자 없이
+  전사를 계속한다**. 화자 분리 때문에 전사가 실패하는 일은 없다. 도구가 없는 노드의 출력은 화자 헤더만
+  빠진 문장 줄 문서다.
+- `--speaker-count N`: 화자 수를 알면 클러스터 수를 고정한다(`--clustering.num-clusters`).
+- `--no-diarize`: 이번 실행만 화자 분리를 건너뛴다.
+- `SPEECHTOTEXT_DIARIZE_THRESHOLD`(기본 `0.9`): 화자 수를 모를 때 쓰는 군집 임계값. **낮추면 화자를 더
+  잘게 쪼개고(같은 사람이 둘로 갈릴 수 있다), 올리면 서로 다른 사람이 한 화자로 합쳐진다.**
+- API 백엔드에는 구간 타임스탬프가 없어 화자 분리를 하지 않는다.
+
+## 화자 이름
+
+`화자N` 라벨에 실제 이름을 붙이는 경로는 셋이고, 결과는 헤더의 범례 한 줄로 남는다:
+
+```
+- 화자: 화자1=김민수 [자기소개 00:03:12] · 화자2=이영희 [LLM] · 화자3=미상
+```
+
+| 출처 | 어떻게 | 표기 |
+|---|---|---|
+| 자기소개(규칙) | "저는 김민수라고 합니다" 류를 각 화자의 앞 12문장에서만 찾는다. 한 이름을 두 화자가 주장하면 둘 다 버린다 | `자기소개 HH:MM:SS` |
+| meeting LLM | `ingest` 가 회의록 CLI 의 마지막 stdout JSON 의 `speakers` 배열을 받아 전사본에 되먹인다(호명·소개처럼 문맥이 필요한 근거는 여기서 나온다) | `LLM` |
+| 소유자 | `polish --speakers "화자1=김민수,화자2=이영희"` | `소유자` |
+
+우선순위는 **소유자 > 자기소개 > LLM**. 규칙이 이미 이름을 정한 라벨에 LLM 이 다른 이름을 제안하면
+규칙 이름을 유지하고 이견을 범례에 남긴다: `[자기소개 00:03:12 · LLM 제안: 박철수]`. 근거 없는 라벨은
+`미상`으로 적는다. 누락과 미상은 다른 사실이다.
+
+**이름은 제안이지 판정이 아니다.** 자기소개 패턴도 LLM 도 틀릴 수 있으므로, 소유자가
+`polish --speakers` 로 고치면 그 값이 이후 모든 경로를 이긴다.
+
 이미 있는 전사본은 오디오·모델·비용 없이 다시 다듬을 수 있다(멱등):
 
 ```bash
-python3 ~/.hermes/skills/speechtotext/scripts/speechtotext_cli.py polish --file <전사본.md>
+python3 /srv/autophagy-skills/live/speechtotext/scripts/speechtotext_cli.py polish --file <전사본.md>
 ```
 
 ### 용어집 — 이름을 한 곳에만 적는다
@@ -148,6 +219,12 @@ best-effort 발행된다(실패해도 로컬 전사본과 회의록은 그대로
 | `SPEECHTOTEXT_PROMPT` | 고유명사 힌트(로컬·API 양쪽에 전달). 미설정 시 용어집에서 만든다 | 없음 |
 | `SPEECHTOTEXT_GLOSSARY` | 용어집 파일(`틀린표기=올바른표기`) | `~/.hermes/speechtotext/glossary.txt` |
 | `SPEECHTOTEXT_TRANSCRIPT_DIR` · `SPEECHTOTEXT_STATE_FILE` | 전사본·처리 상태 | `~/.hermes/speechtotext/` |
+| `SPEECHTOTEXT_DIARIZE_BIN` | sherpa-onnx 화자 분리 바이너리. **셋 중 하나라도 비면 화자 분리를 하지 않는다** | 없음 = 화자 없음 |
+| `SPEECHTOTEXT_DIARIZE_SEGMENTATION` | pyannote segmentation onnx 모델 경로 | 없음 |
+| `SPEECHTOTEXT_DIARIZE_EMBEDDING` | 화자 임베딩 onnx 모델 경로 | 없음 |
+| `SPEECHTOTEXT_DIARIZE_THRESHOLD` | 군집 임계값(화자 수 미지정일 때만 사용) | `0.9` |
+| `SPEECHTOTEXT_DIARIZE_THREADS` | segmentation·embedding 스레드 수 | CPU 수(≤8) |
+| `SPEECHTOTEXT_DIARIZE_TIMEOUT` | 화자 분리 상한(초). 넘기면 `DIARIZE-FAIL` 후 계속 | `3600` |
 
 ## 로컬 전사 도구 설치 (노드 1회)
 
@@ -163,9 +240,36 @@ sh ./models/download-ggml-model.sh large-v3-turbo-q5_0          # 약 547MiB
 급하면 `medium`. 처리 시간은 CPU 에서 실시간의 1~5배가 걸릴 수 있으므로 cron 틱이 겹치지
 않도록 워처가 flock 을 건다.
 
+### GPU 빌드 (NVIDIA GB10 노드, 2026-09-01)
+
+CPU 빌드는 `build/` 에 폴백으로 남기고, `SPEECHTOTEXT_WHISPER_BIN` 은 CUDA 빌드를 가리킨다:
+
+```bash
+cmake -B build-cuda -DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES=121   # CUDA 13.0
+cmake --build build-cuda -j --config Release                        # build-cuda/bin/whisper-cli
+```
+
+### 화자 분리 도구 설치 (노드 1회)
+
+sherpa-onnx v1.13.6 CPU 빌드(`linux-aarch64-shared-cpu` 자산)를 agent 계정 홈 `~/sherpa-onnx/` 아래에 둔다:
+
+```
+sherpa-onnx/
+  bin/    화자 분리 실행 파일 (SPEECHTOTEXT_DIARIZE_BIN)
+  lib/    공유 라이브러리 (CLI 가 LD_LIBRARY_PATH 에 자동으로 얹는다)
+  models/ sherpa-onnx-pyannote-segmentation-3-0/model.onnx
+          3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx
+  samples/
+```
+
+두 모델 경로를 `SPEECHTOTEXT_DIARIZE_SEGMENTATION`·`SPEECHTOTEXT_DIARIZE_EMBEDDING` 에
+적으면 다음 틱부터 화자 블록이 붙는다. 화자 분리는 CPU 에서 돌고 전사는 GPU 에서 도므로
+둘이 자원을 놓고 다투지 않는다.
+
 ## 관련
 
 - 회의록 생성 본체: [`meeting`](../meeting/SKILL.md) — 민감도 게이트·칸반·통지·Drive 발행 소유
 - 발행 규약: [`drive-publish`](../../docs/guide/drive-publish.md)
 - 워처 규약: [`watcher-cron-설계규약`](../../docs/guide/watcher-cron-설계규약.md)
-- 소개: [`음성-녹취-회의록-자동화`](../../docs/기능소개/음성-녹취-회의록-자동화.md)
+- 소개: [`음성-녹취-회의록-자동화`](../../docs/기능소개/음성-녹취-회의록-자동화.md) ·
+  [`전사본-화자-구분과-문장-단위-출력`](../../docs/기능소개/전사본-화자-구분과-문장-단위-출력.md)

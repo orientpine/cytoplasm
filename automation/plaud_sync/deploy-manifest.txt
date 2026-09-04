@@ -1,0 +1,1 @@
+agent|automation/plaud_sync/cron/plaud_sync_watch.py|.hermes/scripts/plaud_sync_watch.py|required

@@ -321,7 +321,10 @@ def test_ingest_chains_transcript_into_meeting_with_credentials(
     summary = json.loads(capsys.readouterr().out)
     transcript = Path(summary["transcript_path"])
     assert transcript.is_file()
-    assert SPOKEN in transcript.read_text(encoding="utf-8")
+    # 전사본은 문장마다 한 줄이므로 말한 문장이 통째로 살아 있는지로 확인한다.
+    written = transcript.read_text(encoding="utf-8")
+    for sentence in stt_polish.split_sentences(SPOKEN):
+        assert f"\n{sentence}\n" in written
     assert summary["meeting_exit"] == 0
 
     call = json.loads(fake_meeting[1].read_text(encoding="utf-8"))
@@ -1081,8 +1084,10 @@ def test_polish_turns_one_wall_of_text_into_paragraphs(tmp_path: Path) -> None:
     assert "\n\n" in result.body
     assert result.paragraphs >= 4
     assert result.sentences == 96
-    for line in result.body.splitlines():
-        assert len(line) < 2000
+    # 문장 하나가 한 줄 — 1,137자짜리 줄이 나오던 문서를 대신한다.
+    lines = [line for line in result.body.splitlines() if line.strip()]
+    assert len(lines) == 96
+    assert max(len(line) for line in lines) < 300
 
 
 def test_polish_never_drops_a_distinct_sentence() -> None:

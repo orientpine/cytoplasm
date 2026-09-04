@@ -26,6 +26,9 @@ _TITLE = "통합 승인 과제"
 
 @dataclass(slots=True)
 class FakeDirectory:
+    #: 요청별 스레드 스펙 기록 — e2e는 자기 바인딩을 직접 만들므로 비어 있어야 한다.
+    requests: list[tuple[ApprovalKind, object]] = field(default_factory=list)
+
     def owner_dm(self) -> str:
         raise AssertionError
 
@@ -37,6 +40,10 @@ class FakeDirectory:
 
     def agent_chat_thread(self, kind: ApprovalKind) -> str:
         assert kind is ApprovalKind.TODO
+        return _CHANNEL
+
+    def agent_chat_request_thread(self, kind: ApprovalKind, request: object) -> str:
+        self.requests.append((kind, request))
         return _CHANNEL
 
     def describe(self, channel_id: str) -> ChannelFacts:

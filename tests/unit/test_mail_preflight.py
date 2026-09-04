@@ -13,7 +13,9 @@ sys.path.insert(0, str(_REPO / "skills" / "mail" / "scripts"))
 
 import gmail_approval_gate as gmail_gate  # noqa: E402
 import mail_gmail_send  # noqa: E402
+import mail_quote  # noqa: E402
 import triage_cli  # noqa: E402
+import triage_core  # noqa: E402
 import triage_gate  # noqa: E402
 from automation.entity_preflight.contracts import (  # noqa: E402
     CandidateResolver,
@@ -276,3 +278,131 @@ def test_mail_cli_when_candidates_conflict_then_prints_one_clarify_and_exits_non
     assert caught.value.exit_code == 6
     assert captured.out.count("ENTITY-CLARIFY") == 1
     assert "송화" in captured.out and "송희" in captured.out
+
+
+# --- the quoted original survives the execution boundary ----------------------------
+#
+# 2026-09-03: a forward draft whose ``quote`` held 3,530 chars was sent with ``--body``
+# equal to the 266-char reply text alone — the recipient never received the mail being
+# answered. The guard payload carries only the owner-reviewed reply text, so the
+# boundary that rebuilds the frozen argv must re-attach the quote.
+
+QUOTE_TO = "peer@example.invalid"
+QUOTE_CC = "cc-one@example.invalid"
+QUOTE_SUBJECT = "Re: 견적 확인 요청"
+QUOTE_ORIGINAL_BODY = "다음 주 회의 참석 가능 여부 회신 부탁드립니다.\n\n감사합니다."
+QUOTED_ORIGINAL = (
+    f"{mail_quote.SEPARATOR}\n"
+    "보낸 사람: 가상 발신자 <peer@example.invalid>\n"
+    "보낸 날짜: 2026-08-30 15:12\n"
+    "받는 사람: owner@example.invalid\n"
+    f"참조: {QUOTE_CC}\n"
+    "제목: 견적 확인 요청\n"
+    f"\n{QUOTE_ORIGINAL_BODY}"
+)
+QUOTE_REPLY = "송아 이사님께 확인 후 회신드리겠습니다."
+QUOTE_REPLY_NORMALIZED = "송화 이사님께 확인 후 회신드리겠습니다."
+
+
+def _quote_draft(*, body: str, quote: str) -> dict[str, JsonValue]:
+    """A pending mailon draft exactly as ``triage_gate.create_draft`` persists it."""
+    record: dict[str, JsonValue] = {
+        "argv": list(
+            triage_core.build_send_argv(
+                "python3", QUOTE_TO, QUOTE_SUBJECT, mail_quote.with_quote(body, quote), (), QUOTE_CC
+            )
+        ),
+        "body": body,
+        "category": "reply",
+        "cc": QUOTE_CC,
+        "channel_id": "",
+        "created": "2026-09-03T00:00:00Z",
+        "flags": [],
+        "id": "abc123",
+        "kind": "reply",
+        "mail_subject": "견적 확인 요청",
+        "message_id": "",
+        "sender": "가상 발신자 <peer@example.invalid>",
+        "sender_masked": triage_core.mask_value(QUOTE_TO),
+        "sensitive": False,
+        "status": "pending",
+        "subject": QUOTE_SUBJECT,
+        "surface": None,
+        "tags": [],
+        "to": QUOTE_TO,
+        "uid": "u-1",
+        "uid_opaque": triage_core.mask_value("u-1"),
+        "policy_version": None,
+    }
+    if quote:  # absent on legacy/no-quote drafts, exactly like the gate persists them
+        record["quote"] = quote
+    record["sha256"] = triage_core.draft_sha256(record)
+    return record
+
+
+def _quote_payload(body: str) -> dict[str, JsonValue]:
+    """What the entity preflight returns: the reply text only, never the quote."""
+    return {"to": QUOTE_TO, "cc": QUOTE_CC, "subject": QUOTE_SUBJECT, "body": body}
+
+
+def _argv_option(argv: JsonValue, option: str) -> str:
+    assert isinstance(argv, list)
+    value = argv[argv.index(option) + 1]
+    assert isinstance(value, str)
+    return value
+
+
+def test_mail_preflight_when_draft_quotes_the_original_then_sends_it_below_the_reply() -> None:
+    # Given: an approved reply draft whose frozen argv quotes the answered mail.
+    import mail_preflight  # noqa: E402
+
+    draft = _quote_draft(body=QUOTE_REPLY, quote=QUOTED_ORIGINAL)
+
+    # When: the execution boundary rebuilds the argv from the preflight payload.
+    updated = mail_preflight._draft_with_payload(draft, _quote_payload(QUOTE_REPLY))
+
+    # Then: what actually goes out is the reply text followed by the original mail.
+    sent = _argv_option(updated["argv"], "--body")
+    assert sent == mail_quote.with_quote(QUOTE_REPLY, QUOTED_ORIGINAL)
+    assert mail_quote.SEPARATOR in sent
+    assert QUOTE_ORIGINAL_BODY in sent
+    assert updated["body"] == QUOTE_REPLY
+    assert updated["quote"] == QUOTED_ORIGINAL
+    assert updated["sha256"] == triage_core.draft_sha256(updated)
+
+
+def test_mail_preflight_when_reply_text_is_normalized_then_quote_rides_below_the_new_body() -> None:
+    # Given: the preflight rewrote a personal name inside the reply text only.
+    import mail_preflight  # noqa: E402
+
+    draft = _quote_draft(body=QUOTE_REPLY, quote=QUOTED_ORIGINAL)
+
+    # When: the rewritten reply crosses the same boundary.
+    updated = mail_preflight._draft_with_payload(draft, _quote_payload(QUOTE_REPLY_NORMALIZED))
+
+    # Then: the quote follows the NEW body and the original text is never normalized.
+    sent = _argv_option(updated["argv"], "--body")
+    assert sent == mail_quote.with_quote(QUOTE_REPLY_NORMALIZED, QUOTED_ORIGINAL)
+    assert sent.startswith(QUOTE_REPLY_NORMALIZED)
+    assert updated["body"] == QUOTE_REPLY_NORMALIZED
+    assert updated["quote"] == QUOTED_ORIGINAL
+    assert updated["sha256"] == triage_core.draft_sha256(updated)
+
+
+def test_mail_preflight_when_draft_has_no_quote_then_argv_and_hash_stay_byte_identical() -> None:
+    # Given: a legacy draft persisted without a quote field.
+    import mail_preflight  # noqa: E402
+
+    draft = _quote_draft(body=QUOTE_REPLY, quote="")
+    assert "quote" not in draft
+
+    # When: it crosses the boundary with an unchanged payload.
+    updated = mail_preflight._draft_with_payload(draft, _quote_payload(QUOTE_REPLY))
+
+    # Then: argv and hash match the pre-fix plain-body behavior byte for byte.
+    assert updated["argv"] == list(
+        triage_core.build_send_argv("python3", QUOTE_TO, QUOTE_SUBJECT, QUOTE_REPLY, (), QUOTE_CC)
+    )
+    assert "quote" not in updated
+    assert updated["sha256"] == draft["sha256"]
+    assert updated["sha256"] == triage_core.draft_sha256(updated)

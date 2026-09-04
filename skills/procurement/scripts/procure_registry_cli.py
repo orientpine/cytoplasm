@@ -7,10 +7,15 @@ import sys
 
 from skills.procurement.scripts import procure_core as core
 from skills.procurement.scripts import procure_registry as registry
+from skills.procurement.scripts import procurement_governed
 
 
 def cmd_register(args) -> None:
     """Register a form and its analysis map exactly once, unless forced."""
+    message = procurement_governed.refusal(Path(__file__))
+    if message:
+        print(message, file=sys.stderr)
+        raise SystemExit(3)
     try:
         record = registry.register(args.name, Path(args.template), args.force)
     except core.UnsupportedTemplate as error:

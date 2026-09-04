@@ -8,7 +8,8 @@ from contextlib import closing
 from dataclasses import dataclass
 from http.client import HTTPException, HTTPSConnection
 from pathlib import Path
-from typing import Protocol, TypeAlias, override
+from typing import Protocol, TypeAlias
+from automation.typing_compat import override
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 

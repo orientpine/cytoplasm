@@ -195,3 +195,151 @@ def test_deliver_marks_and_falls_back_on_thread_failure(
     assert fallback_log == ["결과"]
     err = capsys.readouterr().err
     assert "NOTIFY-THREAD-FAIL" in err and "abc123" in err
+
+
+# -------------------------------------------------- approval thread (2026-09-01)
+# 소유자 결정: 승인 요청·리마인더·결과 통지가 요청별 스레드 하나에서 완결된다.
+# 레코드의 `approval_thread_id` 가 있으면 결과는 스레드를 새로 만들지 않고 거기로 간다.
+
+APPROVAL_THREAD = "400000000000000001"
+
+
+class _RecordingApi:
+    def __init__(self, responses: dict[tuple[str, str], object] | None = None) -> None:
+        self.calls: list[tuple[str, str, dict | None]] = []
+        self.responses = responses or {}
+
+    def __call__(self, method: str, path: str, payload: dict | None = None):
+        self.calls.append((method, path, payload))
+        response = self.responses.get((method, path))
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
+def test_of_record_prefers_the_approval_thread() -> None:
+    # Given: a record bound to a per-request approval thread (origin also present)
+    ref = OriginRef.of_record({
+        "approval_thread_id": APPROVAL_THREAD,
+        "origin_channel_id": ORIGIN_CHANNEL,
+        "origin_message_id": ORIGIN_MESSAGE,
+    })
+    # Then: the thread is known up front and the ref is truthy
+    assert ref.thread_id == APPROVAL_THREAD
+    assert bool(ref)
+    assert OriginRef.of_record({"approval_thread_id": None}).thread_id == ""
+
+
+def test_resolve_returns_the_approval_thread_without_any_api_call() -> None:
+    # Given: a ref that already names the approval thread
+    api = _RecordingApi()
+    ref = OriginRef(channel_id=ORIGIN_CHANNEL, message_id=ORIGIN_MESSAGE, thread_id=APPROVAL_THREAD)
+    # When / Then: no thread is created — the approval thread is the result thread
+    assert resolve_thread_id(api, ref, "이름") == APPROVAL_THREAD
+    assert api.calls == []
+
+
+def test_deliver_posts_into_the_approval_thread_and_closes_it() -> None:
+    # Given: a record bound to an approval thread and a healthy Discord api
+    from automation.interop.origin_notice import ThreadOutcome
+
+    posts: list[tuple[str, str]] = []
+    api = _RecordingApi({
+        ("GET", f"/channels/{APPROVAL_THREAD}"): {"name": "메일 발신 · 세미나 안내"},
+        ("PATCH", f"/channels/{APPROVAL_THREAD}"): {"id": APPROVAL_THREAD},
+    })
+    # When: the terminal result is delivered
+    result = deliver(
+        api=api,
+        transport_factory=lambda channel_id: _Transport(channel_id, posts),
+        record={"id": "abc123", "approval_thread_id": APPROVAL_THREAD,
+                "origin_channel_id": ORIGIN_CHANNEL, "origin_message_id": ORIGIN_MESSAGE},
+        thread_name="이름",
+        content="✉️ 발송 완료",
+        fallback=lambda content: pytest.fail("fallback must not fire on success"),
+        outcome=ThreadOutcome.DONE,
+    )
+    # Then: the content lands in the approval thread, no thread is created, and the
+    # thread is renamed with the status prefix and archived
+    assert result == "thread-post-1"
+    assert posts == [(APPROVAL_THREAD, "✉️ 발송 완료")]
+    assert not [call for call in api.calls if call[1].endswith("/threads")]
+    assert api.calls[-1] == (
+        "PATCH", f"/channels/{APPROVAL_THREAD}",
+        {"name": "✅ 완료 · 메일 발신 · 세미나 안내", "archived": True},
+    )
+
+
+def test_close_replaces_an_earlier_status_prefix_and_respects_the_limit() -> None:
+    # Given: a thread already closed once (cancelled) and a long name
+    from automation.interop.origin_notice import ThreadOutcome, close_thread
+
+    long_name = "⛔ 취소 · " + "가" * 95
+    api = _RecordingApi({
+        ("GET", f"/channels/{APPROVAL_THREAD}"): {"name": long_name},
+        ("PATCH", f"/channels/{APPROVAL_THREAD}"): {},
+    })
+    # When: it is closed again as expired
+    assert close_thread(api, APPROVAL_THREAD, ThreadOutcome.EXPIRED) is True
+    # Then: the old prefix is replaced, not stacked, and the name fits Discord's limit
+    payload = api.calls[-1][2]
+    assert payload is not None
+    assert payload["archived"] is True
+    assert payload["name"].startswith("⌛ 만료 · 가")
+    assert "⛔" not in payload["name"]
+    assert len(payload["name"]) <= 100
+
+
+def test_deliver_close_failure_leaves_a_marker_but_keeps_the_result(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: the rename/archive call is refused
+    from automation.interop.origin_notice import ThreadOutcome
+
+    posts: list[tuple[str, str]] = []
+    api = _RecordingApi({
+        ("GET", f"/channels/{APPROVAL_THREAD}"): {"name": "할 일 · 보고서"},
+        ("PATCH", f"/channels/{APPROVAL_THREAD}"): _http_error(403),
+    })
+    # When: the result is delivered with a terminal outcome
+    result = deliver(
+        api=api,
+        transport_factory=lambda channel_id: _Transport(channel_id, posts),
+        record={"id": "abc123", "approval_thread_id": APPROVAL_THREAD},
+        thread_name="이름",
+        content="등록 완료",
+        fallback=lambda content: pytest.fail("fallback must not fire on success"),
+        outcome=ThreadOutcome.CANCELLED,
+    )
+    # Then: the notice itself is unaffected and the failure is a marker, not an exception
+    assert result == "thread-post-1"
+    assert posts == [(APPROVAL_THREAD, "등록 완료")]
+    err = capsys.readouterr().err
+    assert "THREAD-CLOSE-FAIL" in err and "abc123" in err and "NOTIFY-THREAD-FAIL" not in err
+
+
+def test_deliver_without_any_thread_never_closes() -> None:
+    # Given: a legacy record with neither approval thread nor origin
+    from automation.interop.origin_notice import ThreadOutcome
+
+    api = _RecordingApi()
+    fallback_log: list[str] = []
+    # When: a terminal result is delivered
+    result = deliver(
+        api=api,
+        transport_factory=lambda channel_id: pytest.fail("no thread expected"),
+        record={"id": "abc123"},
+        thread_name="이름",
+        content="결과",
+        fallback=lambda content: fallback_log.append(content) or "dm-1",
+        outcome=ThreadOutcome.DONE,
+    )
+    # Then: only the fallback ran — nothing to rename or archive
+    assert result == "dm-1" and fallback_log == ["결과"]
+    assert api.calls == []
+
+
+def test_thread_outcome_prefixes_are_the_owner_facing_status_words() -> None:
+    from automation.interop.origin_notice import ThreadOutcome
+
+    assert {outcome.value for outcome in ThreadOutcome} == {"✅ 완료", "⛔ 취소", "⌛ 만료"}

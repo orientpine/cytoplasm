@@ -182,13 +182,19 @@ class OwnerDecision:
         match decision:
             case state.APPROVED:
                 self.commands.confirm(self.entry, self.owner_id)
-                if record.get("origin_channel_id"):
-                    # 채널 지시에만 결과를 돌려준다 — 소유자가 직접 확정한 건은 종전대로 무통지.
-                    _notify_thread(record, _executed_notice(record, self.entry.draft_id))
+                if _has_thread(record):
+                    # 승인 스레드(또는 채널 지시)가 있는 건에만 결과를 돌려주고 그 스레드를
+                    # 닫는다 — 둘 다 없는 옛 초안은 종전대로 무통지.
+                    _notify_thread(
+                        record,
+                        _executed_notice(record, self.entry.draft_id),
+                        calendar_confirm.OUTCOME_DONE,
+                    )
             case state.CANCELLED:
                 self.commands.discard(self.entry.draft_id)
                 _notify_result(
-                    self.discord, record, _cancelled_notice(record, self.entry.draft_id)
+                    self.discord, record, _cancelled_notice(record, self.entry.draft_id),
+                    calendar_confirm.OUTCOME_CANCELLED,
                 )
             case unreachable:
                 assert_never(unreachable)
@@ -305,7 +311,10 @@ def _process_entries(
                     decision.probe(calendar_approval.request_of(entry))
                     record = draft_record(entry.draft_id)  # 폐기 전에 읽는다
                     commands.discard(entry.draft_id)
-                    _notify_result(discord, record, _expired_notice(record, entry.draft_id))
+                    _notify_result(
+                        discord, record, _expired_notice(record, entry.draft_id),
+                        calendar_confirm.OUTCOME_EXPIRED,
+                    )
                     decision.drop(calendar_approval.request_of(entry))
             else:
                 request = calendar_approval.request_of(entry)
@@ -357,22 +366,29 @@ def _process_entries(
     return tuple(retained)
 
 
-def _notify_result(discord: DiscordClient, record: Mapping[str, object], content: str) -> None:
-    """Send one result notice to the thread of the instructing channel, else to cha.
+def _has_thread(record: Mapping[str, object]) -> bool:
+    """A request thread to answer in — this request's own, else the instructing channel."""
+    return bool(record.get("approval_thread_id") or record.get("origin_channel_id"))
 
-    소유자 지시 2026-08-23: 채널에서 시작된 지시의 결과는 그 채널의 스레드로
-    돌아간다. origin 이 없는 초안(cha가 직접 만든 건)은 종전 경로를 그대로 쓴다.
+
+def _notify_result(
+    discord: DiscordClient, record: Mapping[str, object], content: str, outcome: str = ""
+) -> None:
+    """Send one result notice to this request's thread, else to cha.
+
+    소유자 결정 2026-09-01: 결과는 승인이 게시된 그 스레드로 돌아가 종결 표시된다.
+    승인 스레드도 origin 도 없는 옛 초안은 종전 경로(소유자 통지)를 그대로 쓴다.
     """
-    if record.get("origin_channel_id"):
-        _notify_thread(record, content)
+    if _has_thread(record):
+        _notify_thread(record, content, outcome)
         return
     _notify_owner(discord, content)
 
 
-def _notify_thread(record: Mapping[str, object], content: str) -> None:
-    """Post to the origin thread; the command already committed, so failures only log."""
+def _notify_thread(record: Mapping[str, object], content: str, outcome: str = "") -> None:
+    """Post to the request thread; the command already committed, so failures only log."""
     try:
-        calendar_confirm.notify_result(dict(record), content)
+        calendar_confirm.notify_result(dict(record), content, outcome)
     except Exception as error:  # noqa: BLE001 — 통지 실패가 완료된 tick을 되돌리면 안 된다
         print(
             f"calendar-confirm-watch thread notification failed: {_redact(str(error))}",

@@ -45,6 +45,13 @@ wrapper_record_commands() { # wrapper_record_commands <node> <outfile>
   : > "$out" || return 1
   capture_on_node() { printf '%s\0' "$2" >> "$out"; printf '%s' "active"; return 0; }
 
+  # 기록 중임을 프로브들에게 알린다. 래퍼 드리프트 프로브는 기대 지문을 얻으려고 이
+  # 생성기를 **새 프로세스로** 실행하는데, 그 프로세스가 다시 여기로 들어오면 재귀가
+  # 끝나지 않는다(2026-08-31 실측: cron 실행 2 개 → ops 프로세스 436 개, 전부
+  # `--inputs-digest`; 노드는 memory pressure critical). 그래서 기록 스윕 동안에는 그
+  # 프로브가 명령만 남기고 생성기를 부르지 않는다 — 판정은 평시 틱이 한다.
+  export HEALTHCHECK_WRAPPER_RECORDING=1
+
   for definition in "${LIVE_CHECKS[@]}"; do
     IFS='|' read -r _name _type check_node _rest <<< "$definition"
     [[ "$check_node" == "$node" ]] || continue
@@ -57,6 +64,7 @@ wrapper_record_commands() { # wrapper_record_commands <node> <outfile>
     [[ "$check_node" == "$node" ]] || continue
     printf '%s\0' "$(healthcheck_repair_command "$name")" >> "$out"
   done
+  unset HEALTHCHECK_WRAPPER_RECORDING
 }
 
 #: 사람이 검토할 수 있는 ``sha256<TAB>command`` 매니페스트. 명령 발견은 위의 관측
@@ -102,6 +110,7 @@ wrapper_print() { # wrapper_print <node>
   printf '#   bash <release>/automation/healthcheck_probe_wrapper.sh --install %s\n' "$node"
   printf '# wrapper-version: %s\n' "$WRAPPER_VERSION"
   printf '# wrapper-node: %s\n' "$node"
+  printf '# probe-type: litellm_completion\n'
   printf '# wrapper-inputs: %s\n' "$(wrapper_inputs_digest "$node")"
   printf 'set -euo pipefail\n'
   printf 'readonly command_hash="$(printf %s "${SSH_ORIGINAL_COMMAND:-}" | sha256sum)"\n' "'%s'"

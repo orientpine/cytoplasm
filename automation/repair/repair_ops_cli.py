@@ -17,7 +17,7 @@ from automation.repair.repair_ops_approval import ApprovalReaction, ManualOwnerA
 from automation.repair.repair_ops_core import Approval, RepairAgent, RepairOutcome, RepairPhase
 from automation.repair.repair_ops_discord import RepairDiscordError, configured_discord
 from automation.repair.repair_ops_git import GitRepository, RepairOpsError
-from automation.repair.repair_ops_pending import PendingRepairApprovalStore
+from automation.repair.repair_ops_pending import PendingApprovalError, PendingRepairApproval, PendingRepairApprovalStore
 from automation.repair.repair_ops_posting import PostingOwnerApproval
 from automation.repair.repair_ops_reaction_watch import ReactionDecision, reaction_decision
 from automation.repair.repair_lifecycle import LifecycleState, RepairLifecycleStore
@@ -91,17 +91,34 @@ def _approval(config: RepairOpsConfig) -> Approval | None:
         return SignedOwnerApproval(os.environ["AUTOPHAGY_OWNER_ID"], config.approval_log, config.event, config.signature, secret, True)
     if e2e_mode is not None or e2e_inputs:
         return None
+    store = PendingRepairApprovalStore(_pending_root())
     try:
-        discord = configured_discord()
+        discord = configured_discord(config.ticket_id, _live_requests(store, config.ticket_id))
     except RepairDiscordError:
         return None
     return PostingOwnerApproval(
         discord.owner_id,
-        PendingRepairApprovalStore(_pending_root()),
+        store,
         discord,
         lambda: datetime.now(UTC),
         binding=discord.binding,
     )
+
+
+def _live_requests(
+    store: PendingRepairApprovalStore, ticket_id: str
+) -> tuple[PendingRepairApproval, ...]:
+    """This ticket's live request, so its thread is reused instead of a new empty one.
+
+    Same read the posting gate's ``outstanding`` does, one ticket at a time. An
+    unreadable record yields nothing here — the façade still refuses that request
+    as store-unreadable, so skipping the reuse can never post twice.
+    """
+    try:
+        pending = store.get(ticket_id)
+    except (OSError, PendingApprovalError):
+        return ()
+    return () if pending is None else (pending,)
 
 
 def _pending_root() -> Path:
@@ -178,6 +195,8 @@ def _apply_approved(config: RepairOpsConfig) -> int:
     if pending is None:
         return 1
     try:
+        # No ticket: this run reads the request the producer already posted, and
+        # asking for a request thread here would open a second, empty one.
         discord = configured_discord()
     except RepairDiscordError:
         return 2

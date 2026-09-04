@@ -531,3 +531,176 @@ def test_stored_v6_dm_binding_survives_the_v7_flip() -> None:
 
     # Then: it still drains through the owner DM it was posted to.
     assert validated is binding
+
+
+# ------------------------------------------------------ per-request thread (2026-09-01)
+
+REQUEST_THREAD_ID = "1601000000000000003"
+
+
+class RequestThreadDirectory(FakeDirectory):
+    """FakeDirectory that also serves the per-request thread seam."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_threads: list[tuple[ApprovalKind, object]] = []
+        self.facts[REQUEST_THREAD_ID] = ChannelFacts(
+            11, "메일 발신 · 세미나 안내", (), AGENT_CHAT_CHANNEL_ID,
+        )
+
+    def agent_chat_request_thread(self, kind: ApprovalKind, request: object) -> str:
+        self.calls.append("agent_chat_request_thread")
+        self.request_threads.append((kind, request))
+        return REQUEST_THREAD_ID
+
+
+def test_resolve_new_binding_with_request_lands_on_the_request_thread() -> None:
+    # Given: a producer that knows the instruction origin and a masked title
+    from automation.interop import approval_surface as module
+
+    directory = RequestThreadDirectory()
+    request = module.RequestThread(
+        title="세미나 안내", origin_channel_id=AGENT_CHAT_CHANNEL_ID, origin_message_id="msg-1",
+    )
+
+    # When: a fresh binding is resolved with the request spec
+    binding = resolve_new_binding(ApprovalKind.MAIL_COMPOSE, directory, OWNER_ID, request=request)
+
+    # Then: the binding is the per-request thread, still on the agent-chat surface at v8
+    assert binding.channel_id == REQUEST_THREAD_ID
+    assert binding.surface is ApprovalSurface.AGENT_CHAT_THREAD
+    assert binding.policy_version == POLICY_VERSION
+    assert directory.request_threads == [(ApprovalKind.MAIL_COMPOSE, request)]
+    assert "agent_chat_thread" not in directory.calls
+
+
+def test_resolve_new_binding_without_request_keeps_the_kind_thread() -> None:
+    # Given: a legacy caller that passes no request spec
+    directory = RequestThreadDirectory()
+
+    # When: a fresh binding is resolved the old way
+    binding = resolve_new_binding(ApprovalKind.TODO, directory, OWNER_ID)
+
+    # Then: the per-kind thread is still used and the request seam is untouched
+    assert binding.channel_id == AGENT_CHAT_THREAD_ID
+    assert "agent_chat_request_thread" not in directory.calls
+
+
+def test_request_thread_name_labels_and_truncates() -> None:
+    # Given: an over-long title on a labelled kind
+    from automation.interop import approval_surface as module
+
+    long_title = "가" * 80
+    name = module.request_thread_name(
+        ApprovalKind.MAIL_COMPOSE, module.RequestThread(title=long_title),
+    )
+
+    # Then: label + separator + a 40-char title, never beyond Discord's 100-char limit
+    assert name == "메일 발신 · " + "가" * 40
+    assert len(name) <= 100
+    assert module.request_thread_name(
+        ApprovalKind.CALENDAR, module.RequestThread(title="draft-42"),
+    ) == "캘린더 · draft-42"
+
+
+def test_request_thread_name_covers_every_kind() -> None:
+    # Given / When: every approval kind is rendered with an id-only title
+    from automation.interop import approval_surface as module
+
+    names = {
+        kind: module.request_thread_name(kind, module.RequestThread(title="id-1"))
+        for kind in ApprovalKind
+    }
+
+    # Then: each kind has a non-empty label and the title survives
+    assert all(name.endswith(" · id-1") and len(name) > len(" · id-1") for name in names.values())
+    assert len(set(names.values())) == len(ApprovalKind)
+
+
+def test_request_thread_spec_has_no_origin_by_default() -> None:
+    # Given: a producer without an instruction message (cron draft, repair)
+    from automation.interop import approval_surface as module
+
+    request = module.RequestThread(title="t_abc")
+
+    # Then: the spec is origin-less and immutable
+    assert (request.origin_channel_id, request.origin_message_id) == ("", "")
+    with pytest.raises((AttributeError, TypeError)):
+        request.title = "other"  # type: ignore[misc]
+
+
+def test_validate_stored_binding_accepts_a_request_thread_at_v8() -> None:
+    # Given: a stored v8 binding whose channel is a per-request thread under agent-chat
+    directory = RequestThreadDirectory()
+    binding = ApprovalBinding(
+        ApprovalKind.MAIL_COMPOSE, ApprovalSurface.AGENT_CHAT_THREAD, REQUEST_THREAD_ID, 8,
+    )
+
+    # When / Then: the stored binding validates without any policy bump
+    assert validate_stored_binding(binding, directory, OWNER_ID) == binding
+
+
+# ------------------------------------------- live-thread reuse (2026-09-01, S6)
+# 한 승인 키는 스레드 하나: 같은 키의 살아 있는 요청이 이미 연 요청별 스레드가 있으면 새 요청
+# (같은 해시의 재요청·내용이 바뀐 대체)도 그 스레드로 간다. kind 스레드와 DM 은 재사용하지 않는다.
+
+LIVE_REQUEST_THREAD_ID = "1601000000000000004"
+
+
+class LiveRequest:
+    def __init__(self, channel_id: str) -> None:
+        self.channel_id = channel_id
+
+
+def _reuse_directory() -> RequestThreadDirectory:
+    directory = RequestThreadDirectory()
+    directory.facts[LIVE_REQUEST_THREAD_ID] = ChannelFacts(
+        11, "메일 발신 · 세미나 안내", (), AGENT_CHAT_CHANNEL_ID,
+    )
+    return directory
+
+
+def test_reuse_returns_the_live_request_thread_of_the_same_key() -> None:
+    # Given: a live request of this key already sits in its own thread
+    from automation.interop import approval_surface as module
+
+    directory = _reuse_directory()
+
+    # When: the producer asks before resolving a fresh binding
+    binding = module.reuse_request_thread(
+        ApprovalKind.MAIL_COMPOSE, [LiveRequest(LIVE_REQUEST_THREAD_ID)], directory, OWNER_ID,
+    )
+
+    # Then: the same thread is bound at the current policy and nothing new is opened
+    assert binding == ApprovalBinding(
+        ApprovalKind.MAIL_COMPOSE, ApprovalSurface.AGENT_CHAT_THREAD, LIVE_REQUEST_THREAD_ID, POLICY_VERSION,
+    )
+    assert "agent_chat_request_thread" not in directory.calls
+
+
+def test_reuse_never_picks_the_legacy_kind_thread_or_a_dm() -> None:
+    # Given: live requests that still sit on the per-kind thread and on the owner DM
+    from automation.interop import approval_surface as module
+
+    directory = _reuse_directory()
+
+    # When / Then: neither is a per-request thread, so a fresh one must be opened
+    assert module.reuse_request_thread(
+        ApprovalKind.TODO, [LiveRequest(AGENT_CHAT_THREAD_ID), LiveRequest(DM_CHANNEL_ID)], directory, OWNER_ID,
+    ) is None
+    assert module.kind_thread_name(ApprovalKind.TODO) == "승인-todo"
+
+
+def test_reuse_skips_unverifiable_or_empty_candidates_and_other_surfaces() -> None:
+    from automation.interop import approval_surface as module
+
+    directory = _reuse_directory()
+    # Then: an unknown channel, a blank one and an empty set all yield None, fail-soft
+    assert module.reuse_request_thread(
+        ApprovalKind.WIKI, [LiveRequest(""), LiveRequest("9" * 18)], directory, OWNER_ID,
+    ) is None
+    assert module.reuse_request_thread(ApprovalKind.WIKI, [], directory, OWNER_ID) is None
+    # And: a supply-chain kind never reuses anything (it is not on the agent-chat surface)
+    assert module.reuse_request_thread(
+        ApprovalKind.SKILL_DEPLOY, [LiveRequest(LIVE_REQUEST_THREAD_ID)], directory, OWNER_ID,
+    ) is None

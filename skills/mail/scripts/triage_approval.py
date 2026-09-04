@@ -112,13 +112,14 @@ def confirm_intent(draft: dict) -> ApprovalIntent:
     digest = draft.get("sha256")
     if not isinstance(digest, str) or not digest:
         raise triage_gate.GateError("드래프트 sha256 누락 — 승인 게시 거부", 3)
-    binding = stored_binding(draft)
+    binding = stored_binding(draft, outstanding=_live_requests(draft))
     triage_gate.set_approval_binding(
         draft,
         kind=triage_binding.draft_kind(draft),
         surface=str(binding.surface),
         channel_id=str(binding.channel_id),
         policy_version=int(binding.policy_version),
+        approval_thread_id=triage_binding.approval_thread_id(binding),
     )
     return lifecycle().ApprovalIntent(
         key=approval_key(draft), action_hash=_approval_action_hash(draft), channel_id=str(binding.channel_id)
@@ -276,8 +277,16 @@ class MailApprovalGate:
             + self.notice
         )
         message_id = triage_confirm.post_approval_request(content, intent.channel_id)
-        triage_confirm.add_reaction(message_id, triage_confirm.APPROVE_EMOJI, intent.channel_id)
-        triage_confirm.add_reaction(message_id, triage_confirm.CANCEL_EMOJI, intent.channel_id)
+        for emoji in (triage_confirm.APPROVE_EMOJI, triage_confirm.CANCEL_EMOJI):
+            try:
+                triage_confirm.add_reaction(message_id, emoji, intent.channel_id)
+            except HTTPError as error:
+                reason = getattr(error, "code", None) or str(error)
+                print(
+                    f"APPROVAL-REACTION-FAIL {emoji} message={message_id} "
+                    f"reason={type(error).__name__}:{reason}",
+                    file=sys.stderr,
+                )
         return lifecycle().PostedApproval(message_id=message_id, channel_id=intent.channel_id)
 
     def commit(self, intent: ApprovalIntent, posted: PostedApproval, created_at: str) -> None:
@@ -288,6 +297,18 @@ class MailApprovalGate:
             intent.channel_id,
             approval_created_at=created_at,
         )
+
+
+def _live_requests(draft: dict) -> tuple[ApprovalRequest, ...]:
+    """This key's live requests, read exactly as the gate's ``outstanding`` reads them.
+
+    재사용 판정에만 쓰는 기회적 읽기다: 읽을 수 없는 저장소를 여기서 판정하지 않는다 —
+    파사드가 곧바로 같은 읽기를 다시 하고 store-unreadable 로 거부한다.
+    """
+    try:
+        return MailApprovalGate(draft).outstanding(approval_key(draft))
+    except (lifecycle().ApprovalRecordsError, triage_gate.GateError):
+        return ()
 
 
 def request_approval(draft: dict, *, notice: str = "") -> Verdict:

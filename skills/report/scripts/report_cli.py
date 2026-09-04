@@ -25,6 +25,11 @@ else:
     report_sensitivity = import_module(".report_sensitivity", __package__)
     report_knowledge = import_module(".report_knowledge", __package__)
 
+if __package__ in (None, ""):
+    report_governed = import_module("report_governed")
+else:
+    report_governed = import_module(".report_governed", __package__)
+
 
 def _private_directory(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -295,6 +300,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command in {"report", "slides", "script"}:
+            message = report_governed.refusal(Path(__file__))
+            if message:
+                print(message, file=sys.stderr)
+                return 3
         return int(args.func(args))
     except (OSError, report_llm.LlmInvocationError) as error:
         print(f"REPORT-REFUSED {error.__class__.__name__}", file=sys.stderr)

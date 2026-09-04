@@ -59,10 +59,14 @@ for file in docker-compose.yml config.yaml; do
 done
 ```
 
+### Apply note (2026-09-03)
+
+The compose `/health` check makes a real provider completion every 10 seconds. The healthcheck now uses the model-free `/health/liveliness` endpoint instead. To apply on the node, ops should copy the updated `docker-compose.yml` into `/home/ops/litellm-gateway/`, then run `systemctl --user restart litellm-gateway.service`; that unit runs `docker compose up -d`. The container restart is an owner/ops decision: as documented in `docs/guide/operations.md`, LiteLLM settings are not changed casually while operating. Afterwards, verify there are no new `litellm-internal-health-check` rows in `LiteLLM_SpendLogs` and that `docker ps` shows the `litellm` container healthy.
+
 ## 2. Materialize remote-only secrets and `.env`
 
 This writes no secret to this repository. It requires the existing
-`/home/ops/.env.secrets` to contain `ZAI_API_KEY`; it adds strong, remote-only
+`/home/ops/.env.secrets` to contain `OPENAI_API_KEY`; it adds strong, remote-only
 values for the two secrets that do not yet exist. The master key must begin
 with `sk-`, as required by LiteLLM.
 
@@ -74,7 +78,7 @@ set -euo pipefail
 secrets=/home/ops/.env.secrets
 test -r "$secrets"
 chmod 600 "$secrets"
-grep -q '^ZAI_API_KEY=' "$secrets"
+grep -q '^OPENAI_API_KEY=' "$secrets"
 
 if ! grep -q '^LITELLM_MASTER_KEY=' "$secrets"; then
   umask 077
@@ -88,14 +92,14 @@ fi
 set -a
 . "$secrets"
 set +a
-: "${ZAI_API_KEY:?missing from /home/ops/.env.secrets}"
+: "${OPENAI_API_KEY:?missing from /home/ops/.env.secrets}"
 : "${LITELLM_MASTER_KEY:?missing from /home/ops/.env.secrets}"
 : "${POSTGRES_PASSWORD:?missing from /home/ops/.env.secrets}"
 case "$LITELLM_MASTER_KEY" in sk-*) ;; *) exit 1 ;; esac
 
 umask 077
 cat > /home/ops/litellm-gateway/.env <<EOF
-ZAI_API_KEY=$ZAI_API_KEY
+OPENAI_API_KEY=$OPENAI_API_KEY
 LITELLM_MASTER_KEY=$LITELLM_MASTER_KEY
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 LITELLM_MONTHLY_HARD_CAP=<monthly-hard-cap>

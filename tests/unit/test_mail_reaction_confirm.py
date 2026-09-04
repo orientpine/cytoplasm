@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import pytest
 
@@ -15,6 +16,8 @@ sys.path.insert(0, str(_REPO / "skills" / "mail" / "scripts"))
 from automation.interop.approval_surface import (  # noqa: E402
     ApprovalKind,
     ApprovalSurface,
+    ChannelFacts,
+    RequestThread,
     required_surface,
 )
 from automation.interop.discord_transport import (  # noqa: E402
@@ -23,6 +26,7 @@ from automation.interop.discord_transport import (  # noqa: E402
 )
 import triage_cli  # noqa: E402
 import triage_approval  # noqa: E402
+import triage_binding  # noqa: E402
 import triage_confirm  # noqa: E402
 import triage_core  # noqa: E402
 import triage_gate  # noqa: E402
@@ -161,15 +165,10 @@ def test_new_reply_draft_posts_to_the_agent_chat_thread(
             return {"type": 1, "name": "", "recipients": [{"id": OWNER_ID}]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
             return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
-        if method == "GET" and path == "/guilds/guild-1/threads/active":
-            return {"threads": [{
-                "id": AGENT_CHAT_THREAD,
-                "type": 11,
-                "name": "승인-mail-reply",
-                "parent_id": AGENT_CHAT_CHANNEL,
-            }]}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/threads":
+            return {"id": AGENT_CHAT_THREAD}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
-            return {"type": 11, "name": "승인-mail-reply", "parent_id": AGENT_CHAT_CHANNEL}
+            return {"type": 11, "name": "메일 회신 · Re: 민감 문의", "parent_id": AGENT_CHAT_CHANNEL}
         if method == "GET" and path == f"/channels/{APPROVALS_CHANNEL}":
             return {"type": 0, "name": "approvals", "recipients": []}
         if method == "POST" and path.endswith("/messages"):
@@ -203,8 +202,14 @@ def test_new_reply_draft_posts_to_the_agent_chat_thread(
         post=True,
     )
 
-    # Then: the one approval message is in the agent-chat thread with full reply and hash
+    # Then: the request got its OWN thread, named after this mail...
     [draft] = triage_gate.list_drafts()
+    assert [
+        (item[1], (item[2] or {}).get("name"))
+        for item in requests
+        if item[0] == "POST" and item[1].endswith("/threads")
+    ] == [(f"/channels/{AGENT_CHAT_CHANNEL}/threads", "메일 회신 · Re: 민감 문의")]
+    # ...and the one approval message is in that thread with full reply and hash
     posts = [item for item in requests if item[0] == "POST" and item[1].endswith("/messages")]
     assert actions == [f"draft:{draft['id']}", f"posted:{MESSAGE_ID}"]
     assert len(posts) == 1
@@ -239,6 +244,24 @@ def test_v1_bound_reply_pending_is_still_consumable(monkeypatch: pytest.MonkeyPa
     assert binding.channel_id == APPROVALS_CHANNEL
     assert binding.surface is ApprovalSurface.SKILL_APPROVALS
     assert action == triage_confirm.APPROVE_EMOJI
+
+
+def test_post_survives_reaction_http_error(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    draft = _draft(message_id="")
+    monkeypatch.setattr(triage_confirm, "post_approval_request", lambda _content, _channel: MESSAGE_ID)
+
+    def fail_reaction(_message_id: str, emoji: str, _channel_id: str) -> None:
+        raise HTTPError("https://discord.invalid", 503, "Service Unavailable", {}, None)
+
+    monkeypatch.setattr(triage_confirm, "add_reaction", fail_reaction)
+
+    posted = triage_approval.MailApprovalGate(draft).post(
+        SimpleNamespace(channel_id=APPROVALS_CHANNEL)
+    )
+
+    assert posted.message_id == MESSAGE_ID
+    assert posted.channel_id == APPROVALS_CHANNEL
+    assert "APPROVAL-REACTION-FAIL" in capsys.readouterr().err
 
 
 def test_supersede_deletes_from_the_bound_channel_not_the_guild(
@@ -636,3 +659,208 @@ def test_notify_result_falls_back_to_owner_when_helper_is_unavailable(
     # Then: the owner still gets it through the legacy path, with a marker
     assert result == "dm-1" and notices == ["결과"]
     assert "NOTIFY-HELPER-MISSING" in capsys.readouterr().err
+
+
+# ------------------------------------------------ per-request approval thread (S6)
+
+REQUEST_THREAD = "400000000000000001"
+REQUEST_THREAD_NAME = "메일 회신 · Re: 일정 문의"
+
+
+class _RequestThreadDirectory:
+    """Directory that records the thread spec the mail binding asks for."""
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[object, object]] = []
+
+    def owner_dm(self) -> str:
+        return DM_CHANNEL
+
+    def skill_approvals(self) -> str:
+        return APPROVALS_CHANNEL
+
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_CHANNEL
+
+    def agent_chat_thread(self, kind: object) -> str:
+        raise AssertionError(f"mail must not reuse the per-kind thread: {kind}")
+
+    def agent_chat_request_thread(self, kind: object, request: object) -> str:
+        self.requests.append((kind, request))
+        return REQUEST_THREAD
+
+    def describe(self, channel_id: str) -> ChannelFacts:
+        if channel_id == REQUEST_THREAD:
+            return ChannelFacts(11, REQUEST_THREAD_NAME, (), AGENT_CHAT_CHANNEL)
+        raise AssertionError(f"unexpected channel: {channel_id}")
+
+
+def _unbound_draft() -> dict:
+    record = {
+        **_draft(message_id=""),
+        "channel_id": "",
+        "surface": None,
+        "policy_version": None,
+        "origin_channel_id": ORIGIN_CHANNEL,
+        "origin_message_id": ORIGIN_MESSAGE,
+    }
+    record["sha256"] = triage_core.draft_sha256(record)
+    return record
+
+
+def test_new_binding_opens_a_thread_for_this_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: an unposted reply draft carrying the owner's instruction origin
+    monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
+    monkeypatch.setattr(triage_confirm, "owner_id", lambda: OWNER_ID)
+    directory = _RequestThreadDirectory()
+    monkeypatch.setattr(triage_binding, "approval_directory", lambda: directory)
+
+    # When: the gate resolves a fresh binding for it
+    binding = triage_approval.stored_binding(_unbound_draft())
+
+    # Then: the binding IS this request's own thread, asked for with the draft subject
+    assert binding.channel_id == REQUEST_THREAD
+    assert binding.surface is ApprovalSurface.AGENT_CHAT_THREAD
+    assert directory.requests == [(
+        ApprovalKind.MAIL_REPLY,
+        RequestThread(
+            title="Re: 일정 문의",
+            origin_channel_id=ORIGIN_CHANNEL,
+            origin_message_id=ORIGIN_MESSAGE,
+        ),
+    )]
+
+
+def test_confirm_intent_persists_the_request_thread_outside_the_action_hash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given: a freshly created reply draft in an isolated store
+    monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
+    monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "gate"))
+    monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
+    monkeypatch.setenv("TRIAGE_MAILON_PYTHON", "python3")
+    monkeypatch.setattr(triage_confirm, "owner_id", lambda: OWNER_ID)
+    monkeypatch.setattr(triage_binding, "approval_directory", lambda: _RequestThreadDirectory())
+    draft = triage_gate.create_draft(
+        uid="u-1", sender="발신자 <s@example.invalid>", mail_subject="일정 문의",
+        to="owner@example.invalid", subject="Re: 일정 문의", body="본문", sensitive=False,
+        tags=(), category="important", flags=("reply_needed",), kind="reply",
+        origin_channel_id=ORIGIN_CHANNEL, origin_message_id=ORIGIN_MESSAGE,
+    )
+
+    # When: the approval intent is built — the one place the binding is decided
+    intent = triage_approval.confirm_intent(draft)
+
+    # Then: the record remembers the thread the result notice must return to...
+    [stored] = triage_gate.list_drafts()
+    assert intent.channel_id == REQUEST_THREAD
+    assert stored["approval_thread_id"] == REQUEST_THREAD
+    # ...and that memory is outside the approval action hash.
+    assert stored["sha256"] == draft["sha256"] == triage_core.draft_sha256(stored)
+    assert intent.action_hash == draft["sha256"]
+
+
+def _thread_draft() -> dict:
+    record = {
+        **_draft(),
+        "approval_thread_id": REQUEST_THREAD,
+        "channel_id": REQUEST_THREAD,
+        "origin_channel_id": ORIGIN_CHANNEL,
+        "origin_message_id": ORIGIN_MESSAGE,
+        "policy_version": 8,
+        "surface": "agent-chat-thread",
+    }
+    record["sha256"] = triage_core.draft_sha256(record)
+    return record
+
+
+def _thread_api(draft: dict, users_by_emoji: dict[str, list[dict]], calls: list[tuple]):
+    def request(method: str, path: str, payload: dict | None = None):
+        calls.append((method, path, payload))
+        if method == "GET" and path == f"/channels/{REQUEST_THREAD}":
+            return {
+                "id": REQUEST_THREAD, "type": 11,
+                "name": REQUEST_THREAD_NAME, "parent_id": AGENT_CHAT_CHANNEL,
+            }
+        if method == "GET" and path == f"/channels/{REQUEST_THREAD}/messages/{MESSAGE_ID}":
+            return {"content": f"draft sha256:{draft['sha256']}"}
+        for emoji, users in users_by_emoji.items():
+            quoted = triage_confirm.quote(emoji, safe="")
+            if method == "GET" and path.endswith(f"/reactions/{quoted}?limit=100"):
+                return users
+        if method == "GET" and "/reactions/" in path:
+            return []
+        if method == "PATCH" and path == f"/channels/{REQUEST_THREAD}":
+            return {"id": REQUEST_THREAD}
+        raise AssertionError(f"unexpected Discord call: {method} {path}")
+
+    return request
+
+
+def _run_thread_watch(
+    monkeypatch: pytest.MonkeyPatch, draft: dict, users_by_emoji: dict[str, list[dict]]
+):
+    sent: list[triage_gate.Approval] = []
+    dm_notices: list[str] = []
+    calls: list[tuple] = []
+    thread_posts: list[tuple[str, str]] = []
+    monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
+    monkeypatch.setattr(triage_confirm, "owner_id", lambda: OWNER_ID)
+    monkeypatch.setattr(triage_confirm, "_api", _thread_api(draft, users_by_emoji, calls))
+    monkeypatch.setattr(triage_gate, "list_drafts", lambda: [draft])
+    monkeypatch.setattr(triage_gate, "execute_draft", lambda _d, approval: sent.append(approval))
+    monkeypatch.setattr(triage_gate, "discard_draft", lambda _draft_id: None)
+    monkeypatch.setattr(triage_confirm, "dm_owner", lambda content: dm_notices.append(content))
+
+    class _ThreadTransport:
+        def __init__(self, channel_id: str) -> None:
+            self.channel_id = channel_id
+
+        def send(self, content: str) -> tuple[SentMessage, ...]:
+            thread_posts.append((self.channel_id, content))
+            return (SentMessage(message_id="thread-post-1"),)
+
+    monkeypatch.setattr(triage_confirm, "_dm_transport", _ThreadTransport)
+    monkeypatch.setattr(triage_cli, "cmd_process", lambda _args: 0)
+    assert triage_cli.cmd_watch(argparse.Namespace()) == 0
+    return sent, dm_notices, calls, thread_posts
+
+
+def test_watch_closes_the_request_thread_when_the_mail_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a draft whose approval lives in its own request thread, approved with ✅
+    draft = _thread_draft()
+    # When: the production watch tick sends it
+    sent, dm_notices, calls, thread_posts = _run_thread_watch(
+        monkeypatch, draft, {triage_confirm.APPROVE_EMOJI: [{"id": OWNER_ID, "bot": False}]}
+    )
+    # Then: the result lands in that same thread — no new thread, no owner fallback...
+    assert len(sent) == 1 and dm_notices == []
+    assert [method for method, _path, _payload in calls if method == "POST"] == []
+    assert [channel for channel, _content in thread_posts] == [REQUEST_THREAD]
+    assert "발송 완료" in thread_posts[0][1]
+    # ...and the thread is renamed with its terminal status and archived.
+    assert [(path, payload) for method, path, payload in calls if method == "PATCH"] == [
+        (f"/channels/{REQUEST_THREAD}",
+         {"archived": True, "name": f"✅ 완료 · {REQUEST_THREAD_NAME}"}),
+    ]
+
+
+def test_watch_closes_the_request_thread_when_the_owner_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the same request-thread draft, cancelled with ⛔
+    draft = _thread_draft()
+    # When: the production watch tick resolves the cancellation
+    sent, dm_notices, calls, thread_posts = _run_thread_watch(
+        monkeypatch, draft, {triage_confirm.CANCEL_EMOJI: [{"id": OWNER_ID, "bot": False}]}
+    )
+    # Then: the cancel notice lands in the thread, which is closed as cancelled
+    assert sent == [] and dm_notices == []
+    assert [channel for channel, _content in thread_posts] == [REQUEST_THREAD]
+    assert "발송 취소" in thread_posts[0][1]
+    assert [(path, payload) for method, path, payload in calls if method == "PATCH"] == [
+        (f"/channels/{REQUEST_THREAD}",
+         {"archived": True, "name": f"⛔ 취소 · {REQUEST_THREAD_NAME}"}),
+    ]

@@ -5,7 +5,11 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+try:
+    override = getattr(__import__("typing"), "override")
+except AttributeError:
+    def override(method):
+        return method
 
 from automation.drive_client import DriveClient
 from automation.interop.external_effect_gate import ApprovalContext

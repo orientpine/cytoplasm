@@ -36,6 +36,18 @@ class PeerRegistryError(RuntimeError):
 
 def named_peer_ids(request: str) -> tuple[str, ...]:
     path = _peers_config_path()
+    if not path.exists():
+        # 분류 레지스트리는 「분류가 필요한 설치에만」 생성되는 선택 파일이다
+        # (docs/guide/discord-server-architecture.md §2.2·§5.1-6). 파일이 없는 노드는
+        # 정상 설치 상태이므로 피어 분류만 건너뛰고 단독 일정은 그대로 통과시킨다.
+        # 파일이 있는데 못 읽거나 깨진 경우는 분류가 조용히 틀리는 것이라 아래에서
+        # 그대로 fail-closed 다. attestation trust root(/etc/autophagy/peers.yaml)는
+        # 스키마가 다른 별도 파일이므로 폴백 대상이 아니다.
+        print(
+            f"PEER-REGISTRY-ABSENT path={path} — 피어 분류 없이 단독 일정으로 라우팅합니다",
+            file=sys.stderr,
+        )
+        return ()
     return tuple(
         agent_id
         for agent_id in _registered_agent_ids(path)

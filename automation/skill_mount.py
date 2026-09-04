@@ -21,6 +21,14 @@
   * 스킬별 `<SKILL>_SCRIPTS`(예: `BUDGET_SCRIPTS`) — 래퍼가 이미 갖고 있던 구멍.
   * 공용 `AUTOPHAGY_SKILL_LIVE_ROOT` — `skill_mount_probe.sh` 의
     `HEALTHCHECK_SKILL_LIVE_ROOT` 와 같은 목적(=/srv 가 아닌 트리를 가리켜 검증한다).
+
+「스킬 채택 템플릿」
+각 스킬은 import 시 배포 환경을 가정하지 않도록 `<skill>_governed.py`에
+`GOVERNED_LIVE_ROOT`, `LIVE_ROOT_ENV`, `SKILL_NAME`, `STALE_COPY_MARKER` 상수를 남기고,
+`refusal(script, *, env=None)`에서 런타임 루트를 해결한 뒤
+`automation.skill_mount.governed_copy_refusal(SKILL_NAME, script, env=env)`를 지연 import해
+호출한다. automation import가 불가능하면 `<root>/<skill>/scripts`가 있으면 거부하고 없으면
+허용한다. 배포본임을 증명할 수 없는 사본이 메일처럼 변경 가능한 작업을 하는 일을 막기 위해서다.
 """
 from __future__ import annotations
 
@@ -34,6 +42,9 @@ LIVE_ROOT: Final = Path("/srv/autophagy-skills/live")
 
 #: live 루트 주입(테스트·운영 dry-run 전용). 비어 있으면 governed 기본값이다.
 LIVE_ROOT_ENV: Final = "AUTOPHAGY_SKILL_LIVE_ROOT"
+
+#: governed 마운트 밖의 사본이 변경 가능한 작업을 하지 못하게 하는 기계 판독 표지다.
+STALE_COPY_MARKER: Final = "STALE-SKILL-COPY-BLOCK"
 
 
 def live_root(env: Mapping[str, str] | None = None) -> Path:
@@ -60,3 +71,33 @@ def skill_scripts(
         if override:
             return Path(override).expanduser()
     return live_root(environment) / skill / "scripts"
+
+
+def governed_copy_refusal(
+    skill: str,
+    script: Path,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> str | None:
+    """governed 마운트 밖 사본의 실행을 거부할 이유를 돌려준다.
+
+    마운트가 없는 워크스테이션은 배포 사본을 판별할 근거 자체가 없으므로 허용한다.
+    반대로 마운트가 있는데 해석할 수 없으면 배포본임을 증명할 수 없어 fail-closed 한다.
+    """
+    root = live_root(env)
+    governed = root / skill / "scripts"
+    try:
+        if not governed.is_dir():
+            return None
+        same = governed.resolve() == script.resolve().parent
+    except OSError as error:
+        return (
+            f"{STALE_COPY_MARKER}: 관리자 배포본 {governed} 를 판정할 수 없다"
+            f"({error.__class__.__name__}) — 이 사본 {script} 을 실행하지 않는다"
+        )
+    if same:
+        return None
+    return (
+        f"{STALE_COPY_MARKER}: {skill} 은 관리자 배포본 {governed / script.name} 에서만 실행한다"
+        f" — 이 사본 {script} 은 마운트 판정(readlink {root / skill}) 밖이라 낡았을 수 있다"
+    )

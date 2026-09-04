@@ -2,19 +2,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from email.message import Message
 from pathlib import Path
-from urllib.error import HTTPError
 
 import pytest
 
 from automation.interop.approval_lifecycle import ApprovalRequest, Outcome, PostedApproval, Verdict
+from automation.interop.approval_surface import (
+    ApprovalKind,
+    ApprovalSurfaceError,
+    ChannelFacts,
+    RequestThread,
+    request_thread_name,
+)
 from automation.memory_curator.binding import entry_digest
+from automation.interop import reaction_approval
 from automation.memory_relocate.effects_live import (
     DiscordTransport,
     RelocationStore,
     RelocationStoreError,
     build_effects,
+    record_push_approval,
     recover_entry_text,
 )
 from automation.memory_relocate.model import RelocationRecord, RelocationState, record_key
@@ -59,6 +66,17 @@ def _save(path: Path, record: RelocationRecord) -> None:
             relocations={record_key(record.source_kind, record.entry_sha256): record},
         ),
     )
+
+
+def test_effects_live_reuses_the_shared_reaction_transport() -> None:
+    """The transport is imported, never re-implemented (it was copied twice before).
+
+    The reaction transport and the ✅→gate-record transcription now live in
+    ``automation.interop.reaction_approval``; this module only re-exports them, so the
+    cron wrapper and the approval gate keep their import path and a fix lands once.
+    """
+    assert DiscordTransport is reaction_approval.DiscordTransport
+    assert record_push_approval is reaction_approval.record_push_approval
 
 
 def test_relocation_store_when_message_is_already_bound_refuses_overwrite(tmp_path: Path) -> None:
@@ -150,203 +168,6 @@ def test_recover_entry_text_when_native_digest_is_absent_returns_none(tmp_path: 
 
 
 
-class _FakeResponse:
-    status = 200
-    reason = "OK"
-    headers: dict[str, str] = {}
-
-    def read(self) -> bytes:
-        return b'{"id": "chan-1"}'
-
-
-class _FakeConnection:
-    def __init__(self, host: str, timeout: int) -> None:  # noqa: ARG002
-        self.requested_path: str | None = None
-
-    def request(self, method: str, path: str, *, body: object, headers: object) -> None:  # noqa: ARG002
-        self.requested_path = path
-
-    def getresponse(self) -> _FakeResponse:
-        return _FakeResponse()
-
-    def close(self) -> None:
-        return None
-
-
-def test_transport_prefixes_the_discord_api_version_when_requesting(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: a captured connection standing in for the Discord REST endpoint.
-    captured: dict[str, _FakeConnection] = {}
-
-    def fake_https(host: str, timeout: int) -> _FakeConnection:
-        connection = _FakeConnection(host, timeout)
-        captured["c"] = connection
-        return connection
-
-    monkeypatch.setattr("automation.memory_relocate.effects_live.HTTPSConnection", fake_https)
-    transport = DiscordTransport(token="t", owner_id="9")
-
-    # When: any call is issued with an API-relative path.
-    _ = transport.api("POST", "/users/@me/channels", {"recipient_id": "9"})
-
-    # Then: the request targets the versioned API, not the discord.com website (HTML would break JSON parse).
-    assert captured["c"].requested_path == "/api/v10/users/@me/channels"
-
-
-@dataclass(frozen=True, slots=True)
-class _SequencedResponse:
-    status: int
-    reason: str
-    headers: Message
-    body: bytes = b'{"ok": true}'
-
-    def read(self) -> bytes:
-        return self.body
-
-
-class _SequencedConnection:
-    def __init__(
-        self,
-        response: _SequencedResponse,
-        requests: list[tuple[str, str]],
-    ) -> None:
-        self.response = response
-        self.requests = requests
-
-    def request(
-        self,
-        method: str,
-        path: str,
-        *,
-        body: object,
-        headers: object,
-    ) -> None:
-        del body, headers
-        self.requests.append((method, path))
-
-    def getresponse(self) -> _SequencedResponse:
-        return self.response
-
-    def close(self) -> None:
-        return None
-
-
-def _install_response_sequence(
-    monkeypatch: pytest.MonkeyPatch,
-    responses: list[_SequencedResponse],
-) -> list[tuple[str, str]]:
-    requests: list[tuple[str, str]] = []
-
-    def fake_https(host: str, timeout: int) -> _SequencedConnection:
-        del host, timeout
-        return _SequencedConnection(responses.pop(0), requests)
-
-    monkeypatch.setattr("automation.memory_relocate.effects_live.HTTPSConnection", fake_https)
-    return requests
-
-
-def _headers(retry_after: str | None = None) -> Message:
-    headers = Message()
-    if retry_after is not None:
-        headers["Retry-After"] = retry_after
-    return headers
-
-
-def test_transport_when_any_method_is_rate_limited_retries_after_header(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: a DELETE receives one Discord 429 carrying an explicit retry delay.
-    requests = _install_response_sequence(
-        monkeypatch,
-        [
-            _SequencedResponse(429, "rate limited", _headers("2.5")),
-            _SequencedResponse(200, "OK", _headers()),
-        ],
-    )
-    sleeps: list[float] = []
-    transport = DiscordTransport("t", "9", sleeper=sleeps.append, max_attempts=3)
-
-    # When: the method-agnostic API call runs.
-    result = transport.api("DELETE", "/channels/c/messages/m")
-
-    # Then: it honors Retry-After and repeats the same method exactly once.
-    assert result == {"ok": True}
-    assert sleeps == [2.5]
-    assert requests == [
-        ("DELETE", "/api/v10/channels/c/messages/m"),
-        ("DELETE", "/api/v10/channels/c/messages/m"),
-    ]
-
-
-def test_transport_when_rate_limit_reaches_attempt_cap_raises_last_429(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: every allowed attempt receives a distinct 429 response.
-    requests = _install_response_sequence(
-        monkeypatch,
-        [
-            _SequencedResponse(429, "rate limited 1", _headers("0.1")),
-            _SequencedResponse(429, "rate limited 2", _headers("0.2")),
-            _SequencedResponse(429, "rate limited 3", _headers("0.3")),
-        ],
-    )
-    sleeps: list[float] = []
-    transport = DiscordTransport("t", "9", sleeper=sleeps.append, max_attempts=3)
-
-    # When: the explicit attempt limit is exhausted.
-    with pytest.raises(HTTPError) as raised:
-        _ = transport.api("PUT", "/channels/c/messages/m/reactions/x/@me")
-
-    # Then: the final 429 is preserved and no fourth request or sleep occurs.
-    assert raised.value.code == 429
-    assert raised.value.reason == "rate limited 3"
-    assert sleeps == [0.1, 0.2]
-    assert len(requests) == 3
-
-
-def test_transport_when_server_returns_500_raises_without_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: Discord returns a non-rate-limit server error.
-    requests = _install_response_sequence(
-        monkeypatch,
-        [_SequencedResponse(500, "server error", _headers())],
-    )
-    sleeps: list[float] = []
-    transport = DiscordTransport("t", "9", sleeper=sleeps.append, max_attempts=3)
-
-    # When: the API call observes the response.
-    with pytest.raises(HTTPError) as raised:
-        _ = transport.api("POST", "/channels/c/messages", {"content": "x"})
-
-    # Then: the original error escapes immediately without retrying.
-    assert raised.value.code == 500
-    assert sleeps == []
-    assert len(requests) == 1
-
-
-def test_transport_when_429_omits_retry_after_uses_conservative_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: Discord rate-limits once without a Retry-After header.
-    requests = _install_response_sequence(
-        monkeypatch,
-        [
-            _SequencedResponse(429, "rate limited", _headers()),
-            _SequencedResponse(200, "OK", _headers()),
-        ],
-    )
-    sleeps: list[float] = []
-    transport = DiscordTransport("t", "9", sleeper=sleeps.append, max_attempts=2)
-
-    # When: the API call retries.
-    result = transport.api("GET", "/channels/c/messages/m")
-
-    # Then: the frozen helper's conservative one-second default is used.
-    assert result == {"ok": True}
-    assert sleeps == [1.0]
-    assert len(requests) == 2
-
-
 def test_relocation_store_when_binding_a_message_persists_its_channel(tmp_path: Path) -> None:
     # Given: a proposed record whose approval surface is not resolved yet (empty channel).
     path = tmp_path / "relocations.json"
@@ -406,6 +227,7 @@ def _effects_with_verdict(
     verdict: Verdict,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    specs: list[object] | None = None,
 ) -> ResolveEffects:
     """Assemble the live effects with every config/network boundary replaced by a stub."""
     module = "automation.memory_relocate.effects_live"
@@ -417,8 +239,16 @@ def _effects_with_verdict(
         del memory_dir, record
         return "entry"
 
-    def fake_resolve_new_binding(kind: object, directory: object, owner_id: str) -> _StubBinding:
+    def fake_resolve_new_binding(
+        kind: object,
+        directory: object,
+        owner_id: str,
+        *,
+        request: object = None,
+    ) -> _StubBinding:
         del kind, directory, owner_id
+        if specs is not None:
+            specs.append(request)
         return _StubBinding("chan-9")
 
     def fake_request_approval(
@@ -448,12 +278,68 @@ def _effects_with_verdict(
     )
 
 
+def test_post_effect_opens_a_request_thread_titled_by_the_pending_id_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a persisted relocation whose note path and entry text are the masked content.
+    entry_text = "운영 참고: 반출 절차 본문 그대로"
+    record = _record(entry_text=entry_text)
+    _save(tmp_path / "relocations.json", record)
+    specs: list[object] = []
+    effects = _effects_with_verdict(
+        Verdict(Outcome.POSTED, posted=PostedApproval("msg-1", "chan-9")),
+        monkeypatch,
+        tmp_path,
+        specs,
+    )
+
+    # When: the tick posts the approval request.
+    receipt = effects.post_approval(record)
+
+    # Then: the binding was resolved for THIS request's thread, titled with the pending id.
+    key = record_key(record.source_kind, record.entry_sha256)
+    assert receipt == ("msg-1", "chan-9")
+    assert [getattr(spec, "title", None) for spec in specs] == [key]
+
+    # And: the owner-visible thread name leaks no note path, file name or entry text.
+    name = request_thread_name(ApprovalKind.OBSIDIAN_WRITE, specs[0])
+    assert name.startswith("옵시디언 · memory:")
+    for secret in (entry_text, record.note_relpath, "relocated.md"):
+        assert secret not in name
+
+
+def test_post_effect_persists_the_approval_thread_id_beside_the_unchanged_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a persisted relocation awaiting its approval post.
+    record = _record(entry_text="operational reference worth relocating")
+    path = tmp_path / "relocations.json"
+    _save(path, record)
+    effects = _effects_with_verdict(
+        Verdict(Outcome.POSTED, posted=PostedApproval("msg-1", "chan-9")),
+        monkeypatch,
+        tmp_path,
+    )
+
+    # When: the tick posts the approval request.
+    _ = effects.post_approval(record)
+
+    # Then: the record names the approval thread, and the action hash it binds is untouched.
+    persisted = load_state(path).relocations[record_key(record.source_kind, record.entry_sha256)]
+    assert persisted.approval_thread_id == "chan-9"
+    assert persisted.action_hash == record.action_hash
+    assert persisted.note_plan_sha256 == record.note_plan_sha256
+
+
 def test_post_effect_returns_the_message_and_channel_it_posted_to(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: a lifecycle verdict that posted the approval to one concrete owner-DM channel.
+    # Given: a lifecycle verdict that posted the approval to one concrete approval channel.
     record = _record(entry_text="operational reference worth relocating")
+    _save(tmp_path / "relocations.json", record)
     posted = _effects_with_verdict(
         Verdict(Outcome.POSTED, posted=PostedApproval("msg-1", "chan-9")),
         monkeypatch,
@@ -477,6 +363,7 @@ def test_post_effect_returns_an_adopted_live_binding_as_a_receipt(
 ) -> None:
     # Given: enriched-journal recovery adopted a live message instead of posting a new one.
     record = _record(entry_text="operational reference worth relocating")
+    _save(tmp_path / "relocations.json", record)
     request = ApprovalRequest(
         record_key(record.source_kind, record.entry_sha256),
         record.action_hash,
@@ -526,3 +413,172 @@ def test_probe_effect_with_an_unbound_channel_is_pending_without_touching_discor
 
     # Then: an unbound surface is unverifiable and never reaches Discord.
     assert result == "pending"
+
+
+AGENT_CHAT_CHANNEL_ID = "1528936606856122430"
+_REQUEST_THREAD_BASE = 1528936606856122440
+
+
+class _ThreadOpeningDirectory:
+    """Fake channel directory that OPENS one thread per request, like the real one."""
+
+    def __init__(self, token: str, owner_id: str, api: object, cache_path: Path) -> None:
+        del token, owner_id, api, cache_path
+        self.opened: list[str] = []
+
+    def thread_id(self, index: int) -> str:
+        """Discord answers a DISTINCT snowflake for every thread it creates."""
+        return str(_REQUEST_THREAD_BASE + index)
+
+    def agent_chat(self) -> str:
+        return AGENT_CHAT_CHANNEL_ID
+
+    def agent_chat_thread(self, kind: ApprovalKind) -> str:
+        del kind
+        raise AssertionError("a request must never fall back to the shared kind thread")
+
+    def agent_chat_request_thread(self, kind: ApprovalKind, request: RequestThread) -> str:
+        self.opened.append(request_thread_name(kind, request))
+        return self.thread_id(len(self.opened) - 1)
+
+    def describe(self, channel_id: str) -> ChannelFacts:
+        for index, name in enumerate(self.opened):
+            if channel_id == self.thread_id(index):
+                return ChannelFacts(11, name, (), AGENT_CHAT_CHANNEL_ID)
+        raise ApprovalSurfaceError(f"unknown channel: {channel_id}")
+
+
+class _RecordingTransport:
+    """Offline relocation transport: post, poll and delete without Discord."""
+
+    def __init__(self, token: str, owner_id: str) -> None:
+        del token
+        self.owner_id = owner_id
+        self.messages: dict[str, str] = {}
+        self.channels: list[str] = []
+
+    def api(self, method: str, path: str, payload: object = None) -> object:
+        del payload
+        raise AssertionError(f"the directory must not reach Discord: {method} {path}")
+
+    def post_message(self, channel_id: str, content: str) -> str:
+        message_id = f"msg-{len(self.channels) + 1}"
+        self.channels.append(channel_id)
+        self.messages[message_id] = content
+        return message_id
+
+    def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
+        del channel_id, message_id, emoji
+
+    def get_message(self, channel_id: str, message_id: str) -> str | None:
+        del channel_id
+        return self.messages.get(message_id)
+
+    def get_reaction_users(
+        self, channel_id: str, message_id: str, emoji: str
+    ) -> tuple[tuple[str, bool], ...]:
+        del channel_id, message_id, emoji
+        return ()
+
+    def delete_message(self, channel_id: str, message_id: str) -> None:
+        del channel_id
+        _ = self.messages.pop(message_id, None)
+
+
+def test_re_requesting_the_same_relocation_reuses_its_live_request_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a relocation posted into its own approval thread by an earlier tick.
+    module = "automation.memory_relocate.effects_live"
+    record = _record(entry_text="operational reference worth relocating")
+    path = tmp_path / "relocations.json"
+    _save(path, record)
+    key = record_key(record.source_kind, record.entry_sha256)
+    directories: list[_ThreadOpeningDirectory] = []
+    transports: list[_RecordingTransport] = []
+
+    def make_transport(token: str, owner_id: str) -> _RecordingTransport:
+        transports.append(_RecordingTransport(token, owner_id))
+        return transports[-1]
+
+    def make_directory(
+        token: str, owner_id: str, api: object, cache_path: Path
+    ) -> _ThreadOpeningDirectory:
+        directories.append(_ThreadOpeningDirectory(token, owner_id, api, cache_path))
+        return directories[-1]
+
+    monkeypatch.setattr(
+        f"{module}.load_config",
+        lambda: ObsidianWriteConfig("git@example.invalid:owner/vault.git", tmp_path / "clone"),
+    )
+    monkeypatch.setattr(f"{module}.recover_entry_text", lambda memory_dir, current: "entry")
+    monkeypatch.setattr(f"{module}.DiscordTransport", make_transport)
+    monkeypatch.setattr(f"{module}.DiscordChannelDirectory", make_directory)
+    effects = build_effects(
+        memory_dir=tmp_path / "memory",
+        state_path=path,
+        rag_state_path=tmp_path / "rag-state.json",
+        token="t",
+        owner_id="9",
+        now=datetime(2026, 7, 31, 14, 30, tzinfo=UTC),
+    )
+    directory, transport = directories[0], transports[0]
+
+    # When: the next tick re-requests the very same record (same hash → PENDING).
+    first = effects.post_approval(record)
+    second = effects.post_approval(load_state(path).relocations[key])
+
+    # Then: one approval key keeps ONE thread — no empty orphan per re-request,
+    # every post landed in it, and the record still points at that first thread.
+    assert directory.opened == [
+        request_thread_name(ApprovalKind.OBSIDIAN_WRITE, RequestThread(title=key))
+    ]
+    assert first == second == ("msg-1", directory.thread_id(0))
+    assert transport.channels == [directory.thread_id(0)]
+    assert load_state(path).relocations[key].approval_thread_id == directory.thread_id(0)
+
+
+def test_post_after_a_missing_message_reuses_the_thread_the_request_opened(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a request whose approval card went missing (the message binding was
+    # cleared) but which already opened its own request thread.
+    module = "automation.memory_relocate.effects_live"
+    record = replace(
+        _record(entry_text="operational reference worth relocating"),
+        approval_thread_id="777888999",
+    )
+    _save(tmp_path / "relocations.json", record)
+    candidates: list[tuple[object, ...]] = []
+    specs: list[object] = []
+
+    def fake_reuse_request_thread(
+        kind: object, outstanding: object, directory: object, owner_id: str
+    ) -> _StubBinding | None:
+        del kind, directory, owner_id
+        seen = tuple(outstanding)
+        candidates.append(seen)
+        return _StubBinding("777888999") if seen else None
+
+    monkeypatch.setattr(f"{module}.reuse_request_thread", fake_reuse_request_thread)
+    effects = _effects_with_verdict(
+        Verdict(Outcome.POSTED, posted=PostedApproval("msg-1", "777888999")),
+        monkeypatch,
+        tmp_path,
+        specs,
+    )
+
+    # When: the tick re-posts the approval request.
+    assert effects.post_approval(record) == ("msg-1", "777888999")
+
+    # Then: the record's own thread was offered as the reuse candidate...
+    assert [candidate.channel_id for candidate in candidates[0]] == ["777888999"]
+    # ...so no fresh binding was resolved — that path opens a SECOND thread for one
+    # request, which the approval lifecycle forbids.
+    assert specs == []
+    stored = load_state(tmp_path / "relocations.json").relocations[
+        record_key(record.source_kind, record.entry_sha256)
+    ]
+    assert stored.approval_thread_id == "777888999"

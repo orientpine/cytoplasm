@@ -30,6 +30,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Final, TypeAlias
 
+from automation.deploy_reconcile_backlog import release_backlog_notice as _release_backlog_notice
+
 Converge: TypeAlias = Callable[[], int]
 """Runs the privileged helper. 0 converged · 5 someone else holds the lock · else failed."""
 
@@ -64,6 +66,7 @@ class ReconcileState:
     pending_notice: str | None = None
     incident_open: bool = False
     skip_reason: str | None = None
+    mirror_state: str = "unknown"
 
 
 def _drift_notice(*, origin_sha: str, current_sha: str, failures: int, elapsed: float) -> str:
@@ -87,21 +90,6 @@ def _recovery_notice(*, current_sha: str) -> str:
 BACKLOG_NOTICE_SECONDS: Final = 3 * 24 * 3600.0
 
 
-def _release_backlog_notice(
-    *, remote_head: str, current_sha: str, commit_count: int | None, elapsed: float
-) -> str:
-    runtime = current_sha or "(none)"
-    count = f"{commit_count}건" if commit_count is not None else "수 미상"
-    return (
-        "릴리스 대기 중인 머지가 쌓여 있습니다 (머지=축적, 릴리스=배포).\n"
-        f"  미배포 커밋 : {count} · {int(elapsed // 86400)}일 경과\n"
-        f"  origin/main : {remote_head}\n"
-        f"  runtime     : {runtime}\n"
-        "릴리스하려면 워크스테이션에서 `automation/release.sh` 를 실행하세요 (소유자 ✅ 1회).\n"
-        "노드는 서명 없는 head 를 설치하지 않으며, 이 상태는 사고가 아닙니다."
-    )
-
-
 def reconcile_unsigned_head(
     state: ReconcileState,
     *,
@@ -110,6 +98,7 @@ def reconcile_unsigned_head(
     now: float,
     deliver: Deliver,
     commit_count: int | None = None,
+    mirror_state: str = "unknown",
 ) -> ReconcileState:
     """Digest the release backlog once per aged period — never once per sha.
 
@@ -135,6 +124,7 @@ def reconcile_unsigned_head(
         consecutive_failures=failures,
         drift_since=backlog_since,
         skip_reason=reason,
+        mirror_state=mirror_state,
     )
     elapsed = now - backlog_since
     period = int(elapsed // BACKLOG_NOTICE_SECONDS)
@@ -147,6 +137,7 @@ def reconcile_unsigned_head(
         current_sha=current_sha,
         commit_count=commit_count,
         elapsed=elapsed,
+        mirror_state=mirror_state,
     )
     delivered = deliver(notice)
     return replace(

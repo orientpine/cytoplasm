@@ -142,13 +142,23 @@ def _origin_notice():
     return origin_notice
 
 
-def notify_result(draft: dict, content: str) -> str:
-    """Deliver a send/cancel result to the origin-channel thread, else to the owner.
+#: ``origin_notice.ThreadOutcome`` 멤버 이름 — 종결 통지만 스레드를 닫는다.
+SENT_OUTCOME = "DONE"
+CANCELLED_OUTCOME = "CANCELLED"
+EXPIRED_OUTCOME = "EXPIRED"
+
+
+def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
+    """Deliver a send/cancel result to the request's approval thread, else to the owner.
 
     라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
     `automation.interop.origin_notice.deliver`가 소유한다(2026-08-23 일반화 —
     스킬별 사본 증식 방지). 이 함수는 mail의 주입 지점(_api/_dm_transport/
     dm_owner)과 스레드 이름만 바인딩한다.
+
+    레코드의 ``approval_thread_id`` 가 있으면 결과는 승인 요청이 열린 그 스레드로
+    간다. ``outcome`` 은 종결 상태(발송/취소/만료)일 때만 주며, 그때 공유 구현이
+    스레드 이름에 상태 접두어를 붙이고 아카이브한다. 중간 통지는 비워 둔다.
     """
     try:
         origin_notice = _origin_notice()
@@ -165,6 +175,7 @@ def notify_result(draft: dict, content: str) -> str:
         thread_name=f"메일: {draft['subject']} (draft {draft['id']})",
         content=content,
         fallback=dm_owner,
+        outcome=origin_notice.ThreadOutcome[outcome] if outcome else None,
     )
 
 

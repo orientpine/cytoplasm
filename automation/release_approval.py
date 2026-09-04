@@ -94,9 +94,17 @@ def _record_path() -> Path:
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
-    plan = release_plan.build_plan(
-        Path(args.repo), base=args.base, head=args.head, version=args.version
-    )
+    try:
+        plan = release_plan.build_plan(
+            Path(args.repo),
+            base=args.base,
+            head=args.head,
+            version=args.version,
+            bump=args.bump,
+        )
+    except release_plan.ReleasePlanError as error:
+        print(f"RELEASE-PLAN-BLOCK: {error}", file=sys.stderr)
+        return 4
     patch_notes = fit_patch_notes(
         version=plan.version,
         head_sha=plan.head,
@@ -284,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--base", required=True)
     plan.add_argument("--head", required=True)
     plan.add_argument("--version", required=True)
+    plan.add_argument("--bump", choices=("major", "minor", "patch"), default="patch")
     plan.set_defaults(run=cmd_plan)
     retire = commands.add_parser(
         "retire", help="서명·승인 완료된 이전 release를 감사 archive로 이동"

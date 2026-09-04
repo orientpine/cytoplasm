@@ -11,10 +11,17 @@ S5  v7 (2026-08-24 owner decision) moves owner-only approvals off the owner DM
     into per-kind threads under the personal ``#agent-chat`` channel so the
     owner reads approvals inside threads. Repair stays on the owner DM until
     its Ops bot joins the personal guild.
+S6  2026-09-01 owner decision: inside ``AGENT_CHAT_THREAD`` a producer that passes a
+    ``RequestThread`` gets its own per-request thread (anchored on the instruction
+    message when that message lives in ``#agent-chat``, else a fresh channel thread)
+    so the approval, its reminders and the result notice complete in ONE thread.
+    The surface facts are unchanged (public thread whose parent is ``#agent-chat``),
+    so no policy bump: stored v7/v8 bindings keep validating as before, and a caller
+    that passes no spec still lands on the legacy per-kind thread.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -48,6 +55,61 @@ class ApprovalSurface(StrEnum):
     OWNER_DM = "owner-dm"
     SKILL_APPROVALS = "skill-approvals"
     AGENT_CHAT_THREAD = "agent-chat-thread"
+
+
+@dataclass(frozen=True, slots=True)
+class RequestThread:
+    """One approval request's thread spec (S6).
+
+    ``title`` is already masked by the producer — calendar/wiki/patent/obsidian pass an
+    id, never a subject or body — and is truncated here, not by the caller. The origin
+    pair is the owner's instruction message; it only anchors the thread when that
+    message lives in ``#agent-chat`` (owner-only surface), otherwise it is ignored.
+    """
+
+    title: str
+    origin_channel_id: str = ""
+    origin_message_id: str = ""
+
+
+#: Owner-facing thread label per kind — the thread name is ``<label> · <title>``.
+KIND_LABELS: Final[Mapping[ApprovalKind, str]] = MappingProxyType({
+    ApprovalKind.MAIL_REPLY: "메일 회신",
+    ApprovalKind.MAIL_COMPOSE: "메일 발신",
+    ApprovalKind.BUDGET_MAIL: "과제비 메일",
+    ApprovalKind.PATENT_EXPORT: "특허 반출",
+    ApprovalKind.REPAIR: "수리",
+    ApprovalKind.CALENDAR: "캘린더",
+    ApprovalKind.COORDINATION: "일정 조율",
+    ApprovalKind.WIKI: "위키",
+    ApprovalKind.SKILL_DEPLOY: "스킬 배포",
+    ApprovalKind.SKILL_ATTEST: "스킬 검증",
+    ApprovalKind.SKILL_PUBLISH: "스킬 발행",
+    ApprovalKind.SKILL_SUBMIT: "스킬 제출",
+    ApprovalKind.MANAGED_ACTIVATE: "관리형 활성화",
+    ApprovalKind.RELEASE: "릴리스",
+    ApprovalKind.OBSIDIAN_WRITE: "옵시디언",
+    ApprovalKind.TODO: "할 일",
+})
+
+REQUEST_TITLE_LIMIT: Final = 40
+THREAD_NAME_LIMIT: Final = 100  # Discord channel/thread name limit
+
+
+def request_thread_name(kind: ApprovalKind, request: RequestThread) -> str:
+    """``<kind label> · <title≤40>`` clipped to Discord's 100-char thread name."""
+    title = " ".join(request.title.split())[:REQUEST_TITLE_LIMIT] or "요청"
+    return f"{KIND_LABELS[kind]} · {title}"[:THREAD_NAME_LIMIT]
+
+
+def kind_thread_name(kind: ApprovalKind) -> str:
+    """The frozen name of the legacy per-kind thread (v7) — never reused for a request."""
+    return f"승인-{kind.value}"
+
+
+class LiveRequest(Protocol):
+    @property
+    def channel_id(self) -> str: ...
 
 
 # v8 (2026-08-28 §10-7): Ops 봇의 개인 서버 초대를 전제로 repair 승인도 agent-chat
@@ -176,6 +238,8 @@ class ChannelDirectory(Protocol):
 
     def agent_chat_thread(self, kind: ApprovalKind) -> str: ...
 
+    def agent_chat_request_thread(self, kind: ApprovalKind, request: RequestThread) -> str: ...
+
     def describe(self, channel_id: str) -> ChannelFacts: ...
 
 
@@ -202,6 +266,7 @@ def _resolved_channel_id(
     surface: ApprovalSurface,
     directory: ChannelDirectory,
     skill_channel_id: str | None,
+    request: RequestThread | None = None,
 ) -> str:
     try:
         match surface:
@@ -212,7 +277,9 @@ def _resolved_channel_id(
                     return skill_channel_id
                 return directory.skill_approvals()
             case ApprovalSurface.AGENT_CHAT_THREAD:
-                return directory.agent_chat_thread(kind)
+                if request is None:
+                    return directory.agent_chat_thread(kind)
+                return directory.agent_chat_request_thread(kind, request)
             case unreachable:
                 assert_never(unreachable)
     except Exception as error:  # noqa: BLE001 - fail closed; # noqa: BROAD_EXCEPT_OK
@@ -251,11 +318,50 @@ def resolve_new_binding(
     directory: ChannelDirectory,
     owner_id: str,
     skill_channel_id: str | None = None,
+    *,
+    request: RequestThread | None = None,
 ) -> ApprovalBinding:
+    """Resolve a fresh binding; ``request`` selects the per-request thread (S6)."""
     surface = required_surface(kind)
-    channel_id = _resolved_channel_id(kind, surface, directory, skill_channel_id)
+    channel_id = _resolved_channel_id(kind, surface, directory, skill_channel_id, request)
     binding = ApprovalBinding(kind, surface, channel_id, POLICY_VERSION)
     return _validate_channel(binding, directory, owner_id)
+
+
+def reuse_request_thread(
+    kind: ApprovalKind,
+    outstanding: Iterable[LiveRequest],
+    directory: ChannelDirectory,
+    owner_id: str,
+) -> ApprovalBinding | None:
+    """The per-request thread a LIVE request of the same key already opened (S6).
+
+    One approval key keeps one thread: a same-hash re-request (PENDING) and a content
+    change (supersede) both land where the first post did instead of opening an empty
+    thread per attempt. Only a per-request thread qualifies — the legacy per-kind thread
+    and an owner DM never do, so a legacy pending request migrates on its next post and
+    the shared kind thread is never renamed or archived. Unverifiable candidates are
+    skipped, not fatal: the caller then resolves a fresh binding as before.
+    """
+    del owner_id  # a request thread is validated by its parent, not by a DM recipient
+    if required_surface(kind) is not ApprovalSurface.AGENT_CHAT_THREAD:
+        return None
+    for request in outstanding:
+        channel_id = str(request.channel_id or "")
+        if not channel_id.isdigit():
+            continue
+        try:
+            facts = directory.describe(channel_id)
+            parent = directory.agent_chat()
+        except Exception:  # noqa: BLE001 - reuse is opportunistic; resolution stays fail-closed
+            continue
+        if (
+            facts.channel_type in (11, 12)
+            and facts.parent_id == parent
+            and facts.name != kind_thread_name(kind)
+        ):
+            return ApprovalBinding(kind, ApprovalSurface.AGENT_CHAT_THREAD, channel_id, POLICY_VERSION)
+    return None
 
 
 def validate_stored_binding(

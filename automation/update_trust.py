@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, override
+from typing import TYPE_CHECKING, Final, TypeVar
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -36,6 +36,20 @@ from automation.update_trust_state import (
     release_floor_path,
 )
 
+
+if TYPE_CHECKING:
+    from typing import override
+else:
+    try:
+        from typing import override
+    except ImportError:
+        # provision-deploy-converge.sh 가 이 파일을 루트 libexec 트리에 소수 동반 모듈과 함께
+        # 단독 설치한다 — 거기에는 automation.typing_compat 이 없으므로 같은 폴백을 여기서 든다
+        # (skills/mail/scripts/mail_runtime.py 와 같은 이유·같은 모양).
+        _Method = TypeVar("_Method")
+
+        def override(method: _Method, /) -> _Method:
+            return method
 
 UPDATE_ALLOWED_SIGNERS_PATH: Final = Path("/etc/autophagy/update-allowed-signers")
 UPDATE_TRUST_PRINCIPAL: Final = "update-trust@autophagy"

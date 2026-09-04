@@ -13,7 +13,7 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 _SCENARIO_TIMEOUT_SECONDS: Final = 30
 
 
-def _environment(home: str) -> Mapping[str, str]:
+def _environment(home: str, skills_root: Path) -> Mapping[str, str]:
     interop_runtime = Path(
         os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")
     ).expanduser()
@@ -23,6 +23,9 @@ def _environment(home: str) -> Mapping[str, str]:
         "AUTOPHAGY_DEMO_SECRET": "DUMMY-scenario-review",
         "AUTOPHAGY_REPO_ROOT": str(REPO_ROOT),
         "INTEROP_RUNTIME": str(interop_runtime),
+        # The reviewed skill dir is a checkout copy, not the live mount; naming its parent
+        # as the live root keeps skill_mount.governed_copy_refusal from refusing the run.
+        "AUTOPHAGY_SKILL_LIVE_ROOT": str(skills_root),
     }
 
 
@@ -42,7 +45,7 @@ def scenario_passes(skill_dir: Path, output_file: Path | None) -> bool:
             completed = subprocess.run(
                 ["bash", str(scenario)],
                 cwd=resolved_skill_dir,
-                env=_environment(home),
+                env=_environment(home, resolved_skill_dir.parent),
                 check=False,
                 capture_output=True,
                 encoding="utf-8",
