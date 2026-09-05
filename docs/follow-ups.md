@@ -45,6 +45,7 @@
 - **두 실행이 같은 ✅ 를 보고 동시에 태그를 자르면 한 커밋에 서명 태그가 둘 생긴다 → 완결기가 승인 레코드에 적힌 요청 버전을 재사용하게 한다.** 실측: 세션이 `--bump minor` 로 `v1.2.0` 을 13:11:22 에, 완결 타이머(`~/.hermes/release-completer/`)가 **기본 patch bump** 로 `v1.1.5` 를 13:11:23 에 잘랐다 — 둘 다 같은 커밋을 peel 하고 둘 다 update-trust 서명이 유효하다. `release_version_for` 의 "HEAD 에 이미 붙은 태그를 재사용" 은 태그가 **먼저 존재해야** 작동하므로 1초 차 경합을 막지 못한다.
 - **갈라지는 조건은 좁다** — 세션이 `--bump patch`(완결기 기본값과 같음)로 돌면 양쪽이 같은 이름을 계산하고 `ensure_signed_tag` 가 동일 이름 기존 태그를 찾아 멱등 성공한다(v1.2.1·v1.2.2 실측: 중복 없음). 즉 문제는 **세션이 minor·major 를 쓸 때만** 나타난다.
 - 프로덕션 영향은 없다(같은 커밋·같은 키라 어느 쪽으로 수렴해도 같은 코드). 다만 `public_export.sh` 는 `--version` 생략 시 source 커밋의 vX.Y.Z 태그가 **정확히 하나**여야 해서 `source commit has multiple semantic release tags` 로 막히므로, 그 릴리스만 `--version` 을 명시해야 한다. 서명 태그는 지우지 않는다(롤백 방지 floor 는 앞으로만 간다) — 심각도 낮음.
+- **태그뿐 아니라 배포 실행도 경합한다 — 세션 `release.sh` 의 `deploy_all --apply` 와 완결 타이머의 `deploy_all --apply` 가 같은 ✅ 를 보고 동시에 스킬을 배포해, 스킬별 실행 lock 에서 진 쪽이 `EXECUTION-LOCK-BLOCK` 으로 실패한다 → 완결기가 같은 head 의 살아 있는 세션 실행을 감지하면 그 틱을 양보하거나, `deploy_all` 이 lock-blocked 스킬을 실패가 아니라 '다른 실행이 수렴 중' 으로 분류해 종료 전 재판정한다.** v1.2.3 실측(2026-09-05): 세션 17:32:36 시작, 완결기 17:33:42 시작 → 세션은 `meeting` 을, 완결기는 `speechtotext` 를 각각 양보했고 완결기 1차 실행은 `Failed with result 'exit-code'`(17:35:32), 2차 틱이 `already fully deployed`(17:36:26) 로 닫았다. 최종 상태는 양쪽 모두 `fully deployed` 로 수렴했고 `deploy_all --verify` rc 0 — 프로덕션 영향 없음. 다만 완결기의 sha 별 3회 상한을 한 번 소모하고 실패 저널이 남으므로, 세션이 `--no-deploy` 없이 돌 때마다 반복된다(심각도 낮음).
 
 ## 수리 티켓 t_bd0d3789 후속 (2026-09-03)
 
