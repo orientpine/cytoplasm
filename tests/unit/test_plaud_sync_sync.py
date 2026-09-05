@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from automation.term_correction import FUZZY, Correction
 from automation.plaud_sync.binding import PlaudHashFields, plaud_action_hash
 from automation.plaud_sync.fetch import fetch_recordings
 from automation.plaud_sync.lifelog_model import (
@@ -86,6 +87,30 @@ def test_plan_new_records_freezes_body_and_binds_hash() -> None:
     assert record.kind == "obsidian-write"
     assert record.recorded_at == "2026-09-01T08:00:00Z"
     assert result.state.last_poll_at == _NOW.isoformat()
+
+
+def test_plan_new_records_corrects_the_frozen_body_and_reports_the_words() -> None:
+    # 교정은 노트를 얼리는 그 자리에서 끝나야 한다 — 카드가 붙는 sha 는 언 본문의 것이다.
+    state = PlaudSyncState(version=1, last_poll_at=None, records={})
+
+    result = plan_new_records(
+        state,
+        (_recording(summary_markdown="항정기술과 회의했다.", transcript_text="항정기술과 회의했다."),),
+        now=_NOW,
+        policy_version=8,
+        extractor=_NO_EXTRACTION,
+        glossary=(("한전기술", "한전기술"),),
+    )
+
+    body = result.bodies["rec-001"]
+    summary, transcript = body.split("## 전문")
+    assert "한전기술과 회의했다." in summary
+    assert "항정기술과 회의했다." in transcript, "전문은 인식된 그대로 남는다"
+    assert result.corrections == (
+        ("standup", (Correction(before="항정기술", after="한전기술", term="한전기술", kind=FUZZY),)),
+    )
+    record = _planned_record(result.state, "rec-001")
+    assert record.body_sha256 == hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def test_plan_new_records_skips_known_ids() -> None:

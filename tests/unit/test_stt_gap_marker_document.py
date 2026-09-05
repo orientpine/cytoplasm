@@ -170,7 +170,7 @@ def _document(audio: Path) -> str:
     transcription = stt_local.transcribe(
         stt_audio.check_audio(audio), toolchain, diarizer=diarizer
     )
-    tidied, speakers = stt_speaker_flow.tidy(transcription, ())
+    tidied, speakers = stt_speaker_flow.tidy(transcription)
     written = stt_transcript.write_transcript(
         audio.parent / "transcripts",
         label="구간실패",
@@ -275,15 +275,13 @@ def test_a_marker_stays_its_own_block_even_when_the_words_around_it_never_end(
     assert f"[00:01:45]\n{marker}" in body
 
 
-def test_the_glossary_never_rewrites_the_marker() -> None:
-    """용어집은 잘못 들린 말을 고친다. 표지는 들린 말이 아니다."""
+def test_tidying_never_rewrites_the_marker() -> None:
+    """표지는 들린 말이 아니다 — 다듬기가 그 줄을 건드리면 어느 분이 비었는지가 조용히 바뀐다."""
     marker = stt_gap.marker(105_000, 210_000)
     polished = stt_polish.polish_sentences(
-        (stt_blocks.TimedSentence(marker, 105_000, 210_000),),
-        glossary=(("구간", "구역"), ("전사", "轉寫")),
+        (stt_blocks.TimedSentence(marker, 105_000, 210_000),)
     )
     assert marker in polished.body
-    assert polished.substitutions == 0
 
 
 def _segment(start: int, end: int, text: str) -> dict[str, object]:

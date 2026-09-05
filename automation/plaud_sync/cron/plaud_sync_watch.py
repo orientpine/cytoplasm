@@ -46,7 +46,7 @@ from automation.plaud_sync.store import (  # noqa: E402
     save_state,
 )
 from automation.plaud_sync.sync import plan_new_records, poll_due  # noqa: E402
-from automation.plaud_sync import transcribe_live  # noqa: E402
+from automation.plaud_sync import terms, transcribe_live  # noqa: E402
 from automation.plaud_sync.watch_step import ResolveResult, resolve_tick  # noqa: E402
 
 ENV_SECRETS: Final = Path.home() / ".env.secrets"
@@ -133,6 +133,7 @@ def _discover(state: PlaudSyncState, now: datetime) -> PlaudSyncState:
         date_from = (now - timedelta(days=lookback)).date().isoformat()
         with PlaudMcpClient() as client:
             recordings = fetch_recordings(client, date_from=date_from)
+        initial_status = "transcribing" if transcribe_live.enabled(os.environ) else "planned"
         result = plan_new_records(
             state,
             recordings,
@@ -140,10 +141,16 @@ def _discover(state: PlaudSyncState, now: datetime) -> PlaudSyncState:
             policy_version=POLICY_VERSION,
             extractor=build_extractor(os.environ, repo_root=_REPO_ROOT),
             tz=_note_timezone(),
-            initial_status="transcribing" if transcribe_live.enabled(os.environ) else "planned",
+            initial_status=initial_status,
+            glossary=terms.glossary(),
         )
         for recording_id, body in result.bodies.items():
             save_note_body(STATE_DIR, recording_id, body)
+        if initial_status == "planned":
+            # 'transcribing' 으로 언 것은 초안이고 transcribe.finalize 가 로컬 전사로 다시 언다 —
+            # 그 초안까지 적으면 같은 녹음이 로그에 두 번 남아 오탐을 되짚기 어려워진다.
+            for label, corrections in result.corrections:
+                _ = terms.record(corrections, label=label)
         for recording_id in result.skipped:
             print(
                 f"plaud-sync: unplannable recording skipped: {recording_id}",

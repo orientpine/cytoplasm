@@ -198,20 +198,20 @@ def test_polishing_an_already_polished_body_changes_nothing() -> None:
     assert twice.collapsed == 0
 
 
-def test_polish_sentences_keeps_the_timings_it_was_given() -> None:
+def test_polish_sentences_keeps_the_timings_and_the_words_it_was_given() -> None:
+    """접기는 문장 단위로 시각을 지키고, 낱말은 들린 그대로 남는다(전사본은 증거다)."""
     sentences = (
         stt_blocks.TimedSentence("영무를 잡아놨습니다.", 1_000, 2_000, "화자1"),
         stt_blocks.TimedSentence("영무를 잡아놨습니다.", 2_000, 3_000, "화자1"),
         stt_blocks.TimedSentence("확인했습니다.", 3_000, 4_000, "화자1"),
     )
-    result = stt_polish.polish_sentences(sentences, glossary=(("영무", "업무"),))
+    result = stt_polish.polish_sentences(sentences)
 
-    assert result.substitutions == 2
     assert result.collapsed == 1
     assert result.sentences == 2
     assert result.timed[0].start_ms == 1_000
     assert result.body.splitlines()[0] == "[00:00:01] 화자1"
-    assert "업무를 잡아놨습니다." in result.body
+    assert "영무를 잡아놨습니다." in result.body
 
 
 # --- the provenance header the blocks live under ------------------------------

@@ -36,6 +36,7 @@ import meeting_knowledge
 import meeting_reference
 import meeting_project
 import meeting_slides
+import meeting_terms
 from meeting_runtime import runtime_root
 
 KST = ZoneInfo("Asia/Seoul")
@@ -72,6 +73,37 @@ def _publish_note(
     publish_best_effort(
         "meeting", title, [(note_path, title)], on=on, project=project or None
     )
+
+
+def _correct_terms(
+    extraction: meeting_llm.Extraction, *, label: str, project: str
+) -> meeting_llm.Extraction:
+    """회의록 본문의 용어를 중첩된 회의록 참고 문서로 고치고 교정 내역을 남긴다.
+
+    교정은 전사본이 아니라 **산출 문서**를 만들 때 한다(소유자 결정 2026-09-05,
+    `docs/guide/용어-교정-규약.md`) — 그래서 여기서 고치는 것은 해석 결과뿐이고, 부록에
+    실릴 원문은 추출된 그대로 `write_note` 로 간다.
+
+    참고 문서 조회도 로그 기록도 그 자체가 fail-soft 라서 감싸지 않는다: 여기서 다시
+    잡으면 그 모듈들이 이미 찍은 마커 위에 마커가 겹치고, 실패의 종류가 지워진다.
+    automation 자체가 없는 마운트만 한 줄 남기고 지나간다 — 참고 문서가 없다고 회의록을
+    잃는 것이 더 나쁘다.
+    """
+    root = str(runtime_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        from automation import term_correction_log, term_glossary  # noqa: PLC0415
+    except ImportError:
+        print(f"TERM-CORRECTION-SKIP reason=ImportError root={root}", file=sys.stderr)
+        return extraction
+    corrected, corrections = meeting_terms.correct(
+        extraction, term_glossary.glossary_for("meeting", project)
+    )
+    term_correction_log.record(
+        corrections, document="meeting", label=label, project=project, stage="minutes"
+    )
+    return corrected
 
 
 def _env_path(name: str, default: str) -> Path:
@@ -365,6 +397,9 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     evidence_footer = ""
     if pack is not None:
         extraction, evidence_footer = meeting_evidence.finalize(extraction, pack)
+    # 노트·카드·원장이 갈라지기 전에 한 번만 고친다 — 뒤에서 고치면 같은 항목이 문서마다
+    # 다른 표기로 남는다. 부록에 실릴 `extracted.text` 는 여기서도 그대로다.
+    extraction = _correct_terms(extraction, label=label, project=project)
 
     sensitive_label = "민감 회의" if gate.sensitive else label
     items = meeting_action_db.items_from(extraction.todos, extraction.others)

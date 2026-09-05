@@ -10,11 +10,13 @@ the live bindings have their own file.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import tzinfo
 from pathlib import Path
 from typing import Final
 
+from automation.term_correction import FUZZY, Correction
 from automation.plaud_sync.audio import AudioSource
 from automation.plaud_sync.fetch import CloudTranscript
 from automation.plaud_sync.lifelog_fields import DEFAULT_TIMEZONE
@@ -107,6 +109,16 @@ class FakeEffects:
     stored: list[tuple[str, str]] = field(default_factory=list)
     discarded: list[Path] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
+    terms: tuple[tuple[str, str], ...] = ()
+    corrected: list[tuple[str, tuple[Correction, ...]]] = field(default_factory=list)
+
+    def glossary(self) -> tuple[tuple[str, str], ...]:
+        return self.terms
+
+    def record_corrections(
+        self, recording: LifelogRecording, corrections: Sequence[Correction]
+    ) -> None:
+        self.corrected.append((recording.name, tuple(corrections)))
 
     def draft_body(self, recording_id: str) -> str | None:
         assert recording_id == "rec-001"
@@ -296,6 +308,28 @@ def test_run_step_processes_each_candidate_and_reports_its_outcome() -> None:
     state = PlaudSyncState(1, None, {"rec-001": _RECORD})
     effects = FakeEffects(results=[_ok()])
     assert run_step(state, effects=effects, limit=1, max_attempts=2) == (("rec-001", "planned"),)
+
+
+def test_process_corrects_the_note_with_the_glossary_and_leaves_the_transcript_alone() -> None:
+    # 노트를 얼리는 그 자리에서 고친다 — 카드가 붙는 sha 는 이 본문의 것이라 나중은 없다.
+    markdown = _TRANSCRIPT_MD.replace("오늘 안건은 출시 일정입니다.", "항정기술 방문 안건입니다.")
+    effects = FakeEffects(
+        results=[_ok()],
+        summary="- 항정기술 방문을 정했다",
+        markdown=markdown,
+        terms=(("한전기술", "한전기술"),),
+    )
+
+    assert process(_RECORD, effects=effects, max_attempts=2) == "planned"
+
+    body = effects.commits[0][2]
+    assert body is not None
+    summary, transcript = split_lifelog_body(body)
+    assert summary == "- 한전기술 방문을 정했다"
+    assert "항정기술 방문 안건입니다." in transcript, "전사본은 인식된 그대로 남는다"
+    assert effects.corrected == [
+        ("standup", (Correction(before="항정기술", after="한전기술", term="한전기술", kind=FUZZY),))
+    ]
 
 
 def test_split_transcript_separates_legend_and_body_and_tolerates_a_headerless_file() -> None:

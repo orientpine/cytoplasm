@@ -1260,3 +1260,125 @@ def test_plan_cards_forwards_the_project_to_every_card():
 
     assert len(cards) == 2
     assert all("회의록/해양고신뢰성" in card.body for card in cards)
+
+
+# --- 용어 교정은 회의록에서, 전사본에는 새기지 않는다 (2026-09-05 소유자 결정) ---------
+
+_MISHEARD_TRANSCRIPT = """# 주간 연구 미팅 (합성 픽스처 — 실제 회의 아님)
+
+일시: 2026-07-15 (수) 10:00, 장소: 공학관 402호, 참석: 차, 박
+
+## 논의/결정
+- 항정기술 쪽 계측 자료는 8월 1일까지 받기로 했다.
+
+## 액션아이템
+- 차: 항정기술 계측 자료 정리 7/24까지
+"""
+
+_MISHEARD_RECORDED = {
+    "meeting": {"title": "계측 자료 협의", "date": "2026-07-15", "attendees": ["차", "박"]},
+    "summary": ["항정기술 계측 자료를 8월 1일까지 받기로 했다"],
+    "decisions": [
+        {
+            "text": "항정기술 계측 자료를 8월 1일까지 받는다",
+            "basis": "항정기술 쪽 계측 자료는 8월 1일까지 받기로 했다",
+        }
+    ],
+    "todos": [
+        {
+            "title": "항정기술 계측 자료 정리",
+            "deadline": "2026-07-24",
+            "basis": "차: 항정기술 계측 자료 정리 7/24까지",
+        }
+    ],
+    "milestones": [],
+    "others": [],
+}
+
+
+def test_the_minutes_body_is_corrected_and_the_appendix_transcript_is_not(
+    tmp_path, monkeypatch, capsys
+):
+    """회의록 본문은 회의록 참고 문서로 고치고, 부록 전사본은 인식된 그대로 남긴다.
+
+    전사본은 증거다 — 오인식을 거기에 새기면 원래 낱말이 어디에도 남지 않는다. 반대로
+    본문의 오인식은 그대로 두면 공정표·보고서로 옮겨 간다(2026-08-26 실측).
+    """
+    glossary = tmp_path / "용어집.csv"
+    glossary.write_text("한전기술\n", encoding="utf-8")
+    transcript = tmp_path / "meeting-misheard.md"
+    transcript.write_text(_MISHEARD_TRANSCRIPT, encoding="utf-8")
+    recorded = tmp_path / "recorded-misheard.json"
+    recorded.write_text(json.dumps(_MISHEARD_RECORDED, ensure_ascii=False), encoding="utf-8")
+    log = tmp_path / "corrections.jsonl"
+    monkeypatch.setenv("TERM_GLOSSARY_FILE", str(glossary))
+    monkeypatch.setenv("TERM_CORRECTION_LOG", str(log))
+    monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
+    monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
+    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
+    monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
+    monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
+    monkeypatch.setenv("MEETING_CONFIG", str(tmp_path / "absent.json"))
+
+    rc = meeting_cli.main(
+        [
+            "ingest",
+            "--file", str(transcript),
+            "--recorded-response", str(recorded),
+            "--label", "계측 자료 협의",
+            "--offline",
+        ]
+    )
+    capsys.readouterr()
+
+    assert rc == 0
+    note = next((tmp_path / "notes").glob("*.md")).read_text(encoding="utf-8")
+    body = meeting_minutes.finalized_view(note)
+    appendix = note[note.index("### C. 원문 전사본") :]
+    assert "한전기술" in body and "항정기술" not in body
+    assert "항정기술" in appendix and "한전기술" not in appendix
+    records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert records, "교정 로그가 비어 있다"
+    assert {(item["document"], item["stage"]) for item in records} == {("meeting", "minutes")}
+    assert {(item["before"], item["after"]) for item in records} == {("항정기술", "한전기술")}
+
+
+def test_the_transcript_handed_to_the_note_is_the_uncorrected_one(tmp_path, monkeypatch):
+    """부록에 실리는 원문은 추출된 텍스트 그대로여야 한다 — 바이트 하나도 다르지 않게."""
+    glossary = tmp_path / "용어집.csv"
+    glossary.write_text("한전기술\n", encoding="utf-8")
+    transcript = tmp_path / "meeting-misheard.md"
+    transcript.write_text(_MISHEARD_TRANSCRIPT, encoding="utf-8")
+    recorded = tmp_path / "recorded-misheard.json"
+    recorded.write_text(json.dumps(_MISHEARD_RECORDED, ensure_ascii=False), encoding="utf-8")
+    seen: dict[str, str] = {}
+    real_write_note = meeting_actions.write_note
+
+    def spy(notes_dir, **kwargs):
+        seen["original_text"] = kwargs["original_text"]
+        return real_write_note(notes_dir, **kwargs)
+
+    monkeypatch.setattr(meeting_cli.meeting_actions, "write_note", spy)
+    monkeypatch.setenv("TERM_GLOSSARY_FILE", str(glossary))
+    monkeypatch.setenv("TERM_CORRECTION_LOG", str(tmp_path / "corrections.jsonl"))
+    monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
+    monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
+    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
+    monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
+    monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
+    monkeypatch.setenv("MEETING_CONFIG", str(tmp_path / "absent.json"))
+
+    rc = meeting_cli.main(
+        [
+            "ingest",
+            "--file", str(transcript),
+            "--recorded-response", str(recorded),
+            "--label", "계측 자료 협의",
+            "--offline",
+        ]
+    )
+
+    assert rc == 0
+    assert seen["original_text"] == _MISHEARD_TRANSCRIPT

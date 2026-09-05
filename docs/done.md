@@ -397,3 +397,16 @@
 - **읽을 수 없는 보드는 예전 동작** — 상태 조회만 전용 10초 상한을 쓰고(mutation 은 60초 유지), 실패·미주입·판정 불가는
   기존 중복 제거(occurrence 증가)로 떨어진다.
   [소개](기능소개/수리-티켓-재발-재발급.md) · `automation/repair/{repair_core,repair_cli}.py` · 회귀 `tests/unit/test_repair_tickets.py`.
+
+### 용어 교정 위치 이동 — 전사본이 아니라 문서에서 (2026-09-05)
+
+- **위치 규칙** — 교정은 음성→전사본이 아니라 전사본→산출 문서 단계에서 하고, 참고 문서는 **문서 종류별로**
+  중첩된다(`autophagy/용어집.csv` → `autophagy/<문서 종류>/용어집.csv` → `…/<과제>/용어집.csv`). 전사본은
+  증거라 되돌릴 수 없는 치환을 새기지 않는다 — 근접 교정이 「기성금」을 깨뜨린 적이 있고, 원문에 새겨졌다면
+  원래 낱말은 어디에도 남지 않는다. AGENTS.md 「용어 교정 위치 규칙」 · [규약](guide/용어-교정-규약.md).
+- **단일 정의** — 엔진·층 해석·감사 로그가 `automation/term_correction.py`·`term_glossary.py`·
+  `term_correction_log.py` 셋뿐이고 스킬은 위임한다. 채택 여부는 `tests/unit/test_term_correction_conformance.py`
+  가 기계로 대조하고, 붙이지 않은 문서 종류는 사유와 함께 `_EXEMPT` 에 등록된다.
+- **채택** — meeting 은 회의록 **본문만** 고치고 부록 「### C. 원문 전사본」은 바이트 그대로 두며, plaud lifelog 는
+  한눈에·요약·결정 · 할 일만 고치고 `## 전문` 을 보존한다. speechtotext 는 전사본을 인식된 그대로 남기고
+  인식 전 프롬프트 힌트만 유지한다. [소개](기능소개/용어-교정-문서-단계.md).

@@ -20,7 +20,6 @@ import stt_client
 import stt_diarize
 import stt_local
 import stt_media
-import stt_correction_log
 import stt_polish
 import stt_runtime
 import stt_speaker_flow
@@ -124,7 +123,7 @@ def cmd_run(args: argparse.Namespace, *, chain: bool) -> int:
     source = Path(args.file).expanduser()
     label = args.label or source.stem
     project = _project(args, label)
-    pairs = stt_runtime.merged_glossary(project)
+    pairs = stt_runtime.glossary(project)
     try:
         transcription = _transcribe(args, pairs)
     except stt_audio.TranscriptionRefused as refusal:
@@ -134,10 +133,7 @@ def cmd_run(args: argparse.Namespace, *, chain: bool) -> int:
         print(str(failure))
         return failure.exit_code
 
-    tidied, speakers = stt_speaker_flow.tidy(transcription, pairs)
-    stt_correction_log.record(
-        tidied.corrections, label=label, project=project, stage="transcribe"
-    )
+    tidied, speakers = stt_speaker_flow.tidy(transcription)
     transcript = stt_transcript.write_transcript(
         stt_runtime.transcript_dir(), label=label, source_name=source.name,
         transcription=transcription, now=now, polish=tidied,
@@ -181,14 +177,11 @@ def cmd_polish(args: argparse.Namespace) -> int:
     override = stt_speakers.parse_override(args.speakers)
     speakers = stt_speakers.merge(override, existing)
     tidied = stt_polish.polish_sentences(
-        stt_blocks.parse(body),
-        glossary=stt_runtime.merged_glossary(project),
-        names=stt_speakers.names(speakers),
+        stt_blocks.parse(body), names=stt_speakers.names(speakers)
     )
     if not tidied.body.strip():
         print(stt_audio.EMPTY_TRANSCRIPT_NOTICE)
         return 5
-    stt_correction_log.record(tidied.corrections, label=label, project=project, stage="polish")
     path.write_text(
         stt_transcript.rewrite(
             header,

@@ -11,11 +11,12 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, tzinfo
 from pathlib import PurePosixPath
 from typing import Final
 
+from automation import term_correction
 from automation.obsidian_write.note import NotePlan
 from automation.typing_compat import override
 
@@ -39,14 +40,16 @@ from .lifelog_fields import (
     transcript_block,
     unquote_transcript,
 )
-from .lifelog_model import ExtractionOutcome, LifelogRecording
+from .lifelog_model import ExtractionOutcome, LifelogExtraction, LifelogRecording
 
 __all__ = [
     "SOURCE_RULE",
     "SUMMARY_HEADING",
     "TRANSCRIPT_HEADING",
+    "CorrectedNote",
     "LifelogRecording",
     "PlaudNoteError",
+    "corrected_lifelog_note",
     "note_title",
     "plan_lifelog_note",
     "recording_stamp",
@@ -71,6 +74,14 @@ class PlaudNoteError(Exception):
         return f"PLAUD recording {self.recording_id!r} has no valid timestamp"
 
 
+@dataclass(frozen=True, slots=True)
+class CorrectedNote:
+    """언 노트와 그때 바뀐 낱말들 — 감사 로그는 참고 문서를 읽어 온 쪽이 남긴다."""
+
+    plan: NotePlan
+    corrections: tuple[term_correction.Correction, ...] = ()
+
+
 def recording_stamp(recording: LifelogRecording, tz: tzinfo = DEFAULT_TIMEZONE) -> datetime:
     """Recording start in the note's zone; the one place an unusable timestamp fails."""
     stamp = local_stamp(recording, tz)
@@ -80,38 +91,118 @@ def recording_stamp(recording: LifelogRecording, tz: tzinfo = DEFAULT_TIMEZONE) 
 
 
 def note_title(recording: LifelogRecording, stamp: datetime) -> str:
-    return f"{_normalized_text(recording.name) or '녹음'} ({stamp.date().isoformat()})"
+    return corrected_title(recording, stamp, ())[0]
+
+
+def corrected_title(
+    recording: LifelogRecording, stamp: datetime, glossary: term_correction.Glossary
+) -> tuple[str, tuple[term_correction.Correction, ...]]:
+    """제목도 사람이 읽는 문장이라 고친다 — 그러나 **경로는 고치지 않는다**.
+
+    Plaud 가 붙이는 녹음 이름은 음성에서 나오므로 본문과 같은 오인식을 안고 온다. 파일
+    이름의 슬러그는 그 이름의 원문에서 계속 뽑는다: 경로가 참고 문서를 따라 움직이면
+    용어집을 한 줄 고친 날 같은 녹음이 노트 둘로 갈라진다.
+    """
+    name, corrections = term_correction.apply(_normalized_text(recording.name) or "녹음", glossary)
+    return f"{name} ({stamp.date().isoformat()})", corrections
 
 
 def plan_lifelog_note(
-    recording: LifelogRecording, *, extraction: ExtractionOutcome, tz: tzinfo = DEFAULT_TIMEZONE
+    recording: LifelogRecording,
+    *,
+    extraction: ExtractionOutcome,
+    tz: tzinfo = DEFAULT_TIMEZONE,
+    glossary: term_correction.Glossary = (),
 ) -> NotePlan:
     """Build the deterministic PARA destination and content for one recording."""
+    return corrected_lifelog_note(recording, extraction=extraction, tz=tz, glossary=glossary).plan
+
+
+def corrected_lifelog_note(
+    recording: LifelogRecording,
+    *,
+    extraction: ExtractionOutcome,
+    tz: tzinfo = DEFAULT_TIMEZONE,
+    glossary: term_correction.Glossary = (),
+) -> CorrectedNote:
+    """계획한 노트와 그 노트를 만들며 고친 낱말들.
+
+    교정은 노트를 **얼리는 이 자리**에서 끝난다 — 승인 카드와 push 가 언 본문의 sha 를 묶으므로
+    나중 교정은 존재할 수 없다. 무엇이 바뀌었는지는 돌려만 주고, 로그로 남기는 것은 참고 문서를
+    읽어 온 효과 경계의 일이다(순수 함수는 파일을 쓰지 않는다).
+    """
     stamp = recording_stamp(recording, tz)
     slug = _slug_for_name(_normalized_text(recording.name))
     digest = hashlib.sha256(recording.id.encode("utf-8")).hexdigest()[:_DIGEST_LENGTH]
     filename = f"{stamp.date().isoformat()}-{slug}--{digest}.md"
-    return NotePlan(
-        relpath=_LIFELOG_ROOT / str(stamp.year) / filename,
-        title=note_title(recording, stamp),
-        body=_render(recording, extraction, stamp),
+    body, corrections = _render(recording, extraction, stamp, glossary)
+    return CorrectedNote(
+        plan=NotePlan(
+            relpath=_LIFELOG_ROOT / str(stamp.year) / filename,
+            # 본문이 이미 같은 제목을 실었으므로 교정 내역은 거기서 한 번만 센다.
+            title=corrected_title(recording, stamp, glossary)[0],
+            body=body,
+        ),
+        corrections=corrections,
     )
 
 
 def render_lifelog_body(
-    recording: LifelogRecording, *, extraction: ExtractionOutcome, tz: tzinfo = DEFAULT_TIMEZONE
+    recording: LifelogRecording,
+    *,
+    extraction: ExtractionOutcome,
+    tz: tzinfo = DEFAULT_TIMEZONE,
+    glossary: term_correction.Glossary = (),
 ) -> str:
     """Render the v2 Markdown body (frontmatter first) for one recording."""
-    return _render(recording, extraction, recording_stamp(recording, tz))
+    return _render(recording, extraction, recording_stamp(recording, tz), glossary)[0]
 
 
-def _render(recording: LifelogRecording, extraction: ExtractionOutcome, stamp: datetime) -> str:
-    summary = strip_unresolvable_images(recording.summary_markdown)
+def _corrected_fields(
+    extraction: ExtractionOutcome, glossary: term_correction.Glossary
+) -> tuple[ExtractionOutcome, tuple[term_correction.Correction, ...]]:
+    """사람·장소·결정·할 일에만 교정을 건다 — 렌더된 본문 전체에 걸면 '## 전문' 까지 고쳐진다.
+
+    시각(`at`)과 기한(`due`)은 낱말이 아니라 일정이라 손대지 않고, 생략 사유는 우리가 쓴
+    문장이라 교정할 것이 없다.
+    """
+    if not isinstance(extraction, LifelogExtraction):
+        return extraction, ()
+    collected: list[term_correction.Correction] = []
+
+    def fixed(text: str) -> str:
+        repaired, corrections = term_correction.apply(text, glossary)
+        collected.extend(corrections)
+        return repaired
+
+    corrected = LifelogExtraction(
+        people=tuple(fixed(person) for person in extraction.people),
+        places=tuple(fixed(place) for place in extraction.places),
+        decisions=tuple(replace(item, text=fixed(item.text)) for item in extraction.decisions),
+        todos=tuple(
+            replace(todo, text=fixed(todo.text), owner=fixed(todo.owner))
+            for todo in extraction.todos
+        ),
+    )
+    return corrected, tuple(collected)
+
+
+def _render(
+    recording: LifelogRecording,
+    extraction: ExtractionOutcome,
+    stamp: datetime,
+    glossary: term_correction.Glossary = (),
+) -> tuple[str, tuple[term_correction.Correction, ...]]:
+    summary, corrections = term_correction.apply(
+        strip_unresolvable_images(recording.summary_markdown), glossary
+    )
+    title, title_corrections = corrected_title(recording, stamp, glossary)
+    extraction, field_corrections = _corrected_fields(extraction, glossary)
     topics = topic_tags(summary)
     parts = [
         frontmatter(
             tags=(TAG_ROOT, *topics),
-            title=note_title(recording, stamp),
+            title=title,
             source=f"PLAUD 녹음 {recording.id}",
             stamp=stamp,
         ),
@@ -130,7 +221,7 @@ def _render(recording: LifelogRecording, extraction: ExtractionOutcome, stamp: d
     if recording.transcript_source:
         source_line += f" · 전사: {recording.transcript_source}"
     parts += [TRANSCRIPT_HEADING, transcript_block(recording.transcript_text), SOURCE_RULE, source_line]
-    return "\n\n".join(parts)
+    return "\n\n".join(parts), (*title_corrections, *corrections, *field_corrections)
 
 
 def split_lifelog_body(body: str) -> tuple[str, str]:

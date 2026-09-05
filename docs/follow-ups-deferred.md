@@ -25,6 +25,7 @@
 
 - **[OWNER] peer 에이전트가 `[release]` 승인 카드(v1.1.2)에 `⛔ DO-NOT-APPROVE — HEAD a75057c0 확인 불가(unpushed tip)` 를 붙이고 "✅ 하지 말고 push 뒤 재게시하라" 고 안내했다 → peer 에게 `[release]` 카드는 심사 범위 밖(VA-1 은 소유자 단독 ✅, 피어 attestation 은 스킬 단위)임을 지시하거나, HEAD 존재 확인을 `git ls-remote origin` 으로만 하게 자가 스킬 참고 문서를 고친다(peer 홈 `~/.hermes/skills/software-development/skill-deploy-review/`, `hermes curator`).** 판정 주체는 저장소 코드가 아니다 — 그 자가 스킬은 `[skill-deploy]` 전용 결정적 리포터(git 호출 0)이고, peer 가 그 어휘만 빌려 즉석 심사를 하며 HEAD 를 노드 로컬 체크아웃(`origin/main=7e130408`)에서 찾았다. 미러는 설계상 릴리스가 수렴한 **뒤에야** origin/main 을 따라오므로(「ops 체크아웃 단방향 규칙」 sync_mirror) 새 릴리스 HEAD 는 로컬에서 항상 "unpushed" 로 읽힌다. 실측: a75057c0 은 PR #378 머지(13:01:22Z)로 origin/main 에 있었고 요청 게시는 그 뒤, v1.1.2 태그·`agent-current`·deploy 영수증 전부 그 HEAD. 영향: 카드마다 거짓 ⛔ 안내가 붙어 소유자가 멀쩡한 릴리스를 막을 수 있다 — 심각도 중(릴리스·노드는 무영향).
   ↳ 처리(2026-09-04): 적어 둔 두 선택지 중 어느 것도 아니라 **E7 결정 복원**으로 닫았다. 그 자가 스킬의 SKILL.md 는 이미 트리거를 `[skill-deploy]` 로 한정하고 리포터 출력을 verbatim 중계하라며 `Do not add an LLM judgment.` 를 명시하고 있었는데도 peer 가 `[release]` 카드에 LLM 판단을 붙였다 — 참고 문서를 한 번 더 고치는 것은 이미 실패한 통제의 반복이다. `docs/patch/2026-07-17-e7-peer-attestation.md` 가 "That skill directory is removed: an agent must not read a Discord request and be instructed to run a reviewer as part of deployment" 로 그 리뷰어를 은퇴시켰으나 2026-08-15 루트 반전이 자작 스킬 보호 목적으로 `provision-skill-roots.sh` 의 `PEER_PINNED_SKILLS` 에 이름을 넣어 매 프로비저닝이 되살리고 있었다(의도적 재검토가 아닌 부수 효과). 조치: pin 목록을 `(autophagy-interop)` 으로 줄이고 회귀를 `test_provision_when_the_retired_reviewer_is_present_then_it_is_not_pinned` 로 고정(**존재**를 전제로 검사 — 부재면 `PEER-PIN-SKIP` 이라 고치지 않아도 통과한다), 노드에서는 tarball 백업 후 `hermes curator unpin` → `archive`(삭제 아님, `restore` 가능). 사후 실측: 1차 루트에 `autophagy-interop` 만, `list-archived` 에 등재, `hermes skills list` 무영향. peer attestation 은 ops 체크아웃의 `peer_attest.py` 가 자체 봇 토큰으로 회신을 게시하는 경로라 무관하다(그 3파일에 자가 스킬 루트·curator 참조 0건). 상세 `docs/patch/2026-09-04-peer-retired-reviewer-unpin.md`.
+  ↳ 처리(2026-09-05): 위 09-04 진단은 불완전했다 — v1.2.0~v1.2.2 카드에도 같은 심사(`⛔ 배포 승인 보류`)가 붙었다. 지시 문서는 pin 된 `autophagy-interop`(2026-09-01 자가 저작 `[release]` 절차)이었고, 소유자 결정(인터롭 유지, A+C)에 따라 peer 게이트웨이의 `discord.ignored_channels` 로 `#approvals` 수신을 끊고(A) 그 절차를 스킬에서 제거했다(C). 원문·근거는 「릴리스 승인 카드가 peer 시야에 있다 (2026-09-05)」의 처리 줄과 `docs/patch/2026-09-05-peer-gateway-ignores-approvals.md`.
 
 ## 수리 티켓 t_bd0d3789 종결 중 소유자만 닫을 수 있는 것 (2026-09-03)
 
@@ -811,6 +812,16 @@ healthcheck까지 구현했다.
 
 # 해소 기록 — 닫혔지만 회계 가드가 원문을 요구한다
 
+## 릴리스 승인 카드가 peer 시야에 있다 (2026-09-05)
+
+> [이관 2026-09-05 · 해소] follow-ups.md 에서 옮겨 왔다. 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **`[release]` 승인 카드가 `#approvals`(SKILL_APPROVALS 표면)에 게시돼 peer 봇이 보고, peer 가 매번 즉석 심사해 `⛔ 배포 승인 보류 / DO-NOT-APPROVE` 를 붙인다 → `release` kind 를 요청별 `#agent-chat` 스레드로 옮겨 peer 시야에서 뺀다.** 그 예외의 사유는 `tests/unit/test_request_thread_adoption_conformance.py:28-34` 에 적혀 있다 — "2차 주체인 peer 봇이 같은 채널을 봐야 하므로". 그런데 **`release` 만은 그 사유가 성립하지 않는다**: VA-1 릴리스 승인은 소유자 단독 ✅ 이고 peer attestation 이 없다(skill-deploy·attest·publish·submit·managed-activate 는 성립한다). 즉 peer 가 볼 이유가 없는 유일한 kind 가 peer 가 보는 채널에 있다.
+- **오탐은 구조적이라 정확도를 고쳐서는 닫히지 않는다.** peer 는 HEAD 를 노드 로컬 상태에서 찾는다(카드가 `origin/main = <직전 릴리스 sha>`, `운영 포인터 = /srv/autophagy-agent-releases/<직전 sha>` 를 함께 보고한다 — 둘 다 노드 값이다). 미러는 「ops 체크아웃 단방향 규칙」의 `sync_mirror` 대로 릴리스가 수렴한 **뒤에야** origin/main 을 따라오는데, 승인 카드는 정의상 아직 배포되지 않은 HEAD 를 가리킨다 — **승인 전에 통과할 수 있는 순간이 없다.** 2026-09-05 실측 반증: peer 가 "공유 저장소에 없음" 이라 한 커밋을 빈 저장소에서 `git fetch --depth 1 <origin> <sha>` 로 직접 받아냈고, `git ls-remote` 의 `refs/heads/main` 이 바로 그 sha 였다.
+- **자가 스킬 회수로는 닫히지 않았다(2026-09-04 시도).** peer 의 `skill-deploy-review` 를 아카이브한 뒤에도 같은 심사가 나왔고 문구만 `DO-NOT-APPROVE` → `배포 승인 보류` 로 바뀌었다. 실측: peer 1차 루트에 `autophagy-interop` 뿐이고 그 스킬은 여전히 아카이브 상태다. 즉 원인은 스킬이 아니라 **그 카드가 peer 에게 보인다는 사실** 이다.
+- 조치 전 확인할 것: `surface_for(release)` 가 바뀌면 `approval_surface.POLICY_VERSION`(현재 8) bump 가 필요한지 — 필요하면 MAJOR 신호라 `release.sh --bump major` 사이클이다. 레코드 소비자(`skill_gate.py`·`release_approval.py`·`deploy_all.py`)는 채널이 아니라 레코드를 읽으므로 영향 없을 것으로 보이나 확인이 필요하다. 영향: 매 릴리스마다 거짓 ⛔ 가 붙어 소유자가 멀쩡한 릴리스를 막거나, 반대로 경보를 무시하는 습관이 든다 — 심각도 중(릴리스·노드 동작은 무영향).
+  ↳ 처리(2026-09-05): 적어 둔 조치(B — `release` kind 를 `#agent-chat` 요청별 스레드로 이동)는 **채택하지 않았다**. 소유자 결정: 인터롭(공유 Lab 의 보고·조율)은 계속 필요하므로 peer LLM 게이트웨이는 유지하고, 근본 원인 두 겹만 걷어냈다. **원인 정정** — 3번째 불릿의 "원인은 스킬이 아니라 카드가 보인다는 사실" 은 절반만 맞았다: 심사를 지시한 문서는 아카이브한 `skill-deploy-review` 가 아니라 **pin 된 `autophagy-interop`** 이었다(2026-09-01 자가 저작 — 라우팅 표 `[release]` 행, `### [release] — Quick Reference` 50줄, `references/release-approval.md`, 교훈 불릿 12건; 그 절차가 노드 미러의 `git rev-parse origin/main` 과 `readlink /srv/autophagy-agent-current` 로 HEAD 를 찾으라고 적혀 있어 승인 전에는 통과할 수 없었다). **A(전송 계층)**: peer `~/.hermes/config.yaml` 최상위 `discord.ignored_channels` 에 `#approvals` 채널 id 를 넣었다 — Hermes Discord 어댑터의 거부 목록은 스레드의 부모 채널 id 까지 대조하고(`channel_keys`) `allowed_channels` 보다 우선하므로 카드 auto-thread 까지 막힌다. config 백업 후 YAML 파싱 검증, agent+peer 게이트웨이 쌍 재시동(둘 다 `active`, NRestarts 0). **C(지시 계층)**: `autophagy-interop` 을 tarball 백업(sha256 `a60d1fee…`)한 뒤 위 절차 전부와 `[skill-deploy]`·`[skill-publish]` 행·`scripts/publish-verify.py` 를 제거했다(344→231행, 잔존 참조 0, `hermes skills list` enabled 유지). PATENT EXPORT·Drive 아카이브·blocked-review 는 그대로다. peer attestation 은 `peer_attest.py` 가 REST 로 게시하는 경로라 무영향. 4번째 불릿(POLICY_VERSION bump 검토)은 B 를 하지 않으므로 소멸. 실표면 검증 지점: v1.2.3 승인 카드에 peer 논평이 없어야 한다. 상세 `docs/patch/2026-09-05-peer-gateway-ignores-approvals.md`.
+
 ## 동결 해제·repair 재발 수리 착지 후 남긴 것 (2026-09-04)
 
 > [이관 2026-09-04 · 해소] follow-ups.md 에서 옮겨 왔다. 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
@@ -1573,3 +1584,8 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   의존한다. 조치: 필요해지면 별도 로컬 diarization 파이프라인을 검토(파이썬 ML 스택이라
   stdlib 정책 예외가 필요). **현재 기능에 영향 없음 · 심각도 낮음**.
   ↳ 해소(2026-09-04): `skills/speechtotext/scripts/stt_diarize.py` 와 `skills/speechtotext/scripts/stt_speakers.py` 가 존재한다. 같은 소절의 「해소 (2026-09-01)」 줄이 sherpa-onnx 착지를 이미 기록해 두었다.
+
+## 용어 교정 문서 단계 이동 (2026-09-05) — 소유자·관측
+
+- **OWNER — Drive 에 교정 참고 문서가 아직 없다 → 소유자가 `autophagy/용어집.csv`(모든 산출물)와 필요하면 `autophagy/회의록/용어집.csv`·`autophagy/라이프로그/용어집.csv` 를 만들어야 실제 교정이 걸린다.** 2026-09-04 실측에서 공통 파일이 부재했고, 2026-09-04 QA 사고로 노드의 옛 `~/.hermes/speechtotext/glossary.txt` 도 지워졌다. 코드는 없는 참고 문서를 빈 것으로 읽으므로(fail-soft) 실패가 아니라 **교정 0건**으로 나타난다 — 형식과 자리는 [용어-교정-규약](guide/용어-교정-규약.md). 심각도 중(문서 품질), 저장소에서 닫을 수 없음.
+- **OBSERVE — 라이프로그 노트의 파일 이름 슬러그는 교정하지 않는다 → 파일 탐색기에는 오인식 표기가 남을 수 있다.** 의도된 절충이다: 경로가 참고 문서를 따라 움직이면 용어집을 한 줄 고친 날 같은 녹음이 노트 둘로 갈라진다(제목·본문은 교정된다). 소유자가 파일 이름까지 맞추고 싶다고 말하면 그때 이관 규칙(옛 경로 → 새 경로 이동)을 함께 설계한다. 심각도 낮음.

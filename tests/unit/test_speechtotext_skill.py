@@ -1114,31 +1114,52 @@ def test_polish_collapses_only_an_exact_consecutive_repeat() -> None:
     assert result.body.count("안건을 정리했습니다.") == 2
 
 
-def test_glossary_corrects_the_names_the_model_got_wrong(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "glossary.txt"
-    path.write_text(
-        "# 회의 고유명사\n\n영무=업무\n외교환기=열교환기\n", encoding="utf-8"
-    )
-    monkeypatch.setenv("SPEECHTOTEXT_GLOSSARY", str(path))
-    glossary = stt_polish.load_glossary(dict(os.environ))
-
-    assert glossary == (("영무", "업무"), ("외교환기", "열교환기"))
-    result = stt_polish.polish(_SAID, glossary=glossary)
-    assert "영무" not in result.body
-    assert "업무를 잡아놨습니다" in result.body
-    assert result.substitutions == 1
-
-
-def test_glossary_is_empty_when_none_is_configured(tmp_path: Path, monkeypatch) -> None:
+def test_the_glossary_is_empty_when_none_is_configured(tmp_path: Path, monkeypatch) -> None:
     """A guessed name written into production would harden the very mishearing it guessed."""
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("SPEECHTOTEXT_GLOSSARY", str(tmp_path / "absent.txt"))
-    assert stt_polish.load_glossary(dict(os.environ)) == ()
+    assert stt_runtime.glossary("해양고신뢰성") == ()
 
 
-def test_prompt_hint_feeds_the_same_names_to_the_model() -> None:
-    hint = stt_polish.prompt_hint((("영무", "업무"), ("한정기술", "한전기술")))
-    assert "업무" in hint and "한전기술" in hint
-    assert stt_polish.prompt_hint(()) == ""
+def test_the_prompt_hint_is_built_from_the_transcript_layers(tmp_path, monkeypatch) -> None:
+    """참고 문서는 이제 인식 **조건**으로만 쓰인다 — 층 조회는 automation 이 한다.
+
+    스킬이 층을 다시 구현하면 같은 낱말이 회의록과 전사 힌트에서 달라진다.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AUTOPHAGY_RUNTIME_ROOT", str(REPO))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+    monkeypatch.delenv("SPEECHTOTEXT_PROMPT", raising=False)
+    monkeypatch.delenv("DRIVE_PUBLISH_ENABLED", raising=False)
+    reference = tmp_path / "용어집.csv"
+    reference.write_text("한전기술\n영무,업무\n", encoding="utf-8")
+    monkeypatch.setenv("TERM_GLOSSARY_FILE", str(reference))
+
+    pairs = stt_runtime.glossary("해양고신뢰성")
+
+    assert pairs == (("한전기술", "한전기술"), ("영무", "업무"))
+    assert stt_runtime.prompt_for("", pairs) == "고유명사: 한전기술, 업무"
+
+
+def test_an_explicit_glossary_file_is_read_without_touching_drive(tmp_path, monkeypatch) -> None:
+    """명시한 파일은 명시한 대로 — 소유자가 이미 그 경로를 설정해 둔 노드가 있다."""
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AUTOPHAGY_RUNTIME_ROOT", str(REPO))
+    monkeypatch.setenv("DRIVE_PUBLISH_ENABLED", "1")
+    local = tmp_path / "용어집.csv"
+    local.write_text("영무,업무\n", encoding="utf-8")
+    monkeypatch.setenv("SPEECHTOTEXT_GLOSSARY", str(local))
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from automation import drive_outputs
+
+    def explode() -> None:
+        raise AssertionError("명시된 파일이 있으면 Drive 를 보지 않는다")
+
+    monkeypatch.setattr(drive_outputs, "client_from_environment", explode)
+
+    assert stt_runtime.glossary("해양고신뢰성") == (("영무", "업무"),)
 
 
 def test_split_document_separates_the_provenance_header(tmp_path: Path) -> None:
@@ -1177,6 +1198,32 @@ def test_transcribe_writes_a_readable_transcript(
     assert body.count("\n\n") >= 4
     assert summary["polish"]["paragraphs"] >= 4
     assert summary["polish"]["sentences"] == 96
+
+
+def test_the_transcript_keeps_the_word_that_was_recognized(
+    tmp_path: Path, monkeypatch, fake_meeting, capsys
+) -> None:
+    """전사본은 증거다 — 참고 문서가 있어도 들린 낱말을 그대로 남긴다(소유자 결정 2026-09-05).
+
+    퍼지 교정이 전사본에 새겨지면 원래 낱말은 어디에도 남지 않는다. 교정은 이 전사본으로
+    회의록·라이프로그 노트를 만들 때 그 문서에 건다.
+    """
+    _cli_env(tmp_path, monkeypatch, fake_meeting)
+    glossary = tmp_path / "용어집.csv"
+    glossary.write_text("한전기술\n", encoding="utf-8")
+    monkeypatch.setenv("SPEECHTOTEXT_GLOSSARY", str(glossary))
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"RIFF")
+    spoken = tmp_path / "spoken.txt"
+    spoken.write_text("항정기술 담당자와 일정을 정했습니다.", encoding="utf-8")
+
+    assert speechtotext_cli.main(
+        ["transcribe", "--file", str(audio), "--label", "킥오프", "--recorded", str(spoken)]
+    ) == 0
+
+    body = Path(json.loads(capsys.readouterr().out)["transcript_path"]).read_text(encoding="utf-8")
+    assert "항정기술 담당자와 일정을 정했습니다." in body
+    assert "한전기술" not in body
 
 
 def test_polish_verb_retidies_an_existing_transcript(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -1297,253 +1344,15 @@ def test_project_is_the_first_token_that_is_not_a_date() -> None:
     assert stt_runtime.project_of("") == ""
 
 
-def test_parse_glossary_reads_the_text_the_file_holds() -> None:
-    """주석과 빈 줄은 항목이 아니고, 한 칸짜리 줄은 **바른 용어**다.
-
-    2026-09-05 전에는 구분자 없는 줄을 버렸다. 그때는 용어집이 1:1 쌍뿐이라 그것이 잘못 쓴
-    줄이었지만, 지금은 소유자가 틀리는 방식을 모른 채 바른 용어만 적는 정상 형식이다.
-    """
-    parsed = stt_polish.parse_glossary("# 주석\n영무=업무\n\n한정기술=한전기술\n열교환기\n")
-
-    assert parsed == (("영무", "업무"), ("한정기술", "한전기술"), ("열교환기", "열교환기"))
-
-
-class _FakeProjectDrive:
-    """Enough Drive to hold one project folder with one glossary file in it."""
-
-    def __init__(self, text: str | None) -> None:
-        self.text = text
-        self.resolved: list[tuple[str, ...]] = []
-
-    def ensure_folder_path(self, parts):
-        raise AssertionError(f"용어집 조회가 폴더를 만들었다: {tuple(parts)}")
-
-    def find_folder_path(self, parts):
-        self.resolved.append(tuple(parts))
-        return "project-folder"
-
-    def list_children(self, folder_id):
-        assert folder_id == "project-folder"
-        return [] if self.text is None else [{"id": "g1", "name": "용어집.txt"}]
-
-    def download_file(self, file_id: str, dest: Path) -> str:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(self.text or "", encoding="utf-8")
-        return "sha"
-
-
-class _FakeNestedDrive:
-    """Drive with a 용어집.txt at some folders on the path — and no folder creation."""
-
-    def __init__(self, glossaries, *, folders=None, legacy=None, fails: bool = False) -> None:
-        self.glossaries = {tuple(key): value for key, value in glossaries.items()}
-        self.legacy = {tuple(key): value for key, value in (legacy or {}).items()}
-        known = set(self.glossaries) | set(self.legacy)
-        self.folders = {tuple(f) for f in (known if folders is None else folders)}
-        self.fails = fails
-        self.looked: list[tuple[str, ...]] = []
-
-    def ensure_folder_path(self, parts):
-        raise AssertionError(f"용어집 조회가 폴더를 만들었다: {tuple(parts)}")
-
-    def find_folder_path(self, parts):
-        if self.fails:
-            raise RuntimeError("drive is unreachable")
-        key = tuple(parts)
-        self.looked.append(key)
-        return "|".join(key) if key in self.folders else None
-
-    def list_children(self, folder_id):
-        key = tuple(folder_id.split("|"))
-        kids = []
-        if key in self.glossaries:
-            kids.append({"id": f"{folder_id}|csv", "name": "용어집.csv"})
-        if key in self.legacy:
-            kids.append({"id": f"{folder_id}|txt", "name": "용어집.txt"})
-        return kids
-
-    def download_file(self, file_id: str, dest: Path) -> str:
-        *parts, kind = file_id.split("|")
-        source = self.glossaries if kind == "csv" else self.legacy
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(source[tuple(parts)], encoding="utf-8")
-        return "sha"
-
-
-def test_the_glossary_is_nested_and_the_deeper_folder_wins(tmp_path, monkeypatch) -> None:
-    """트리가 중첩이니 용어집도 중첩이다 — 루트에 한 번 적은 이름이 모든 녹음에 걸린다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-    drive = _FakeNestedDrive(
-        {
-            ("autophagy",): "영무=업무\n한정기술=바깥값\n",
-            ("autophagy", "전사본"): "한정기술=전사본값\n",
-            ("autophagy", "전사본", "해양고신뢰성"): "한정기술=한전기술\n",
-        }
-    )
-
-    merged = dict(stt_runtime.merged_glossary("해양고신뢰성", client=drive))
-
-    assert merged["영무"] == "업무"
-    assert merged["한정기술"] == "한전기술"
-
-
-def test_the_outer_layers_are_looked_up_from_the_root_down(tmp_path, monkeypatch) -> None:
-    """조회는 바깥에서 안으로 — 그리고 조회가 폴더를 만들면 fake 가 실패시킨다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-    drive = _FakeNestedDrive({("autophagy", "전사본"): "영무=업무\n"})
-
-    assert stt_runtime.glossary(client=drive) == (("영무", "업무"),)
-    assert drive.looked == [("autophagy",), ("autophagy", "전사본")]
-
-
-def test_a_missing_outer_folder_does_not_hide_the_inner_glossary(tmp_path, monkeypatch) -> None:
-    """바깥 층이 없는 것은 정상이다 — 안쪽 층이 그 때문에 사라지면 안 된다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-    drive = _FakeNestedDrive(
-        {("autophagy", "전사본", "해양고신뢰성"): "한정기술=한전기술\n"},
-        folders={("autophagy", "전사본", "해양고신뢰성")},
-    )
-
-    assert dict(stt_runtime.merged_glossary("해양고신뢰성", client=drive)) == {"한정기술": "한전기술"}
-
-
-def test_a_fetched_glossary_is_cached_on_the_node(tmp_path, monkeypatch) -> None:
-    """캐시가 있어야 Drive 옵트아웃 경로(plaud lifelog)도 같은 이름을 고친다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-
-    stt_runtime.glossary(client=_FakeNestedDrive({("autophagy", "전사본"): "영무=업무\n"}))
-
-    cached = tmp_path / ".hermes/speechtotext/glossary.txt"
-    assert cached.read_text(encoding="utf-8") == "영무=업무\n"
-    assert stt_polish.load_glossary({}) == (("영무", "업무"),)
-
-
-def test_a_correct_term_is_cached_as_one_column(tmp_path, monkeypatch) -> None:
-    """캐시는 정본의 거울이다 — 한 칸으로 받은 것을 두 칸으로 적으면 형식을 오해하게 된다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-
-    stt_runtime.glossary(client=_FakeNestedDrive({("autophagy", "전사본"): "열교환기\n영무,업무\n"}))
-
-    cached = tmp_path / ".hermes/speechtotext/glossary.txt"
-    assert cached.read_text(encoding="utf-8") == "열교환기\n영무=업무\n"
-
-
-def test_the_node_cache_answers_when_drive_will_not(tmp_path, monkeypatch, capsys) -> None:
-    """Drive 불통이 용어집을 비우면 안 된다 — 그 침묵이 오인식을 굳힌다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-    cached = tmp_path / ".hermes/speechtotext/glossary.txt"
-    cached.parent.mkdir(parents=True)
-    cached.write_text("영무=업무\n", encoding="utf-8")
-
-    pairs = stt_runtime.glossary(client=_FakeNestedDrive({}, fails=True))
-
-    assert pairs == (("영무", "업무"),)
-    assert "GLOSSARY-FETCH-FAIL" in capsys.readouterr().err
-
-
-def test_a_glossary_absent_from_drive_is_absent_here_too(tmp_path, monkeypatch, capsys) -> None:
-    """Drive 가 정본이므로 거기 없으면 없는 것이다 — 낡은 캐시를 정본으로 승격하지 않는다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-    cached = tmp_path / ".hermes/speechtotext/glossary.txt"
-    cached.parent.mkdir(parents=True)
-    cached.write_text("영무=업무\n", encoding="utf-8")
-
-    assert stt_runtime.glossary(client=_FakeNestedDrive({}, folders={("autophagy",)})) == ()
-    assert cached.read_text(encoding="utf-8") == ""
-    assert "GLOSSARY-DRIVE-ABSENT" in capsys.readouterr().err
-
-
-def test_an_explicit_glossary_path_is_read_without_touching_drive(tmp_path, monkeypatch) -> None:
-    """명시한 파일은 명시한 대로 — 샌드박스·오프라인의 결정성이 여기 걸려 있다."""
-    local = tmp_path / "glossary.txt"
-    local.write_text("영무=업무\n", encoding="utf-8")
-    monkeypatch.setenv("SPEECHTOTEXT_GLOSSARY", str(local))
-    drive = _FakeNestedDrive({("autophagy", "전사본"): "영무=틀린값\n"})
-
-    assert stt_runtime.glossary(client=drive) == (("영무", "업무"),)
-    assert drive.looked == []
-
-
-def test_a_glossary_row_may_be_a_table_row_or_an_equals_line() -> None:
-    """표(csv)로 적든 예전처럼 =로 적든 같은 용어집이다 — 머리글과 주석은 읽지 않는다."""
-    parsed = stt_polish.parse_glossary(
-        "틀린표기,올바른표기\n영무,업무\n한정기술=한전기술\n# 작성 예시\n# 포스텔,포스텍\n"
-    )
-
-    assert parsed == (("영무", "업무"), ("한정기술", "한전기술"))
-
-
-def test_a_quoted_table_field_keeps_its_comma() -> None:
-    """Sheets 는 쉼표가 든 칸을 따옴표로 감싼다 — 손으로 자르면 그 줄이 쓰레기가 된다."""
-    parsed = stt_polish.parse_glossary('"서울, 부산","서울·부산"\n영무,업무\n')
-
-    assert parsed == (("서울, 부산", "서울·부산"), ("영무", "업무"))
-
-
-def test_the_table_glossary_wins_over_a_legacy_text_file(tmp_path, monkeypatch) -> None:
-    """한 폴더에 둘 다 있으면 새 이름이 정본이다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-    drive = _FakeNestedDrive(
-        {("autophagy", "전사본"): "영무,업무\n"},
-        legacy={("autophagy", "전사본"): "영무=옛값\n"},
-    )
-
-    assert stt_runtime.glossary(client=drive) == (("영무", "업무"),)
-
-
-def test_a_legacy_text_glossary_is_still_read(tmp_path, monkeypatch) -> None:
-    """이미 Drive 에 있는 용어집.txt 가 이름이 바뀌었다고 안 읽히면 조용한 회귀다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
-    drive = _FakeNestedDrive({}, legacy={("autophagy", "전사본"): "영무=업무\n"})
-
-    assert stt_runtime.glossary(client=drive) == (("영무", "업무"),)
-
-
 def test_the_shipped_example_documents_the_format_without_adding_entries() -> None:
     """예시 파일을 그대로 올려도 항목이 생기지 않는다 — 전부 주석이어야 한다."""
-    example = (
-        Path(__file__).resolve().parents[2]
-        / "skills/speechtotext/configs/용어집.example.csv"
-    )
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from automation import term_correction
 
-    assert stt_polish.parse_glossary(example.read_text(encoding="utf-8")) == ()
+    example = REPO / "skills/speechtotext/configs/용어집.example.csv"
 
-
-def test_project_glossary_is_read_from_the_project_folder(monkeypatch) -> None:
-    drive = _FakeProjectDrive("한정기술=한전기술\n포스텔=포스텍\n")
-
-    pairs = stt_runtime.project_glossary("해양고신뢰성", client=drive)
-
-    assert drive.resolved == [("autophagy", "전사본", "해양고신뢰성")]
-    assert pairs == (("한정기술", "한전기술"), ("포스텔", "포스텍"))
-
-
-def test_project_glossary_is_empty_when_the_project_has_none() -> None:
-    assert stt_runtime.project_glossary("해양고신뢰성", client=_FakeProjectDrive(None)) == ()
-    assert stt_runtime.project_glossary("", client=_FakeProjectDrive("영무=업무\n")) == ()
-
-
-def test_project_entries_win_over_the_global_glossary(tmp_path, monkeypatch) -> None:
-    """Generic mishearings belong to every project; institution names belong to one."""
-    glob = tmp_path / "glossary.txt"
-    glob.write_text("영무=업무\n한정기술=틀린값\n", encoding="utf-8")
-    monkeypatch.setenv("SPEECHTOTEXT_GLOSSARY", str(glob))
-
-    merged = stt_runtime.merged_glossary(
-        "해양고신뢰성", client=_FakeProjectDrive("한정기술=한전기술\n")
-    )
-
-    assert dict(merged)["영무"] == "업무"
-    assert dict(merged)["한정기술"] == "한전기술"
+    assert term_correction.parse_glossary(example.read_text(encoding="utf-8")) == ()
 
 
 def test_transcribe_files_the_transcript_under_its_project(
@@ -1568,7 +1377,6 @@ def test_transcribe_files_the_transcript_under_its_project(
             SimpleNamespace(links=("https://drive.example/t",)),
         )[1],
     )
-    monkeypatch.setattr(stt_runtime, "project_glossary", lambda project, **kw: ())
     audio = tmp_path / "20260825_해양고신뢰성.wav"
     audio.write_bytes(b"RIFF")
     spoken = tmp_path / "spoken.txt"
@@ -1588,7 +1396,6 @@ def test_ingest_hands_the_project_to_the_meeting_child(
 ) -> None:
     _cli_env(tmp_path, monkeypatch, fake_meeting)
     monkeypatch.setenv("SPEECHTOTEXT_GLOSSARY", str(tmp_path / "absent.txt"))
-    monkeypatch.setattr(stt_runtime, "project_glossary", lambda project, **kw: ())
     audio = tmp_path / "20260825_해양고신뢰성.wav"
     audio.write_bytes(b"RIFF")
     spoken = tmp_path / "spoken.txt"
@@ -1600,27 +1407,6 @@ def test_ingest_hands_the_project_to_the_meeting_child(
 
     argv = json.loads(fake_meeting[1].read_text(encoding="utf-8"))["argv"]
     assert argv[argv.index("--project") + 1] == "해양고신뢰성"
-
-
-def test_project_glossary_never_builds_a_client_without_the_opt_in(monkeypatch) -> None:
-    """Reading a project glossary is a Drive call, and a Drive call is opt-in.
-
-    Without this the CLI reached the owner's real Drive from a unit test — the run that
-    found it created a folder named after a test fixture.
-    """
-    monkeypatch.setattr(os, "environ", dict(os.environ))
-    monkeypatch.delenv("DRIVE_PUBLISH_ENABLED", raising=False)
-    if str(REPO) not in sys.path:
-        sys.path.insert(0, str(REPO))
-    from automation import drive_outputs
-
-    def explode() -> None:
-        raise AssertionError("a Drive client must not be built without DRIVE_PUBLISH_ENABLED=1")
-
-    monkeypatch.setattr(drive_outputs, "client_from_environment", explode)
-
-    assert stt_runtime.project_glossary("해양고신뢰성") == ()
-    assert stt_runtime.merged_glossary("해양고신뢰성") == stt_runtime.glossary()
 
 
 # --- 창 단위 전사: 한 구간의 사고가 나머지 전사본을 데려가지 않는다 -------------

@@ -16,11 +16,13 @@ from datetime import datetime, tzinfo
 from types import MappingProxyType
 from typing import Final
 
+from automation import term_correction
+
 from .binding import PlaudHashFields, plaud_action_hash
 from .lifelog_fields import DEFAULT_TIMEZONE
 from .lifelog_model import ExtractionOutcome, ExtractionSkipped, Extractor, LifelogExtractError
 from .model import PlaudStatus, PlaudSyncRecord, PlaudSyncState
-from .note import LifelogRecording, PlaudNoteError, plan_lifelog_note, recording_stamp
+from .note import LifelogRecording, PlaudNoteError, corrected_lifelog_note, recording_stamp
 
 APPROVAL_KIND: Final = "obsidian-write"
 APPROVAL_SURFACE: Final = "agent-chat-thread"
@@ -36,6 +38,8 @@ class DiscoveryResult:
     skipped: tuple[str, ...]
     #: Recordings whose field extraction failed this poll — not frozen, retried next poll.
     deferred: tuple[str, ...] = ()
+    #: (녹음 이름, 그 노트에서 고친 어절들). 감사 로그는 효과 경계가 남긴다.
+    corrections: tuple[tuple[str, tuple[term_correction.Correction, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bodies", MappingProxyType(dict(self.bodies)))
@@ -62,12 +66,14 @@ def plan_new_records(
     extractor: Extractor,
     tz: tzinfo = DEFAULT_TIMEZONE,
     initial_status: PlaudStatus = "planned",
+    glossary: term_correction.Glossary = (),
 ) -> DiscoveryResult:
     records = dict(state.records)
     bodies: dict[str, str] = {}
     planned: list[str] = []
     skipped: list[str] = []
     deferred: list[str] = []
+    corrections: list[tuple[str, tuple[term_correction.Correction, ...]]] = []
 
     for recording in recordings:
         if recording.id in records:
@@ -93,7 +99,10 @@ def plan_new_records(
             except LifelogExtractError:
                 deferred.append(recording.id)
                 continue
-        plan = plan_lifelog_note(recording, extraction=extraction, tz=tz)
+        note = corrected_lifelog_note(recording, extraction=extraction, tz=tz, glossary=glossary)
+        plan = note.plan
+        if note.corrections:
+            corrections.append((recording.name or recording.id, note.corrections))
         note_relpath = plan.relpath.as_posix()
         body_sha256 = hashlib.sha256(plan.body.encode("utf-8")).hexdigest()
         records[recording.id] = PlaudSyncRecord(
@@ -133,4 +142,5 @@ def plan_new_records(
         planned=tuple(planned),
         skipped=tuple(skipped),
         deferred=tuple(deferred),
+        corrections=tuple(corrections),
     )

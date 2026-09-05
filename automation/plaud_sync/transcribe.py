@@ -17,18 +17,20 @@ note's source line says so, because a lifelog note stuck forever helps nobody.
 
 from __future__ import annotations
 
-import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import tzinfo
 from pathlib import Path, PurePosixPath
 from typing import Final, Literal, Protocol, TypeAlias
 
+from automation import term_correction
+
 from .audio import AudioSource
-from .binding import PlaudHashFields, plaud_action_hash
+from .binding import finalize
 from .fetch import CloudTranscript
 from .lifelog_model import ExtractionOutcome, LifelogExtractError
 from .model import PlaudSyncRecord, PlaudSyncState
-from .note import LifelogRecording, plan_lifelog_note, split_lifelog_body
+from .note import LifelogRecording, split_lifelog_body
 
 Outcome: TypeAlias = Literal["planned", "fallback", "retry", "stale"]
 
@@ -79,6 +81,12 @@ class TranscribeEffects(Protocol):
     def tz(self) -> tzinfo: ...
 
     def extract(self, recording: LifelogRecording) -> ExtractionOutcome: ...
+
+    def glossary(self) -> term_correction.Glossary: ...
+
+    def record_corrections(
+        self, recording: LifelogRecording, corrections: Sequence[term_correction.Correction]
+    ) -> None: ...
 
     def draft_body(self, recording_id: str) -> str | None: ...
 
@@ -147,35 +155,6 @@ def _recording(
     )
 
 
-def finalize(
-    record: PlaudSyncRecord,
-    recording: LifelogRecording,
-    *,
-    extraction: ExtractionOutcome,
-    tz: tzinfo,
-) -> tuple[PlaudSyncRecord, str]:
-    plan = plan_lifelog_note(recording, extraction=extraction, tz=tz)
-    relpath = plan.relpath.as_posix()
-    body_sha256 = hashlib.sha256(plan.body.encode("utf-8")).hexdigest()
-    promoted = replace(
-        record,
-        status="planned",
-        note_relpath=relpath,
-        note_title=plan.title,
-        body_sha256=body_sha256,
-        action_hash=plaud_action_hash(
-            PlaudHashFields(
-                recording_id=record.recording_id,
-                note_relpath=relpath,
-                note_title=plan.title,
-                body_sha256=body_sha256,
-            )
-        ),
-        last_block_reason=None,
-    )
-    return promoted, plan.body
-
-
 def _promote(
     record: PlaudSyncRecord, recording: LifelogRecording, effects: TranscribeEffects
 ) -> tuple[PlaudSyncRecord, str]:
@@ -184,8 +163,18 @@ def _promote(
     Extraction waits for the local transcript on purpose (sync.DRAFT_EXTRACTION_REASON): it
     carries speaker names where the cloud draft has speaker_1 labels. A LifelogExtractError
     propagates so the caller parks the record without counting a transcription attempt.
+
+    교정 참고 문서는 이 노트를 얼리기 직전에 읽는다 — 카드가 붙은 뒤에는 본문을 고칠 수 없다.
     """
-    return finalize(record, recording, extraction=effects.extract(recording), tz=effects.tz)
+    promoted, body, corrections = finalize(
+        record,
+        recording,
+        extraction=effects.extract(recording),
+        tz=effects.tz,
+        glossary=effects.glossary(),
+    )
+    effects.record_corrections(recording, corrections)
+    return promoted, body
 
 
 def _local_transcript(

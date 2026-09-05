@@ -12,7 +12,6 @@ from typing import Protocol
 
 import stt_blocks
 import stt_client
-import stt_correction_log
 import stt_polish
 import stt_runtime
 import stt_speakers
@@ -29,28 +28,24 @@ class TranscriptionLike(Protocol):
 
 def tidy(
     transcription: TranscriptionLike,
-    glossary: stt_polish.Glossary,
     override: stt_speakers.SpeakerMap = (),
 ) -> tuple[stt_polish.Polished, stt_speakers.SpeakerMap]:
     """Tidy speech, infer self-introductions, and render attributed headers."""
     sentences = transcription.sentences or stt_blocks.parse(transcription.text)
-    polished = stt_polish.polish_sentences(sentences, glossary=glossary)
-    known_names = tuple(right for _wrong, right in glossary)
-    rule = stt_speakers.infer(polished.timed, known_names=known_names)
+    polished = stt_polish.polish_sentences(sentences)
+    rule = stt_speakers.infer(polished.timed)
     speakers = stt_speakers.merge(override, rule)
     named = stt_polish.polish_sentences(
         polished.timed, names=stt_speakers.names(speakers)
     )
-    # Preserve the correction receipt from the first pass; the second pass only renders names.
+    # 접은 횟수는 첫 패스의 것이다 — 두 번째 패스는 이름만 렌더하므로 언제나 0 을 센다.
     polished = stt_polish.Polished(
         body=named.body,
         sentences=polished.sentences,
         paragraphs=named.paragraphs,
         collapsed=polished.collapsed,
-        substitutions=polished.substitutions,
         blocks=named.blocks,
         timed=named.timed,
-        corrections=polished.corrections,
     )
     return polished, speakers
 
@@ -186,11 +181,8 @@ def absorb(
     if stt_speakers.render_legend(merged) == stt_speakers.render_legend(current):
         return merged
     polished = stt_polish.polish_sentences(
-        stt_blocks.parse(body),
-        glossary=stt_runtime.merged_glossary(project),
-        names=stt_speakers.names(merged),
+        stt_blocks.parse(body), names=stt_speakers.names(merged)
     )
-    stt_correction_log.record(polished.corrections, label=label, project=project, stage="absorb")
     transcript_path.write_text(
         stt_transcript.rewrite(
             header,

@@ -21,13 +21,13 @@ import json
 import subprocess
 import sys
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import tzinfo
 from pathlib import Path
 from typing import Final
 
-from automation import pipeline_lock
+from automation import pipeline_lock, term_correction
 from automation.skill_mount import skill_scripts
 
 from .audio import (
@@ -47,6 +47,8 @@ from .lifelog_model import ExtractionOutcome, LifelogRecording
 from .mcp_client import PlaudMcpClient, PlaudMcpError, text_content
 from .model import PlaudSyncRecord, PlaudSyncState
 from .store import load_note_body, load_state, save_note_body, save_state, save_transcript
+from .terms import glossary as lifelog_glossary
+from .terms import record as record_note_corrections
 from .transcribe import (
     DEFAULT_MAX_ATTEMPTS,
     CliResult,
@@ -159,6 +161,18 @@ class LiveEffects:
     def extract(self, recording: LifelogRecording) -> ExtractionOutcome:
         """The gated LLM extractor (rules → patent → key → template) on the finalized recording."""
         return build_extractor(self.env, repo_root=_REPO_ROOT)(recording)
+
+    def glossary(self) -> term_correction.Glossary:
+        """라이프로그 교정 참고 문서 — 이 노드는 Drive 발행이 꺼져 있어 캐시가 정상 경로다."""
+        return lifelog_glossary(self.env)
+
+    def record_corrections(
+        self, recording: LifelogRecording, corrections: Sequence[term_correction.Correction]
+    ) -> None:
+        """무엇이 무엇으로 바뀌었는지 노드에만 남긴다 — 라벨은 소유자가 아는 녹음 이름이다."""
+        _ = record_note_corrections(
+            corrections, label=recording.name or recording.id, env=self.env
+        )
 
     def draft_body(self, recording_id: str) -> str | None:
         return load_note_body(self.state_dir, recording_id)

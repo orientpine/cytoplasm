@@ -7,6 +7,7 @@ import pytest
 
 from zoneinfo import ZoneInfo
 
+from automation import term_correction
 from automation.plaud_sync.lifelog_model import (
     ExtractionSkipped,
     LifelogDecision,
@@ -437,6 +438,91 @@ def test_split_lifelog_body_reads_back_the_transcript_without_the_quote_prefix()
     assert transcript == recording.transcript_text
     assert summary.startswith("직장 동료들이 점심을 함께하며")
     assert "결정 · 할 일" not in summary and "[[김철수]]" not in summary
+
+
+# ---- 용어 교정 (소유자 결정 2026-09-05): 산출 문서에서만 고치고 '## 전문' 은 인식된 그대로 둔다 ----
+
+
+def test_the_note_body_is_corrected_and_the_transcript_is_not() -> None:
+    # 전사본은 증거다. 틀린 교정을 원문에 새기면 원래 낱말이 어디에도 남지 않으므로, 노트가
+    # 스스로 쓰는 구역(한눈에·요약·결정·할 일)만 고치고 접힌 '## 전문' 은 손대지 않는다.
+    recording = replace(
+        _real_shape_recording(),
+        summary_markdown="항정기술과 열교환기 사양을 논의했다.",
+        transcript_text="[00:00 · 화자1] 항정기술과 열교환기 사양을 논의했다.",
+    )
+
+    body = render_lifelog_body(
+        recording, extraction=_SKIPPED, tz=_SEOUL, glossary=(("한전기술", "한전기술"),)
+    )
+
+    summary, transcript = split_lifelog_body(body)
+    assert "한전기술과 열교환기 사양을 논의했다." in summary
+    assert "항정기술" not in summary
+    assert "항정기술과 열교환기 사양을 논의했다." in transcript
+    assert "한전기술" not in transcript
+
+
+def test_corrected_lifelog_note_fixes_the_extracted_fields_and_reports_every_word() -> None:
+    from automation.plaud_sync.note import corrected_lifelog_note
+
+    extraction = LifelogExtraction(
+        people=("김철수",),
+        places=("항정기술 회의실",),
+        decisions=(LifelogDecision("항정기술 방문", at="12:40"),),
+        todos=(LifelogTodo("열기환기 점검", owner="항정기술 담당", due="다음 주"),),
+    )
+    recording = replace(
+        _real_shape_recording(),
+        summary_markdown="항정기술 방문을 정했다.",
+        transcript_text="[00:00 · 화자1] 항정기술 이야기.",
+    )
+
+    note = corrected_lifelog_note(
+        recording,
+        extraction=extraction,
+        tz=_SEOUL,
+        glossary=(("한전기술", "한전기술"), ("열기환기", "열교환기")),
+    )
+
+    assert "- 사람:: [[김철수]]" in note.plan.body
+    assert "- 장소:: 한전기술 회의실" in note.plan.body
+    assert "- 결정: 한전기술 방문 [12:40]" in note.plan.body
+    assert "- [ ] 열교환기 점검 — 담당 한전기술 담당 · 기한 다음 주" in note.plan.body
+    assert "> [00:00 · 화자1] 항정기술 이야기." in note.plan.body, "전문은 그대로다"
+    assert note.plan.body.splitlines()[-1].startswith("출처: PLAUD 녹음 mem_clRcZZ53qx")
+    changed = [(item.before, item.after, item.kind) for item in note.corrections]
+    assert ("열기환기", "열교환기", term_correction.EXACT) in changed
+    assert changed.count(("항정기술", "한전기술", term_correction.FUZZY)) == 4
+
+
+def test_the_note_title_is_corrected_while_the_path_keeps_its_identity() -> None:
+    """제목은 사람이 읽는 첫 줄이라 고치고, 파일 이름은 그 노트의 신원이라 고정한다.
+
+    Plaud 가 붙이는 녹음 이름도 음성에서 나오므로 같은 오인식을 안고 온다. 그러나 경로는
+    슬러그에서 오고, 경로가 참고 문서에 따라 움직이면 용어집을 한 줄 고친 날 같은 녹음이
+    노트 둘로 갈라진다.
+    """
+    from automation.plaud_sync.note import corrected_lifelog_note
+
+    recording = replace(_real_shape_recording(), name="항정기술 미팅")
+
+    fixed = corrected_lifelog_note(
+        recording, extraction=_SKIPPED, tz=_SEOUL, glossary=(("한전기술", "한전기술"),)
+    )
+    plain = corrected_lifelog_note(recording, extraction=_SKIPPED, tz=_SEOUL)
+
+    assert fixed.plan.title.startswith("한전기술 미팅")
+    assert "title: 한전기술 미팅" in fixed.plan.body
+    assert fixed.plan.relpath == plain.plan.relpath
+
+
+def test_plan_lifelog_note_without_a_glossary_changes_nothing() -> None:
+    recording = replace(_real_shape_recording(), summary_markdown="항정기술과 회의했다.")
+
+    plan = plan_lifelog_note(recording, extraction=_SKIPPED, tz=_SEOUL)
+
+    assert "항정기술과 회의했다." in plan.body
 
 
 # ---- yaml_scalar: 실제 Linter 빌드(escape char '"')가 title 에 써넣는 값과 대조했다 (docs/qa/PLV2) ----

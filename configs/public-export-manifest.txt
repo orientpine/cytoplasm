@@ -109,6 +109,7 @@ docs/patch/2026-08-18-hermes-compat-v0203-rebase.md
 docs/patch/2026-08-19-release-reconcile-unblock.md
 docs/patch/2026-08-21-hermes-compat-public-message-policy.md
 docs/patch/2026-09-04-peer-retired-reviewer-unpin.md
+docs/patch/2026-09-05-peer-gateway-ignores-approvals.md
 
 docs/기능소개/공개-릴리스-정책.md
 docs/기능소개/fs3-owner-observe-원장.md
