@@ -90,14 +90,24 @@ class WindowStore:
 
 
 def resolve_store(
-    env: Mapping[str, str], *, audio: Path, model: Path, windows: Sequence[stt_window.Window]
+    env: Mapping[str, str],
+    *,
+    audio: Path,
+    model: Path,
+    windows: Sequence[stt_window.Window],
+    tool: Path,
 ) -> WindowStore:
     """The store for this recording under this plan, refusing a path inside a checkout."""
     root = Path(env.get(CACHE_ENV, "").strip() or DEFAULT_CACHE_DIR).expanduser()
     for candidate in (root, *root.parents):
         if (candidate / ".git").exists():
             raise stt_client.SttError(CHECKOUT_NOTICE.format(path=root))
-    key = stt_window.cache_key(audio_sha256=digest(audio), model=model.stem, windows=windows)
+    key = stt_window.cache_key(
+        audio_sha256=digest(audio),
+        model=model.stem,
+        tool=digest(tool),
+        windows=windows,
+    )
     return WindowStore(root=root, key=key)
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sys
+from functools import partial
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -184,11 +185,12 @@ def test_text_of_joins_the_segments_the_way_the_document_reads_them() -> None:
 def test_the_cache_key_changes_when_the_plan_changes() -> None:
     short = stt_window.plan_windows(240_000, window_ms=100_000, overlap_ms=20_000)
     long = stt_window.plan_windows(240_000, window_ms=200_000, overlap_ms=20_000)
-    same = stt_window.cache_key(audio_sha256="abc", model="ggml", windows=short)
-    assert same == stt_window.cache_key(audio_sha256="abc", model="ggml", windows=short)
-    assert same != stt_window.cache_key(audio_sha256="abc", model="ggml", windows=long)
-    assert same != stt_window.cache_key(audio_sha256="def", model="ggml", windows=short)
-    assert same != stt_window.cache_key(audio_sha256="abc", model="other", windows=short)
+    key = partial(stt_window.cache_key, tool="whisper-build")
+    same = key(audio_sha256="abc", model="ggml", windows=short)
+    assert same == key(audio_sha256="abc", model="ggml", windows=short)
+    assert same != key(audio_sha256="abc", model="ggml", windows=long)
+    assert same != key(audio_sha256="def", model="ggml", windows=short)
+    assert same != key(audio_sha256="abc", model="other", windows=short)
 
 
 def test_spans_reads_only_the_offsets_a_segment_actually_reported() -> None:
@@ -208,11 +210,14 @@ import stt_window_store  # noqa: E402
 def _store(tmp_path: Path) -> stt_window_store.WindowStore:
     audio = tmp_path / "a.mp3"
     audio.write_bytes(b"audio-bytes")
+    tool = tmp_path / "whisper-cli"
+    tool.write_bytes(b"whisper-build")
     return stt_window_store.resolve_store(
         {"SPEECHTOTEXT_WINDOW_CACHE": str(tmp_path / "cache")},
         audio=audio,
         model=tmp_path / "ggml-large-v3-turbo-q5_0.bin",
         windows=stt_window.plan_windows(240_000, window_ms=100_000, overlap_ms=20_000),
+        tool=tool,
     )
 
 
@@ -227,6 +232,7 @@ def test_the_window_cache_refuses_to_live_inside_a_git_checkout(tmp_path: Path) 
             audio=audio,
             model=tmp_path / "m.bin",
             windows=stt_window.plan_windows(60_000),
+            tool=tmp_path / "whisper-cli",
         )
     except stt_client.SttError as refusal:
         assert "git 체크아웃" in str(refusal)

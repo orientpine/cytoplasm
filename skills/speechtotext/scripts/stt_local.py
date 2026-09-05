@@ -179,7 +179,11 @@ def transcribe(
         )
         windows = _plan(wav, toolchain)
         store = stt_window_store.resolve_store(
-            os.environ, audio=audio.path, model=toolchain.model, windows=windows
+            os.environ,
+            audio=audio.path,
+            model=toolchain.model,
+            windows=windows,
+            tool=toolchain.binary,
         )
         report = stt_window_run.run_windows(
             wav, windows, toolchain,

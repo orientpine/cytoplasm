@@ -232,12 +232,17 @@ def text_of(segments: Sequence[Segment]) -> str:
     return _WHITESPACE.sub(" ", joined).strip()
 
 
-def cache_key(*, audio_sha256: str, model: str, windows: Sequence[Window]) -> str:
-    """Identity of one plan over one recording with one model — the resume key.
+def cache_key(
+    *, audio_sha256: str, model: str, tool: str, windows: Sequence[Window]
+) -> str:
+    """Identity of one plan over one recording, by one model and one transcriber build.
 
-    Any of the three changing makes a different key, so a resumed run can never mix a
-    window decoded from other audio, by another model, or under another cut.
+    Any of the four changing makes a different key, so a resumed run can never mix a
+    window decoded from other audio, by another model, by another build of the
+    transcriber, or under another cut. The build belongs here because a window it
+    decoded stays authoritative until the key changes: without it, fixing or upgrading
+    whisper and re-running the same recording hands back the old output forever.
     """
     plan = ";".join(f"{w.index}:{w.start_ms}:{w.length_ms}" for w in windows)
-    material = f"{audio_sha256}|{model}|{plan}"
+    material = f"{audio_sha256}|{model}|{tool}|{plan}"
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
