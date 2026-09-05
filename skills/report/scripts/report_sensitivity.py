@@ -12,10 +12,10 @@ if __package__ in (None, ""):
 else:
     from .report_core import Note
 
-GLM_PROVIDER: Final = "custom:litellm"
-GLM_MODEL: Final = "glm-main"
+#: 유일한 경로. 민감도는 여전히 판정하지만 그 결과가 공급자를 고르지는 않는다 —
+#: 고를 티어가 하나뿐이고, 그 티어를 못 쓰면 요청은 거부된다(내려갈 곳이 없다).
 CODEX_PROVIDER: Final = "openai-codex"
-CODEX_MODEL: Final = "gpt-5.4"
+CODEX_MODEL: Final = "gpt-5.6-sol"
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,9 +78,4 @@ def route_notes(notes: tuple[Note, ...], rules: tuple[TagRule, ...]) -> Route:
             if matched and rule.tag not in tags:
                 tags.append(rule.tag)
     sensitive = "patent-sensitive" in tags
-    return Route(
-        CODEX_PROVIDER if sensitive else GLM_PROVIDER,
-        CODEX_MODEL if sensitive else GLM_MODEL,
-        sensitive,
-        tuple(tags),
-    )
+    return Route(CODEX_PROVIDER, CODEX_MODEL, sensitive, tuple(tags))

@@ -43,6 +43,7 @@ except ImportError:  # pragma: no cover - the first import is the deployed layou
     except ImportError:  # pragma: no cover - only reachable on a half-deployed node
         watch_failure_streak = None
 
+from automation import codex_llm  # noqa: E402
 from automation.entity_preflight.audit import DEFAULT_OPERATIONAL_ROOT  # noqa: E402
 from automation.entity_preflight.gate_metrics import weekly_quality_section  # noqa: E402
 from automation.skill_mount import skill_scripts  # noqa: E402
@@ -68,6 +69,12 @@ MAX_RESULTS = 2
 # 주 1회여도 임시 실행·재발화가 같은 주에 두 번째 DM 을 보낸 실측(2026-08-18/19,
 # 티켓 t_cda4eea8)이 이 워터마크의 이유다. 성공한 발송만 주를 소진한다(규약 (f)).
 WEEK_WATERMARK = "delivered-week"
+# STAGE 라벨은 배포된 프롬프트 템플릿(research-trends-v1.md)이 분기하는 계약이지
+# 제공자 이름이 아니다. 1단계는 영어 1차 종합, 2단계는 한국어 재작성이며 두 단계
+# 모두 공유 Codex OAuth 클라이언트 하나로만 나간다.
+_STAGE_SYNTHESIS = "glm"
+_STAGE_KOREAN = "codex"
+LLM_TIMEOUT_S = 240.0
 ARXIV_MAX_ATTEMPTS = int(os.environ.get("RESEARCH_TRENDS_ARXIV_ATTEMPTS", "4"))
 ARXIV_MIN_INTERVAL_S = float(os.environ.get("RESEARCH_TRENDS_ARXIV_INTERVAL_S", "5.0"))
 ARXIV_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -270,46 +277,36 @@ def _prompt(
     )
 
 
-def _run_llm(stage: str, provider: str, model: str, topic: str, prompt: str) -> str:
+def _codex_model() -> str:
+    return os.environ.get(codex_llm.MODEL_ENV, "").strip() or codex_llm.DEFAULT_MODEL
+
+
+def _run_llm(stage: str, topic: str, prompt: str) -> str:
+    """공유 Codex OAuth 클라이언트로 한 번 부른다. 실패는 이번 주 요약 실패다 — 대체 계층 없음."""
     _append_log(
         "llm-calls.jsonl",
-        {"stage": stage, "provider": provider, "model": model, "topic": topic},
+        {"stage": stage, "provider": codex_llm.PROVIDER, "model": _codex_model(), "topic": topic},
     )
     fake = os.environ.get(f"RESEARCH_TRENDS_FAKE_{stage.upper()}")
     if fake:
         return fake
-    command = ["hermes", "-z", prompt, "--provider", provider, "-m", model, "-t", "todo"]
-    environment = {**os.environ, "PATH": f"{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
-    if provider == "custom:litellm":
-        environment["LITELLM_AGENT_KEY"] = _litellm_key()
     try:
-        completed = subprocess.run(
-            command,
-            cwd=Path.home(),
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=240,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise LlmInvocationError(error.__class__.__name__) from error
-    if completed.returncode != 0 or not completed.stdout.strip():
-        raise LlmInvocationError(f"{stage} rc={completed.returncode}")
-    return completed.stdout.strip()
+        return codex_llm.complete(prompt, timeout=LLM_TIMEOUT_S)
+    except codex_llm.CodexError as error:
+        raise LlmInvocationError(f"{stage}: {error.__class__.__name__}") from error
 
 
-def _glm(topic: str, papers: tuple[Paper, ...], evidence: str = "") -> str:
+def _synthesis(topic: str, papers: tuple[Paper, ...], evidence: str = "") -> str:
     return _run_llm(
-        "glm", "custom:litellm", "glm-main", topic,
-        _prompt("glm", topic, papers, evidence=evidence),
+        _STAGE_SYNTHESIS, topic,
+        _prompt(_STAGE_SYNTHESIS, topic, papers, evidence=evidence),
     )
 
 
-def _codex(topic: str, papers: tuple[Paper, ...], draft: str, evidence: str = "") -> str:
+def _korean(topic: str, papers: tuple[Paper, ...], draft: str, evidence: str = "") -> str:
     return _run_llm(
-        "codex", "openai-codex", "gpt-5.4", topic,
-        _prompt("codex", topic, papers, draft, evidence),
+        _STAGE_KOREAN, topic,
+        _prompt(_STAGE_KOREAN, topic, papers, draft, evidence),
     )
 
 
@@ -325,20 +322,6 @@ def _bot_token() -> str:
         if line.startswith("DISCORD_BOT_TOKEN="):
             return line.partition("=")[2].strip()
     raise OwnerDmDeliveryError("DISCORD_BOT_TOKEN is unavailable")
-
-
-def _litellm_key() -> str:
-    key = os.environ.get("LITELLM_AGENT_KEY", "")
-    if key:
-        return key
-    try:
-        lines = SECRETS.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        lines = []
-    for line in lines:
-        if line.startswith("LITELLM_AGENT_KEY="):
-            return line.partition("=")[2].strip()
-    raise LlmInvocationError("LITELLM_AGENT_KEY is unavailable")
 
 
 def _send_dm(report: str) -> None:
@@ -400,10 +383,10 @@ def run() -> int:
     sensitive = topics_evidence.is_sensitive(pack)
     summarize = (
         (lambda _topic, _papers: "") if sensitive
-        else (lambda topic, papers: _glm(topic, papers, evidence_block))
+        else (lambda topic, papers: _synthesis(topic, papers, evidence_block))
     )
     def write_korean(topic: str, papers: object, draft: str) -> str:
-        return _codex(topic, papers, draft, evidence_block)
+        return _korean(topic, papers, draft, evidence_block)
 
     outcomes = core.run_topics(topics, _fetch_all, summarize, write_korean)
     validated = tuple(

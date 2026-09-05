@@ -24,6 +24,7 @@
 ## 릴리스 승인 카드에 대한 피어 봇 자체 심사 (2026-09-03)
 
 - **[OWNER] peer 에이전트가 `[release]` 승인 카드(v1.1.2)에 `⛔ DO-NOT-APPROVE — HEAD a75057c0 확인 불가(unpushed tip)` 를 붙이고 "✅ 하지 말고 push 뒤 재게시하라" 고 안내했다 → peer 에게 `[release]` 카드는 심사 범위 밖(VA-1 은 소유자 단독 ✅, 피어 attestation 은 스킬 단위)임을 지시하거나, HEAD 존재 확인을 `git ls-remote origin` 으로만 하게 자가 스킬 참고 문서를 고친다(peer 홈 `~/.hermes/skills/software-development/skill-deploy-review/`, `hermes curator`).** 판정 주체는 저장소 코드가 아니다 — 그 자가 스킬은 `[skill-deploy]` 전용 결정적 리포터(git 호출 0)이고, peer 가 그 어휘만 빌려 즉석 심사를 하며 HEAD 를 노드 로컬 체크아웃(`origin/main=7e130408`)에서 찾았다. 미러는 설계상 릴리스가 수렴한 **뒤에야** origin/main 을 따라오므로(「ops 체크아웃 단방향 규칙」 sync_mirror) 새 릴리스 HEAD 는 로컬에서 항상 "unpushed" 로 읽힌다. 실측: a75057c0 은 PR #378 머지(13:01:22Z)로 origin/main 에 있었고 요청 게시는 그 뒤, v1.1.2 태그·`agent-current`·deploy 영수증 전부 그 HEAD. 영향: 카드마다 거짓 ⛔ 안내가 붙어 소유자가 멀쩡한 릴리스를 막을 수 있다 — 심각도 중(릴리스·노드는 무영향).
+  ↳ 처리(2026-09-04): 적어 둔 두 선택지 중 어느 것도 아니라 **E7 결정 복원**으로 닫았다. 그 자가 스킬의 SKILL.md 는 이미 트리거를 `[skill-deploy]` 로 한정하고 리포터 출력을 verbatim 중계하라며 `Do not add an LLM judgment.` 를 명시하고 있었는데도 peer 가 `[release]` 카드에 LLM 판단을 붙였다 — 참고 문서를 한 번 더 고치는 것은 이미 실패한 통제의 반복이다. `docs/patch/2026-07-17-e7-peer-attestation.md` 가 "That skill directory is removed: an agent must not read a Discord request and be instructed to run a reviewer as part of deployment" 로 그 리뷰어를 은퇴시켰으나 2026-08-15 루트 반전이 자작 스킬 보호 목적으로 `provision-skill-roots.sh` 의 `PEER_PINNED_SKILLS` 에 이름을 넣어 매 프로비저닝이 되살리고 있었다(의도적 재검토가 아닌 부수 효과). 조치: pin 목록을 `(autophagy-interop)` 으로 줄이고 회귀를 `test_provision_when_the_retired_reviewer_is_present_then_it_is_not_pinned` 로 고정(**존재**를 전제로 검사 — 부재면 `PEER-PIN-SKIP` 이라 고치지 않아도 통과한다), 노드에서는 tarball 백업 후 `hermes curator unpin` → `archive`(삭제 아님, `restore` 가능). 사후 실측: 1차 루트에 `autophagy-interop` 만, `list-archived` 에 등재, `hermes skills list` 무영향. peer attestation 은 ops 체크아웃의 `peer_attest.py` 가 자체 봇 토큰으로 회신을 게시하는 경로라 무관하다(그 3파일에 자가 스킬 루트·curator 참조 0건). 상세 `docs/patch/2026-09-04-peer-retired-reviewer-unpin.md`.
 
 ## 수리 티켓 t_bd0d3789 종결 중 소유자만 닫을 수 있는 것 (2026-09-03)
 
@@ -382,8 +383,15 @@ OWNER-37이 그 외부 상태 판정만 소유한다.
 - **[OWNER] `~/.hermes/selfskill-audit/pending-overlaps.json` 의 미결 겹침(실측: `meeting-minutes-authoring`·`document-publishing` ↔ governed meeting·doctype·report)을 승격(governed 로 제출) 또는 폐기(`hermes curator archive`)로 결정한다.** 원장은 코드가 유지하고 결정만 남았다(심각도: 중).
 - **[OWNER] obsidian write clone 전환 뒤 첫 fetch 로그에서 origin 이 `uploadpack.allowfilter` 를 허용하는지(blob 없는 fetch 가 실제로 작아졌는지) 와 `tmp_pack_*` 잔해가 더 생기지 않는지 1주 관측한다.** 거부되면 fetch 는 전량이지만 실패하지는 않는다(심각도: 낮음).
 - **[OWNER] 이번 스윕이 SKILL.md·스크립트를 바꾼 스킬(mail·calendar·budget·todo·wiki·coordination·speechtotext·doctype·meeting·patent-prep·procurement·prompt·proposal·recall·report·topics·hello-autophagy)은 릴리스 ✅ 1회로 전량 마운트된다 — `automation/release.sh` 실행.** 그 전까지 노드는 옛 마운트로 돈다("커밋됨 ≠ 배포됨")(심각도: 중).
+  ↳ 해소(2026-09-04) 저장소 절반만: 브랜치 베이스가 릴리스 태그 v1.1.4 에 거리 0 커밋으로 앉아 있어 릴리스는 이미 끊겼다. 노드 마운트 실물 확인은 아직 아니며 소유자 몫으로 열려 있다.
 
 # BLOCKED — 동결·벤더·외부 의존으로 지금 손댈 수 없다
+
+## 동결 해제·repair 재발 수리 착지 후 남긴 것 (2026-09-04)
+
+> [이관 2026-09-04] follow-ups.md 에서 옮겨 왔다 — 네 행이 동결로 남아 이 저장소가 지금 손댈 수 없다. 해제는 「고칠 코드가 그 파일 안에 있는 행만」 기준으로 요청한다.
+
+- **`automation/repair/repair_ops_core.py`·`repair_lifecycle.py`·`repair/systemd/*`·`gate-ledger-inventory.md` 는 동결로 남았다** — 이번 해제는 실제로 고칠 것이 그 파일 안에 있는 행(`repair_core.py`)과 원장이 거짓이던 행만 풀었다. 그 네 행에 걸린 BLOCKED 항목(감사용 전용 exit code·TOCTOU·삭제 패치 범위·유닛 ExecStart 인자·문서 지연)은 [follow-ups-deferred.md](follow-ups-deferred.md) 에 그대로 있다. 조치: 그 항목들을 실제로 고칠 사이클이 잡힐 때 같은 방식(고칠 코드가 그 파일에 있는 행만)으로 해제를 요청한다. **의도된 잔여 · 심각도 낮음**.
 
 ## G8 — LOC 등록부
 
@@ -491,8 +499,6 @@ FS3 K2-A는 비동결 `skill_review`·`peer_attest` 실행 환경을 공용 러�
 
 `<primary-node>`의 agent 게이트웨이가 08-17 13:24부터 08-18 09:57(KST)까지 **모든 도구 호출**을 `ImportError: cannot import name '_plan_tool_batch_segments' from 'agent.tool_dispatch_helpers'`로 실패시켰다(errors.log 9회). 소유자의 메일 요청 2회가 이것으로 막혔고, 첨부 확인·수신자 조회·승인 초안이 전부 도구 호출이라 함께 죽었다(발송·초안 생성은 일어나지 않았다 — 승인 로그·draft store 신규 레코드 0). **코드가 아니라 프로세스가 원인이다**: 그 심볼은 디스크 파일에 정상 존재하고(`tool_dispatch_helpers.py:117`, `__all__` 등록), 새 인터프리터에서 `import agent.tool_executor`는 통과한다. 게이트웨이는 08-16 12:50 기동, `hermes-update`는 08-16 14:34·14:36 실행 — **떠 있는 프로세스 밑에서 소스 트리가 교체**됐고, 옛 모듈을 든 프로세스가 새 파일을 import하다 죽었다(트레이스백 줄 번호가 디스크 소스와 어긋나는 것이 같은 증거). agent·peer 게이트웨이를 함께 재시동해 해소했다(01:03 UTC, 실제 도구 호출 1건으로 검증).
 
-- **`docs/guide/operations.md`가 안내하는 `userctl` 래퍼가 노드에 없다** — 표의 복구 명령 `userctl <node> <account> restart hermes-gateway.service`가 `command not found`로 실패해, 이번 재시동도 `sudo -u <account> env XDG_RUNTIME_DIR=/run/user/$(id -u <account>) systemctl --user restart hermes-gateway.service`로 우회했다 → 래퍼를 설치하거나 문서를 실제로 동작하는 명령으로 고친다. **동작 영향 없음 · 심각도: 낮음(장애 대응 중에 한 번 더 막힌다)**.
-
 ## 수리 티켓 스윕-2 종결 중 발견한 후속 과제 (2026-08-17)
 
 TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보드·증적을 정리하며 남은 것들. 기능은 [todo 소유자-DM 승인 경로](기능소개/todo-소유자-DM-승인-경로.md) · [승인 게시 복구와 강화 저널](기능소개/승인-게시-복구와-강화-저널.md) · [2-store 메모리 재배치](기능소개/2-store-메모리-재배치.md).
@@ -530,7 +536,6 @@ TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보
 
 ## K4-b 설치기·신뢰키 위생(FS3 todo 12) 중 발견한 후속 과제
 
-- **`docs/guide/operations.md`가 자격증명 조회 alias를 「프로비저닝에 없다」고 계속 말한다** — `automation/provision-agent.sh`가 이제 복원하므로 낡은 서술이지만, 그 문서는 `configs/freeze-inventory.txt`의 동결 대상이라 이번에 고치지 않았다(같은 문구를 가진 `onboarding-kit.md`와 기능소개 문서는 갱신했다). **오안내 위험만 · 동작 영향 없음 · 심각도 낮음** → 그 계획의 동결이 풀리는 사이클에서 한 문단을 함께 고친다.
 - **게이트가 import하는 모듈은 `deploy-skill.sh`가 동결인 동안 분할할 수 없다** — `peer_attestation.py`의 진단을 별도 모듈로 떼자 `validate_gate_staging_imports`가 `STAGE-BLOCK: imported gate module is not staged`로 배포를 막았고(실측), staging 목록은 동결된 `deploy-skill.sh` 안에 있다. 그래서 그 모듈은 250줄 천장 안에서 해결해야 했다(현재 249). 같은 제약이 `skill_gate.py`(553, 예외 등록)에도 이미 걸려 있다. **현재 동작·보안 영향 없음 · 심각도 중(구조적 — 천장에 닿은 게이트 모듈이 늘수록 선택지가 사라진다)** → staging 목록을 `deploy-skill.sh` 밖의 기계 판독 파일로 옮기는 안을 todo 14 조율안의 해제 조건과 함께 검토한다.
 
 증적: `.omo/evidence/fs3/task-12-parallel-followup-sweep-3.txt`, 소개 [설치기 위생과 신뢰키 회전 병합](기능소개/설치기-위생과-신뢰키-회전-병합.md).
@@ -540,17 +545,11 @@ TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보
 보드의 열린 카드 8건을 정리하며 healthcheck 허용목록 래퍼(`<primary-node>`·`<rag-node>`)를 재생성하고
 runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드러난 구조적 틈이다.
 
-- **수리 occurrence가 done 티켓에 계속 붙는다** — repair-detector가 signature로 기존 티켓을 찾을 때
-  상태를 보지 않아, 완료된 healthcheck 티켓(t_6f3f7e1e)에 재발 occurrence가 55건까지 조용히 쌓였고
-  (`created:false`) 보드의 열린 목록에는 아무것도 나타나지 않았다 → signature 티켓이 done/archived면
-  새 티켓을 만들거나 reopen한다. **재발 가시성 영향 · 심각도 중**.
 
 ## healthcheck 폭주 수리(PR #347) 중 발견한 인접 결함
 
 > [이관 2026-09-03 · BLOCKED] 동결 파일에 막혀 있다 — freeze 해제 뒤 되돌린다.
 
-- **수리 티켓 레지스트리(`~/.hermes/repair-tickets.json`)는 done 카드에도 같은 시그니처로 occurrence 만 계속 올린다 → `automation/repair/repair_core.py` 의 registry lookup 에서 카드 상태를 확인해 done 이면 새 티켓을 발급(또는 재오픈)하는 설계 판단을 별도 논의한다.** t_318263ba 2623회·t_c0718520 2233회·t_6f3f7e1e 2078회 등에서 done 카드가 재발해도 소유자가 볼 새 신호가 없다. 영향 범위: 수리 티켓 재발 감지, 운영 가시성 저하, **심각도 낮음**.
-  ↳ 처리(2026-09-03): `automation/repair/repair_core.py` 는 configs/freeze-inventory.txt closed 동결 — repair-report-rollout 소유자와 조율하고 cha 가 해제를 승인한 뒤 별도 사이클
 
 
 ## 요청별 승인 스레드 착지 후 남긴 것 (2026-09-01)
@@ -616,9 +615,6 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 ## DM→#agent-chat 이관(승인 표면 v7) 중 발견한 후속 과제 (2026-08-24)
 
-- **승인 스레드는 kind별 고정 앵커다** — 지시 메시지나 다이제스트 메시지 밑에 직접
-  스레드를 다는 origin 앵커링(결과 통지의 `origin_notice`와 대칭)은 후속 개선. 조치:
-  운영해 보고 소유자 선호에 따라 producer에 origin 전달을 확장. **UX 개선 · 심각도 낮음**.
 - **`agent_chat_thread` 해석은 캐시가 없다** — 승인 게시마다 REST 3~4회(채널 조회·active
   스레드·archived·생성). 승인 게시 빈도가 낮아 실용상 무해하나, 빈발 시 directory의 기존
   `cache_path` 메커니즘 재사용을 검토. **성능 여지 · 심각도 낮음**.
@@ -761,10 +757,6 @@ healthcheck까지 구현했다.
 
 ## 음성 녹취 회의록 자동화(speechtotext) 착지 후 남긴 것 (2026-08-25)
 
-- **화자 분리(diarization)가 없다** — whisper.cpp의 `--diarize`는 채널 분리 녹음에만
-  유효하고 `tinydiarize`는 실험적이다. 회의록의 "타인 액션아이템" 정확도는 LLM 추출에
-  의존한다. 조치: 필요해지면 별도 로컬 diarization 파이프라인을 검토(파이썬 ML 스택이라
-  stdlib 정책 예외가 필요). **현재 기능에 영향 없음 · 심각도 낮음**.
 - 해소 (2026-09-01): sherpa-onnx 로컬 화자 분리 착지 — 전사본 블록에 `화자N` 헤더와 이름 범례가 붙고, 도구가 없으면 `DIARIZE-FAIL` 후 화자 없이 계속한다(파이썬 ML 스택 없이 바이너리 호출로 해결해 stdlib 정책 예외 불필요). [소개](기능소개/전사본-화자-구분과-문장-단위-출력.md)
 - **proposal 이 루트 기본값을 여전히 따로 적는다** — 살아 있던 절반(override 불일치)은 닫았다:
   `proposal_publish._root_folder()` 가 `DRIVE_OUTPUTS_ROOT` 를 함께 읽는다. 남은 것은 기본
@@ -818,6 +810,15 @@ healthcheck까지 구현했다.
   ↳ 처리(2026-09-03): `refactor(memory-relocate): RelocationStore 를 relocation_store.py 로 분리해 effects_live.py 를 F2 예외 등록부에서 내린다` — effects_live 219 pure LOC, `automation/final/f2_loc_exceptions.txt` 에서 제거, 재수출로 호출부 무변경
 
 # 해소 기록 — 닫혔지만 회계 가드가 원문을 요구한다
+
+## 동결 해제·repair 재발 수리 착지 후 남긴 것 (2026-09-04)
+
+> [이관 2026-09-04 · 해소] follow-ups.md 에서 옮겨 왔다. 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **재발 판정이 detect 경로에 `hermes kanban show` 왕복을 하나 더 얹는다** — `HermesKanban.is_closed` 는 `_run` 의 timeout=60 을 쓰므로, 보드가 응답하지 않으면 재발 1건당 최대 60초를 쓰고 나서야 fail-soft 로 예전 동작(occurrence 증가)으로 떨어진다. 실패 경로에서만 발생하고 카드·원장은 정확히 유지되지만, 워처가 몰아서 detect 할 때 지연이 합쳐질 수 있다. 조치: 노드에서 재발 실측을 몇 건 모은 뒤 필요하면 이 조회에만 짧은 전용 timeout 을 준다. **동작 결함 아님 · 심각도 낮음**.
+  ↳ 해소(2026-09-04): 상태 조회에 전용 10초 상한을 줬다 — `HermesKanban._run(*args, timeout=_BOARD_TIMEOUT)` 가 mutation 의 60초를 유지하고 `is_closed` 만 `_STATUS_READ_TIMEOUT` 을 넘긴다. 노드 실측을 기다리지 않은 이유는 실패 방향이 바뀌지 않기 때문이다 — 조회가 끊기면 예전 동작(occurrence 증가)으로 떨어지므로 짧은 상한은 최악 지연만 6분의 1로 줄인다. 회귀 `tests/unit/test_repair_tickets.py::test_status_read_gives_up_sooner_than_a_board_mutation` 가 실제 subprocess 경계에서 show·create 의 timeout 을 비교한다.
+- **닫힌 카드로 새 티켓을 발급할 때 예전 티켓과의 연결이 원장에만 남는다** — `RepairRegistry` 는 signature 항목을 새 ticket_id 로 덮어써 occurrence 를 1 로 되돌리므로, 새 카드 본문에는 "이전 카드 t_… 의 재발"이라는 문구가 없다. 소유자가 보드에서 두 카드를 잇는 단서는 같은 제목·signature 뿐이다. 조치: 새 카드 생성 시 이전 ticket_id 를 본문 한 줄로 싣는다(마스킹 규칙 그대로 — id 는 비밀이 아니다). **가시성 개선 · 심각도 낮음**.
+  ↳ 해소(2026-09-04): 새 카드 본문이 `Supersedes closed card: t_…` 로 이전 카드를 지목한다. 같은 자리에서 **그 발급이 실제로는 새 카드를 만들지 못하던 결함**도 함께 닫았다 — `hermes kanban create --idempotency-key` 는 non-archived 동일 키에 기존 카드 id 를 돌려주므로(`docs/qa/RRC-0/01-cli-contract.md` ④) done 카드의 재발이 그 닫힌 카드로 되돌아가고 occurrence 만 1 로 리셋됐다. 이제 멱등키에 이전 카드 id 를 붙인다. 회귀 `tests/unit/test_repair_tickets.py::test_superseding_card_names_the_closed_card_and_asks_a_distinct_dedup_key`.
 
 ## 회의록 과제 양식·Action Item 데이터베이스 중 남긴 것 (2026-08-27)
 
@@ -1522,3 +1523,53 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   ↳ 처리(2026-09-03): `feat(healthcheck): LiteLLM 에 실제 completion 프로브(litellm_completion)를 더해 상류 429·잔액 소진을 FAIL·수리 티켓으로 드러낸다` — `probe_litellm_completion`(glm-main, max_tokens 1, 20초, choices[0] 만 PASS, 상태·error type/code 만 출력), 래퍼 `# probe-type: litellm_completion` + allowlist 해시, tests/unit/test_healthcheck_probe_wrapper.py·test_healthcheck_allowlist_manifest.py(RED 5→GREEN 29). LiteLLM `alerting` 연동은 검토 보류(아래 OBSERVE).
 - **[OWNER] 재생성된 healthcheck 래퍼(`litellm_completion` 프로브 포함)는 노드에서 `automation/provision-healthcheck-probe.sh` 를 소유자가 돌려야 설치된다 → 설치 전까지 새 행은 allowlist 불일치로 FAIL 한다.** 영향: 설치 전 healthcheck 30분 틱의 LiteLLM completion 행 1건 — 심각도 낮음(설치 1회로 끝).
 - **[OBSERVE] LiteLLM `alerting` 에 outage 유형을 alert-dispatcher 와 함께 붙일지 → 실제 completion 프로브가 2주간 429 를 몇 번 잡는지 본 뒤 결정(프로브가 충분하면 얹지 않는다).** 영향: 없음(관측 대기).
+
+## Hermes 무재시동 자체 업데이트로 게이트웨이 도구 계층이 죽었다 (2026-08-18)
+
+> [이관 2026-09-04 · 해소] BLOCKED 에서 옮겨 왔다. 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **`docs/guide/operations.md`가 안내하는 `userctl` 래퍼가 노드에 없다** — 표의 복구 명령 `userctl <node> <account> restart hermes-gateway.service`가 `command not found`로 실패해, 이번 재시동도 `sudo -u <account> env XDG_RUNTIME_DIR=/run/user/$(id -u <account>) systemctl --user restart hermes-gateway.service`로 우회했다 → 래퍼를 설치하거나 문서를 실제로 동작하는 명령으로 고친다. **동작 영향 없음 · 심각도: 낮음(장애 대응 중에 한 번 더 막힌다)**.
+  ↳ 해소(2026-09-04): 재판정이다. `docs/guide/operations.md` 1절(10~17행)이 `userctl` 을 관리 셸에서 운영자가 직접 정의하는 셸 함수로 규정한다. 노드에 래퍼가 설치돼 있어야 한다는 전제 자체가 성립하지 않으므로 코드 수정 없이 닫는다.
+
+## K4-b 설치기·신뢰키 위생(FS3 todo 12) 중 발견한 후속 과제
+
+> [이관 2026-09-04 · 해소] BLOCKED 에서 옮겨 왔다. 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **`docs/guide/operations.md`가 자격증명 조회 alias를 「프로비저닝에 없다」고 계속 말한다** — `automation/provision-agent.sh`가 이제 복원하므로 낡은 서술이지만, 그 문서는 `configs/freeze-inventory.txt`의 동결 대상이라 이번에 고치지 않았다(같은 문구를 가진 `onboarding-kit.md`와 기능소개 문서는 갱신했다). **오안내 위험만 · 동작 영향 없음 · 심각도 낮음** → 그 계획의 동결이 풀리는 사이클에서 한 문단을 함께 고친다.
+  ↳ 해소(2026-09-04): 그 문구가 없다. `docs/guide/operations.md` 에서 alias 를 grep 하면 `~oriclaw/.bash_aliases` 를 말하는 360행만 걸리고, 그 파일은 동결 이후 커밋 3건(aae018e70, 32738984d, 7496167d2)을 받아 이미 갱신됐다.
+
+## Hermes kanban 열린 이슈 정리(2026-08-22) 중 발견한 후속 과제
+
+> [이관 2026-09-04 · 해소] BLOCKED 에서 옮겨 왔다. 아래 「healthcheck 폭주 수리(PR #347)」 절의 불릿과 **같은 결함이 두 절에 두 번 기록된 것**이다. 회계 가드가 원문을 요구해 두 원문을 모두 남긴다.
+
+- **수리 occurrence가 done 티켓에 계속 붙는다** — repair-detector가 signature로 기존 티켓을 찾을 때
+  상태를 보지 않아, 완료된 healthcheck 티켓(t_6f3f7e1e)에 재발 occurrence가 55건까지 조용히 쌓였고
+  (`created:false`) 보드의 열린 목록에는 아무것도 나타나지 않았다 → signature 티켓이 done/archived면
+  새 티켓을 만들거나 reopen한다. **재발 가시성 영향 · 심각도 중**.
+  ↳ 해소(2026-09-04): `automation/repair/repair_core.py` 의 `RepairRegistry.claim` 이 저장된 티켓이 닫혀 있으면 새 티켓을 발급하고, 티켓 상태를 읽을 수 없을 때는 기존 중복 제거 동작을 그대로 유지한다. 아래 「healthcheck 폭주 수리(PR #347)」 절의 중복 기록과 한 건이다.
+
+## healthcheck 폭주 수리(PR #347) 중 발견한 인접 결함
+
+> [이관 2026-09-04 · 해소] BLOCKED 에서 옮겨 왔다. 위 「Hermes kanban 열린 이슈 정리(2026-08-22)」 절의 불릿과 같은 결함의 두 번째 기록이다.
+
+- **수리 티켓 레지스트리(`~/.hermes/repair-tickets.json`)는 done 카드에도 같은 시그니처로 occurrence 만 계속 올린다 → `automation/repair/repair_core.py` 의 registry lookup 에서 카드 상태를 확인해 done 이면 새 티켓을 발급(또는 재오픈)하는 설계 판단을 별도 논의한다.** t_318263ba 2623회·t_c0718520 2233회·t_6f3f7e1e 2078회 등에서 done 카드가 재발해도 소유자가 볼 새 신호가 없다. 영향 범위: 수리 티켓 재발 감지, 운영 가시성 저하, **심각도 낮음**.
+  ↳ 해소(2026-09-04): 위 불릿과 동일한 결함이며 이번 사이클에 `automation/repair/repair_core.py` 에서 닫혔다. `RepairRegistry.claim` 이 저장된 티켓이 closed 면 새 티켓을 발급하고, 상태를 읽지 못하면 기존 중복 제거 동작을 유지한다.
+
+## DM→#agent-chat 이관(승인 표면 v7) 중 발견한 후속 과제 (2026-08-24)
+
+> [이관 2026-09-04 · 해소] OBSERVE 에서 옮겨 왔다. 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **승인 스레드는 kind별 고정 앵커다** — 지시 메시지나 다이제스트 메시지 밑에 직접
+  스레드를 다는 origin 앵커링(결과 통지의 `origin_notice`와 대칭)은 후속 개선. 조치:
+  운영해 보고 소유자 선호에 따라 producer에 origin 전달을 확장. **UX 개선 · 심각도 낮음**.
+  ↳ 해소(2026-09-04): 요청별 스레드로 구현됐다 — `automation/interop/approval_surface.py:61 class RequestThread`, `automation/interop/approval_directory.py:170 agent_chat_request_thread(kind, request)`, 그리고 AGENTS.md 의 「요청별 승인 스레드 규칙」(2026-09-01).
+
+## 음성 녹취 회의록 자동화(speechtotext) 착지 후 남긴 것 (2026-08-25)
+
+> [이관 2026-09-04 · 해소] OBSERVE 에서 옮겨 왔다. 회계 가드가 원문을 요구해 불릿을 그대로 둔다.
+
+- **화자 분리(diarization)가 없다** — whisper.cpp의 `--diarize`는 채널 분리 녹음에만
+  유효하고 `tinydiarize`는 실험적이다. 회의록의 "타인 액션아이템" 정확도는 LLM 추출에
+  의존한다. 조치: 필요해지면 별도 로컬 diarization 파이프라인을 검토(파이썬 ML 스택이라
+  stdlib 정책 예외가 필요). **현재 기능에 영향 없음 · 심각도 낮음**.
+  ↳ 해소(2026-09-04): `skills/speechtotext/scripts/stt_diarize.py` 와 `skills/speechtotext/scripts/stt_speakers.py` 가 존재한다. 같은 소절의 「해소 (2026-09-01)」 줄이 sherpa-onnx 착지를 이미 기록해 두었다.

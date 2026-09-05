@@ -190,7 +190,7 @@ deploy_provenance_check() { # deploy_provenance_check <repo_root> <file-or-dir>.
   for path in "$@"; do
     if [[ -d "$path" ]]; then
       local tracked
-      tracked="$(git -C "$repo_root" ls-files -- "$path")" || {
+      tracked="$(git -C "$repo_root" -c core.quotepath=false ls-files -- "$path")" || {
         deploy_provenance_log "DEPLOY-BLOCK: cannot list tracked files under $path"; return 1; }
       [[ -n "$tracked" ]] || { deploy_provenance_log "DEPLOY-BLOCK: $path has no tracked files"; return 1; }
       # Callers ship the WHOLE directory (tar/rsync), not just its tracked files, so
@@ -199,7 +199,7 @@ deploy_provenance_check() { # deploy_provenance_check <repo_root> <file-or-dir>.
       # build/runtime residue is declared non-source, and blocking on it would break
       # every real deploy.
       local untracked
-      untracked="$(git -C "$repo_root" ls-files --others --exclude-standard -- "$path")" || {
+      untracked="$(git -C "$repo_root" -c core.quotepath=false ls-files --others --exclude-standard -- "$path")" || {
         deploy_provenance_log "DEPLOY-BLOCK: cannot list untracked files under $path"; return 1; }
       if [[ -n "$untracked" ]]; then
         deploy_provenance_log "DEPLOY-BLOCK: $path contains untracked files — commit and push them before deploying"
@@ -210,7 +210,7 @@ deploy_provenance_check() { # deploy_provenance_check <repo_root> <file-or-dir>.
       while IFS= read -r tracked_path; do targets+=("$tracked_path"); done <<<"$tracked"
     else
       local relative
-      relative="$(git -C "$repo_root" ls-files --full-name --error-unmatch -- "$path" 2>/dev/null)" || {
+      relative="$(git -C "$repo_root" -c core.quotepath=false ls-files --full-name --error-unmatch -- "$path" 2>/dev/null)" || {
         deploy_provenance_log "DEPLOY-BLOCK: $path is untracked — commit and push it before deploying"
         return 1; }
       targets+=("$relative")

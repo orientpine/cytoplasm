@@ -243,9 +243,7 @@ def test_build_extractor_skips_patent_sensitive_recordings_without_calling_the_l
 ) -> None:
     # Given
     root = _prepare_repo(tmp_path)
-    extractor = build_extractor(
-        {"LITELLM_AGENT_KEY": "sk-test"}, repo_root=root, complete=_never_called
-    )
+    extractor = build_extractor({}, repo_root=root, complete=_never_called)
 
     # When
     outcome = extractor(_recording(summary="특허 출원 일정 회의"))
@@ -257,9 +255,7 @@ def test_build_extractor_skips_patent_sensitive_recordings_without_calling_the_l
 def test_build_extractor_skips_when_the_rules_file_is_absent(tmp_path: Path) -> None:
     # Given
     root = _prepare_repo(tmp_path, rules=False)
-    extractor = build_extractor(
-        {"LITELLM_AGENT_KEY": "sk-test"}, repo_root=root, complete=_never_called
-    )
+    extractor = build_extractor({}, repo_root=root, complete=_never_called)
 
     # When
     outcome = extractor(_recording())
@@ -268,24 +264,64 @@ def test_build_extractor_skips_when_the_rules_file_is_absent(tmp_path: Path) -> 
     assert outcome == ExtractionSkipped("민감도 규칙 없음")
 
 
-def test_build_extractor_skips_when_no_api_key_is_configured(tmp_path: Path) -> None:
-    # Given
+def test_build_extractor_skips_when_codex_oauth_is_unavailable(tmp_path: Path) -> None:
+    # Given: no injected completer and an environment with no reachable Codex OAuth tier
     root = _prepare_repo(tmp_path)
-    extractor = build_extractor({}, repo_root=root, complete=_never_called)
+    extractor = build_extractor({}, repo_root=root)
+
+    # When
+    outcome = extractor(_recording())
+
+    # Then: the note keeps its deterministic fields and the 한눈에 line carries the reason
+    assert outcome == ExtractionSkipped("LLM 미설정")
+
+
+def test_build_extractor_live_path_calls_codex_oauth_with_the_user_config_ignored(
+    tmp_path: Path,
+) -> None:
+    # Given: a hermes stand-in that answers only for the measured Codex OAuth argv
+    root = _prepare_repo(tmp_path)
+    binary = tmp_path / "hermes"
+    _ = binary.write_text(
+        "#!/bin/sh\n"
+        'case " $* " in *" --ignore-user-config "*) ;; *) exit 8 ;; esac\n'
+        'case " $* " in *" --provider openai-codex "*) ;; *) exit 7 ;; esac\n'
+        f"cat <<'JSON'\n{_payload()}\nJSON\n",
+        encoding="utf-8",
+    )
+    _ = binary.chmod(0o755)
+    environment = {"HOME": str(tmp_path), "AUTOPHAGY_HERMES_BIN": str(binary)}
+    extractor = build_extractor(environment, repo_root=root)
 
     # When
     outcome = extractor(_recording())
 
     # Then
-    assert outcome == ExtractionSkipped("LLM 미설정")
+    assert isinstance(outcome, LifelogExtraction)
+    assert outcome.people == ("김철수",)
+
+
+def test_build_extractor_fails_the_poll_when_codex_oauth_refuses(tmp_path: Path) -> None:
+    # Given: the measured fail-closed signal from a home with no Codex credentials
+    root = _prepare_repo(tmp_path)
+    binary = tmp_path / "hermes"
+    _ = binary.write_text(
+        "#!/bin/sh\n>&2 printf 'agent failed: No Codex credentials stored\\n'\nexit 1\n",
+        encoding="utf-8",
+    )
+    _ = binary.chmod(0o755)
+    environment = {"HOME": str(tmp_path), "AUTOPHAGY_HERMES_BIN": str(binary)}
+    extractor = build_extractor(environment, repo_root=root)
+
+    # When / Then: this poll fails and retries later; no other provider is attempted
+    with pytest.raises(LifelogExtractError):
+        extractor(_recording())
 
 
 def test_build_extractor_raises_when_the_template_is_missing(tmp_path: Path) -> None:
     # Given
     root = _prepare_repo(tmp_path, template=False)
-    extractor = build_extractor(
-        {"LITELLM_AGENT_KEY": "sk-test"}, repo_root=root, complete=_never_called
-    )
+    extractor = build_extractor({}, repo_root=root, complete=_never_called)
 
     # When / Then
     with pytest.raises(LifelogExtractError):
@@ -301,9 +337,7 @@ def test_build_extractor_returns_the_parsed_extraction_on_the_happy_path(tmp_pat
         seen.append(prompt)
         return f"```json\n{_payload()}\n```"
 
-    extractor = build_extractor(
-        {"LITELLM_AGENT_KEY": "sk-test"}, repo_root=root, complete=complete
-    )
+    extractor = build_extractor({}, repo_root=root, complete=complete)
 
     # When
     outcome = extractor(_recording())
@@ -323,7 +357,7 @@ def test_build_extractor_honors_the_prompt_path_override(tmp_path: Path) -> None
     root = _prepare_repo(tmp_path, template=False)
     override = tmp_path / "custom-prompt.md"
     override.write_text("맞춤 지시\n{{SUMMARY}}\n{{TRANSCRIPT}}\n", encoding="utf-8")
-    environment = {"LITELLM_AGENT_KEY": "sk-test", "PLAUD_SYNC_EXTRACT_PROMPT": str(override)}
+    environment = {"PLAUD_SYNC_EXTRACT_PROMPT": str(override)}
     seen: list[str] = []
 
     def complete(prompt: str) -> str:

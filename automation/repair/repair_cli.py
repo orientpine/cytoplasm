@@ -23,6 +23,10 @@ from automation.repair.repair_redaction import redact
 
 
 CARD_ID: Final = re.compile(r"\bt_[A-Za-z0-9]+\b")
+_BOARD_TIMEOUT: Final = 60.0
+# The status read sits on the detect path and falls back to the previous dedup behaviour
+# when it fails, so an unresponsive board must cost seconds, not a full mutation budget.
+_STATUS_READ_TIMEOUT: Final = 10.0
 
 
 class RepairCliError(RuntimeError):
@@ -54,14 +58,33 @@ class HermesKanban(KanbanPort):
     def block_for_repair(self, ticket_id: str, reason: str) -> None:
         self._run("block", "--kind", "needs_input", ticket_id, reason)
 
+    def is_closed(self, ticket_id: str) -> bool:
+        """Report whether the deduplicated card is already finished.
+
+        The card status is read here instead of importing
+        repair_report_consumer.card_state, because that module pulls the Discord
+        transport and the report queue into the detect path; reading one JSON field
+        is cheaper than that coupling.
+        """
+        payload = json.loads(self._run("show", ticket_id, "--json", timeout=_STATUS_READ_TIMEOUT))
+        if not isinstance(payload, dict):
+            raise RepairCliError("kanban show response is invalid")
+        task = payload.get("task")
+        if not isinstance(task, dict):
+            raise RepairCliError("kanban show response shape is invalid")
+        status = task.get("status")
+        if not isinstance(status, str):
+            raise RepairCliError("kanban card status is invalid")
+        return status in {"archived", "done"}
+
     @staticmethod
-    def _run(*args: str) -> str:
+    def _run(*args: str, timeout: float = _BOARD_TIMEOUT) -> str:
         completed = subprocess.run(
             ("hermes", "kanban", *args),
             capture_output=True,
             check=False,
             text=True,
-            timeout=60,
+            timeout=timeout,
         )
         if completed.returncode != 0:
             raise RepairCliError(f"kanban rc={completed.returncode}: {redact(completed.stderr)[:200]}")
@@ -120,7 +143,8 @@ def _private_path(raw: str, ticket_id: str, occurrence: int) -> str:
 def _service() -> RepairService:
     state_file = Path(os.environ.get("REPAIR_STATE_FILE", "~/.hermes/repair-tickets.json")).expanduser()
     identity = Path(os.environ.get("REPAIR_SSH_IDENTITY", "~/.ssh/autophagy-repair-log")).expanduser()
-    return RepairService(HermesKanban(), OpsPrivateLogs(identity), RepairRegistry(state_file))
+    kanban = HermesKanban()
+    return RepairService(kanban, OpsPrivateLogs(identity), RepairRegistry(state_file), kanban.is_closed)
 
 
 def _detect(source: str, location: str, raw_log: str) -> int:

@@ -265,14 +265,14 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
             )
             _log({
                 "ts": now.isoformat(timespec="seconds"), "label": "!meeting 전사본 탐색",
-                "glm_called": False, "exit": 7, "pending": len(candidates),
+                "codex_called": False, "exit": 7, "pending": len(candidates),
             })
             return 7
         pending = chosen[0]
     label = args.label or (
         pending.stem if pending else (Path(args.file).name if args.file else "!meeting 본문")
     )
-    record: dict = {"ts": now.isoformat(timespec="seconds"), "label": label, "glm_called": False}
+    record: dict = {"ts": now.isoformat(timespec="seconds"), "label": label, "codex_called": False}
 
     try:
         if pending is not None:
@@ -312,7 +312,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
         meeting_reference.query(label, getattr(args, "project", "") or "", extracted.text)
     )
     reference_notes = meeting_reference.note_labels(references)
-    # Slide material joins the gate input: a patent deck must route away from GLM too.
+    # Slide material joins the gate input: a patent deck must be confined too.
     gate = meeting_gate.evaluate(
         "\n".join((extracted.text, evidence_text, meeting_slides.gate_text(decks + references))),
         rules,
@@ -345,8 +345,6 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
                 "/srv/autophagy-skills/live/meeting/prompts/meeting-extraction-v6.md",
             ),
             my_names=str(config.get("my_names", "cha,차")),
-            base_url=os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:4000/v1"),
-            api_key=os.environ.get("LITELLM_AGENT_KEY", ""),
             recorded_response=recorded,
             evidence=meeting_evidence.prompt_block(pack) if pack is not None else "",
             slides=meeting_reference.merged_prompt(meeting_slides.prompt_block(decks), references),
@@ -363,7 +361,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
         _log(record)
         return 6
     record["provider"] = provider
-    record["glm_called"] = provider == meeting_llm.GLM_MODEL
+    record["codex_called"] = provider == meeting_llm.CODEX_PROVIDER
     evidence_footer = ""
     if pack is not None:
         extraction, evidence_footer = meeting_evidence.finalize(extraction, pack)
@@ -503,7 +501,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     )
     _log(record)
     output = {key: record[key] for key in
-              ("exit", "ref", "sensitive", "provider", "glm_called", "todos",
+              ("exit", "ref", "sensitive", "provider", "codex_called", "todos",
                "milestones", "others", "cards", "milestones_added", "note", "team_posted",
                "evidence_count", "layers", "slides", "actions_new", "actions_open",
                "actions_closed", "project")}

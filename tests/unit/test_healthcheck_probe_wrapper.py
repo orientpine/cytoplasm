@@ -31,15 +31,15 @@ def _generate(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _digest_with_recorded_http_command(
+def _digest_with_recorded_unit_command(
     remote_command: str, *, unrelated_marker: str = ""
 ) -> str:
-    """원격 명령을 기록만 하도록 프로브 하나를 대체한다(ssh 없음)."""
+    """원격 명령을 기록만 하도록 활성 단위 프로브 하나를 대체한다(ssh 없음)."""
     script = f'''source "{_GENERATOR}"
 source "{_HEALTHCHECK}"
-probe_http_200() {{
+probe_user_unit_active() {{
   : {shlex.quote(unrelated_marker)}
-  capture_on_node "$1" "$RECORDED_HTTP_COMMAND"
+  capture_on_node "$1" "$RECORDED_UNIT_COMMAND"
 }}
 wrapper_inputs_digest "$PRIMARY_NODE"
 '''
@@ -52,72 +52,12 @@ wrapper_inputs_digest "$PRIMARY_NODE"
             **os.environ,
             "HEALTHCHECK_SSH_USER": "",
             "HEALTHCHECK_SSH_IDENTITY": "",
-            "RECORDED_HTTP_COMMAND": remote_command,
+            "RECORDED_UNIT_COMMAND": remote_command,
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout.strip()
 
-
-def _run_litellm_completion(
-    tmp_path: Path, *, status: str, body: str
-) -> subprocess.CompletedProcess[str]:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    response = tmp_path / "response.json"
-    _ = response.write_text(body, encoding="utf-8")
-    env_file = tmp_path / "litellm.env"
-    _ = env_file.write_text("LITELLM_MASTER_KEY=test-key\n", encoding="utf-8")
-
-    sudo = fake_bin / "sudo"
-    _ = sudo.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "while [[ $# -gt 0 ]]; do\n"
-        "  case \"$1\" in -n|-H) shift ;; -u) shift 2 ;; *) break ;; esac\n"
-        "done\n"
-        "exec \"$@\"\n",
-        encoding="utf-8",
-    )
-    sudo.chmod(0o755)
-
-    curl = fake_bin / "curl"
-    _ = curl.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "output=\n"
-        "while [[ $# -gt 0 ]]; do\n"
-        "  case \"$1\" in\n"
-        "    --output) output=$2; shift 2 ;;\n"
-        "    --write-out) shift 2 ;;\n"
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-        "cp -- \"$FAKE_CURL_BODY\" \"$output\"\n"
-        "printf '%s' \"$FAKE_CURL_STATUS\"\n",
-        encoding="utf-8",
-    )
-    curl.chmod(0o755)
-
-    script = f'''source "{_HEALTHCHECK}"
-capture_on_node() {{ bash -c "$2"; }}
-probe_litellm_completion "$PRIMARY_NODE" "$NODE_OPS_ACCOUNT" http://127.0.0.1:4000
-'''
-    return subprocess.run(
-        ("bash", "-c", script),
-        capture_output=True,
-        text=True,
-        check=False,
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-            "HEALTHCHECK_LITELLM_ENV_FILE": str(env_file),
-            "HEALTHCHECK_SSH_USER": "",
-            "HEALTHCHECK_SSH_IDENTITY": "",
-            "FAKE_CURL_BODY": str(response),
-            "FAKE_CURL_STATUS": status,
-        },
-    )
 
 
 def _run_probe(
@@ -176,61 +116,28 @@ def test_the_allowlist_is_observed_from_the_checks_not_hand_listed() -> None:
     assert len(hashes) == len(set(hashes)), "중복 해시는 목록만 부풀린다"
 
 
-def test_litellm_completion_fails_on_429_without_printing_the_body(tmp_path: Path) -> None:
-    result = _run_litellm_completion(
-        tmp_path,
-        status="429",
-        body='{"error":{"type":"rate_limit_error","code":"balance_exhausted","message":"secret upstream detail"}}',
-    )
-
-    assert result.returncode != 0
-    assert "HTTP_STATUS=429" in result.stderr
-    assert "ERROR_TYPE=rate_limit_error" in result.stderr
-    assert "ERROR_CODE=balance_exhausted" in result.stderr
-    assert "secret upstream detail" not in result.stdout + result.stderr
-
-
-def test_litellm_completion_passes_on_200_with_a_choice(tmp_path: Path) -> None:
-    result = _run_litellm_completion(
-        tmp_path,
-        status="200",
-        body='{"choices":[{"message":{"content":"pong"}}]}',
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_litellm_completion_fails_on_200_without_a_choice(tmp_path: Path) -> None:
-    result = _run_litellm_completion(tmp_path, status="200", body='{"choices":[]}')
-
-    assert result.returncode != 0
-    assert "HTTP_STATUS=200" in result.stderr
-    assert "ERROR_TYPE=none" in result.stderr
-    assert "ERROR_CODE=none" in result.stderr
-
-
 def test_the_inputs_digest_moves_when_only_a_recorded_probe_command_moves() -> None:
-    before = _digest_with_recorded_http_command("curl --fail http://one")
-    after = _digest_with_recorded_http_command("curl --fail http://two")
+    before = _digest_with_recorded_unit_command("systemctl --user is-active one.service")
+    after = _digest_with_recorded_unit_command("systemctl --user is-active two.service")
 
     assert re.fullmatch(r"[0-9a-f]{64}", before)
     assert before != after
 
 
 def test_the_inputs_digest_ignores_unrelated_probe_edits() -> None:
-    before = _digest_with_recorded_http_command(
-        "curl --fail http://unchanged", unrelated_marker="before"
+    before = _digest_with_recorded_unit_command(
+        "systemctl --user is-active unchanged.service", unrelated_marker="before"
     )
-    after = _digest_with_recorded_http_command(
-        "curl --fail http://unchanged", unrelated_marker="after"
+    after = _digest_with_recorded_unit_command(
+        "systemctl --user is-active unchanged.service", unrelated_marker="after"
     )
 
     assert before == after
 
 
 def test_the_inputs_digest_is_stable_for_identical_recorded_commands() -> None:
-    first = _digest_with_recorded_http_command("curl --fail http://stable")
-    second = _digest_with_recorded_http_command("curl --fail http://stable")
+    first = _digest_with_recorded_unit_command("systemctl --user is-active stable.service")
+    second = _digest_with_recorded_unit_command("systemctl --user is-active stable.service")
 
     assert first == second
 
@@ -300,8 +207,8 @@ def test_healthcheck_wires_the_wrapper_probe() -> None:
 
     assert "healthcheck_wrapper_probe.sh" in text
     assert "healthcheck_wrapper_current" in text
-    assert "LiteLLM completion|litellm_completion|" in text
-    assert "litellm_completion) probe_litellm_completion" in text
+    assert "/chat/completions" not in text
+    assert "Authorization: Bearer" not in text
     local = next(
         line for line in text.splitlines() if line.startswith("readonly LOCAL_PROBES=")
     )

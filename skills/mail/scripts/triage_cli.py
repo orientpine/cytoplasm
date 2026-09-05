@@ -4,9 +4,9 @@ confirmation→send pipeline. Drafting is owner-initiated (`draft` — 지시문
 필수); the cron `watch` tick is the approval/send loop ONLY (repost→✅/⛔
 resolution→send — no auto-drafting). Draft pipeline order (fixed):
 ① deterministic sensitivity gate (constraint 6, BEFORE any LLM)
-② classification annotation (glm-main; gate-hit mail → non-GLM tier, NEVER
-GLM — never gates an owner-instructed draft) ③ Korean final-text reply draft
-(non-GLM tier, instruction-aware v2 prompt) ④ owner gate ⑤ mailon
+② classification annotation (shared Codex OAuth client; the gate verdict arms
+the routing guard — never gates an owner-instructed draft) ③ Korean final-text
+reply draft (same Codex OAuth tier, instruction-aware v2 prompt) ④ owner gate ⑤ mailon
 send ⑥ approvals.jsonl (W0-6 schema). Schedule-needed mail is delegated to
 the W3-1 calendar skill via the legacy manual `process` path (draft only —
 its own gate confirms; SQLite claim-before-draft keeps its ticks idempotent).
@@ -19,7 +19,11 @@ Env: TRIAGE_GATE_DIR, TRIAGE_DB, TRIAGE_APPROVAL_LOG, TRIAGE_MAIL_HOME,
      TRIAGE_CLASSIFY_PROMPT, TRIAGE_REPLY_PROMPT, TRIAGE_CALENDAR_CLI,
      TRIAGE_MAILON_PYTHON,
      INTEROP_RUNTIME, INTEROP_CONFIG, E2E_TEST_MODE, INTEROP_E2E_SECRET
-     (+ test hooks TRIAGE_GLM_BIN / TRIAGE_HERMES_BIN — never in production).
+     (+ shared-client test hooks AUTOPHAGY_HERMES_BIN / AUTOPHAGY_CODEX_MODEL —
+     never in production).
+
+There is exactly one model tier (Codex OAuth). When it is unavailable the call
+fails closed: LLM-FAIL/ROUTING-REFUSED with a non-zero exit, never a downgrade.
 """
 from __future__ import annotations
 

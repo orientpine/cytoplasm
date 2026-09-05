@@ -8,7 +8,7 @@
 # real secrets, no real mail data.
 #
 # W4-2 triage legs (stub LLMs / stub mailon-send / stub calendar): sensitivity
-# gate FIRST + GLM-never-sees-sensitive, drafts before any send, sanitized
+# gate FIRST + every call pinned to the approved Codex OAuth tier, sanitized
 # #approvals rendering, claim idempotency, fail-closed confirm, signed-inject
 # send with approval records, discard, 2-consecutive-fail NO-GO downgrade +
 # W4-1N switch record, and the watch E2E/mode refusals.
@@ -221,45 +221,39 @@ export TRIAGE_MAIL_MODE_REPO="$work/mail-mode-repo.json"
 mkdir -p "$work/runtime"
 export SCENARIO_APPROVAL_CHANNEL_ID="100000000000000001"
 export TRIAGE_MAILON_PYTHON="$work/mailon-send-stub"
-export TRIAGE_GLM_BIN="$work/glm-stub" TRIAGE_HERMES_BIN="$work/hermes-stub"
+export AUTOPHAGY_HERMES_BIN="$work/hermes-stub"  # 공유 Codex 클라이언트의 유일한 훅
 export TRIAGE_CALENDAR_CLI="$work/calendar-stub.py"
 printf '{"mode": "full-go", "decided_at": "2026-07-16T00:00:00Z", "source": "W0-7c"}' \
   > "$TRIAGE_MAIL_MODE_REPO"
 
-cat > "$work/glm-stub" <<'PY'
-#!/usr/bin/env python3
-import pathlib, sys
-prompt = sys.stdin.read()
-base = pathlib.Path(__file__).resolve().parent
-with (base / "glm-calls.log").open("a") as h:
-    h.write("call\n")
-with (base / "glm-inputs.log").open("a", encoding="utf-8") as h:
-    h.write(prompt + "\n===\n")
-# NOTE: match on UNIQUE fixture tokens, not generic words — the classify
-# instructions themselves contain 광고/회신/세미나 and would false-hit.
-if "beta-202" in prompt:
-    print('{"category": "spam", "reply_needed": false, "schedule_needed": false,'
-          ' "budget": false, "schedule_text": "", "reason": "stub"}')
-elif "장비 사용" in prompt:
-    print('{"category": "important", "reply_needed": true, "schedule_needed": false,'
-          ' "budget": false, "schedule_text": "", "reason": "stub"}')
-elif "delta-404" in prompt:
-    print('{"category": "important", "reply_needed": false, "schedule_needed": true,'
-          ' "budget": false, "schedule_text": "7월 20일 오후 3시 세미나", "reason": "stub"}')
-else:
-    print('{"category": "normal", "reply_needed": false, "schedule_needed": false,'
-          ' "budget": false, "schedule_text": "", "reason": "stub"}')
-PY
 cat > "$work/hermes-stub" <<'PY'
 #!/usr/bin/env python3
-import pathlib, re, sys
-prompt = sys.argv[2] if len(sys.argv) > 2 else ""
+import json, pathlib, re, sys
+# 공유 Codex 클라이언트 argv: [bin, --ignore-user-config, -z, PROMPT, --provider, ...]
+prompt = sys.argv[3] if len(sys.argv) > 3 else ""
 base = pathlib.Path(__file__).resolve().parent
-with (base / "codex-calls.log").open("a") as h:
-    h.write(f"call chars={len(prompt)}\n")
+with (base / "codex-calls.log").open("a", encoding="utf-8") as h:
+    h.write(json.dumps(sys.argv[1:], ensure_ascii=False) + "\n")
+with (base / "codex-inputs.log").open("a", encoding="utf-8") as h:
+    h.write(prompt + "\n===\n")
 if '"category"' in prompt:
-    print('{"category": "important", "reply_needed": true, "schedule_needed": false,'
-          ' "budget": false, "schedule_text": "", "reason": "stub-codex"}')
+    # NOTE: match on UNIQUE fixture tokens, not generic words — the classify
+    # instructions themselves contain 광고/회신/세미나 and would false-hit.
+    if "beta-202" in prompt:
+        print('{"category": "spam", "reply_needed": false, "schedule_needed": false,'
+              ' "budget": false, "schedule_text": "", "reason": "stub"}')
+    elif "장비 사용" in prompt:
+        print('{"category": "important", "reply_needed": true, "schedule_needed": false,'
+              ' "budget": false, "schedule_text": "", "reason": "stub"}')
+    elif "delta-404" in prompt:
+        print('{"category": "important", "reply_needed": false, "schedule_needed": true,'
+              ' "budget": false, "schedule_text": "7월 20일 오후 3시 세미나", "reason": "stub"}')
+    elif "alpha-101" in prompt:  # 민감도 게이트 적중건도 같은 승인 티어로 온다
+        print('{"category": "important", "reply_needed": true, "schedule_needed": false,'
+              ' "budget": false, "schedule_text": "", "reason": "stub-sensitive"}')
+    else:
+        print('{"category": "normal", "reply_needed": false, "schedule_needed": false,'
+              ' "budget": false, "schedule_text": "", "reason": "stub"}')
 else:
     match = re.search(r"PSEUDOSECRET-[0-9a-f]+", prompt)
     extra = f" 참조: {match.group(0)}." if match else ""
@@ -286,7 +280,7 @@ with (base / "calendar-calls.log").open("a", encoding="utf-8") as h:
 print("CHANGE-SUMMARY stub")
 print("DRAFT-CREATED id=calstub1 action=create sha256=deadbeef")
 PY
-chmod +x "$work/glm-stub" "$work/hermes-stub" "$work/mailon-send-stub"
+chmod +x "$work/hermes-stub" "$work/mailon-send-stub"
 tri() { python3 "$script_dir/triage_cli.py" "$@"; }
 send_calls() { [ -f "$work/mailon-send-calls.log" ] && wc -l < "$work/mailon-send-calls.log" || echo 0; }
 cat > "$work/evidence-pack.json" <<'JSON'
@@ -313,16 +307,26 @@ grep -Ec 'action=draft:[0-9a-f]+' "$work/t1.out" | grep -qx 2 || fail "expected 
 grep -q 'sensitive=True category=important action=draft:' "$work/t1.out" \
   || fail "sensitive mail did not produce a draft"
 grep -q "$canary" "$work/t1.out" && fail "canary leaked into triage stdout (#approvals surface)"
-[[ "$(wc -l < "$work/glm-calls.log")" == 4 ]] || fail "expected exactly 4 GLM calls (non-sensitive only)"
-grep -q "$canary" "$work/glm-inputs.log" && fail "SENSITIVE BODY REACHED GLM"
-grep -q "특허" "$work/glm-inputs.log" && fail "patent subject reached GLM"
-[[ "$(wc -l < "$work/codex-calls.log")" == 3 ]] || fail "expected 3 non-GLM calls (1 classify + 2 drafts)"
-grep -q '"provider":"glm-main"' "$work/llm-calls.jsonl" || fail "routing log missing glm entries"
-python3 - "$work/llm-calls.jsonl" <<'PY' || fail "routing log shows sensitive on GLM"
+[[ "$(wc -l < "$work/codex-calls.log")" == 7 ]] \
+  || fail "expected exactly 7 codex calls (5 classify + 2 drafts)"
+grep -q '"provider":"openai-codex"' "$work/llm-calls.jsonl" || fail "routing log missing codex entries"
+python3 - "$work/codex-calls.log" "$work/llm-calls.jsonl" <<'PY' || fail "codex routing assertions failed"
 import json, sys
+
+# 모든 호출의 argv 가 승인 티어에 고정되어야 한다 — --ignore-user-config 가 없으면
+# hermes 가 사용자 설정의 폴백 공급자로 조용히 갈아탄다.
 for line in open(sys.argv[1], encoding="utf-8"):
-    rec = json.loads(line)
-    assert not (rec["provider"] == "glm-main" and rec["sensitive"]), rec
+    argv = json.loads(line)
+    assert "--ignore-user-config" in argv, argv
+    assert argv[argv.index("--provider") + 1] == "openai-codex", argv
+
+# 감사 로그에는 승인 티어만 남고, 강등 표식은 존재조차 하지 않는다.
+records = [json.loads(line) for line in open(sys.argv[2], encoding="utf-8") if line.strip()]
+assert records, "routing log empty"
+for rec in records:
+    assert rec["provider"] == "openai-codex", rec
+    assert "fallback_from" not in rec, rec
+assert any(rec["sensitive"] for rec in records), "sensitive call not recorded"
 PY
 grep -rq "$canary" "$work/mailhome/triage-drafts" || fail "sensitive draft body not confined to mail home"
 grep -rq "$canary" "$work/triage-gate/drafts" 2>/dev/null && fail "canary leaked into public drafts dir"
@@ -529,4 +533,4 @@ tri watch > "$work/watch-mode.out" || fail "mode-skip watch tick failed"
 grep -q '^MODE-SKIP mode=no-go' "$work/watch-mode.out" || fail "watch did not skip on no-go"
 [[ "$(send_calls)" == "$calls_before_watch" ]] || fail "mode-skip watch sent mail"
 
-echo "SCENARIO-PASS mail wrapper+triage offline contract leg=$confirm_leg (gate-first/glm-0-on-sensitive/no-send-before-approval/idempotent/no-go-downgrade+resolve)"
+echo "SCENARIO-PASS mail wrapper+triage offline contract leg=$confirm_leg (gate-first/codex-only-tier/no-send-before-approval/idempotent/no-go-downgrade+resolve)"

@@ -13,7 +13,7 @@ ops 체크아웃이 dirty해져 pull/peer-attest가 막힌다.
 | `entity-preflight.json` | `automation/entity_preflight/policy.py` | 개인 고유명사 자동선택·충돌 임계값과 출처 weight의 불변 시드. 누락/불량=fail-closed |
 | `~/.hermes/config.yaml`의 `approval_reminders` | `automation/interop/approval_reminder_config.py` → 공용 승인 watcher | 비밀이 아닌 런타임 정책. 파서 생략 기본은 enabled=true·3h·1h, 신규 provision 시드는 소유자 정책 1h·1h, 불량 간격=시작 실패 |
 | `mail-mode.default.json` | mail triage_mode | **시드 전용** — 런타임은 `~/.hermes/mail-triage/mail-mode.json`. 시드 경로 쓰기는 코드 가드가 거부 |
-| `routing-policy.md` | (코드 미파싱) | LiteLLM 라우팅·예산·태그 정책의 문서 source of truth — 런북/배포 절차가 참조 |
+| `routing-policy.md` | (코드 미파싱) | Codex OAuth 라우팅·민감도 게이트 정책의 문서 source of truth — 런북/배포 절차가 참조 |
 | `budget-sheet.md` · `inventory.md` · `templates/` | budget 스킬 / 문서 | — |
 
 Peer attestation의 신뢰 근원은 추적 시드와 분리된 `/etc/autophagy/peers.yaml`이다.
@@ -25,13 +25,11 @@ group/other 쓰기 불가인 파일·부모 디렉터리만 인정한다. `~/.he
 - `rag/` — 개인 RAG 스택 한 세트: `compose.yaml` + `personal-rag.service`(systemd) + `mcp/`(인증 MCP API)
   + `embedding/`(로컬 임베딩 서비스). **자체 툴체인**: `uv` + Ruff `ALL`(line-length 100) +
   basedpyright `all` + 각자 `pyproject.toml`의 pytest(메인 트리 pytest와 별개).
-- `litellm-staging/` — staged LiteLLM 게이트웨이 번들: `docker-compose.yml`이 `config.yaml`(라우팅·예산)
-  + `custom_callbacks.py`(`PatentSensitiveGlmBlocker` — patent-sensitive 태그 및
-  `[[PATENT-SENSITIVE-RECALL]]` 센티널 포함 glm-main 요청을 HTTP 403 거부)
-  + `alert_dispatcher.py`(예산 알림)를 묶음. 배포 절차는 `DEPLOY.md` 런북.
+- staged provider gateway bundle — 운영 인프라 번들이다. 현재 자동화 모델 경로가 아니며
+  배포 절차는 해당 운영 런북이 소유한다.
 
 ## ANTI-PATTERNS
 - 삭제된 공유 Lab 채널 ID를 config에 기입 (404 — 승인 채널은 이름 검색/env로 해석, interop AGENTS 참조).
-- `litellm-staging/config.yaml` 수정 시 `model_list[glm-main]` 외 항목(태그 가드·키 예산·alias) 변경 —
-  `routing-policy.md`의 검증 절차(인증 `/health`, 태그 403 마커, hard-cap 검증) 없이 배포 금지.
+- 운영 인프라 번들을 변경해 자동화 모델 경로를 추가하지 않는다. 자동화 호출은
+  `routing-policy.md`의 Codex OAuth 검증 계약만 따른다.
 - `rag/*/.venv`·`__pycache__`·`*_cache`를 소스로 취급 — 생성물이다.

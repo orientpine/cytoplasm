@@ -243,6 +243,36 @@ def test_fetch_recordings_empty_payloads_render_as_blank() -> None:
     assert recording.transcript_text == ""
 
 
+def test_fetch_recordings_tries_supported_blocks_until_one_answers_and_records_it() -> None:
+    class BlockClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, JsonObject]] = []
+
+        def call_tool(
+            self, name: str, arguments: JsonObject, timeout: float = 60.0
+        ) -> JsonObject:
+            self.calls.append((name, dict(arguments)))
+            if name == "list_files":
+                return _wrap(_files_text(_file_row("rec-001")))
+            if name == "get_note":
+                return _wrap(json.dumps([_note_item("요약")]))
+            block = arguments.get("block")
+            if block == "transaction":
+                raise PlaudMcpError("transaction block failed")
+            if block == "outline":
+                return _wrap(json.dumps(_transcript([], next_cursor=None)))
+            assert block == "transaction_polish"
+            return _wrap(json.dumps(_transcript([_segment("정리된 전문", start_ms=0)])))
+
+    client = BlockClient()
+    recording = fetch_recordings(client, date_from=None)[0]
+
+    assert recording.transcript_text.endswith("정리된 전문")
+    assert recording.transcript_source == "PLAUD 클라우드 전사(transaction_polish 블록)"
+    transcript_blocks = [arguments["block"] for name, arguments in client.calls if name == "get_transcript"]
+    assert transcript_blocks == ["transaction", "outline", "transaction_polish"]
+
+
 def test_fetch_recordings_accepts_plain_text_payloads() -> None:
     client = FakeClient(
         pages=[_files_text(_file_row("rec-001"))],
@@ -362,7 +392,7 @@ def test_plan_new_records_passes_each_new_recording_to_the_extractor_and_freezes
 def test_plan_new_records_defers_a_recording_whose_extraction_failed_this_poll() -> None:
     # 전송·파싱 실패는 저하된 노트를 영구 동결하는 대신 다음 폴에 재시도한다(빈 요약 skip 과 같은 원칙).
     def extractor(recording: _ModelRecording) -> LifelogExtraction:
-        raise LifelogExtractError("glm-main timed out")
+        raise LifelogExtractError("추출 모델 시간 초과")
 
     state = PlaudSyncState(version=1, last_poll_at=None, records={})
     result = plan_new_records(

@@ -27,8 +27,10 @@ prerequisites:
    `~/.hermes/doctype/private/`, 0700/0600)에만 보관한다. registry의 canonical/overlay에는 본문 없는
    메타데이터와 `private:<opaque>` 참조만 남긴다. `--out`은 repo 내부 경로를 거부한다.
 2. 모든 예시/입력/few-shot은 LLM 호출 전에 결정적 민감도 게이트를 통과한다. 한국어 요지 추출과 서술 초안은
-   항상 `openai-codex/gpt-5.4`만 사용한다. `call_glm(..., sensitive=True)`는 `PatentRoutingError`로
-   fail-closed하며, 문서 본문을 GLM에 보내는 경로는 없다.
+   공용 Codex OAuth 클라이언트(`automation/codex_llm.py`, provider `openai-codex`)만 사용한다.
+   `call_codex`는 호출 직전에 경로가 고정된 Codex OAuth 티어(argv에 `--ignore-user-config` 포함)인지
+   확인하고, 아니면 `PatentRoutingError`로 fail-closed한다. 자격증명이 없으면 `LlmCallError`로 거부하며
+   다른 제공자로 내려가는 경로는 없다.
 3. `register-from-example`, 같은 이름의 재등록, `refine`은 모두 최대 버전 + 1의 불변 버전을 추가한다.
    승인본은 사설 example으로 누적되어 이후 서술 작성의 few-shot이 된다. 기존 버전은 수정·삭제하지 않는다.
 4. `--review`는 문서 본문 없이 파일명·SHA256·type/version만 cha owner에게 보낸다. 제출·메일·외부 수집 기능은 없다.
@@ -88,14 +90,15 @@ python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" show --name 
 ```
 
 바이너리 `.hwp`와 잘못된 컨테이너는 표준 `CONVERSION-REQUEST`로 거부한다. 모든 경로는 E5의
-Codex·민감도 게이트를 그대로 따르므로 본문을 GLM에 보내는 경로는 없다.
+Codex·민감도 게이트를 그대로 따르므로 본문이 단일 Codex OAuth 티어 밖으로 나가는 경로는 없다.
 
 ## Runtime and sandbox
 
-Production uses `hermes -z … --provider openai-codex -m gpt-5.4 -t todo`. Offline tests set
-`DOCTYPE_HERMES_BIN` and `DOCTYPE_GLM_BIN` to deterministic local binaries; `DOCTYPE_LITELLM_BASE_URL`
-exists only for the explicitly forbidden-on-sensitive GLM helper. `scripts/scenario.sh` creates examples,
-private roots, stubs, and drafts only under `mktemp`, then removes them.
+Production goes through the shared client `automation/codex_llm.py`, which runs
+`hermes --ignore-user-config -z … --provider openai-codex -m <model> -t todo` with no fallback and no
+retry. Offline tests point `DOCTYPE_HERMES_BIN` at a deterministic local binary (the skill hands it to
+the shared client as `AUTOPHAGY_HERMES_BIN`). `scripts/scenario.sh` creates examples, private roots,
+stubs, and drafts only under `mktemp`, then removes them.
 
 ## 저장 어댑터 운영 설정
 Obsidian 저장은 `OBSIDIAN_WRITE_CONFIG`(기본 `~/.hermes/obsidian-write/config.json`)가 가리키는 설정의 전용 `clone_dir`, 읽기 가능한 `ssh_key_path`(쓰기 전용 deploy key), `repo_url`, `branch`를 사용한다. 쓰기 클론은 RAG 읽기 미러와 달라야 하며, key·승인 레코드가 없으면 push 전에 fail-closed한다.

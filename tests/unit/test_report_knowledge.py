@@ -115,7 +115,7 @@ def test_patent_sensitive_evidence_routes_report_to_codex(
     monkeypatch.setattr(report_cli.report_llm, "generate", generate)
 
     assert report_cli._report(args, evidence_pack=_pack(item=sensitive)) == 0
-    assert routes == [("openai-codex", "gpt-5.4", True)]
+    assert routes == [("openai-codex", "gpt-5.6-sol", True)]
 
 
 def test_evidence_json_preview_exposes_only_count_and_layers(

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Final
 
 from automation.plaud_sync.audio import AudioSource
+from automation.plaud_sync.fetch import CloudTranscript
 from automation.plaud_sync.lifelog_fields import DEFAULT_TIMEZONE
 from automation.plaud_sync.lifelog_model import (
     ExtractionOutcome,
@@ -97,6 +98,7 @@ class FakeEffects:
     draft: str | None = _DRAFT_BODY
     source: AudioSource | Exception = _SOURCE
     summary: str = "- 새 요약"
+    cloud: CloudTranscript = CloudTranscript("[00:05 · speaker_1] 클라우드 전사 문장", "transaction")
     download_error: Exception | None = None
     results: list[CliResult] = field(default_factory=list)
     markdown: str = _TRANSCRIPT_MD
@@ -117,6 +119,9 @@ class FakeEffects:
 
     def fetch_summary(self, recording_id: str) -> str:
         return self.summary
+
+    def fetch_transcript(self, recording_id: str) -> CloudTranscript:
+        return self.cloud
 
     tz: tzinfo = DEFAULT_TIMEZONE
     extraction: ExtractionOutcome = _SKIPPED
@@ -225,8 +230,31 @@ def test_process_when_recording_fails_at_the_cap_then_falls_back_to_the_cloud_tr
     assert after.last_block_reason is None
     assert body is not None
     assert split_lifelog_body(body)[1] == "[00:05 · speaker_1] 클라우드 전사 문장"
-    assert " · 전사: PLAUD 클라우드 전사(로컬 전사 2회 실패: rc=5 notice for rc 5)" in body
+    assert " · 전사: PLAUD 클라우드 전사(transaction 블록)(로컬 전사 2회 실패: rc=5 notice for rc 5)" in body
     assert effects.stored == [], "no local transcript exists to store"
+
+
+def test_process_when_cloud_fallback_has_neither_summary_nor_transcript_then_it_stays_visible() -> None:
+    empty_draft = render_lifelog_body(
+        replace(_DRAFT_RECORDING, summary_markdown="- (요약 없음)", transcript_text="- (전사 없음)"),
+        extraction=_SKIPPED,
+    )
+    effects = FakeEffects(
+        draft=empty_draft,
+        summary="- (요약 없음)",
+        cloud=CloudTranscript("- (전사 없음)"),
+        results=[_fail(5)],
+    )
+    once_failed = replace(_RECORD, transcribe_attempts=1)
+
+    assert process(once_failed, effects=effects, max_attempts=2) == "retry"
+
+    (_before, after, body) = effects.commits[0]
+    assert after.status == "transcribing"
+    assert after.transcribe_attempts == 2
+    assert body is None
+    assert after.last_block_reason is not None and "요약" in after.last_block_reason
+    assert "전사" in after.last_block_reason
 
 
 def test_process_when_download_breaks_the_cap_then_it_counts_as_a_recording_failure() -> None:
@@ -312,7 +340,7 @@ def test_process_when_extraction_fails_then_the_record_waits_without_counting_an
     # 전송·파싱 실패는 노드·LLM 쪽 사정이다 — 전사 실패처럼 세면 두 번 만에 클라우드 폴백으로 떨어진다.
     class Failing(FakeEffects):
         def extract(self, recording: LifelogRecording) -> ExtractionOutcome:
-            raise LifelogExtractError("glm-main timed out")
+            raise LifelogExtractError("추출 모델 시간 초과")
 
     effects = Failing(results=[_ok()])
 

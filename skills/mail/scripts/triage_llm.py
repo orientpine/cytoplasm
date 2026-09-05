@@ -1,22 +1,24 @@
-"""LLM routing for mail triage (W4-2, constraint 6).
+"""LLM routing for mail triage (W4-2, constraint 6) — one Codex OAuth tier.
 
-Routing contract:
-- non-sensitive classification -> LiteLLM ``glm-main`` (loopback gateway).
-- sensitivity-gate HIT (patent etc.) -> the non-GLM quality tier, NEVER GLM.
-- reply drafts (Korean final text) -> ALWAYS the non-GLM quality tier.
+Routing contract (2026-09-04 provider migration):
+- EVERY call — classification, digest summary, Korean reply draft, sensitive or
+  not — runs on the shared Codex OAuth client (``automation.codex_llm``,
+  provider ``openai-codex``).
+- the sensitivity gate is unchanged and still runs first. Its routing guard
+  survives as an identity check: gate-hit text only leaves after the shared
+  client is confirmed to be the approved Codex OAuth tier
+  (``PatentRoutingError`` otherwise). There is no longer a GLM tier to keep it
+  away from, so the guard now protects against the tier being repointed.
+- there is NO second tier and no fallback. When Codex OAuth cannot answer
+  (missing credentials, quota, transport) the call raises
+  ``LlmUnavailableError`` and the caller fails closed — never a downgrade.
 
-The plan's "sonnet-5" tier is realized as ``hermes -z … --provider
-openai-codex -m gpt-5.4`` per the v2.2 model-policy reinterpretation
-(Anthropic deferred; sonnet-5 mentions map to the openai-codex tier).
-``call_glm`` refuses sensitive input outright, and LiteLLM's deployed
-PatentSensitiveGlmBlocker (HTTP 403) is the fail-closed second layer.
+Every call appends one masked line to the routing log (provider/model/purpose/
+opaque uid) — the auditable call-count surface for QA.
 
-Every call appends one masked line to the routing log (provider/model/
-purpose/opaque uid) — the auditable GLM-call-count surface for QA.
-
-Test hooks (never set in production units):
-  TRIAGE_GLM_BIN     stub command: prompt on stdin, response on stdout.
-  TRIAGE_HERMES_BIN  overrides the hermes binary for the codex one-shot.
+Test hooks (never set in production units; read by the shared client):
+  AUTOPHAGY_HERMES_BIN   overrides the hermes binary.
+  AUTOPHAGY_CODEX_MODEL  overrides the model.
 """
 
 from __future__ import annotations
@@ -24,21 +26,20 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import shutil
-import subprocess
-import urllib.error
-import urllib.request
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import triage_core
 
-GLM_MODEL = "glm-main"
-NON_GLM_PROVIDER = "openai-codex"
-ENV_SECRETS = Path.home() / ".env.secrets"
+CODEX_PROVIDER = "openai-codex"  # the only approved tier
+CALL_TIMEOUT_S = 600.0  # unchanged per-call budget of the mail pipeline
+REPO_ROOT_ENV = "AUTOPHAGY_REPO_ROOT"
+MOUNTED_REPO_ROOT = Path("/srv/autophagy-agent-current")
 
 
 class PatentRoutingError(RuntimeError):
-    """Raised when sensitivity-gate-hit text is about to reach a GLM tier."""
+    """Raised when triage text is about to reach a non-approved model tier."""
 
 
 class LlmCallError(RuntimeError):
@@ -46,18 +47,66 @@ class LlmCallError(RuntimeError):
 
 
 class LlmUnavailableError(LlmCallError):
-    """Raised when the GLM tier itself is unavailable, not this one request.
+    """Raised when the Codex OAuth tier itself is unavailable, not this request.
 
-    HTTP 429/5xx and connection/timeout failures mean every following call would
-    fail the same way (2026-09-03: the provider behind ``glm-main`` answered 429
-    "Insufficient balance" to all 15 non-sensitive mails of one digest run). The
-    caller degrades to the non-GLM tier on this type only — a 400/403 is this
-    request's own problem and must never trigger a run-wide degrade.
+    Missing OAuth credentials, quota exhaustion and transport failures mean every
+    following call fails the same way. Before the migration this type selected the
+    non-GLM degrade path; now it is the fail-closed signal — the caller refuses the
+    run instead of routing the prompt anywhere else.
     """
 
 
+def _repo_root() -> Path:
+    """Locate the repository without importing it (skills stay import-light)."""
+    override = os.environ.get(REPO_ROOT_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "automation" / "skill_mount.py").is_file():
+            return parent
+    return MOUNTED_REPO_ROOT
+
+
+def _codex_module() -> ModuleType:
+    """Import the shared Codex client lazily; an ImportError REFUSES the call.
+
+    Fail closed exactly like the approval_lifecycle rule in ``skills/AGENTS.md``:
+    a skill that cannot reach the governed client does not improvise its own
+    provider call.
+    """
+    root = str(_repo_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        import automation.codex_llm as codex_llm
+    except ImportError:
+        raise LlmUnavailableError(
+            "automation.codex_llm 임포트 실패 — 승인된 Codex OAuth 경로 없음 (호출 거부)"
+        ) from None
+    return codex_llm
+
+
+def _approved_codex(sensitive: bool) -> ModuleType:
+    """Return the shared client only if it is bound to the approved tier.
+
+    Constraint 6's guard, carried through the migration: gate-hit text may only
+    ever leave for the approved tier. With a single tier left the check is on the
+    tier's identity instead of a GLM/non-GLM split — a client repointed at any
+    other provider refuses the prompt before it is built into a request.
+    """
+    codex = _codex_module()
+    if codex.PROVIDER != CODEX_PROVIDER:
+        subject = "민감도 게이트 적중 메일" if sensitive else "메일"
+        raise PatentRoutingError(
+            f"{subject} 프롬프트가 승인되지 않은 티어({codex.PROVIDER})로 향함 — 호출 거부"
+        )
+    return codex
+
+
 def codex_model() -> str:
-    return os.environ.get("TRIAGE_CODEX_MODEL", "gpt-5.4")
+    """The model the shared client will use for this call (single source: the client)."""
+    codex = _codex_module()
+    return os.environ.get(codex.MODEL_ENV, "").strip() or codex.DEFAULT_MODEL
 
 
 def _log_path() -> Path:
@@ -70,34 +119,31 @@ def _append_record(record: dict) -> None:
     """Append one masked JSON line to the routing log (0600, flock-serialized)."""
     path = _log_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     with path.open("a", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n")
+        handle.write(line + "\n")
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     path.chmod(0o600)
 
 
-def _log_call(
-    *, provider: str, model: str, purpose: str, uid_opaque: str, sensitive: bool,
-    fallback_from: str = "",
-) -> None:
-    """Append one masked routing line; ``fallback_from`` marks a degraded call.
+def _log_call(*, model: str, purpose: str, uid_opaque: str, sensitive: bool) -> None:
+    """Append one masked routing line recording the codex route of this call.
 
-    A degrade is a routing exception, so it must be visible in the audit surface:
-    the line keeps its normal purpose (``classify``/``digest_summary``) and adds
-    ``"fallback_from": "glm-main"`` — countable without parsing free-form text.
+    The line keeps its shape (provider/model/purpose/opaque uid/sensitive) so the
+    QA call-count surface still parses. ``fallback_from`` is gone with the tier it
+    described — a degraded call can no longer exist.
     """
-    record = {
-        "model": model,
-        "provider": provider,
-        "purpose": purpose,
-        "sensitive": sensitive,
-        "timestamp": triage_core.utc_now(),
-        "uid": uid_opaque,
-    }
-    if fallback_from:
-        record["fallback_from"] = fallback_from
-    _append_record(record)
+    _append_record(
+        {
+            "model": model,
+            "provider": CODEX_PROVIDER,
+            "purpose": purpose,
+            "sensitive": sensitive,
+            "timestamp": triage_core.utc_now(),
+            "uid": uid_opaque,
+        }
+    )
 
 
 def log_failure(*, purpose: str, uid_opaque: str, sensitive: bool, error: BaseException) -> None:
@@ -118,150 +164,73 @@ def log_failure(*, purpose: str, uid_opaque: str, sensitive: bool, error: BaseEx
     )
 
 
-def _litellm_key() -> str:
-    key = os.environ.get("LITELLM_AGENT_KEY", "")
-    if key:
-        return key
-    try:
-        for line in ENV_SECRETS.read_text(encoding="utf-8").splitlines():
-            if line.startswith("LITELLM_AGENT_KEY="):
-                return line.split("=", 1)[1].strip()
-    except OSError:
-        pass
-    raise LlmCallError("LITELLM_AGENT_KEY 없음 — glm-main 호출 불가")
+def call_codex(prompt: str, *, sensitive: bool = False, timeout: float = CALL_TIMEOUT_S) -> str:
+    """One completion on the approved Codex OAuth tier — no retry, no fallback.
 
-
-def call_glm(prompt: str, *, sensitive: bool, timeout: float = 180.0) -> str:
-    """Call LiteLLM glm-main for NON-sensitive triage only (fail closed)."""
-    if sensitive:
-        raise PatentRoutingError("sensitivity-gate hit — GLM tier is forbidden for this mail")
-    stub = os.environ.get("TRIAGE_GLM_BIN", "")
-    if stub:
-        completed = subprocess.run(  # noqa: S603 — explicit test hook
-            [stub], input=prompt.encode("utf-8"), capture_output=True,
-            timeout=timeout, check=False,
-        )
-        if completed.returncode != 0:
-            raise LlmCallError(f"glm stub failed rc={completed.returncode}")
-        return completed.stdout.decode("utf-8", errors="replace")
-    base_url = os.environ.get("TRIAGE_LITELLM_BASE_URL", "http://127.0.0.1:4000/v1")
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/chat/completions",
-        data=json.dumps(
-            {
-                "model": GLM_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-                "thinking": {"type": "disabled"},
-                "metadata": {"tags": ["mail-triage"]},
-            }
-        ).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {_litellm_key()}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        # 429/5xx = the tier is out (quota, upstream down) → every following call
-        # fails identically, so the caller may degrade the whole run. Any other
-        # status is about THIS request (bad body, patent blocker 403) and must
-        # stay a plain call error.
-        unavailable = error.code == 429 or 500 <= error.code < 600
-        failure = LlmUnavailableError if unavailable else LlmCallError
-        raise failure(f"glm-main 호출 실패: {triage_core.redact(str(error))[:200]}") from None
-    except OSError as error:  # URLError, socket timeout, reset — gateway unreachable
-        raise LlmUnavailableError(
-            f"glm-main 호출 실패: {triage_core.redact(str(error))[:200]}"
-        ) from None
-    return payload["choices"][0]["message"]["content"]
-
-
-def call_codex(prompt: str, *, timeout: float = 600.0) -> str:
-    """Non-GLM quality tier via the hermes openai-codex one-shot.
-
-    ``-t todo`` is load-bearing (W2-3): without an explicit harmless toolset
-    the one-shot agent gets file/terminal tools and has edited local files.
+    The shared client owns the argv (``--ignore-user-config`` is load bearing:
+    without it hermes reads the user config and may switch to a configured
+    fallback provider on auth/quota/transport errors), the child environment and
+    the success rule (rc 0 AND non-empty stdout).
     """
-    binary = os.environ.get("TRIAGE_HERMES_BIN", "")
-    if not binary:
-        binary = shutil.which("hermes") or os.path.expanduser("~/.local/bin/hermes")
-    completed = subprocess.run(  # noqa: S603
-        [binary, "-z", prompt, "--provider", NON_GLM_PROVIDER, "-m", codex_model(), "-t", "todo"],
-        capture_output=True, timeout=timeout,
-        cwd=os.path.expanduser("~"), check=False,
-    )
-    if completed.returncode != 0:
-        stderr = completed.stderr.decode("utf-8", errors="replace")[-300:]
-        raise LlmCallError(
-            f"codex one-shot failed rc={completed.returncode}: {triage_core.redact(stderr)}"
-        )
-    return completed.stdout.decode("utf-8", errors="replace")
+    codex = _approved_codex(sensitive)
+    try:
+        client = codex.CodexClient.from_environment(timeout=timeout)
+        return client.complete(prompt)
+    except codex.CodexUnavailableError as error:
+        raise LlmUnavailableError(_failure_text(error)) from None
+    except codex.CodexError as error:
+        raise LlmCallError(_failure_text(error)) from None
+
+
+def _failure_text(error: BaseException) -> str:
+    return f"codex 호출 실패: {triage_core.redact(str(error))[:200]}"
 
 
 def classify(
     *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path,
-    force_codex: bool = False,
 ) -> tuple[triage_core.Classification, str]:
-    """Step-2 classification. Route by the step-1 sensitivity verdict.
+    """Step-2 classification on the approved Codex OAuth tier.
 
-    ``force_codex`` is the availability degrade path: the caller judged
-    ``glm-main`` unavailable and runs the SAME prompt on the non-GLM tier. It can
-    only widen the sensitive routing (codex), never narrow it.
+    The step-① sensitivity verdict no longer selects a tier (there is one), but it
+    still travels with the call: it arms the routing guard and stays in the masked
+    audit line.
     """
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    if sensitive or force_codex:
-        raw, provider, model = call_codex(prompt), NON_GLM_PROVIDER, codex_model()
-    else:
-        raw, provider, model = call_glm(prompt, sensitive=False), GLM_MODEL, GLM_MODEL
-    _log_call(provider=provider, model=model, purpose="classify",
-              uid_opaque=uid_opaque, sensitive=sensitive,
-              fallback_from=GLM_MODEL if force_codex and not sensitive else "")
-    return triage_core.parse_classification(raw), provider
+    raw = call_codex(prompt, sensitive=sensitive)
+    _log_call(model=codex_model(), purpose="classify",
+              uid_opaque=uid_opaque, sensitive=sensitive)
+    return triage_core.parse_classification(raw), CODEX_PROVIDER
 
 
 def draft_reply(
     *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str,
     prompt_path: Path, instruction: str = "", evidence: str = "",
 ) -> tuple[str, str, str]:
-    """Step-3 Korean final-text reply — ALWAYS the non-GLM quality tier."""
+    """Step-3 Korean final-text reply — the approved Codex OAuth tier, as before."""
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body, instruction=instruction,
         evidence=evidence,
     )
-    raw = call_codex(prompt)
-    _log_call(provider=NON_GLM_PROVIDER, model=codex_model(), purpose="draft_reply",
+    raw = call_codex(prompt, sensitive=sensitive)
+    _log_call(model=codex_model(), purpose="draft_reply",
               uid_opaque=uid_opaque, sensitive=sensitive)
     llm_subject, reply_body = triage_core.parse_reply(raw)
-    return triage_core.reply_subject(llm_subject, subject), reply_body, NON_GLM_PROVIDER
+    return triage_core.reply_subject(llm_subject, subject), reply_body, CODEX_PROVIDER
 
 
 def summarize(
     *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path,
-    force_codex: bool = False,
 ) -> str:
-    """One-line Korean digest summary. Route by the step-1 sensitivity verdict.
-
-    ``force_codex`` mirrors ``classify``: the availability degrade path onto the
-    non-GLM tier, marked as such in the routing log.
-    """
+    """One-line Korean digest summary on the approved Codex OAuth tier."""
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    if sensitive or force_codex:
-        raw, provider, model = call_codex(prompt), NON_GLM_PROVIDER, codex_model()
-    else:
-        raw, provider, model = call_glm(prompt, sensitive=False), GLM_MODEL, GLM_MODEL
-    _log_call(provider=provider, model=model, purpose="digest_summary",
-              uid_opaque=uid_opaque, sensitive=sensitive,
-              fallback_from=GLM_MODEL if force_codex and not sensitive else "")
+    raw = call_codex(prompt, sensitive=sensitive)
+    _log_call(model=codex_model(), purpose="digest_summary",
+              uid_opaque=uid_opaque, sensitive=sensitive)
     return triage_core.parse_digest_summary(raw)

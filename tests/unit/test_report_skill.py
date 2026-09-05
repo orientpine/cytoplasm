@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import date
@@ -91,8 +92,20 @@ def test_sensitive_notes_route_only_to_openai_codex(tmp_path: Path) -> None:
     route = report_sensitivity.route_notes(selected, rules)
 
     assert route.provider == "openai-codex"
-    assert route.model == "gpt-5.4"
+    assert route.model == "gpt-5.6-sol"
     assert route.sensitive is True
+
+
+def test_plain_notes_route_to_the_same_single_codex_tier(tmp_path: Path) -> None:
+    """민감 판정은 그대로지만 고를 두 번째 티어가 없다 — 평범한 노트도 같은 경로다."""
+    rules = report_sensitivity.load_rules(ROOT / "configs" / "sensitivity-rules.yaml")
+    _write_note(tmp_path / "plain.md", "Plain", "weekly cell culture logs", 10)
+    selected = report_core.select_notes(tmp_path, limit=1)
+
+    route = report_sensitivity.route_notes(selected, rules)
+
+    assert (route.provider, route.model) == ("openai-codex", "gpt-5.6-sol")
+    assert route.sensitive is False
 
 
 def test_report_publish_calls_use_weekly_bundle_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,24 +192,24 @@ def test_report_with_no_notes_returns_insufficient_material(tmp_path: Path, caps
     assert "자료 부족" in captured.out
 
 
-def test_glm_hermes_child_receives_key_from_secrets_when_parent_environment_lacks_it(
+def test_report_child_authenticates_through_codex_oauth_home_without_any_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """자격증명은 HOME 아래에 있다 — 부모가 넘기는 API 키는 이제 존재하지 않는다."""
     # Given
     binary = tmp_path / ".local" / "bin" / "hermes"
     binary.parent.mkdir(parents=True)
     _ = binary.write_text(
-        '#!/bin/sh\n[ -n "$LITELLM_AGENT_KEY" ] || exit 9\nprintf "draft"\n',
+        "#!/bin/sh\n"
+        'case " $* " in *" --ignore-user-config "*) ;; *) exit 9;; esac\n'
+        'case " $* " in *" openai-codex "*) ;; *) exit 9;; esac\n'
+        'printf "draft"\n',
         encoding="utf-8",
     )
     _ = binary.chmod(0o755)
-    _ = (tmp_path / ".env.secrets").write_text(
-        "LITELLM_AGENT_KEY=report-fallback-key\n", encoding="utf-8"
-    )
-    monkeypatch.delenv("LITELLM_AGENT_KEY", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     route = report_sensitivity.Route(
-        provider="custom:litellm", model="glm-main", sensitive=False, tags=()
+        provider="openai-codex", model="gpt-5.6-sol", sensitive=False, tags=()
     )
 
     # When
@@ -204,6 +217,50 @@ def test_glm_hermes_child_receives_key_from_secrets_when_parent_environment_lack
 
     # Then
     assert result == "draft"
+    logged = json.loads(
+        (tmp_path / ".hermes" / "report" / "logs" / "llm-calls.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[-1]
+    )
+    assert logged["provider"] == "openai-codex" and logged["model"] == "gpt-5.6-sol"
+
+
+def test_report_refuses_instead_of_downgrading_when_codex_credentials_are_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """자격증명 없음(rc 1, 빈 stdout)은 실패다 — 다른 티어로 내려가지 않는다."""
+    # Given
+    binary = tmp_path / ".local" / "bin" / "hermes"
+    binary.parent.mkdir(parents=True)
+    _ = binary.write_text(
+        '#!/bin/sh\necho "No Codex credentials stored." >&2\nexit 1\n', encoding="utf-8"
+    )
+    _ = binary.chmod(0o755)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    route = report_sensitivity.Route(
+        provider="openai-codex", model="gpt-5.6-sol", sensitive=False, tags=()
+    )
+
+    # When / Then
+    with pytest.raises(report_llm.LlmInvocationError) as failure:
+        _ = report_llm.generate("prompt", route)
+    assert "No Codex credentials stored" in str(failure.value)
+
+
+def test_report_refuses_a_route_that_is_not_the_codex_oauth_tier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """민감도 게이트의 fail-closed 층은 남는다 — 승인된 경로 외에는 호출 자체가 없다."""
+    # Given
+    monkeypatch.setenv("HOME", str(tmp_path))
+    route = report_sensitivity.Route(
+        provider="third-party-tier", model="other", sensitive=True, tags=("patent-sensitive",)
+    )
+
+    # When / Then
+    with pytest.raises(report_llm.LlmInvocationError):
+        _ = report_llm.generate("prompt", route)
+    assert not (tmp_path / ".hermes" / "report" / "logs" / "llm-calls.jsonl").exists()
 
 
 def test_cli_runs_as_main_from_hash_named_deploy_layout(tmp_path: Path) -> None:

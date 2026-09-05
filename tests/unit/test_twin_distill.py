@@ -23,7 +23,7 @@ from automation.twin_distill.gather import (
     GatherRequest,
     RecallSearchResult,
 )
-from automation.twin_distill.llm import LlmConfigurationError
+from automation.twin_distill.llm import CodexLlmClient, LlmConfigurationError
 from automation.twin_distill.validate import (
     AuthorityCapError,
     CandidateSpec,
@@ -119,7 +119,7 @@ def _safe_result() -> RecallSearchResult:
 def _patent_result() -> RecallSearchResult:
     return RecallSearchResult(
         source="obsidian:patent-roadmap#c0001",
-        content="PATENT-ONLY-CONTENT must never reach the GLM prompt.",
+        content="PATENT-ONLY-CONTENT must never reach the model prompt.",
         metadata=EvidenceMetadata(sensitivity="patent-sensitive", source_type="obsidian"),
     )
 
@@ -224,13 +224,27 @@ def test_wiki_draft_runner_uses_draft_subprocess_with_explicit_environment() -> 
     assert dict(call.environment) == environment
 
 
-def test_missing_llm_key_fails_before_any_draft_is_emitted() -> None:
-    # Given: a production dependency bundle with no LiteLLM credential
+def test_unreachable_codex_oauth_fails_before_any_draft_is_emitted() -> None:
+    # Given: a production dependency bundle whose environment cannot reach Codex OAuth
     search = FakeSearchClient((_safe_result(),), [])
     runner = FakeDraftRunner([])
     runtime = LiveDependencies(search_client=search, draft_runner=runner, environment={})
 
-    # When / Then
-    with pytest.raises(LlmConfigurationError, match="LITELLM_AGENT_KEY"):
+    # When / Then: it fails closed on the single tier; there is no second provider to try
+    with pytest.raises(LlmConfigurationError, match="Codex"):
         run_with_live_llm(_invocation(), runtime)
     assert runner.emitted == []
+
+
+def test_live_client_calls_codex_oauth_with_the_user_config_ignored() -> None:
+    # Given: the live client the CLI builds for an environment that can reach Codex
+    client = CodexLlmClient.from_environment(
+        {"HOME": "/home/agent", "AUTOPHAGY_HERMES_BIN": "/home/agent/.local/bin/hermes"}
+    )
+
+    # When: the argv of one distillation call is inspected
+    argv = client.client.argv("prompt")
+
+    # Then: the provider is Codex OAuth and the user-config fallback tier cannot fire
+    assert "--ignore-user-config" in argv
+    assert argv[argv.index("--provider") + 1] == "openai-codex"

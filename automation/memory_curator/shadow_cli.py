@@ -7,7 +7,7 @@ promotion, and never opens a Discord surface — the classifier can be
 compared against the legacy cue matcher before anything is trusted.
 
 ``--offline`` skips the LLM entirely (pre-LLM vetoes only), which makes the
-command runnable on a node with no LiteLLM credential.
+command runnable on a node with no Codex OAuth credential.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from automation.rag_ingest.sensitivity import (
     SensitivityRulesError,
     load_rules,
 )
-from automation.twin_distill.llm import LiteLlmClient, LlmConfigurationError
+from automation.twin_distill.llm import CodexLlmClient, LlmConfigurationError
 
 from .classify import classify_entries
 from .classify_model import EntryVerdict
@@ -142,7 +142,7 @@ def _online_verdicts(
     rules: Sequence[SensitivityRule],
 ) -> tuple[EntryVerdict, ...] | None:
     try:
-        client = LiteLlmClient.from_environment(os.environ)
+        client = CodexLlmClient.from_environment(os.environ)
     except LlmConfigurationError:
         return None
     return classify_entries(entries_by_kind, client=client, rules=rules)
@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         online = _online_verdicts(entries_by_kind, rules)
         if online is None:
-            return _refuse("LITELLM_AGENT_KEY 필요 (또는 --offline 사용)")
+            return _refuse("Codex OAuth 인증 필요 (또는 --offline 사용)")
         verdicts = online
 
     report = build_shadow_report(files, verdicts, cue_matched=cue_matched, full=args.full)

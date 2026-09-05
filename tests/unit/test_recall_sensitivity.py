@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,14 +12,16 @@ sys.path.insert(0, str(_SCRIPTS))
 
 import recall_cli  # noqa: E402
 
-_GLM_CFG = "model:\n  default: glm-main\n  provider: custom:litellm\n"
-_SOL_CFG = (
+from automation.knowledge import core as knowledge_core  # noqa: E402
+
+_OFF_TIER_CFG = "model:\n  default: unspecified-main\n  provider: custom:unspecified\n"
+_CODEX_CFG = (
     "model:\n"
     "  default: gpt-5.6-sol\n"
     "  provider: openai-codex\n"
     "fallback_providers:\n"
-    "  - provider: custom:litellm\n"
-    "    model: glm-main\n"
+    "  - provider: custom:unspecified\n"
+    "    model: unspecified-main\n"
 )
 
 
@@ -75,7 +76,7 @@ def test_cli_excludes_sensitive_rows_and_keeps_missing_sensitivity_visible(
     )
     proc = subprocess.run(
         [sys.executable, str(_SCRIPTS / "recall_cli.py"), "search", "배양기"],
-        env=_cli_env(tmp_path, rows_path, _hermes_cfg(tmp_path, _GLM_CFG)),
+        env=_cli_env(tmp_path, rows_path, _hermes_cfg(tmp_path, _OFF_TIER_CFG)),
         capture_output=True,
         text=True,
         check=False,
@@ -113,7 +114,7 @@ def test_cli_all_sensitive_rows_emit_no_result_rows(tmp_path: Path) -> None:
     )
     proc = subprocess.run(
         [sys.executable, str(_SCRIPTS / "recall_cli.py"), "search", "특허", "--json"],
-        env=_cli_env(tmp_path, rows_path, _hermes_cfg(tmp_path, _GLM_CFG)),
+        env=_cli_env(tmp_path, rows_path, _hermes_cfg(tmp_path, _OFF_TIER_CFG)),
         capture_output=True,
         text=True,
         check=False,
@@ -144,31 +145,36 @@ def test_cli_has_no_caller_facing_reinclusion_flag(monkeypatch) -> None:
 
 
 def test_parse_primary_model_reads_top_level_model_block() -> None:
-    model, provider = recall_cli._parse_primary_model(_SOL_CFG)
+    model, provider = recall_cli._parse_primary_model(_CODEX_CFG)
     assert (model, provider) == ("gpt-5.6-sol", "openai-codex")
-    model, provider = recall_cli._parse_primary_model(_GLM_CFG)
-    assert (model, provider) == ("glm-main", "custom:litellm")
+    model, provider = recall_cli._parse_primary_model(_OFF_TIER_CFG)
+    assert (model, provider) == ("unspecified-main", "custom:unspecified")
     # fallback entries must never leak into the primary parse
-    assert "glm" not in recall_cli._parse_primary_model(_SOL_CFG)[0]
+    assert "unspecified" not in recall_cli._parse_primary_model(_CODEX_CFG)[0]
 
 
 def test_route_guard_fails_closed(tmp_path: Path, monkeypatch) -> None:
     # missing config file => exclude
     monkeypatch.setenv("RECALL_HERMES_CONFIG", str(tmp_path / "absent.yaml"))
-    assert recall_cli._primary_route_is_glm_free() is False
-    # glm primary => exclude
+    assert recall_cli._primary_route_is_codex() is False
+    # any primary route that is not the Codex OAuth tier => exclude
     monkeypatch.setenv(
-        "RECALL_HERMES_CONFIG", str(_hermes_cfg(tmp_path, _GLM_CFG))
+        "RECALL_HERMES_CONFIG", str(_hermes_cfg(tmp_path, _OFF_TIER_CFG))
     )
-    assert recall_cli._primary_route_is_glm_free() is False
+    assert recall_cli._primary_route_is_codex() is False
     # model block missing keys => exclude
     empty = tmp_path / "empty.yaml"
     empty.write_text("agent:\n  max_turns: 60\n", encoding="utf-8")
     monkeypatch.setenv("RECALL_HERMES_CONFIG", str(empty))
-    assert recall_cli._primary_route_is_glm_free() is False
+    assert recall_cli._primary_route_is_codex() is False
+    # the Codex OAuth tier is the one route that releases sensitive rows
+    monkeypatch.setenv(
+        "RECALL_HERMES_CONFIG", str(_hermes_cfg(tmp_path, _CODEX_CFG))
+    )
+    assert recall_cli._primary_route_is_codex() is True
 
 
-def test_sol_primary_releases_sensitive_rows_with_sentinel(tmp_path: Path) -> None:
+def test_codex_primary_releases_sensitive_rows_with_sentinel(tmp_path: Path) -> None:
     rows_path = tmp_path / "rows.json"
     rows_path.write_text(
         json.dumps(
@@ -196,7 +202,7 @@ def test_sol_primary_releases_sensitive_rows_with_sentinel(tmp_path: Path) -> No
     )
     proc = subprocess.run(
         [sys.executable, str(_SCRIPTS / "recall_cli.py"), "search", "배양기"],
-        env=_cli_env(tmp_path, rows_path, _hermes_cfg(tmp_path, _SOL_CFG)),
+        env=_cli_env(tmp_path, rows_path, _hermes_cfg(tmp_path, _CODEX_CFG)),
         capture_output=True,
         text=True,
         check=False,
@@ -214,13 +220,12 @@ def test_sol_primary_releases_sensitive_rows_with_sentinel(tmp_path: Path) -> No
     )
 
 
-def test_sentinel_matches_litellm_gateway_guard() -> None:
-    callbacks = (
-        Path(__file__).resolve().parents[2]
-        / "configs"
-        / "litellm-staging"
-        / "custom_callbacks.py"
-    ).read_text(encoding="utf-8")
-    match = re.search(r"PATENT_SENTINEL = \"(.+?)\"", callbacks)
-    assert match is not None
-    assert match.group(1) == recall_cli.SENSITIVE_MARKER
+def test_sentinel_is_the_shared_audit_marker() -> None:
+    """Released patent rows stay auditable by carrying one canonical marker.
+
+    The gateway that once rejected the marker on a second tier is gone with that tier;
+    the marker itself is still the machine-checked contract between recall and the
+    shared knowledge core, so its exact bytes are pinned here.
+    """
+    assert recall_cli.SENSITIVE_MARKER == "[[PATENT-SENSITIVE-RECALL]]"
+    assert knowledge_core.SENSITIVE_MARKER == recall_cli.SENSITIVE_MARKER

@@ -9,7 +9,7 @@ from automation.memory_curator.classify_prompt import (
 
 _ENTRY_A = (
     "배포 판정은 readlink /srv/autophagy-skills/live/<skill> 해시로 한다.\n"
-    "LiteLLM 게이트웨이는 127.0.0.1:4000 에서 듣는다."
+    "모델 프록시는 127.0.0.1:4000 에서 듣는다."
 )
 _ENTRY_B = "cha에게 보고할 때는 항상 한국어로 쓴다."
 

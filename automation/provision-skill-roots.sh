@@ -51,7 +51,14 @@ readonly LEGACY_HUB_ENTRY="$HUB_STATE $HUB_TARGET none bind,rw,nosuid,nodev,noex
 # peer 잔여 사본 허용목록 — 이 이름들만, 그리고 검증을 통과할 때만 제거한다.
 readonly PEER_RESIDUE_ALLOWLIST=(coordination prompt wiki)
 # peer 자작 스킬 — curator 가 자동 전이시키지 못하게 pin 한다.
-readonly PEER_PINNED_SKILLS=(autophagy-interop skill-deploy-review)
+# `skill-deploy-review` 는 여기 넣지 않는다. E7(docs/patch/2026-07-17-e7-peer-attestation.md)이
+# "an agent must not read a Discord request and be instructed to run a reviewer as part of
+# deployment" 로 그 리뷰어를 은퇴시켰고, 결정론적 대체제는 ops 체크아웃에서 도는
+# automation/peer_attest.py 다(자가 스킬 루트를 참조하지 않는다). 이름을 되돌려 넣으면
+# 프로비저닝마다 부활해 peer 가 `[release]` 승인 카드까지 즉석 심사한다 — 그 심사는 HEAD 를
+# 관측 미러에서 찾는데 미러는 sync_mirror 규칙상 릴리스 수렴 뒤에야 전진하므로 새 릴리스
+# HEAD 는 언제나 "unpushed tip" 으로 읽혀 거짓 ⛔ 가 상시 발생한다(v1.1.2 실측).
+readonly PEER_PINNED_SKILLS=(autophagy-interop)
 
 log() { printf '[provision-skill-roots] %s\n' "$*"; }
 die() { log "ERROR: $1" >&2; exit 1; }

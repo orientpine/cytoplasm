@@ -7,7 +7,7 @@ W2-3 회의록 구조화 추출 프롬프트. `skills/meeting/scripts/meeting_ll
 버전 이력 (openai-codex gpt-5.4 원샷 실검증):
 - v1 폐기: "지시문+스키마 예시 선행" 구조 → codex가 프롬프트를 문서로 오인해 에코.
 - v2 폐기: "=== 회의록 시작/끝 ===" 마커 + 스키마 불릿 나열 → 동일 에코 재발.
-- v3 채택: 마커/스키마 블록 없는 평문 지시-마지막 구조 — glm-main과 codex 양쪽에서
+- v3 채택: 마커/스키마 블록 없는 평문 지시-마지막 구조 — Codex OAuth에서
   patent/clean 픽스처 파싱 성공 확인.
 - v4 (2026-08-26): 연구 회의록 서식 재설계에 맞춰 meeting/summary/discussion/
   open_questions/next_meeting 키를 추가하고 decisions에 basis를 붙였다. 발표자료를

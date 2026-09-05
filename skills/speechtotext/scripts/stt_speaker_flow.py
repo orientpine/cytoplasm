@@ -12,6 +12,7 @@ from typing import Protocol
 
 import stt_blocks
 import stt_client
+import stt_correction_log
 import stt_polish
 import stt_runtime
 import stt_speakers
@@ -49,6 +50,7 @@ def tidy(
         substitutions=polished.substitutions,
         blocks=named.blocks,
         timed=named.timed,
+        corrections=polished.corrections,
     )
     return polished, speakers
 
@@ -188,6 +190,7 @@ def absorb(
         glossary=stt_runtime.merged_glossary(project),
         names=stt_speakers.names(merged),
     )
+    stt_correction_log.record(polished.corrections, label=label, project=project, stage="absorb")
     transcript_path.write_text(
         stt_transcript.rewrite(
             header,

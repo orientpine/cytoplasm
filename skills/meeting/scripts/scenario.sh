@@ -53,13 +53,13 @@ done
 [ ! -f "$work/plan/team-post.txt" ] || { echo "FAIL sensitive team post exists"; exit 1; }
 grep -q '청구항' "$work/notes/"*.md || { echo "FAIL original detail missing from note"; exit 1; }
 
-echo "[4] glm fail-closed guard (call_litellm refuses sensitive input)"
+echo "[4] route fail-closed guard (extraction refuses a non-Codex route)"
 python3 - "$skill_dir" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1] + "/scripts")
 import meeting_llm
 try:
-    meeting_llm.call_litellm("x", sensitive=True, base_url="http://127.0.0.1:1", api_key="n")
+    meeting_llm.call_codex("x", sensitive=True, provider="third-party-tier")
 except meeting_llm.PatentRoutingError:
     sys.exit(0)
 sys.exit(1)

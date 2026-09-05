@@ -29,4 +29,4 @@
 - 티켓: repair `t_f0159b45`
 - 파일: `skills/mail/scripts/triage_llm.py`, `skills/mail/scripts/triage_llm_routing.py`, `skills/mail/scripts/triage_digest.py`
 - 게이트: 민감도 게이트가 민감 메일의 GLM 경로를 차단하고, 다이제스트는 읽기·통지 경계라 발송 승인 게이트를 열지 않는다
-- 회귀: `tests/unit/test_mail_digest_glm_fallback.py`
+- 회귀: `tests/unit/test_mail_digest_codex_failclosed.py` (2026-09-04 공급자 이관이 이 폴백을 대체한 뒤의 계약)

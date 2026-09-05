@@ -9,7 +9,7 @@ import json
 import shlex
 import sys
 from pathlib import Path
-from urllib.request import Request
+from types import SimpleNamespace
 
 import pytest
 
@@ -48,43 +48,39 @@ def test_rules_copy_is_in_sync_with_repo_config() -> None:
     assert RULES_PATH.read_bytes() == repo_rules
 
 
-def test_gate_hit_refuses_glm_fail_closed() -> None:
+def test_gate_hit_refuses_unapproved_tier_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 제약 6: 게이트 적중 본문은 승인된 Codex OAuth 티어 밖으로 나가지 않는다. 공유
+    # 클라이언트가 다른 공급자를 가리키면 프롬프트가 전송되기 전에 거부된다.
+    monkeypatch.setattr(
+        triage_llm, "_codex_module", lambda: SimpleNamespace(PROVIDER="unapproved-tier")
+    )
     with pytest.raises(triage_llm.PatentRoutingError):
-        triage_llm.call_glm("아무 프롬프트", sensitive=True)
+        triage_llm.call_codex("아무 프롬프트", sensitive=True)
 
 
-def test_call_glm_requests_json_without_thinking(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: the real HTTP path with a captured LiteLLM request.
-    captured: list[Request] = []
+def test_call_codex_pins_provider_and_ignores_user_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: argv 를 그대로 기록하는 hermes 대역.
+    argv_log = tmp_path / "argv.json"
+    hermes = _write_stub(
+        tmp_path / "hermes-stub",
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        "pathlib.Path(" + repr(str(argv_log)) + ").write_text(json.dumps(sys.argv))\n"
+        "print('{}')\n",
+    )
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
 
-    class Response:
-        def __enter__(self):
-            return self
+    # When: 비민감 분류 요청 한 건이 나간다.
+    result = triage_llm.call_codex("return JSON", sensitive=False, timeout=30.0)
 
-        def __exit__(self, *_args) -> None:
-            return None
-
-        def read(self) -> bytes:
-            return b'{"choices":[{"message":{"content":"{}"}}]}'
-
-    def urlopen(request, *, timeout: float):
-        del timeout
-        captured.append(request)
-        return Response()
-
-    monkeypatch.delenv("TRIAGE_GLM_BIN", raising=False)
-    monkeypatch.setattr(triage_llm, "_litellm_key", lambda: "dummy-key")
-    monkeypatch.setattr(triage_llm.urllib.request, "urlopen", urlopen)
-
-    # When: a non-sensitive classification request is sent.
-    result = triage_llm.call_glm("return JSON", sensitive=False, timeout=12.0)
-
-    # Then: JSON mode is required and reasoning is explicitly disabled.
-    request = captured[0]
-    payload = json.loads(request.data.decode("utf-8"))
+    # Then: 사용자 설정의 폴백 공급자로 샐 수 없도록 argv 가 고정된다.
+    argv = json.loads(argv_log.read_text(encoding="utf-8"))
     assert result == "{}"
-    assert payload["response_format"] == {"type": "json_object"}
-    assert payload["thinking"] == {"type": "disabled"}
+    assert "--ignore-user-config" in argv  # 없으면 hermes 가 폴백 공급자로 전환한다
+    assert argv[argv.index("--provider") + 1] == triage_llm.CODEX_PROVIDER
+    assert argv[3] == "return JSON"
 
 
 # --- ② classification contract ---------------------------------------------------
@@ -103,8 +99,8 @@ def test_parse_classification_rejects_unknown_category() -> None:
 
 
 def test_parse_classification_rejects_stringy_bool_flags() -> None:
-    # glm-5.2 sometimes emits the JSON booleans as strings; "false" must NOT
-    # become True and spuriously trigger a calendar draft.
+    # The classifier sometimes emits the JSON booleans as strings; "false" must
+    # NOT become True and spuriously trigger a calendar draft.
     raw = ('{"category": "important", "reply_needed": "false", '
            '"schedule_needed": "false", "budget": "false", '
            '"schedule_text": "", "reason": "x"}')
@@ -494,18 +490,16 @@ def test_parse_digest_summary_happy_and_rejects_empty() -> None:
         triage_core.parse_digest_summary('{"other": "x"}')
 
 
-def test_summarize_non_sensitive_uses_glm(
+def test_summarize_non_sensitive_uses_codex(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    glm = _write_stub(
-        tmp_path / "glm-stub",
+    codex = _write_stub(
+        tmp_path / "hermes-stub",
         "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "sys.stdin.read()\n"
         "print('{\"summary\": \"ok\"}')\n",
     )
     log = tmp_path / "llm-calls.jsonl"
-    monkeypatch.setenv("TRIAGE_GLM_BIN", str(glm))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(codex))
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
     summary = triage_llm.summarize(
         subject="S", sender="X", body="B", sensitive=False,
@@ -514,7 +508,8 @@ def test_summarize_non_sensitive_uses_glm(
     assert summary == "ok"
     record = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
     assert record["purpose"] == "digest_summary"
-    assert record["provider"] == triage_llm.GLM_MODEL and record["sensitive"] is False
+    assert record["provider"] == triage_llm.CODEX_PROVIDER and record["sensitive"] is False
+    assert record["model"] == triage_llm.codex_model()
 
 
 def test_summarize_sensitive_routes_to_codex(
@@ -526,9 +521,8 @@ def test_summarize_sensitive_routes_to_codex(
         "print('{\"summary\": \"ok\"}')\n",
     )
     log = tmp_path / "llm-calls.jsonl"
-    monkeypatch.setenv("TRIAGE_HERMES_BIN", str(hermes))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
-    monkeypatch.delenv("TRIAGE_GLM_BIN", raising=False)  # any GLM fallback would fail
     summary = triage_llm.summarize(
         subject=f"특허 {CANARY}", sender="X", body=f"본문 {CANARY}", sensitive=True,
         uid_opaque="sha256:u", prompt_path=_PROMPTS / "digest-summary-v1.md",
@@ -536,7 +530,8 @@ def test_summarize_sensitive_routes_to_codex(
     assert summary == "ok"
     record = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
     assert record["purpose"] == "digest_summary"
-    assert record["provider"] == triage_llm.NON_GLM_PROVIDER and record["sensitive"] is True
+    # 민감 메일도 같은 승인 티어를 쓴다 — 게이트 판정은 라우팅 가드를 무장시킬 뿐이다.
+    assert record["provider"] == triage_llm.CODEX_PROVIDER and record["sensitive"] is True
 
 
 def test_draft_reply_passes_instruction(
@@ -547,10 +542,10 @@ def test_draft_reply_passes_instruction(
         tmp_path / "hermes-stub",
         "#!/usr/bin/env python3\n"
         "import pathlib, sys\n"
-        "pathlib.Path(" + repr(str(capture)) + ").write_text(sys.argv[2], encoding='utf-8')\n"
+        "pathlib.Path(" + repr(str(capture)) + ").write_text(sys.argv[3], encoding='utf-8')\n"
         "print('{\"subject\": \"Re: S\", \"body\": \"감사합니다.\"}')\n",
     )
-    monkeypatch.setenv("TRIAGE_HERMES_BIN", str(hermes))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(tmp_path / "llm-calls.jsonl"))
     instruction = "CANARY-지시: 회의 일정은 다음 달로 미룬다고 답하라"
     subject, body, provider = triage_llm.draft_reply(
@@ -559,4 +554,4 @@ def test_draft_reply_passes_instruction(
         instruction=instruction,
     )
     assert instruction in capture.read_text(encoding="utf-8")
-    assert (subject, body, provider) == ("Re: S", "감사합니다.", triage_llm.NON_GLM_PROVIDER)
+    assert (subject, body, provider) == ("Re: S", "감사합니다.", triage_llm.CODEX_PROVIDER)

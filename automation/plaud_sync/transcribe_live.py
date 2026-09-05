@@ -40,7 +40,7 @@ from .audio import (
     open_url,
     parse_source,
 )
-from .fetch import fetch_summary
+from .fetch import CloudTranscript, fetch_summary, fetch_transcript
 from .lifelog_extract_live import build_extractor
 from .lifelog_fields import note_timezone
 from .lifelog_model import ExtractionOutcome, LifelogRecording
@@ -60,7 +60,12 @@ CLI_ENV: Final = "SPEECHTOTEXT_CLI"
 SCRIPTS_ENV: Final = "SPEECHTOTEXT_SCRIPTS"
 DEFAULT_CLI_TIMEOUT: Final = 21600.0
 BUSY_LINE: Final = "plaud-sync: transcribe busy (pipeline lock held)"
-_CHILD_OVERRIDES: Final = {"SPEECHTOTEXT_BACKEND": "local", "DRIVE_PUBLISH_ENABLED": "0"}
+_CHILD_OVERRIDES: Final = {
+    "SPEECHTOTEXT_BACKEND": "local",
+    # Lifelog is not meeting minutes: marked gaps beat an empty note; meetings still refuse them.
+    "SPEECHTOTEXT_ALLOW_INCOMPLETE": "1",
+    "DRIVE_PUBLISH_ENABLED": "0",
+}
 _MCP_ERRORS: Final = (PlaudMcpError, OSError, ValueError)
 _DETAIL_LIMIT: Final = 160
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -174,6 +179,13 @@ class LiveEffects:
                 return fetch_summary(client, recording_id)
         except _MCP_ERRORS:
             return ""
+
+    def fetch_transcript(self, recording_id: str) -> CloudTranscript:
+        try:
+            with PlaudMcpClient() as client:
+                return fetch_transcript(client, recording_id)
+        except _MCP_ERRORS:
+            return CloudTranscript("")
 
     def download(self, source: AudioSource) -> Path:
         dest = self.state_dir / "audio" / f"{source.recording_id}{source.suffix}"

@@ -135,7 +135,7 @@ def _parse_add(arguments: list[str]) -> AddRequest:
     model = values["--model"]
     if category not in ("task", "research-background"):
         raise PromptCliError("unsupported category")
-    if model not in ("glm-main", "openai-codex", "any"):
+    if model not in ("openai-codex", "any"):
         raise PromptCliError("unsupported model")
     return AddRequest(
         id=values["--id"],

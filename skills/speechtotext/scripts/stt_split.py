@@ -19,6 +19,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import Field, dataclass, replace
 from typing import ClassVar, Final, Protocol, TypeVar
 
+import stt_gap
+
 #: 사람이 한 덩어리로 읽을 수 있는 상한. 넘어가면 구두점이 없는 한 끊는다.
 DEFAULT_MAX_SPAN_MS: Final = 15_000
 #: 이보다 짧게 걸치는 턴은 화자 교대가 아니라 분리기가 경계에서 떠는 것이다.
@@ -109,6 +111,11 @@ def _split(
 ) -> tuple[SentenceT, ...]:
     start, end = sentence.start_ms, sentence.end_ms
     text = sentence.text
+    # 전사 실패 표지는 발화가 아니라 문서가 자기 자신에 대해 하는 말이다. 창 하나만큼 긴
+    # 구간을 가리키므로 화자 경계는 얼마든지 걸치지만, 잘리는 순간 소유자가 읽어야 할 그
+    # 한 줄이 조각으로 흩어진다(2026-09-04: 11 조각, 14분에 걸쳐).
+    if stt_gap.is_marker(text):
+        return (sentence,)
     # 시각이 없으면(API 백엔드) 자를 근거가 없고, 띄어쓰기가 없으면 자를 자리가 없다.
     if start is None or end is None or end <= start:
         return (sentence,)

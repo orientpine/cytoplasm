@@ -22,7 +22,7 @@ id: report-outline
 version: 1
 category: task                # task(작업별) | research-background(연구 배경지식)
 purpose: "용도 한 줄"
-model: glm-main               # 권장 모델: glm-main | openai-codex | any
+model: openai-codex           # 권장 모델: openai-codex | any
 tags: [report, weekly]
 created: 2026-07-16T00:00:00Z
 updated: 2026-07-16T00:00:00Z
@@ -40,9 +40,9 @@ body_ref: inline              # inline | private:<불투명 32-hex ID>
   repo/오버레이 엔트리는 `sensitivity: patent-sensitive` +
   `body_ref: private:<불투명 ID>` 메타 스텁만 갖는다 (본문 0바이트).
 - 민감 프롬프트 **사용 시** 호출은 `patent-sensitive` 태그가 강제되어
-  비-GLM 경로(openai-codex)로만 라우팅된다. LiteLLM의
-  `PatentSensitiveGlmBlocker`(W1-1)가 fail-closed 2차 계층으로 GLM 유입을
-  HTTP 403으로 차단한다 (`configs/routing-policy.md`).
+  Codex OAuth 경로(`openai-codex`)로만 라우팅된다. 경로가 없거나 Codex OAuth로
+  검증되지 않으면 provider call 전에 fail-closed로 거부한다
+  (`configs/routing-policy.md`).
 
 ## 버전 규칙
 

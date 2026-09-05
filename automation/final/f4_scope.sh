@@ -37,31 +37,6 @@ check_approvals() {
     <"$ROOT/automation/final/approvals_send_log_audit.py"
 }
 
-check_patent_glm() {
-  ssh "$NODE_PRIMARY_NODE_NAME" "sudo -n -u $NODE_OPS_ACCOUNT -H bash -s" <<'SH'
-set -euo pipefail
-cd /home/ops/litellm-gateway
-count="$(sg docker -c 'docker compose exec -T postgres psql -U litellm -d litellm -Atc "SELECT COUNT(*) AS patent_tag_glm_rows FROM \"LiteLLM_SpendLogs\" WHERE \"model_group\" LIKE '\''glm%'\'' AND COALESCE(\"metadata\"::text, '\'''\'') ILIKE '\''%patent-sensitive%'\'';"')"
-printf '%s\n' "$count"
-test "$(tr -d "[:space:]" <<<"$count")" = 0
-SH
-}
-
-check_glm_coding_key() {
-  local account
-  for account in "$NODE_AGENT_ACCOUNT" "$NODE_PEER_ACCOUNT" "$NODE_OPS_ACCOUNT"; do
-    ssh "$NODE_PRIMARY_NODE_NAME" "sudo -n -u $account -H bash -s" <<'SH'
-set -euo pipefail
-names="$(sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' "$HOME/.env.secrets" | grep -Ei 'glm.*(coding|plan)|(coding|plan).*glm' || true)"
-if [[ -n "$names" ]]; then
-  printf 'account=%s prohibited_key_names=%s\n' "$(id -un)" "$(tr '\n' ',' <<<"$names")"
-  exit 1
-fi
-printf 'account=%s prohibited_key_names=0\n' "$(id -un)"
-SH
-  done
-}
-
 check_legacy() {
   ssh "$NODE_PRIMARY_NODE_NAME" "bash -s -- '$NODE_OPERATOR_ACCOUNT'" <<'SH'
 set -euo pipefail
@@ -97,7 +72,7 @@ for port in 4000 9000; do
   printf 'legacy_port=%s absent\n' "$port"
 done
 names="$(docker ps -a --format '{{.Names}}')"
-if grep -Eqi 'whisper-stt|qdrant-db|vllm-embeddings|postgres-litellm|litellm-gateway' <<<"$names"; then
+if grep -Eqi 'whisper-stt|qdrant-db|vllm-embeddings|retired-model-gateway' <<<"$names"; then
   printf 'legacy_container=present\n'
   exit 1
 fi
@@ -155,8 +130,6 @@ PY
 }
 
 record approvals-send-log check_approvals
-record patent-glm-spend check_patent_glm
-record glm-coding-plan-key check_glm_coding_key
 record legacy-teardown check_legacy
 record rag-access-control check_rag_access
 record external-embedding-zero check_embedding

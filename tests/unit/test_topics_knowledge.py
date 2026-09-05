@@ -194,25 +194,35 @@ def test_research_trends_unavailable_evidence_does_not_block_report(
     assert "근거 수집 불가" in reports[0]
 
 
-def test_patent_sensitive_related_notes_skip_glm_and_use_codex_only(
+def test_patent_sensitive_related_notes_skip_the_draft_stage_and_use_codex_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 2026-09-04 공급자 이관 전에는 초안 단계가 은퇴한 2차 티어로 나갔고 민감 근거는 그 티어를
+    # 건너뛰었다. 티어가 하나뿐인 지금도 민감 근거는 초안 단계를 아예 부르지 않고, 정리 단계의
+    # 공유 Codex 클라이언트 한 번만 쓴다 — 티어 수가 줄었다고 민감 경로가 넓어지지 않는다.
     _stub_research(tmp_path, monkeypatch)
     calls: list[str] = []
+    drafts: list[str] = []
     sensitive = _pack(items=(_item(
         content="[[PATENT-SENSITIVE-RECALL]] patent filing",
         sensitivity="patent-sensitive",
     ),))
     monkeypatch.setattr(research_trends.topics_knowledge, "collect", lambda topics: sensitive)
-    monkeypatch.setattr(research_trends, "_glm", lambda *args, **kwargs: calls.append("glm") or "draft")
-    monkeypatch.setattr(research_trends, "_codex", lambda *args, **kwargs: calls.append("codex") or "정리")
+    monkeypatch.setattr(
+        research_trends, "_synthesis", lambda *args, **kwargs: calls.append("synthesis") or "draft"
+    )
+    monkeypatch.setattr(
+        research_trends, "_korean", lambda *args, **kwargs: calls.append("codex") or "정리"
+    )
 
-    def run_topics(topics: tuple[str, ...], fetch: Any, glm: Any, codex: Any) -> tuple[object, ...]:
+    def run_topics(topics: tuple[str, ...], fetch: Any, summarize: Any, korean: Any) -> tuple[object, ...]:
         paper = research_trends.core.Paper("title", "abstract", "url", "2026-08-01")
-        draft = glm(topics[0], (paper,))
-        codex(topics[0], (paper,), draft)
+        draft = summarize(topics[0], (paper,))
+        drafts.append(draft)
+        korean(topics[0], (paper,), draft)
         return ()
 
     monkeypatch.setattr(research_trends.core, "run_topics", run_topics)
     assert research_trends.run() == 0
     assert calls == ["codex"]
+    assert drafts == [""]  # 초안 단계는 모델을 부르지 않고 빈 문자열을 낸다.

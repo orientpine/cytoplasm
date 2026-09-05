@@ -41,13 +41,16 @@ _RETIREMENT_EXEMPT: Final = (
     # 예외가 필요 없다 — 죽은 예외는 넣지 않는다.
 )
 
-_PEER_PINS: Final = ("autophagy-interop", "skill-deploy-review")
+_PEER_PINS: Final = ("autophagy-interop",)
+#: E7(`docs/patch/2026-07-17-e7-peer-attestation.md`)이 은퇴시킨 LLM 트리거 리뷰어.
+#: 1차 루트에 남아 있어도 프로비저너가 다시 pin 해서는 안 된다.
+_PEER_RETIRED_REVIEWER: Final = "skill-deploy-review"
 #: 노드에 실제로 남아 있는 잔여 사본 이름 + 허용목록 밖 대조군.
 _PEER_RESIDUE: Final = ("coordination", "wiki", "prompt", "apple")
 
 _BASE_CONFIG: Final = """model:
-  provider: custom:litellm
-  default: glm-main
+  provider: openai-codex
+  default: gpt-5.6-sol
 timezone: Asia/Seoul
 discord:
   require_mention: true
@@ -424,7 +427,7 @@ def test_provision_when_owner_adds_the_missing_lines_then_the_rerun_converges(
     assert world.agent_config.read_bytes() == before  # 이미 충족 → 무동작
 
 
-def test_provision_when_peer_arm_runs_then_pins_both_live_self_skills(
+def test_provision_when_peer_arm_runs_then_pins_the_live_self_skill(
     tmp_path: Path,
 ) -> None:
     # Given
@@ -439,6 +442,36 @@ def test_provision_when_peer_arm_runs_then_pins_both_live_self_skills(
     assert sorted(pins) == sorted(_PEER_PINS)
     for name in _PEER_PINS:
         assert f"peer pin: {name} pinned (readback OK)" in result.stdout
+
+
+def test_provision_when_the_retired_reviewer_is_present_then_it_is_not_pinned(
+    tmp_path: Path,
+) -> None:
+    """E7 이 은퇴시킨 리뷰어는 1차 루트에 남아 있어도 다시 pin 하지 않는다.
+
+    E7 은 "an agent must not read a Discord request and be instructed to run a
+    reviewer as part of deployment" 로 그 스킬 디렉터리를 없앴다. 그런데 2026-08-15
+    루트 반전이 자작 스킬 보호를 목적으로 이름을 pin 목록에 넣어 매 프로비저닝마다
+    되살렸고, 그래서 peer 가 `[release]` 승인 카드까지 즉석 심사해 거짓 ⛔ 를 붙였다
+    (v1.1.2 실측: HEAD 를 릴리스 수렴 뒤에야 전진하는 관측 미러에서 찾아 언제나
+    "unpushed tip" 으로 읽힌다).
+
+    **부재는 근거가 되지 못한다** — 디렉터리가 없으면 프로비저너는 `PEER-PIN-SKIP`
+    으로 넘어가 pin 목록을 고치지 않아도 통과한다. 존재할 때 pin 되지 않아야
+    회귀가 잡힌다.
+    """
+    # Given: 노드 실측(2026-09-04)과 같이 peer 1차 루트에 그대로 남아 있다.
+    world = _world(tmp_path)
+    _skill(world.peer_skills, _PEER_RETIRED_REVIEWER, author=False)
+
+    # When
+    result = _run(world)
+
+    # Then
+    assert result.returncode == 0, result.stdout + result.stderr
+    pins = (world.peer_skills / ".pins").read_text(encoding="utf-8").split()
+    assert _PEER_RETIRED_REVIEWER not in pins, f"은퇴한 리뷰어가 다시 pin 됐다: {pins}"
+    assert f"peer pin: {_PEER_RETIRED_REVIEWER} pinned" not in result.stdout
 
 
 def test_provision_when_peer_residue_is_not_repo_authored_then_skips_loudly(

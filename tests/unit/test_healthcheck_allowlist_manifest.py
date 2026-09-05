@@ -150,17 +150,14 @@ def test_probe_hash_manifest_is_derived_and_self_verifying(tmp_path: Path) -> No
     )
 
 
-def test_probe_hash_manifest_includes_litellm_completion(tmp_path: Path) -> None:
+def test_probe_hash_manifest_excludes_paid_model_requests(tmp_path: Path) -> None:
+    """The forced-command allowlist must not retain a model credential path."""
     result = _manifest(tmp_path, "--probe-hashes")
 
     assert result.returncode == 0, result.stderr
     rows = [line.split("\t", maxsplit=1) for line in result.stdout.splitlines()]
-    completion_rows = [row for row in rows if "/chat/completions" in row[1]]
-    assert len(completion_rows) == 1
-    digest, command = completion_rows[0]
-    assert digest == hashlib.sha256(command.encode()).hexdigest()
-    assert "--max-time 20" in command
-    assert '"model":"glm-main"' in command
+    assert all("/chat/completions" not in command for _digest, command in rows)
+    assert all("Authorization: Bearer" not in command for _digest, command in rows)
 
 
 def test_probe_hash_manifest_uses_the_node_runtime_config(tmp_path: Path) -> None:

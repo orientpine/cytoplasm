@@ -3,7 +3,7 @@
 Veto-then-handle: when the OWNER explicitly requests meeting ingest with a
 bounded ``!meeting`` command or trusted structured intent, this hook spawns the
 deterministic meeting CLI and returns ``skip`` so the content NEVER enters the
-main-agent (glm-main) context. File name, suffix, MIME type, and DM placement
+main-agent context. File name, suffix, MIME type, and DM placement
 only select a supported payload; none of them establish user intent. After a
 trigger is detected the handler is fail-CLOSED: any internal error still
 returns ``skip`` (constraint 6 outranks availability).
@@ -39,7 +39,9 @@ _CLI_PATH: Final = Path(os.environ.get("MEETING_CLI", _LIVE_CLI)).expanduser()
 _INBOX: Final = Path("~/.hermes/meeting/inbox").expanduser()
 _SPAWN_LOG_DIR: Final = Path("~/.hermes/meeting/logs").expanduser()
 ENV_SECRETS: Final = Path("~/.env.secrets").expanduser()
-_CHILD_CREDENTIALS: Final = frozenset({"DISCORD_BOT_TOKEN", "LITELLM_AGENT_KEY"})
+#: 자식이 비밀 파일에서 물려받는 값 전부. 모델 호출은 Codex OAuth 하나뿐이고 그 자격증명은
+#: API 키가 아니라 HOME 아래 저장소에 있으므로, 여기에 넣을 게이트웨이 키는 없다.
+_CHILD_CREDENTIALS: Final = frozenset({"DISCORD_BOT_TOKEN"})
 
 ACK_MESSAGE: Final = "회의록 접수 — 민감도 게이트 통과 후 처리 중입니다 (수 분 내 결과 통지)."
 ERROR_MESSAGE: Final = (
@@ -174,6 +176,8 @@ def child_environment() -> dict[str, str]:
         if separator and name in _CHILD_CREDENTIALS and name not in environment and value.strip():
             environment[name] = value.strip()
     environment["PATH"] = f"{Path('~/.local/bin').expanduser()}:{environment.get('PATH', '/usr/bin:/bin')}"
+    # Codex OAuth 자격증명은 HOME 아래에서만 찾는다 — 자식에게 반드시 함께 간다.
+    environment.setdefault("HOME", str(Path("~").expanduser()))
     return environment
 
 
@@ -284,7 +288,7 @@ def pre_gateway_dispatch(event, gateway, session_store, **kwargs):
         return None
     if trigger is None:
         return None
-    # Triggered: fail CLOSED from here — content must not reach glm-main.
+    # Triggered: fail CLOSED from here — content must not reach the main agent.
     try:
         _launch(trigger, str(config.get("python", "/usr/bin/python3")))
         _post(_ack_target(trigger), ACK_MESSAGE)

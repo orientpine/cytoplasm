@@ -1,12 +1,12 @@
 """Defensive parsing of plaud-mcp tool payloads into lifelog recordings.
 
-Shapes are measured against the deployed plaud-mcp server (2026-09-02), not the
+Shapes are measured against the deployed plaud-mcp server (2026-09-04), not the
 docs: ``get_note`` returns a top-level list of items keyed ``data_content`` /
 ``data_title`` / ``data_error_code``; ``get_transcript`` returns ``segments``
-(``start_time`` int ms, ``content``, ``speaker``) with ``next_cursor``; an empty
-recording returns ``[]``. The list/dict/plain-text fallbacks keep older or
-alternate shapes working, and a per-recording tool failure skips that recording
-so a transient API error retries next tick instead of freezing a partial note.
+(``start_time`` int ms, ``content``, ``speaker``) with ``next_cursor``. Its supported
+blocks are ``transaction``, ``outline``, ``transaction_polish`` and ``mark_memo``;
+try those in server order, then legacy ``default``. An empty recording returns ``[]``.
+The list/dict/plain-text fallbacks keep older or alternate shapes working.
 """
 
 from __future__ import annotations
@@ -23,9 +23,10 @@ _MAX_TRANSCRIPT_PAGES: Final = 50
 _NOTE_LIST_KEYS: Final = ("note_list", "data")
 _NOTE_CONTENT_KEYS: Final = ("data_content", "content", "markdown", "text", "note")
 _NOTE_TITLE_KEYS: Final = ("data_title", "data_tab_name", "title")
-_SEGMENT_LIST_KEYS: Final = ("segments", "source_list", "data")
+_SEGMENT_LIST_KEYS: Final = ("segments", "marks", "source_list", "data")
 _SEGMENT_TEXT_KEYS: Final = ("content", "text")
 _SEGMENT_TIME_KEYS: Final = ("start_time", "start", "timestamp")
+_TRANSCRIPT_BLOCKS: Final = ("transaction", "outline", "transaction_polish", "mark_memo", "default")
 
 _UNSET: Final = object()
 
@@ -36,6 +37,16 @@ class McpToolClient(Protocol):
     def call_tool(
         self, name: str, arguments: dict[str, JsonValue], timeout: float = 60.0
     ) -> JsonObject: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CloudTranscript:
+    text: str
+    block: str = ""
+
+    @property
+    def source_label(self) -> str:
+        return f"PLAUD 클라우드 전사({self.block} 블록)" if self.block else "PLAUD 클라우드 전사"
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,18 +225,25 @@ def _next_cursor(payload: object) -> str | None:
     return candidate if isinstance(candidate, str) and candidate else None
 
 
-def _transcript_text(client: McpToolClient, file_id: str) -> str:
+def _is_empty_block_message(text: str) -> bool:
+    return (text.startswith('Block "') and (
+        "not available for this recording" in text or "has no content for this recording yet" in text
+    )) or text.startswith("This recording has a highlights block, but it is empty")
+
+
+def _transcript_block_text(client: McpToolClient, file_id: str, block: str) -> str:
     parts: list[str] = []
     cursor: str | None = None
     for _ in range(_MAX_TRANSCRIPT_PAGES):
-        arguments: dict[str, JsonValue] = {"file_id": file_id}
+        arguments: dict[str, JsonValue] = {"file_id": file_id, "block": block}
         if cursor:
             arguments["cursor"] = cursor
         text = text_content(client.call_tool("get_transcript", arguments))
         payload = _loads(text)
         if payload is _UNSET:
-            if text.strip():
-                parts.append(text.strip())
+            plain = text.strip()
+            if plain and not _is_empty_block_message(plain):
+                parts.append(plain)
             break
         segments = _segment_list(payload)
         if segments is None:
@@ -237,6 +255,23 @@ def _transcript_text(client: McpToolClient, file_id: str) -> str:
     return "\n".join(parts)
 
 
+def fetch_transcript(client: McpToolClient, file_id: str) -> CloudTranscript:
+    last_error: PlaudMcpError | None = None
+    answered = False
+    for block in _TRANSCRIPT_BLOCKS:
+        try:
+            text = _transcript_block_text(client, file_id, block)
+        except PlaudMcpError as error:
+            last_error = error
+            continue
+        answered = True
+        if text:
+            return CloudTranscript(text, block)
+    if not answered and last_error is not None:
+        raise last_error
+    return CloudTranscript("")
+
+
 def fetch_recordings(
     client: McpToolClient, *, date_from: str | None, page_size: int = 50
 ) -> tuple[LifelogRecording, ...]:
@@ -244,7 +279,7 @@ def fetch_recordings(
     for stub in _list_stubs(client, date_from, page_size):
         try:
             summary = fetch_summary(client, stub.id)
-            transcript = _transcript_text(client, stub.id)
+            transcript = fetch_transcript(client, stub.id)
         except PlaudMcpError:
             continue
         recordings.append(
@@ -255,7 +290,8 @@ def fetch_recordings(
                 start_at=stub.start_at,
                 duration_ms=stub.duration_ms,
                 summary_markdown=summary,
-                transcript_text=transcript,
+                transcript_text=transcript.text,
+                transcript_source=transcript.source_label if transcript.text else "",
             )
         )
     return tuple(recordings)

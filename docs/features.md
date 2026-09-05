@@ -169,17 +169,22 @@
 완료 기능: [전사본 화자 경계 문장 분할](기능소개/전사본-화자-경계-문장-분할.md) (후속 과제 스윕 4 · speechtotext v1.1.1)
 완료 기능: [Plaud lifelog 동기화 — MCP 무등록 워처·건별 승인·vault 저장](기능소개/plaud-lifelog-동기화.md) (automation/plaud_sync · plaud skill v1.0.0 · 2026-09-02)
 완료 기능: [Plaud 녹음 로컬 전사 — 오디오를 내려받아 노드에서 화자 분리 전사, lifelog·회의록이 그 파일을 소비](기능소개/plaud-녹음-로컬-전사.md) (plaud_sync `transcribing` 스테이지 · plaud skill v1.1.0 · 2026-09-04)
+완료 기능: [용어집을 Drive 에 두고 트리처럼 중첩시킨다](기능소개/용어집-drive-중첩-계층.md) (speechtotext · 소유자 지시 2026-09-05)
+완료 기능: [교정 로그 — 무엇이 무엇으로 바뀌었는지 남긴다](기능소개/교정-로그.md) (speechtotext · 소유자 지시 2026-09-05)
 완료 기능: [Plaud lifelog 노트 v2 양식 — 소유자 Linter 정합 frontmatter·한눈에·결정 · 할 일·접힌 전문, 사람·장소·결정·할 일 LLM 추출](기능소개/plaud-lifelog-노트-v2-양식.md) (B안 · plaud_sync 카드 render v3 · 2026-09-04)
+완료 기능: [아무리 긴 녹음도 손실은 그 구간에만 갇힌다 — 구간 전사·격리·재개](기능소개/plaud-긴-녹음-구간-전사.md) (수리 t_4e3d6630 · speechtotext `stt_window*` · plaud_sync 폴백 fail-closed · 2026-09-04)
 완료 기능: [릴리스 버전 자리 선택 — `release.sh --bump` 와 MAJOR 기계 판정기](기능소개/릴리스-버전-자리-선택.md) (v1.1.0 편의 릴리스 · K1)
 완료 기능: [승인 원장 KPI 집계기와 kind별 TTL·리마인더 표](기능소개/승인-원장-KPI.md) (v1.1.0 편의 릴리스 · K8+K9 표 · read-only)
 완료 기능: [LiteLLM 실제 completion 프로브](기능소개/LiteLLM-실제-completion-프로브.md) (v1.1.0 편의 릴리스 · healthcheck `litellm_completion` · 노드 래퍼 설치는 OWNER)
 남은 운영 판단은 [K4-a 후속 과제](follow-ups.md#fs3-k4-a-공급망그룹-채널-위생-후속-과제)에 기록한다.
 
-**열린 건 1개 / 묶음 1개**
+**열린 건 5개 / 묶음 3개**
 
 | 묶음 | 열린 건 | 최고 심각도 |
 |---|---|---|
 | [v1.1.0 편의 릴리스 착지 후 남긴 것 (2026-09-03)](follow-ups.md#v110-편의-릴리스-착지-후-남긴-것-2026-09-03) | 1 | 낮음 |
+| [2026-09-04 plaud 구간 전사 수리 (t_4e3d6630) 잔여](follow-ups.md#2026-09-04-plaud-구간-전사-수리-t_4e3d6630-잔여) | 3 | 낮음 |
+| [provenance 가드의 남은 이스케이프 경로 (2026-09-05)](follow-ups.md#provenance-가드의-남은-이스케이프-경로-2026-09-05) | 1 | 낮음 |
 
 # DONE
 

@@ -10,6 +10,7 @@ from dataclasses import Field, dataclass, replace
 from pathlib import Path
 from typing import ClassVar, Final, Protocol, TypeVar
 
+import stt_gap
 import stt_split
 
 DEFAULT_THRESHOLD: Final = 0.9
@@ -147,6 +148,11 @@ def assign(sentences: Iterable[SentenceT], turns: Iterable[Turn]) -> tuple[Sente
     assigned: list[SentenceT] = []
     previous = ""
     for sentence in stt_split.split_on_turns(sentences, available):
+        # 전사 실패 표지는 아무도 하지 않은 말이다. 화자를 붙이면 그 몇 분을 잃었다는
+        # 사실이 누군가의 발언으로 읽힌다.
+        if stt_gap.is_marker(sentence.text):
+            assigned.append(sentence)
+            continue
         speaker = _speaker_for(sentence, available, previous)
         if isinstance(speaker, int):
             label = labels.setdefault(speaker, f"화자{len(labels) + 1}")

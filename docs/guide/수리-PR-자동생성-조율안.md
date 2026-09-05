@@ -2,6 +2,8 @@
 
 **상태:** 제안(미구현). 이 문서는 코드를 바꾸지 않는다.
 **대상 독자:** freeze 소유 계획(`.omo/plans/repair-report-core.md`·`repair-report-rollout.md`)의 소유자, 그리고 cha.
+> **2026-09-04 갱신**: `configs/freeze-inventory.txt` 에서 `automation/repair/repair_ops_*.py` 동결이 cha 승인으로 해제됐다. 따라서 아래 §1 이 「동결이라 못 고친다」고 적은 두 파일(`repair_ops_cli.py`·`repair_ops_reaction_watch.py`)은 이제 편집할 수 있고, 남은 제약은 `automation/repair/systemd/*` 동결뿐이다. 본문은 작성 시점(2026-08) 기록이라 그대로 둔다.
+
 **배경:** `AGENTS.md`「수리 반영 경로 규칙」은 브랜치 push 직후 `gh pr create`까지를 에이전트의 종착점으로 규정하지만, 코드에는 그 호출이 0건이다. `docs/follow-ups.md`「배포 가드 보강(DG-7)」이 그 사실을 기록했고, 그 뒤 조사에서 **구현이 아니라 조율이 선행 조건**임이 확정됐다. 이 문서는 그 조율에 필요한 세 가지 — 결과 계약·자격증명 배선·비대화식 호출 — 을 각각 실행 가능한 결론으로 확정한다.
 
 왜 지금 구현하지 않는가는 한 문장으로 요약된다. **이음새는 비동결인데 그 이음새를 둘러싼 호출자와 유닛이 전부 동결이다.** `automation/repair/repair_ops_work_clone.py`(`push_branch`)는 자유롭게 고칠 수 있지만, 그 결과를 바깥으로 나르는 `repair_ops_cli.py`와 그 실행 환경을 정하는 `automation/repair/systemd/*`는 다른 계획이 불변으로 선언해 기계 검사로 강제한다. 그래서 PR 생성 자체보다 **실패를 보이게 만드는 일**이 먼저 막힌다.

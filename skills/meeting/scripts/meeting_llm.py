@@ -1,19 +1,21 @@
 """LLM extraction routing + strict JSON parsing for meeting ingest.
 
 Routing contract (constraint 6):
-- non-sensitive  -> LiteLLM `glm-main` (loopback gateway, agent virtual key)
-- patent-sensitive -> `hermes -z ... --provider openai-codex -m gpt-5.4`
-  (ChatGPT OAuth path; NEVER LiteLLM/GLM). `call_litellm` refuses sensitive
-  input outright, and would tag it `patent-sensitive` anyway so the W1-1
-  gateway guard 403s it — two independent fail-closed layers.
+- Every extraction — patent-sensitive or not — runs on the Codex OAuth tier
+  through the shared `automation.codex_llm` client (provider ``openai-codex``).
+  There is no second tier, so there is nothing to downgrade to: an unavailable
+  tier fails the ingest visibly instead of answering from somewhere else.
+- The sensitivity gate is unchanged and still decides confinement and
+  sanitization. `call_codex` additionally REFUSES any route that is not the
+  Codex OAuth tier — the same fail-closed layer, pointed at the surviving tier.
+- The repository client is imported lazily (skills must not import automation
+  eagerly); an ImportError refuses the call rather than calling a model itself.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import subprocess
-import urllib.request
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -34,11 +36,11 @@ from meeting_schema import (
 
 __all__ = [
     "ActionItem",
-    "CODEX_MODEL",
+    "CODEX_PROVIDER",
     "Decision",
     "Extraction",
     "ExtractionParseError",
-    "GLM_MODEL",
+    "ExtractionUnavailableError",
     "MeetingHeader",
     "NextMeeting",
     "OpenQuestion",
@@ -48,7 +50,6 @@ __all__ = [
     "Topic",
     "build_prompt",
     "call_codex",
-    "call_litellm",
     "extract",
     "load_prompt_template",
     "map_extraction",
@@ -60,13 +61,24 @@ __all__ = [
 #: 실패했다 — 재시도가 있어도 한도가 그대로면 영원히 실패한다. 600초는 그 실측의 2.3배다.
 LLM_TIMEOUT: Final = 600.0
 TIMEOUT_ENV: Final = "MEETING_LLM_TIMEOUT"
-GLM_MODEL: Final = "glm-main"
-CODEX_MODEL: Final = "gpt-5.4"
+CODEX_PROVIDER: Final = "openai-codex"
 _PROMPT_MARKER: Final = "<<<PROMPT>>>"
+_REPO_ROOT_ENV: Final = "AUTOPHAGY_REPO_ROOT"
+_RELEASE_ROOT: Final = Path("/srv/autophagy-agent-current")
 
 
 class PatentRoutingError(Exception):
-    """Raised when patent-sensitive text is about to reach a GLM tier."""
+    """Raised when extraction is asked to run anywhere but the Codex OAuth tier."""
+
+
+class ExtractionUnavailableError(ExtractionParseError):
+    """The Codex OAuth tier could not answer this extraction.
+
+    Subclasses `ExtractionParseError` so every existing caller keeps failing
+    closed on the same path (meeting_cli exit 6, refusal logged) while the
+    recorded error name still distinguishes an unavailable tier from bad JSON.
+    Nothing retries and nothing falls back — there is no other tier.
+    """
 
 
 def load_prompt_template(path: Path) -> str:
@@ -117,73 +129,54 @@ def _budget() -> float:
         return LLM_TIMEOUT
 
 
-def call_litellm(
+def _repo_root() -> Path:
+    """Resolve the repository without importing it — mounted skills run outside it."""
+    override = os.environ.get(_REPO_ROOT_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "automation" / "skill_mount.py").is_file():
+            return parent
+    return _RELEASE_ROOT
+
+
+def call_codex(
     prompt: str,
     *,
-    sensitive: bool,
-    base_url: str,
-    api_key: str,
+    sensitive: bool = False,
+    provider: str = CODEX_PROVIDER,
     timeout: float | None = None,
 ) -> str:
-    """Call LiteLLM glm-main for NON-sensitive extraction only (fail closed)."""
-    budget = timeout if timeout is not None else _budget()
-    if sensitive:
-        raise PatentRoutingError(
-            "patent-sensitive text must never be sent to a GLM tier"
-        )
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/chat/completions",
-        data=json.dumps(
-            {
-                "model": GLM_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-                "metadata": {"tags": ["meeting-ingest"]},
-            }
-        ).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=budget) as response:  # noqa: S310
-        payload = json.loads(response.read().decode("utf-8"))
-    return payload["choices"][0]["message"]["content"]
+    """Run one extraction on the Codex OAuth tier — the only route there is.
 
+    ``sensitive`` no longer picks a provider; it is kept so the refusal below
+    can say what was at stake. ``provider`` exists for the same reason: a caller
+    that asks for any other tier is refused BEFORE the prompt leaves this
+    process — the same guard that used to keep patent text off the second tier.
 
-def call_codex(prompt: str, *, timeout: float = 600.0) -> str:
-    """Run the non-GLM extraction through the hermes openai-codex one-shot.
-
-    ``-t todo`` is load-bearing: without an explicit harmless toolset the
-    one-shot agent gets file/terminal tools and has been observed EDITING
-    local files instead of answering (it rewrote the mounted skill's prompt
-    templates). ``todo`` grants only the inert todo-list tool.
+    The shared client owns the transport (``-t todo`` inert toolset,
+    ``--ignore-user-config`` so the user config's fallback providers cannot
+    fire). An unavailable tier raises instead of answering from elsewhere.
     """
-    completed = subprocess.run(
-        [
-            "hermes",
-            "-z",
-            prompt,
-            "--provider",
-            "openai-codex",
-            "-m",
-            CODEX_MODEL,
-            "-t",
-            "todo",
-        ],
-        capture_output=True,
-        timeout=timeout,
-        cwd=os.path.expanduser("~"),
-        check=False,
-    )
-    stdout = completed.stdout.decode("utf-8", errors="replace")
-    if completed.returncode != 0:
-        stderr = completed.stderr.decode("utf-8", errors="replace")[-400:]
-        raise ExtractionParseError(
-            f"codex one-shot failed rc={completed.returncode}: {stderr}"
+    if provider != CODEX_PROVIDER:
+        detail = " (patent-sensitive)" if sensitive else ""
+        raise PatentRoutingError(
+            f"extraction must run on {CODEX_PROVIDER}; refused route {provider!r}{detail}"
         )
-    return stdout
+    root = _repo_root()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from automation.codex_llm import CodexClient, CodexError  # noqa: PLC0415
+    except ImportError as error:
+        raise ExtractionUnavailableError(
+            f"shared Codex client unavailable ({type(error).__name__}); extraction refused"
+        ) from error
+    budget = _budget() if timeout is None else timeout
+    try:
+        return CodexClient.from_environment(timeout=budget).complete(prompt)
+    except CodexError as error:
+        raise ExtractionUnavailableError(f"codex extraction failed: {error}") from error
 
 
 def extract(
@@ -192,23 +185,21 @@ def extract(
     sensitive: bool,
     prompt_path: Path,
     my_names: str,
-    base_url: str,
-    api_key: str,
     recorded_response: str | None = None,
     evidence: str = "",
     slides: str = "",
     open_actions: str = "",
 ) -> tuple[Extraction, str]:
-    """Route by sensitivity, parse, and return (extraction, provider_used)."""
+    """Build the prompt, run it on the Codex OAuth tier, return (extraction, provider).
+
+    ``sensitive`` no longer selects a tier — it travels with the call so the
+    route guard can name it in a refusal, and the caller keeps using it for
+    confinement and sanitization exactly as before.
+    """
     prompt = build_prompt(
         load_prompt_template(prompt_path), meeting_text=meeting_text, my_names=my_names,
         evidence=evidence, slides=slides, open_actions=open_actions,
     )
     if recorded_response is not None:
         return parse_extraction(recorded_response), "recorded"
-    if sensitive:
-        return parse_extraction(call_codex(prompt)), "openai-codex"
-    raw = call_litellm(
-        prompt, sensitive=False, base_url=base_url, api_key=api_key
-    )
-    return parse_extraction(raw), GLM_MODEL
+    return parse_extraction(call_codex(prompt, sensitive=sensitive)), CODEX_PROVIDER

@@ -22,7 +22,7 @@ _ID_RE: Final = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _TIMESTAMP_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _PRIVATE_REF_RE: Final = re.compile(r"^private:[0-9a-f]{32}$")
 _CATEGORIES: Final = frozenset(("task", "research-background"))
-_MODELS: Final = frozenset(("glm-main", "openai-codex", "any"))
+_MODELS: Final = frozenset(("openai-codex", "any"))
 _SENSITIVITIES: Final = frozenset(("none", "patent-sensitive"))
 
 

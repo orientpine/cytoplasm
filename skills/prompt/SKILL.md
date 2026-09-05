@@ -1,6 +1,6 @@
 ---
 name: prompt
-description: "버전형 프롬프트 자산을 canonical·overlay·legacy 계층에서 결정적으로 검색·조회·추가한다. 민감 본문은 agent 전용 private 저장소에만 두고 비-GLM 경로를 강제한다. W5-1."
+description: "버전형 프롬프트 자산을 canonical·overlay·legacy 계층에서 결정적으로 검색·조회·추가한다. 민감 본문은 agent 전용 private 저장소에만 두고 Codex OAuth 단일 경로를 강제한다. W5-1."
 version: 1.0.3
 author: autophagy-agents
 license: MIT
@@ -25,7 +25,7 @@ Mutating commands run only from /srv/autophagy-skills/live/prompt/scripts/ (stal
 ```bash
 python3 /srv/autophagy-skills/live/prompt/scripts/prompt_cli.py add \
   --id <id> --category <task|research-background> --purpose "<one line>" \
-  --model <glm-main|openai-codex|any> --tags "tag1,tag2" --body-file <600-file>
+  --model <openai-codex|any> --tags "tag1,tag2" --body-file <600-file>
 ```
 
 `add` only writes `~/.hermes/prompt-library/entries/<id>/v<N>.md`; an existing id
@@ -33,9 +33,10 @@ creates the next immutable version. Canonical and legacy files are read-only.
 
 ## Sensitive entries
 
-When `get` reports `routing_tags=patent-sensitive`, never send its body to GLM or
-post it publicly. Use `get --write-body <new-600-file>`, then make the single
-outbound use through `openai-codex` / `gpt-5.4` with the routing tag at the start
+When `get` reports `routing_tags=patent-sensitive`, never post its body publicly and
+never send it anywhere but the Codex OAuth tier. Use `get --write-body <new-600-file>`,
+then make the single outbound use through the shared client
+(`automation/codex_llm.py`, provider `openai-codex`) with the routing tag at the start
 of the request: `<routing-tags>patent-sensitive</routing-tags>`. The private body
 is only under `~/prompts-private/` (700); the overlay keeps a metadata-only stub.
 

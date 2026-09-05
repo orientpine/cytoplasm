@@ -12,11 +12,27 @@ import json
 import os
 import shutil
 import subprocess
+import wave
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
 PROBE_TIMEOUT: Final = 120.0
+
+
+def wav_duration_ms(wav: Path) -> int:
+    """How long a wav is, read from its own header (0 when it cannot be read).
+
+    Used to plan the transcription windows of the normalized 16 kHz wav the skill
+    just wrote itself: the header already knows, so no second probe process runs and
+    no length is ever guessed.
+    """
+    try:
+        with wave.open(str(wav), "rb") as handle:
+            frames, rate = handle.getnframes(), handle.getframerate()
+    except (OSError, wave.Error, EOFError):
+        return 0
+    return round(frames * 1000 / rate) if rate > 0 else 0
 
 
 def probe_duration_ms(path: Path, *, ffprobe: Path, timeout: float = PROBE_TIMEOUT) -> int | None:

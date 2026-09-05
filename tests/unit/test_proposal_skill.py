@@ -241,35 +241,50 @@ def test_assembly_marks_missing_sections_and_returns_reminder(tmp_path: Path) ->
     assert "Approach" in assembled.reminder
 
 
-def test_final_review_invokes_codex_once_with_required_model() -> None:
-    # Given
-    commands: list[tuple[str, ...]] = []
+def _hermes_stub(
+    binary: Path, record: Path, *, stdout: str = "Review comments.", exit_code: int = 0
+) -> Path:
+    """Executable stand-in for the Codex OAuth binary that records the argv it was given."""
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["#!/bin/sh", f"printf '%s\\n' \"$@\" >> '{record}'"]
+    if stdout:
+        lines.append(f"printf '%s' '{stdout}'")
+    if exit_code:
+        lines.append("printf '%s' 'hermes -z: agent failed: No Codex credentials stored.' >&2")
+    lines.append(f"exit {exit_code}")
+    _ = binary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _ = binary.chmod(0o755)
+    return binary
 
-    def invoke(command: tuple[str, ...]) -> proposal_llm.InvocationResult:
-        commands.append(command)
-        return proposal_llm.InvocationResult(returncode=0, stdout="Review comments.")
+
+def test_final_review_invokes_codex_once_through_the_shared_oauth_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    record = tmp_path / "argv.log"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(_hermes_stub(tmp_path / "hermes", record)))
+    monkeypatch.setenv("PROPOSAL_LLM_LOG_ROOT", str(tmp_path / "logs"))
 
     # When
-    review = proposal_llm.run_final_review("# Proposal", invoke)
+    review = proposal_llm.run_final_review("# Proposal")
 
     # Then
     assert review == "Review comments."
-    assert commands == [
-        (
-            "hermes",
-            "-z",
-            "# Proposal",
-            "--provider",
-            "openai-codex",
-            "-m",
-            "gpt-5.4",
-            "-t",
-            "todo",
-        )
+    assert record.read_text(encoding="utf-8").splitlines() == [
+        "--ignore-user-config",
+        "-z",
+        "# Proposal",
+        "--provider",
+        "openai-codex",
+        "-m",
+        "gpt-5.4",
+        "-t",
+        "todo",
     ]
 
 
-def test_sensitive_proposal_routes_drafting_off_glm(tmp_path: Path) -> None:
+def test_sensitive_proposal_routes_drafting_to_the_codex_oauth_tier(tmp_path: Path) -> None:
     # Given
     paths = _paths(tmp_path)
     _ = proposal_core.create_proposal(paths, "renewal-plan", "Renewal plan", (("need", "Need"),))
@@ -284,6 +299,24 @@ def test_sensitive_proposal_routes_drafting_off_glm(tmp_path: Path) -> None:
     assert route.sensitive is True
     assert route.provider == "openai-codex"
     assert route.model == "gpt-5.4"
+
+
+def test_non_sensitive_proposal_uses_the_same_codex_oauth_tier(tmp_path: Path) -> None:
+    """There is no second tier left to fall to: drafting is Codex OAuth either way."""
+    # Given
+    paths = _paths(tmp_path)
+    _ = proposal_core.create_proposal(paths, "renewal-plan", "Renewal plan", (("need", "Need"),))
+    _ = proposal_core.write_draft(paths, "renewal-plan", "need", "Ordinary renewal rationale.")
+
+    # When
+    route = proposal_sensitivity.route_proposal(
+        proposal_core.proposal_text(paths, "renewal-plan"),
+        proposal_sensitivity.load_rules(paths.rules_file),
+    )
+
+    # Then
+    assert route.sensitive is False
+    assert (route.provider, route.model) == ("openai-codex", "gpt-5.4")
 
 
 def test_status_metadata_never_contains_draft_or_contribution_body(tmp_path: Path) -> None:
@@ -303,28 +336,56 @@ def test_status_metadata_never_contains_draft_or_contribution_body(tmp_path: Pat
     assert '"state": "drafted"' in metadata
 
 
-def test_glm_hermes_child_receives_key_from_secrets_when_parent_environment_lacks_it(
+def test_section_draft_resolves_the_codex_binary_from_home_without_a_gateway_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The child carries no gateway key: Codex OAuth credentials live in the owner's HOME."""
     # Given
-    binary = tmp_path / ".local" / "bin" / "hermes"
-    binary.parent.mkdir(parents=True)
-    _ = binary.write_text(
-        '#!/bin/sh\n[ -n "$LITELLM_AGENT_KEY" ] || exit 9\nprintf "draft"\n',
-        encoding="utf-8",
-    )
-    _ = binary.chmod(0o755)
-    _ = (tmp_path / ".env.secrets").write_text(
-        "LITELLM_AGENT_KEY=proposal-fallback-key\n", encoding="utf-8"
-    )
-    monkeypatch.delenv("LITELLM_AGENT_KEY", raising=False)
+    record = tmp_path / "argv.log"
+    _ = _hermes_stub(tmp_path / ".local" / "bin" / "hermes", record, stdout="draft")
+    monkeypatch.delenv("AUTOPHAGY_HERMES_BIN", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PROPOSAL_LLM_LOG_ROOT", str(tmp_path / "logs"))
 
     # When
-    result = proposal_llm.run_section_draft(
-        "prompt", "custom:litellm", "glm-main", False
-    )
+    result = proposal_llm.run_section_draft("prompt", "openai-codex", "gpt-5.4", False)
 
     # Then
     assert result == "draft"
+    assert "--ignore-user-config" in record.read_text(encoding="utf-8").splitlines()
+
+
+def test_missing_codex_credentials_fail_closed_without_a_second_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OAuth unavailable is a refusal, never a downgrade: one attempt, one provider."""
+    # Given
+    record = tmp_path / "argv.log"
+    stub = _hermes_stub(tmp_path / "hermes", record, stdout="", exit_code=1)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(stub))
+    monkeypatch.setenv("PROPOSAL_LLM_LOG_ROOT", str(tmp_path / "logs"))
+
+    # When / Then
+    with pytest.raises(proposal_llm.LlmInvocationError):
+        _ = proposal_llm.run_section_draft("prompt", "openai-codex", "gpt-5.4", False)
+
+    recorded = record.read_text(encoding="utf-8")
+    assert recorded.count("--provider") == 1
+    assert recorded.count("openai-codex") == 1
+
+
+def test_non_codex_route_is_refused_before_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    record = tmp_path / "argv.log"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(_hermes_stub(tmp_path / "hermes", record)))
+    monkeypatch.setenv("PROPOSAL_LLM_LOG_ROOT", str(tmp_path / "logs"))
+
+    # When / Then
+    with pytest.raises(proposal_llm.LlmInvocationError):
+        _ = proposal_llm.run_section_draft("prompt", "custom:other", "other-main", False)
+
+    assert not record.exists()

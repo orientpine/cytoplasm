@@ -53,7 +53,7 @@ def _runner(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    from automation.twin_distill.llm import LiteLlmClient, LlmConfigurationError
+    from automation.twin_distill.llm import CodexLlmClient, LlmConfigurationError
 
     try:
         classifier = _classifier(args.sensitivity_rules.expanduser())
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"CURATE-BLOCK: 위키 draft 게이트가 없다: {cli_path}", file=sys.stderr)
         return 4
     try:
-        client = LiteLlmClient.from_environment(os.environ)
+        client = CodexLlmClient.from_environment(os.environ)
     except LlmConfigurationError as error:
         print(f"CURATE-BLOCK: {error}", file=sys.stderr)
         return 4

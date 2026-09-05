@@ -335,14 +335,15 @@ def test_build_item_retries_only_the_current_classification_once(
 @pytest.mark.parametrize(
     "error",
     [
-        triage_llm.LlmCallError("glm-main 호출 실패: timed out"),
+        triage_llm.LlmCallError("codex 호출 실패: timed out"),
         triage_core.LlmParseError("no JSON object in LLM response"),
     ],
 )
 def test_build_item_classify_failure_fails_open(
     monkeypatch: pytest.MonkeyPatch, error: Exception,
 ) -> None:
-    # classify() failing (timeout OR unparseable glm-5.2 output) must NOT abort
+    # classify() failing (a one-off request error OR unparseable model output) —
+    # NOT a tier outage, which fails the whole tick closed — must NOT abort
     # the whole digest: keep the item, mark it important + classification-failed,
     # and NEVER delegate a calendar draft off a fabricated verdict.
     monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
@@ -660,7 +661,7 @@ def _patch_cli_digest_engine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     )
 
     def build_item(  # noqa: ARG001
-        detail: dict, item_no: int, *, rules: tuple, latch=None
+        detail: dict, item_no: int, *, rules: tuple
     ) -> tuple[dict, dict]:
         shared = {
             "item_no": item_no,
@@ -924,15 +925,15 @@ def test_run_digest_build_stage_llm_failure_emits_structured_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given: a digest whose item build fails at the LLM classify step (the
-    # 2026-07-31 incident: a glm-main timeout killed the whole tick pre-delivery)
+    # 2026-07-31 incident: a classify timeout killed the whole tick pre-delivery)
     db = _patch_cli_digest_engine(monkeypatch, tmp_path)
     dm_calls: list[str] = []
     monkeypatch.setattr(triage_confirm, "dm_owner", lambda body: dm_calls.append(body) or "dm-1")
 
     def fail_build(  # noqa: ARG001
-        _detail: dict, _item_no: int, *, rules: tuple, latch=None
+        _detail: dict, _item_no: int, *, rules: tuple
     ) -> tuple[dict, dict]:
-        raise triage_llm.LlmCallError("glm-main 호출 실패: leak@example.com uid=1234567 timed out")
+        raise triage_llm.LlmCallError("codex 호출 실패: leak@example.com uid=1234567 timed out")
 
     monkeypatch.setattr(triage_digest, "build_item", fail_build)
 

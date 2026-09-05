@@ -149,7 +149,7 @@ def test_route_guard_full_truth_table(
 
 @pytest.mark.parametrize(
     "host",
-    ["glm-main", "litellm-glm", "attacker.example", "public-anthropic-api", None],
+    ["off-tier-host", "other-main", "attacker.example", "public-anthropic-api", None],
 )
 def test_patent_refine_rejects_hosts_outside_owner_allowlist(host: str | None) -> None:
     with pytest.raises(RouteRefused):

@@ -32,12 +32,9 @@ _REPO = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO / "automation" / "provision-agent.sh"
 
 _RENDER_ENV = {
-    "LITELLM_MODEL": "model-under-test",
-    "LITELLM_BASE_URL": "http://litellm.invalid/v1",
-    "LITELLM_KEY_ENV": "LITELLM_KEY_UNDER_TEST",
+    "CODEX_PROVIDER": "openai-codex",
+    "CODEX_MODEL": "gpt-5.6-sol",
     "NODE_AGENT_ACCOUNT": "agent",
-    "FALLBACK_PROVIDER": "provider-under-test",
-    "FALLBACK_MODEL": "fallback-under-test",
 }
 
 

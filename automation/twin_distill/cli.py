@@ -23,7 +23,7 @@ from automation.twin_distill.gather import (
     render_prompt,
 )
 from automation.twin_distill.llm import (
-    LiteLlmClient,
+    CodexLlmClient,
     LlmClient,
     LlmConfigurationError,
     LlmInvocationError,
@@ -175,7 +175,7 @@ def run_with_live_llm(
     invocation: DistillationInvocation,
     dependencies: LiveDependencies,
 ) -> DraftEmission:
-    llm = LiteLlmClient.from_environment(dependencies.environment)
+    llm = CodexLlmClient.from_environment(dependencies.environment)
     return run_distillation(
         invocation,
         DistillationDependencies(dependencies.search_client, llm, dependencies.draft_runner),

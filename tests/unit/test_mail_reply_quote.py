@@ -85,20 +85,21 @@ def _setup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, detail: dict) ->
     monkeypatch.delenv("TRIAGE_CLASSIFY_PROMPT", raising=False)
     monkeypatch.delenv("E2E_TEST_MODE", raising=False)
     monkeypatch.delenv("MAILON_ID", raising=False)
-    glm = _write_stub(
-        tmp_path / "glm-stub",
-        "#!/usr/bin/env python3\nimport sys\nsys.stdin.read()\n"
-        "print('{\"category\": \"important\", \"reply_needed\": true, "
-        "\"schedule_needed\": false, \"budget\": false, "
-        "\"schedule_text\": \"\", \"reason\": \"test\"}')\n",
-    )
-    monkeypatch.setenv("TRIAGE_GLM_BIN", str(glm))
+    # 분류도 초안도 같은 승인 티어(Codex OAuth)로 간다 — 대역 하나가 둘 다 답한다.
     hermes = _write_stub(
         tmp_path / "hermes-stub",
         "#!/usr/bin/env python3\n"
-        f"print('{{\"subject\": \"\", \"body\": \"{REPLY_TEXT}\"}}')\n",
+        "import sys\n"
+        # 공유 클라이언트 argv: [bin, --ignore-user-config, -z, PROMPT, --provider, ...]
+        "prompt = sys.argv[3]\n"
+        "if '\"category\"' in prompt:\n"
+        "    print('{\"category\": \"important\", \"reply_needed\": true, "
+        "\"schedule_needed\": false, \"budget\": false, "
+        "\"schedule_text\": \"\", \"reason\": \"test\"}')\n"
+        "else:\n"
+        f"    print('{{\"subject\": \"\", \"body\": \"{REPLY_TEXT}\"}}')\n",
     )
-    monkeypatch.setenv("TRIAGE_HERMES_BIN", str(hermes))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
     monkeypatch.setattr(triage_cli, "_get_mail", lambda _uid: dict(detail))
 
 

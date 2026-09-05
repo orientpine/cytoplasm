@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -12,6 +13,7 @@ from automation.repair.repair_core import RepairEvent, RepairRegistry, RepairSer
 
 
 _CARD_JSON: Final = '{"task":{"id":"t_repair01"}}'
+_CLOSED_CARD_JSON: Final = '{"task":{"id":"t_repair01","status":"done"}}'
 
 
 @dataclass
@@ -58,6 +60,25 @@ def test_hermes_kanban_create_omits_triage_so_card_can_be_blocked(monkeypatch: p
     assert "--triage" not in calls[0]
 
 
+def test_status_read_gives_up_sooner_than_a_board_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: the production adapter observed at its real subprocess boundary.
+    timeouts: dict[str, float] = {}
+
+    def capture(args: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        timeouts[args[2]] = float(kwargs["timeout"])  # pyright: ignore[reportArgumentType]
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=_CLOSED_CARD_JSON, stderr="")
+
+    monkeypatch.setattr(repair_cli.subprocess, "run", capture)
+
+    # When: the detector reads one card state and creates one card.
+    HermesKanban().is_closed("t_repair01")
+    HermesKanban().create("repair title", "repair body", "repair-key")
+
+    # Then: an unresponsive board costs the detect path far less than a mutation may.
+    assert timeouts["show"] < timeouts["create"]
+    assert timeouts["show"] <= 10
+
+
 def test_creates_blocked_repair_ticket_with_redacted_path_and_hash(tmp_path: Path) -> None:
     # Given: a skill failure that includes a token-shaped secret.
     service = RepairService(FakeKanban(), FakePrivateLogs(), RepairRegistry(tmp_path / "repair-state.json"))
@@ -92,6 +113,128 @@ def test_recurring_error_adds_occurrence_without_creating_duplicate(tmp_path: Pa
     assert repeated.occurrence == 2
     assert len(kanban.created) == 1
     assert private_logs.entries[-1][1] == 2
+
+
+def test_closed_stored_ticket_mints_fresh_repair_ticket(tmp_path: Path) -> None:
+    # Given: a recurrence whose deduplicated card has already been closed.
+    registry = RepairRegistry(tmp_path / "repair-state.json")
+    first = registry.claim("signature", lambda _superseded: "t_closed")
+
+    # When: its card-state probe reports that stored card as closed.
+    repeated = registry.claim("signature", lambda _superseded: "t_fresh", lambda ticket_id: ticket_id == first.ticket_id)
+
+    # Then: the recurrence receives a fresh card and a new occurrence sequence.
+    assert repeated.ticket_id == "t_fresh"
+    assert repeated.occurrence == 1
+    assert repeated.created is True
+
+
+def test_status_probe_absence_none_or_failure_keeps_existing_ticket(tmp_path: Path) -> None:
+    # Given: recurrences linked to existing cards.
+    absent_probe = RepairRegistry(tmp_path / "absent-probe.json")
+    _ = absent_probe.claim("signature", lambda _superseded: "t_existing")
+    none_probe = RepairRegistry(tmp_path / "none-probe.json")
+    _ = none_probe.claim("signature", lambda _superseded: "t_unknown")
+    failed_probe = RepairRegistry(tmp_path / "failed-probe.json")
+    _ = failed_probe.claim("signature", lambda _superseded: "t_unreadable")
+
+    def unavailable(_ticket_id: str) -> None:
+        return None
+
+    def unreadable(_ticket_id: str) -> bool:
+        raise RuntimeError("kanban unavailable")
+
+    # When: no card-state probe is available, it has no result, or its read fails.
+    without_probe = absent_probe.claim("signature", lambda _superseded: "t_unexpected")
+    with_none_probe = none_probe.claim("signature", lambda _superseded: "t_unexpected", unavailable)
+    with_failed_probe = failed_probe.claim("signature", lambda _superseded: "t_unexpected", unreadable)
+
+    # Then: deduplication remains conservative and advances the original card.
+    assert without_probe.ticket_id == "t_existing"
+    assert without_probe.occurrence == 2
+    assert without_probe.created is False
+    assert with_none_probe.ticket_id == "t_unknown"
+    assert with_none_probe.occurrence == 2
+    assert with_none_probe.created is False
+    assert with_failed_probe.ticket_id == "t_unreadable"
+    assert with_failed_probe.occurrence == 2
+    assert with_failed_probe.created is False
+
+
+@dataclass(frozen=True, slots=True)
+class _CreateRequest:
+    title: str
+    body: str
+    idempotency_key: str
+
+
+@dataclass
+class _ReopeningKanban:
+    """Board fake whose cards can be closed, so the detector must open a new one."""
+
+    closed: set[str] = field(default_factory=set)
+    created: list[str] = field(default_factory=list)
+    requests: list[_CreateRequest] = field(default_factory=list)
+    comments: list[tuple[str, str]] = field(default_factory=list)
+    blocked: list[tuple[str, str]] = field(default_factory=list)
+
+    def create(self, title: str, body: str, idempotency_key: str) -> str:
+        ticket_id = f"t_card{len(self.created) + 1}"
+        self.created.append(ticket_id)
+        self.requests.append(_CreateRequest(title, body, idempotency_key))
+        return ticket_id
+
+    def comment(self, ticket_id: str, text: str) -> None:
+        self.comments.append((ticket_id, text))
+
+    def block_for_repair(self, ticket_id: str, reason: str) -> None:
+        self.blocked.append((ticket_id, reason))
+
+    def is_closed(self, ticket_id: str) -> bool:
+        return ticket_id in self.closed
+
+
+def test_service_opens_a_new_card_when_the_deduplicated_card_is_closed(tmp_path: Path) -> None:
+    # Given: a service wired to its board's card-state probe.
+    kanban = _ReopeningKanban()
+    service = RepairService(
+        kanban, FakePrivateLogs(), RepairRegistry(tmp_path / "repair-state.json"), kanban.is_closed
+    )
+    event = RepairEvent(source="cron", location="budget-watch", raw_log="ValueError: boom")
+    first = service.record(event)
+
+    # When: the owner closes that card and the same failure recurs.
+    kanban.closed.add(first.ticket_id)
+    second = service.record(event)
+
+    # Then: the recurrence opens a fresh card instead of thickening the closed one.
+    assert second.ticket_id != first.ticket_id
+    assert second.created is True
+    assert second.occurrence == 1
+    assert kanban.created == [first.ticket_id, second.ticket_id]
+
+
+def test_superseding_card_names_the_closed_card_and_asks_a_distinct_dedup_key(tmp_path: Path) -> None:
+    # Given: a service whose first card the owner has already closed.
+    kanban = _ReopeningKanban()
+    service = RepairService(
+        kanban, FakePrivateLogs(), RepairRegistry(tmp_path / "repair-state.json"), kanban.is_closed
+    )
+    event = RepairEvent(source="cron", location="budget-watch", raw_log="ValueError: boom")
+    first = service.record(event)
+    kanban.closed.add(first.ticket_id)
+
+    # When: the same failure recurs against that closed card.
+    second = service.record(event)
+
+    # Then: the fresh card names the card it supersedes, so the board itself links the pair.
+    assert first.ticket_id in kanban.requests[1].body
+
+    # And: it asks for a dedup key the closed card does not own. `hermes kanban create
+    # --idempotency-key` returns the existing non-archived task for a repeated key
+    # (docs/qa/RRC-0/01-cli-contract.md), so reusing it would hand back the closed card.
+    assert kanban.requests[1].idempotency_key != kanban.requests[0].idempotency_key
+    assert second.ticket_id != first.ticket_id
 
 
 def test_ticket_excerpt_and_comment_never_include_sensitive_error_text(tmp_path: Path) -> None:

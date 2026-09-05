@@ -1,8 +1,8 @@
 """mail-daily-digest watcher: structured single-line failure marker + bounded retry.
 
 The 2026-07-31 incident: the 08:00 KST digest failed when the 7th item's
-``glm-main`` classification timed out during item build (before any Discord
-send). The owner was never told, because the cron was registered
+classification call timed out during item build (before any Discord send). The
+owner was never told, because the cron was registered
 ``--deliver local`` (0 delivery targets) so the wrapper's alert line went
 nowhere. The watcher's retry, meanwhile, keyed on a free-form Korean substring
 (``digest DM 발송 실패``) that the producer no longer emits.
@@ -34,7 +34,14 @@ _RETRY_UNSAFE = (
     "DIGEST-FAIL stage=deliver retry_safe=false code=discord_delivery_failed "
     "detail=HTTP Error 500: Internal Server Error"
 )
-_BUILD_UNSAFE = "DIGEST-FAIL stage=build retry_safe=false code=llm_call_failed detail=glm-main timed out"
+_BUILD_UNSAFE = (
+    "DIGEST-FAIL stage=build retry_safe=false code=llm_call_failed detail=codex timed out"
+)
+# 2026-09-04 이관: 티어 자체가 불가하면 다이제스트는 fail closed 로 이 마커를 낸다.
+_TIER_UNSAFE = (
+    "DIGEST-FAIL stage=build retry_safe=false code=codex_unavailable "
+    "detail=codex 호출 실패: no credentials"
+)
 
 
 def _load_watch_module() -> ModuleType:
@@ -121,12 +128,18 @@ def test_retry_unsafe_deliver_marker_is_never_retried(
 def test_build_marker_is_passed_through_on_stdout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    calls = _stub(monkeypatch, tmp_path, [(4, _BUILD_UNSAFE)])
-    assert watch.main() == 1
-    assert len(calls) == 1
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out.strip().splitlines() == [_BUILD_UNSAFE]
+    # 두 마커 모두 한 테스트 안에서 검사한다: 이 파일의 노드 집합은 task-5 RED 정산 증거에
+    # 고정돼 있어(`.omo/evidence/fs3/artifacts/task-5/red-watch-failure-streak.txt`) 테스트를
+    # 하나 늘리면 그 재현이 깨진다. 티어 불가(codex_unavailable)도 빌드 실패와 같은 계약이다 —
+    # 재시도해도 같은 장애를 두들길 뿐이라 자동 재생 금지.
+    for index, marker in enumerate((_BUILD_UNSAFE, _TIER_UNSAFE)):
+        monkeypatch.setenv("WATCH_FAILURE_ROOT", str(tmp_path / f"watch-failure-{index}"))
+        calls = _stub(monkeypatch, tmp_path, [(4, marker)])
+        assert watch.main() == 1
+        assert len(calls) == 1
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert captured.out.strip().splitlines() == [marker]
 
 
 def test_unmarked_child_failure_is_synthesized_as_stage_runner(

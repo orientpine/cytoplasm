@@ -110,7 +110,6 @@ wrapper_print() { # wrapper_print <node>
   printf '#   bash <release>/automation/healthcheck_probe_wrapper.sh --install %s\n' "$node"
   printf '# wrapper-version: %s\n' "$WRAPPER_VERSION"
   printf '# wrapper-node: %s\n' "$node"
-  printf '# probe-type: litellm_completion\n'
   printf '# wrapper-inputs: %s\n' "$(wrapper_inputs_digest "$node")"
   printf 'set -euo pipefail\n'
   printf 'readonly command_hash="$(printf %s "${SSH_ORIGINAL_COMMAND:-}" | sha256sum)"\n' "'%s'"

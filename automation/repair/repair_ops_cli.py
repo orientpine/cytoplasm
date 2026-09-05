@@ -12,7 +12,7 @@ from pathlib import Path
 from automation.interop.injection_adapter import InboundEvent
 from automation.node_config import load_node_config
 from automation.regression_bank.bank_state import DEFAULT_STATE_PATH
-from automation.repair.repair_ops_adapters import CodexPlanner, LiteLLMPlanner, PeerSandbox, StaticPlanner, private_log
+from automation.repair.repair_ops_adapters import CodexPlanner, PeerSandbox, StaticPlanner, private_log
 from automation.repair.repair_ops_approval import ApprovalReaction, ManualOwnerApproval, SignedOwnerApproval, manual_approval_text
 from automation.repair.repair_ops_core import Approval, RepairAgent, RepairOutcome, RepairPhase
 from automation.repair.repair_ops_discord import RepairDiscordError, configured_discord
@@ -125,13 +125,13 @@ def _pending_root() -> Path:
     return Path(os.environ.get("REPAIR_APPROVAL_PENDING_ROOT", "/srv/autophagy-private/repair-approval-pending"))
 
 
-def planner_for(config: RepairOpsConfig) -> CodexPlanner | LiteLLMPlanner | StaticPlanner:
+def planner_for(config: RepairOpsConfig) -> CodexPlanner | StaticPlanner:
     provider = os.environ.get("REPAIR_DIAGNOSIS_PROVIDER")
     if provider == "static-e2e" and os.environ.get("E2E_TEST_MODE") == "1":
         return StaticPlanner(config.plans)
-    if provider == "openai-codex":
-        return CodexPlanner(config.plans)
-    return LiteLLMPlanner(config.plans, Path(os.environ.get("REPAIR_LITELLM_KEY_FILE", "/home/ops/.config/autophagy/ops-repair.key")))
+    if provider not in (None, "openai-codex"):
+        raise RepairOpsError("repair diagnosis provider must be openai-codex")
+    return CodexPlanner(config.plans)
 
 
 def _agent(config: RepairOpsConfig, approval: Approval) -> RepairAgent:

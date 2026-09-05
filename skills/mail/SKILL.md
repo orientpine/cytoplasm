@@ -1,6 +1,6 @@
 ---
 name: mail
-description: "기관메일(mailon.kr) 스킬. 메일 작성·발송 지시에서 수신자가 이메일 주소가 아니라 사람 이름이면(예: '홍길동 박사님께 메일') 반드시 먼저 resolve로 이름→이메일 해석(기관 웹메일 자동완성 기반, READ-ONLY) — 메일함 검색만으로 포기하거나 주소를 추측·유추하는 것은 금지. 읽기: list/get/classify/status/resolve 래퍼(W4-1, READ-ONLY). 파이프라인(W4-2): 수신메일 민감도 게이트→분류(glm-main, 민감건은 비-GLM)→다이제스트(08:00 KST)→소유자 지시 기반 회신 초안(비-GLM)→현재 승인 표면의 소유자 게이트→mailon 발송→approvals.jsonl. 새 메일 작성(compose)도 동일 watch·해시 바인딩 게이트를 경유한다. 발송은 반드시 승인 게이트 경유 — 직접 send 금지. 민감 회신은 승인 메시지 한 건에 전문과 sha256을 함께 표시한다. 승인 표면은 `approval_surface.py` 정책과 draft의 저장된 바인딩으로 결정되며, 폐지 표면의 미결정 초안은 승인 없이 만료된다. 회신·후속메일은 메일 클라이언트의 회신처럼 원문(헤더+본문)을 발송 본문 하단에 인용한다(draft 기본, --reply-all 로 전체회신, compose --in-reply-to <uid> 로 후속메일)."
+description: "기관메일(mailon.kr) 스킬. 메일 작성·발송 지시에서 수신자가 이메일 주소가 아니라 사람 이름이면(예: '홍길동 박사님께 메일') 반드시 먼저 resolve로 이름→이메일 해석(기관 웹메일 자동완성 기반, READ-ONLY) — 메일함 검색만으로 포기하거나 주소를 추측·유추하는 것은 금지. 읽기: list/get/classify/status/resolve 래퍼(W4-1, READ-ONLY). 파이프라인(W4-2): 수신메일 민감도 게이트→분류(Codex OAuth 단일 티어)→다이제스트(08:00 KST)→소유자 지시 기반 회신 초안(Codex OAuth)→현재 승인 표면의 소유자 게이트→mailon 발송→approvals.jsonl. 새 메일 작성(compose)도 동일 watch·해시 바인딩 게이트를 경유한다. 발송은 반드시 승인 게이트 경유 — 직접 send 금지. 민감 회신은 승인 메시지 한 건에 전문과 sha256을 함께 표시한다. 승인 표면은 `approval_surface.py` 정책과 draft의 저장된 바인딩으로 결정되며, 폐지 표면의 미결정 초안은 승인 없이 만료된다. 회신·후속메일은 메일 클라이언트의 회신처럼 원문(헤더+본문)을 발송 본문 하단에 인용한다(draft 기본, --reply-all 로 전체회신, compose --in-reply-to <uid> 로 후속메일)."
 version: 1.7.8
 author: autophagy-agents
 license: MIT
@@ -113,8 +113,8 @@ Hermes cron(`mail-triage-watch`, no_agent)이 `watch`를 돌린다. 이 루프�
 - **DM 전송**: 공유 interop 전송기(DiscordTransport)를 통해 2,000자 이하 순서 보장 청크로 분할 발송된다(429 Retry-After 대응). 다이제스트 등 `dm_owner`를 쓰는 모든 표면에 동일 적용. 발송/취소 **결과 통지**는 그 요청의 승인 스레드(`approval_thread_id`)로 게시되며, 없으면 origin 바인딩의 원 채널 스레드로 간다(§4).
 - **동기화 폴백**: mailon 동기화(`list --sync`) 실패 시 로컬 `state.db` 기준으로 폴백 발송하며, DM 최상단에 "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)" 경고를 부착한다. `--no-sync` 명시 실행의 실패는 폴백 없이 fail-closed.
 - **실패 처리**: 모든 digest 실패(빌드 단계 LLM 실패, DM 전송 실패)는 기록 없이 단일 행·레닥션된 구조화 마커 `DIGEST-FAIL stage=<build|deliver|runner> retry_safe=<true|false> code=<...>`로 종료하며(주소·본문·토큰 미포함), 다음 tick에 재시도한다(DM-first/record-after 불변식 유지 — cursor는 전달 성공 후에만 기록). 워처는 `retry_safe=true` 마커만 인틱 재시도한다(전달 실패는 일부 청크가 이미 나갔을 수 있어 `retry_safe=false`). cron은 `--deliver discord`로 등록되어, no-agent 스크립트의 **stdout**(성공=빈 stdout=무음, 실패=마커 1행+exit 1)이 소유자 DM으로 전달된다 — `--deliver local`(전달 대상 0개)이었던 2026-07-31에는 실패가 소유자에게 도달하지 못했다.
-- **항목 단위 fail-open (분류)**: 한 메일의 분류 LLM 호출이 실패(glm-5.2 timeout 또는 파싱 불가한 비-JSON 응답)해도 다이제스트 전체가 중단되지 않는다. 해당 항목은 보수적으로 `🔴 중요` + `⚠️ 분류 실패` 배지로 표면화되고(플래그는 모두 미부여 — 조작된 판정으로 캘린더 초안을 위임하지 않음), 나머지 메일은 정상 전달·기록된다. 요약 실패가 `(요약 실패)` fallback으로 항목을 유지하는 것과 동일한 취지이며, 요약도 분류와 같이 **1회 재시도**한 뒤에야 fallback으로 내려간다 — 재시도까지 실패한 건은 `llm-calls.jsonl`에 `purpose=digest_summary_failed` 한 줄로 예외 클래스와 레닥션·클립된 메시지, 불투명 uid만 남겨(제목·발신자·본문·주소 등 메일 내용은 절대 기록하지 않음) no-agent cron이 stderr를 버려도 원인을 추적할 수 있게 한다. 분류도 재시도 소진 시 `purpose=classify_failed`로 같은 방식으로 기록한다. (분류가 파싱은 되나 bool을 문자열로 준 경우 `"false"`가 참으로 새는 버그도 함께 차단 — `_json_bool` 엄격 파싱.)
-- **GLM 불가 폴백 (2026-09-03)**: HTTP 429·5xx·연결 실패는 `LlmUnavailableError`로 구분한다. 기존 1회 재시도 뒤에도 불가하면 **비민감 메일만** 같은 프롬프트를 codex 티어로 처리하고, 런 단위 래치가 그 뒤 GLM 재시도를 멈춘다. 소유자 DM에는 `⚠️ glm-main 사용 불가 …` 한 줄만 붙고, 각 강등 호출은 `llm-calls.jsonl`의 `fallback_from=glm-main` 표식으로 남는다. 민감 메일의 비-GLM 라우팅은 바뀌지 않는다.
+- **항목 단위 fail-open (분류)**: 한 메일의 분류 LLM 호출이 실패(모델 timeout 또는 파싱 불가한 비-JSON 응답)해도 다이제스트 전체가 중단되지 않는다. 해당 항목은 보수적으로 `🔴 중요` + `⚠️ 분류 실패` 배지로 표면화되고(플래그는 모두 미부여 — 조작된 판정으로 캘린더 초안을 위임하지 않음), 나머지 메일은 정상 전달·기록된다. 요약 실패가 `(요약 실패)` fallback으로 항목을 유지하는 것과 동일한 취지이며, 요약도 분류와 같이 **1회 재시도**한 뒤에야 fallback으로 내려간다 — 재시도까지 실패한 건은 `llm-calls.jsonl`에 `purpose=digest_summary_failed` 한 줄로 예외 클래스와 레닥션·클립된 메시지, 불투명 uid만 남겨(제목·발신자·본문·주소 등 메일 내용은 절대 기록하지 않음) no-agent cron이 stderr를 버려도 원인을 추적할 수 있게 한다. 분류도 재시도 소진 시 `purpose=classify_failed`로 같은 방식으로 기록한다. (분류가 파싱은 되나 bool을 문자열로 준 경우 `"false"`가 참으로 새는 버그도 함께 차단 — `_json_bool` 엄격 파싱.)
+- **티어 불가 = fail closed (2026-09-04 공급자 이관)**: 모델 경로는 공유 Codex OAuth 클라이언트(`automation/codex_llm.py`, provider `openai-codex`) 하나뿐이다. 자격 증명 없음·쿼터·전송 실패는 `LlmUnavailableError`로 구분되며, **강등할 티어가 없으므로 강등하지 않는다** — 그 단계는 재시도하지 않고(사고 당시 재시도 폭주 방지) 틱 전체가 `DIGEST-FAIL stage=build retry_safe=false code=codex_unavailable` 마커 한 줄로 종료한다. DM도 저장도 하지 않으므로 메일은 다음 틱에 그대로 남고, 원인은 `llm-calls.jsonl`의 `purpose=classify_failed`(마스킹) 한 줄로 남는다. 개별 요청 실패(1회성 rc≠0·파싱 불가)는 기존 항목 단위 fail-open 그대로다. 2026-09-03 은퇴한 2차 티어로의 강등 폴백(`fallback_from` 표식과 `⚠️ 티어 사용 불가` 알림 줄)은 그 티어와 함께 제거되었다.
 - 민감 메일은 DM에는 전문이 포함되나, 로컬 DB에는 마스킹된 제목과 빈 요약만 저장된다(제약 7).
 - 일정 예약이 필요한 메일은 이 단계에서 캘린더 스킬로 초안 생성이 위임된다. **위임 실패는 원인별로 구분해 보고한다** — 카드의 `🗓️ 일정 초안` 노트가 `calendar-unavailable`(배포본 없음) · `calendar-refused`(rc=1 게이트 거부) · `calendar-unparsed`(rc=2 일정 문장 해석 불가) · `calendar-misconfigured`(rc=3 설정·피어 레지스트리 등) · `calendar-routing`(rc=4 단독 일정이 아님 — coordination/되묻기) · `calendar-ambiguous`(rc=5 되묻기) · `calendar-exec-failed`(rc=6) · `calendar-timeout` · `calendar-spawn-failed` · 계약 밖 종료코드는 `calendar-failed-rc<N>` 중 하나가 된다. 자식 CLI의 stderr는 카드가 아니라 운영 로그 한 줄(`CAL-FAIL uid=<마스킹> rc=… cause=… stderr=…`, 개행 제거·200자 클립)로만 나가고, 캘린더 CLI가 느리거나(timeout) 실행되지 않아도 그 항목만 잃고 다이제스트는 계속된다(항목 단위 fail-open).
 - **참조(CC) 수신 메일**: cha가 To가 아닌 Cc로만 수신한 메일은 회신 대상이 아니다
@@ -129,7 +129,7 @@ Hermes cron(`mail-triage-watch`, no_agent)이 `watch`를 돌린다. 이 루프�
 cha가 다이제스트를 보고 지시를 내리면(예: "3번 메일, 참석 가능하다고 회신해줘"), 에이전트는 다음 절차를 따른다:
 1. `digest-items` 명령으로 번호(N)를 실제 `uid`로 변환한다.
 2. `draft --uid <uid> --instruction "<지시문>" [--reply-all]` 명령을 실행하여 초안을 생성하고 현재 mail-reply 승인 스레드에 게시한다.
-3. 초안은 `prompts/reply-draft-v2.md`를 사용하며, 항상 비-GLM 티어에서 생성된다.
+3. 초안은 `prompts/reply-draft-v2.md`를 사용하며, 항상 승인된 Codex OAuth 티어에서 생성된다.
 4. **원문 인용 (2026-09-01, 소유자 지시)**: 발송 본문은 메일 클라이언트의 회신처럼 `<회신문>` + 빈 줄 + `-----원본 메시지-----` 헤더(보낸 사람·보낸 날짜·받는 사람·참조·제목) + 원문 본문이다(`scripts/mail_quote.py`, 원문은 20,000자에서 절단 마커). vendor mailon 에는 답장 명령이 없어 새 메일 compose 로 나가므로, 인용이 없으면 상대는 무엇에 대한 답인지 알 수 없다. draft 레코드의 `body` 는 소유자가 검토하는 회신문만이고 인용은 `quote` 필드·동결 argv 에 들어가 승인 해시에 함께 바인딩된다. 승인 메시지는 인용을 덤프하지 않고 `- 원문 인용: 포함` 한 줄로만 알린다(Discord 2,000자 한도). 엔티티 프리플라이트는 회신문만 정규화해 되돌려주므로 인용은 발송 직전 실행 경계(`scripts/mail_preflight.py`)에서 회신문 아래에 다시 붙인다 — 2026-09-03 전달 메일이 원문 없이 회신문만 발송된 사고가 그 이유다.
 5. **전체회신**: cha 가 "전체회신"·"모두에게"·"참조 그대로" 라고 하면 `--reply-all` 을 붙인다 — 원문 frontmatter 의 To∪Cc 에서 소유자(`MAILON_ID`)와 발신자를 뺀 주소가 Cc 로 들어가 argv·해시에 바인딩되고 승인 메시지에 `- Cc:` 로 표시된다. 지시가 없으면 기본은 발신자 단독 회신이다. 원문에 다른 수신자가 없으면 `--reply-all` 도 단독 회신과 같다.
 
@@ -235,8 +235,10 @@ MailOn 첨부파일은 Google Drive `autophagy/메일 첨부파일/<연도>/<월
 1. **발송은 게이트 경유만**: mailon send를 직접 호출하지 않는다. 승인 없는
    발송 경로는 존재하지 않으며, 직접 터미널 호출은 배포된 외부효과 게이트
    (`mailon_send` 룰)가 fail-closed로 차단한다.
-2. **민감 라우팅 (제약 6)**: 민감도 게이트 적중 메일의 본문·초안은 GLM에
-   절대 넣지 않는다. 게이트가 LLM보다 먼저 실행된다.
+2. **민감 라우팅 (제약 6)**: 민감도 게이트 적중 메일의 본문·초안은 승인된
+   Codex OAuth 티어(`openai-codex`) 밖으로 절대 나가지 않는다. 게이트가 LLM보다
+   먼저 실행되고, 공유 클라이언트가 다른 공급자를 가리키면 라우팅 가드가
+   호출 자체를 거부한다(`PatentRoutingError`).
 3. **마스킹 (제약 7)**: 실제 제목·발신자·본문을 QA/리포트/공개 채널/repo/git에
    절대 쓰지 않는다. 민감 회신의 완성 본문은 소유자 전용 승인 메시지에만 표시하며, 원본 수신메일과
    민감 초안은 `~agent/mail/`(700) 밖으로 내보내지 않는다.

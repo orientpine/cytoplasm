@@ -1,7 +1,7 @@
 """Distill one Obsidian note into a wiki draft body.
 
-The LLM leg reuses ``automation.twin_distill.llm`` — same Protocol, same LiteLLM
-route, so this package adds no new model surface and no new budget path.
+The LLM leg reuses ``automation.twin_distill.llm`` — same Protocol, same Codex
+OAuth route, so this package adds no new model surface and no new budget path.
 patent-sensitive sources never reach a prompt: they are dropped during candidate
 selection, before this module is called.
 """

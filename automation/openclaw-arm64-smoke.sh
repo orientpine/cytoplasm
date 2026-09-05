@@ -3,12 +3,11 @@
 # automation/openclaw-arm64-smoke.sh — plan task W0-9, OpenClaw ARM64 fallback
 #
 # Stage 1 (implemented): install OpenClaw for ops, configure exactly two small
-# agents using Z.AI directly, prove one routed reply, save synthetic evidence,
+# agents using Codex OAuth, prove one routed reply, save synthetic evidence,
 # then leave every OpenClaw user service inactive and disabled.
 #
-# Stage 2 is intentionally a guarded stub for the later W1 checkpoint.  It
-# must add LiteLLM + test-peer-bot validation without changing this stage-1
-# evidence contract.
+# Stage 2 is intentionally a guarded stub for the later W1 checkpoint. It
+# must preserve the same fail-closed Codex OAuth provider contract.
 #
 # Run on the configured primary node as the infrastructure account:
 #   sudo -u ops -H bash /srv/autophagy-agents/automation/openclaw-arm64-smoke.sh --stage 1
@@ -27,7 +26,6 @@ readonly NODE_BIN_DIR="${NODE_INSTALL_DIR}/bin"
 readonly USER_BIN_DIR="${HOME}/.local/bin"
 readonly STATE_DIR="${HOME}/.local/state/openclaw-arm64-smoke"
 readonly SENTINEL="${STATE_DIR}/stage1-onboarded"
-readonly SECRETS_FILE="${HOME}/.env.secrets"
 readonly ROUTER_AGENT="router"
 readonly WORKER_AGENT="worker"
 
@@ -49,7 +47,7 @@ usage() {
 Usage: openclaw-arm64-smoke.sh --stage <1|2> [--install-method <auto|npm>]
 
   --stage 1              Run the implemented ARM64 two-agent smoke test.
-  --stage 2              Reserved for the later W1 LiteLLM + Discord checkpoint.
+  --stage 2              Reserved for the later W1 Discord checkpoint.
   --install-method auto  Use the official Linux installer (default).
   --install-method npm   Same installer, explicitly requesting its npm path.
 
@@ -114,8 +112,6 @@ require_ops_context() {
   [[ "$(id -un)" == "$OPS_USER" ]] || die "must run as $OPS_USER (use: sudo -u ops -H bash ... )"
   [[ "$HOME" == "/home/${OPS_USER}" ]] || die "expected HOME=/home/${OPS_USER}; got HOME=$HOME"
   [[ -d "$REPO_DIR/.git" ]] || die "expected ops checkout not found: $REPO_DIR"
-  [[ -r "$SECRETS_FILE" ]] || die "required secrets file is unreadable: $SECRETS_FILE"
-  [[ "$(stat -c '%a' "$SECRETS_FILE")" == "600" ]] || die "$SECRETS_FILE must be mode 600"
 }
 
 runtime_dir() {
@@ -180,43 +176,6 @@ install_openclaw_if_absent() {
   log "OpenClaw installed: $(openclaw --version 2>/dev/null || printf 'version unavailable')"
 }
 
-load_zai_key() {
-  # The value is read only in the ops process. Do not enable xtrace or print it.
-  set -a
-  # shellcheck disable=SC1090
-  . "$SECRETS_FILE"
-  set +a
-  [[ -n "${ZAI_API_KEY:-}" ]] || die "ZAI_API_KEY is absent or empty in $SECRETS_FILE"
-}
-
-install_zai_plugin_if_absent() {
-  if openclaw plugins list 2>/dev/null | grep -Fq '@openclaw/zai-provider'; then
-    log "Z.AI provider plugin: already present — preserving"
-  else
-    openclaw plugins install @openclaw/zai-provider
-    log "Z.AI provider plugin: installed"
-  fi
-}
-
-is_installer_generated_zai_stub() {
-  node - "$HOME/.openclaw/openclaw.json" <<'NODE'
-const fs = require("fs");
-const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-const hasOnlyKeys = (value, keys) => isObject(value) && Object.keys(value).sort().join(",") === keys.join(",");
-const stub =
-  hasOnlyKeys(config, ["meta", "plugins"]) &&
-  hasOnlyKeys(config.meta, ["lastTouchedAt", "lastTouchedVersion"]) &&
-  typeof config.meta.lastTouchedAt === "string" &&
-  typeof config.meta.lastTouchedVersion === "string" &&
-  hasOnlyKeys(config.plugins, ["entries"]) &&
-  hasOnlyKeys(config.plugins.entries, ["zai"]) &&
-  hasOnlyKeys(config.plugins.entries.zai, ["enabled"]) &&
-  config.plugins.entries.zai.enabled === true;
-process.exit(stub ? 0 : 1);
-NODE
-}
-
 onboard_once() {
   install -d -m 700 "$STATE_DIR"
   if [[ -f "$SENTINEL" ]]; then
@@ -224,18 +183,12 @@ onboard_once() {
     return 0
   fi
 
-  # Installing @openclaw/zai-provider writes this exact, credential-free plugin
-  # stub before onboarding. Preserve it so onboard can extend it. Any other
-  # pre-existing configuration remains operator-owned and is never clobbered.
-  if [[ -e "$HOME/.openclaw/openclaw.json" ]]; then
-    is_installer_generated_zai_stub || die "existing $HOME/.openclaw/openclaw.json is not the installer-generated Z.AI plugin stub; inspect it manually rather than clobbering it"
-    log "onboarding: preserving installer-generated Z.AI plugin stub"
-  fi
+  [[ ! -e "$HOME/.openclaw/openclaw.json" ]] || \
+    die "existing $HOME/.openclaw/openclaw.json is operator-owned; refuse to replace its provider"
 
   openclaw onboard --non-interactive --accept-risk \
     --mode local \
-    --auth-choice zai-api-key \
-    --zai-api-key "$ZAI_API_KEY" \
+    --auth-choice openai-codex \
     --gateway-bind loopback \
     --install-daemon
   install -m 600 /dev/null "$SENTINEL"
@@ -254,7 +207,7 @@ EOF
   # intentionally convergent: every re-run restores this isolated W0-9 shape.
   openclaw config set gateway.bind loopback
   openclaw config set gateway.port "$STAGE1_GATEWAY_PORT"
-  openclaw config set agents.defaults.model.primary zai/glm-5.1
+  openclaw config set agents.defaults.model.primary openai-codex/gpt-5.6-sol
   openclaw config set agents.list "$agents_json" --strict-json --replace
   openclaw config set tools.profile messaging
   openclaw config set tools.sessions.visibility all
@@ -264,7 +217,7 @@ EOF
   openclaw config set transcripts.enabled true
   openclaw config set transcripts.maxUtterances 2000
   openclaw gateway install --force --port "$STAGE1_GATEWAY_PORT"
-  log "configuration: exactly two agents (${ROUTER_AGENT}, ${WORKER_AGENT}); direct Z.AI; no channel bindings"
+  log "configuration: exactly two agents (${ROUTER_AGENT}, ${WORKER_AGENT}); Codex OAuth; no channel bindings"
 }
 
 start_gateway() {
@@ -328,7 +281,7 @@ run_stage1_round_trip() {
     printf 'W0-9 stage-1 synthetic two-agent transcript\n'
     printf 'utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'gateway=127.0.0.1:%s\n' "$STAGE1_GATEWAY_PORT"
-    printf 'provider=Z.AI direct (no LiteLLM, no Discord)\n'
+    printf 'provider=Codex OAuth (no alternate provider, no Discord)\n'
     printf 'agents=%s -> %s\n\n' "$ROUTER_AGENT" "$WORKER_AGENT"
     printf '%s\n' '===== worker bootstrap (OpenClaw JSON event stream) ====='
     cat "$worker_raw"
@@ -364,8 +317,8 @@ write_inactive_status() {
 run_stage2_stub() {
   cat >&2 <<'EOF'
 Stage 2 is intentionally not implemented in W0-9 stage 1.
-The later W1 checkpoint must add LiteLLM endpoint + test peer bot smoke evidence
-under docs/qa/W0-9/stage2/ while preserving the stage-1 installation and config.
+The later W1 checkpoint must add test peer bot smoke evidence under docs/qa/W0-9/stage2/
+while preserving the stage-1 installation and Codex OAuth config.
 EOF
   exit 64
 }
@@ -397,8 +350,6 @@ require_ops_context
 assert_stage1_port_free
 install_node_if_absent
 install_openclaw_if_absent
-load_zai_key
-install_zai_plugin_if_absent
 trap cleanup EXIT
 onboard_once
 configure_exactly_two_agents

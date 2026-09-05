@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from automation.codex_llm import PROVIDER
+
 DEFAULT_THRESHOLD = 0.45
 DEFAULT_STRONG_THRESHOLD = 0.60
 GROUNDING_RATIO = 0.5
@@ -115,14 +117,18 @@ def parse_primary_model(text: str) -> tuple[str, str]:
     return model, provider
 
 
-def primary_route_is_glm_free(env: Mapping[str, str], default_path: str = "~/.hermes/config.yaml") -> bool:
+def primary_route_is_codex_oauth(env: Mapping[str, str], default_path: str = "~/.hermes/config.yaml") -> bool:
+    """True only when the primary route IS the Codex OAuth tier — unreadable or any other provider stays closed."""
     path = Path(env.get("RECALL_HERMES_CONFIG", env.get("KNOWLEDGE_HERMES_CONFIG", default_path))).expanduser()
     try:
         model, provider = parse_primary_model(path.read_text(encoding="utf-8"))
     except OSError:
         return False
-    route = f"{model} {provider}".lower()
-    return bool(model and provider) and "glm" not in route and "litellm" not in route
+    return bool(model.strip()) and provider.strip().casefold() == PROVIDER
+
+
+#: Callers outside this module's ticket scope still import the old spelling.
+primary_route_is_glm_free = primary_route_is_codex_oauth
 
 
 def merge_entity_rows(primary: list[dict[str, Any]], auxiliary: list[dict[str, Any]], hints: tuple[str, ...]) -> list[dict[str, Any]]:

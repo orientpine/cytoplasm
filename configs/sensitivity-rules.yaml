@@ -4,11 +4,10 @@
 #
 # Contract:
 # - A hit on any keyword (substring, case-insensitive) or pattern (regex)
-#   tags the document. Tag `patent-sensitive` forces NON-GLM routing
-#   (openai-codex) and confines the original + detail to ~agent/notes/meetings/
-#   (mode 700). LiteLLM additionally hard-blocks `patent-sensitive`-tagged
-#   requests to glm-main (W1-1 PatentSensitiveGlmBlocker, HTTP 403) as the
-#   fail-closed second layer.
+#   tags the document. Tag `patent-sensitive` permits only the Codex OAuth route
+#   (`openai-codex`) and confines the original + detail to ~agent/notes/meetings/
+#   (mode 700). A missing, malformed, or non-Codex route is refused before a
+#   provider call as the fail-closed second layer.
 # - Keep rules DETERMINISTIC: plain keywords + explicit regexes only.
 #   No LLM/classifier may participate in this decision.
 version: 1

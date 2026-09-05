@@ -28,7 +28,7 @@ machine-consumed form of this table and must cover the on-disk set.
     | budget          | UNSAFE  | Gmail send (`gws gmail +send`) behind BUDGET_GWS_BIN |
     | calendar        | UNSAFE  | Calendar insert/delete behind CALENDAR_GWS_BIN; already run by test_calendar_scenario.py |
     | coordination    | UNSAFE  | drives the Discord-capable coordinate_cli; green only because the tokenless refusal fires first |
-    | doctype         | UNSAFE  | Codex/GLM CLI behind DOCTYPE_HERMES_BIN / DOCTYPE_GLM_BIN |
+    | doctype         | UNSAFE  | Codex OAuth CLI behind DOCTYPE_HERMES_BIN (the only tier) |
     | hello-autophagy | SAFE    | no seams at all: runs scripts/hello.sh and asserts its marker |
     | mail            | UNSAFE  | mailon send + two LLM CLIs behind TRIAGE_* seams; already run by test_mail_scenario.py |
     | meeting         | UNSAFE  | LLM extraction, offline only via --offline/--recorded-response |
@@ -79,7 +79,7 @@ _HELD_BACK: Final[Mapping[str, str]] = {
     "budget": "Gmail send behind BUDGET_GWS_BIN",
     "calendar": "Calendar write behind CALENDAR_GWS_BIN",
     "coordination": "Discord request path, gated only by the tokenless refusal",
-    "doctype": "Codex/GLM CLI behind DOCTYPE_HERMES_BIN",
+    "doctype": "Codex OAuth CLI behind DOCTYPE_HERMES_BIN",
     "mail": "mailon send behind TRIAGE_MAILON_PYTHON",
     "meeting": "LLM extraction, offline only via --recorded-response",
     "patent-prep": "Drive upload behind PATENT_GWS_BIN",

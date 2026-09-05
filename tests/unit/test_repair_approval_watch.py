@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from automation.repair import repair_ops_cli
-from automation.repair.repair_ops_adapters import StaticPlanner
+from automation.repair.repair_ops_adapters import CodexPlanner, StaticPlanner
 from automation.repair.repair_ops_cli import RepairOpsConfig
 from automation.repair.repair_ops_pending import CANCEL_EMOJI, APPROVE_EMOJI, PendingRepairApproval, PendingRepairApprovalStore, PostingOwnerApproval
 from automation.repair.repair_ops_reaction_watch import RepairApprovalWatcher
@@ -245,6 +245,18 @@ def test_cli_when_e2e_mode_lacks_a_signed_injection_then_refuses_ambiguous_produ
     assert status == 2
 
 
+def test_cli_defaults_to_codex_oauth_planning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = RepairOpsConfig("t-repair-1", tmp_path, tmp_path, tmp_path, tmp_path / "approvals.jsonl", None, None)
+    monkeypatch.delenv("E2E_TEST_MODE", raising=False)
+    monkeypatch.delenv("REPAIR_DIAGNOSIS_PROVIDER", raising=False)
+
+    planner = repair_ops_cli.planner_for(config)
+
+    assert isinstance(planner, CodexPlanner)
+
+
 def test_cli_when_signed_e2e_sets_static_provider_then_uses_no_ops_secret_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -256,5 +268,5 @@ def test_cli_when_signed_e2e_sets_static_provider_then_uses_no_ops_secret_file(
     # When: the CLI builds its planner before the signed repair lifecycle starts.
     planner = repair_ops_cli.planner_for(config)
 
-    # Then: the E2E never attempts to read the production ops LiteLLM key file.
+    # Then: the E2E never attempts to read a production model credential file.
     assert isinstance(planner, StaticPlanner)

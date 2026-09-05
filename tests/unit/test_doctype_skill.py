@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from automation import codex_llm
 from skills.doctype.scripts import (
     doctype_cli,
     doctype_extract,
@@ -37,7 +38,8 @@ def _codex_stub(path: Path) -> Path:
     stub = path / "codex-stub"
     source = '''#!/usr/bin/env python3
 import sys
-prompt = sys.argv[2]
+argv = sys.argv[1:]
+prompt = argv[argv.index("-z") + 1] if "-z" in argv else ""
 if "DOCTYPE_STAGE=EXTRACT" in prompt:
     print('{"gist":"구조화된 추천 근거","tone":"공식적","mode":"narrative","sections":[{"title":"추천 대상","guidance":"사실 식별","kind":"slot-fill"},{"title":"추천 사유","guidance":"논증 작성","kind":"narrative"},{"title":"선정 근거","guidance":"근거 종합","kind":"narrative"}]}')
 else:
@@ -120,7 +122,7 @@ def test_register_generate_and_refine_when_narrative_example_is_approved(
     assert "합성 수행사" not in second.path.read_text(encoding="utf-8")
 
 
-def test_sensitive_example_when_registered_never_calls_glm_or_logs_body(
+def test_sensitive_example_when_registered_never_leaves_the_codex_tier_or_logs_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     canary = "PRIVATE-CANARY-" + secrets.token_hex(4)
@@ -134,8 +136,16 @@ def test_sensitive_example_when_registered_never_calls_glm_or_logs_body(
     extracted = doctype_extract.extract(source, store.paths.rules_file)
     result = store.add(extracted.draft("sensitive-reason", "민감서류"))
 
+    # A route that is not the pinned Codex OAuth tier (here: argv without the load-bearing
+    # --ignore-user-config, which is what keeps a configured fallback from firing) must be
+    # refused before a byte of the document leaves the node.
+    monkeypatch.setattr(
+        codex_llm.CodexClient,
+        "argv",
+        lambda self, prompt: [self.binary, "-z", prompt, "--provider", "custom:other"],
+    )
     with pytest.raises(doctype_llm.PatentRoutingError):
-        doctype_llm.call_glm("must fail before transport", sensitive=True)
+        doctype_llm.call_codex("must fail before transport", sensitive=True)
     records = _log_records(log)
     assert result.entry.metadata.sensitivity == "patent-sensitive"
     assert result.private_path.read_text(encoding="utf-8").endswith(canary + "\n")
@@ -173,21 +183,32 @@ def test_generate_when_output_is_under_metadata_repo_refuses(tmp_path: Path) -> 
         doctype_generate.ensure_private_output(store, store.repo_root() / "draft.md")
 
 
-def test_glm_key_falls_back_to_secrets_when_environment_lacks_it(
+def test_codex_call_fails_closed_when_oauth_credentials_are_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Missing credentials is a refusal, never a downgrade: one attempt, no audit record."""
     # Given
-    _ = (tmp_path / ".env.secrets").write_text(
-        "LITELLM_AGENT_KEY=doctype-fallback-key\n", encoding="utf-8"
+    calls = tmp_path / "calls.log"
+    stub = tmp_path / "hermes-no-credentials"
+    _ = stub.write_text(
+        "#!/bin/sh\n"
+        f"printf 'call\\n' >> '{calls}'\n"
+        "printf '%s' 'hermes -z: agent failed: No Codex credentials stored.' >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
     )
-    monkeypatch.delenv("LITELLM_AGENT_KEY", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _ = stub.chmod(0o755)
+    monkeypatch.setenv("DOCTYPE_HERMES_BIN", str(stub))
+    log = tmp_path / "logs" / "calls.jsonl"
+    monkeypatch.setenv("DOCTYPE_LLM_LOG", str(log))
 
     # When
-    key = doctype_llm._litellm_key()
+    with pytest.raises(doctype_llm.LlmCallError):
+        _ = doctype_llm.call_codex("문서 본문", purpose="gist-extract")
 
     # Then
-    assert key == "doctype-fallback-key"
+    assert calls.read_text(encoding="utf-8") == "call\n"
+    assert not log.exists()
 
 
 def test_register_from_example_when_save_route_is_ambiguous_has_zero_side_effects(

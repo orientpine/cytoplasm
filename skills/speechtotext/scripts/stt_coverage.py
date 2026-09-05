@@ -25,6 +25,8 @@ DEFAULT_EDGE_GAP_MS: Final = 60_000
 DEFAULT_INTERNAL_GAP_MS: Final = 120_000
 DEFAULT_REPEAT_LIMIT: Final = 0.08
 REPEAT_WINDOW: Final = 8
+#: Below this a "repeated phrase" is just a short answer said twice, not a collapse.
+MIN_REPEAT_WORDS: Final = 120
 
 Span = tuple[int, int]
 
@@ -122,3 +124,17 @@ def dominant_repeat(text: str, *, window: int = REPEAT_WINDOW) -> tuple[float, s
     counts = Counter(tuple(words[index : index + window]) for index in range(len(words) - window))
     gram, hits = counts.most_common(1)[0]
     return min(hits * window / len(words), 1.0), " ".join(gram)
+
+
+def collapsed(
+    text: str, *, limit: float = DEFAULT_REPEAT_LIMIT, min_words: int = MIN_REPEAT_WORDS
+) -> tuple[float, str]:
+    """Repetition verdict for one stretch of transcript: `(ratio, phrase)` or `(0.0, "")`.
+
+    The same measurement the whole-transcript refusal uses, applied to a single window
+    so that a decode that collapsed at minute 40 costs minute 40 and not the recording.
+    """
+    if len(text.split()) < min_words:
+        return 0.0, ""
+    ratio, phrase = dominant_repeat(text)
+    return (ratio, phrase) if ratio > limit else (0.0, "")

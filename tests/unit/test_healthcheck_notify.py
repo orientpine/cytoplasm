@@ -28,19 +28,19 @@ def test_a_healthy_sweep_says_nothing() -> None:
 
 def test_a_new_failure_is_reported_once() -> None:
     # Given: 처음 실패한 체크
-    state, notice = plan_notice(NotifyState(), failing=("example-primary-node LiteLLM",))
+    state, notice = plan_notice(NotifyState(), failing=("example-primary-node model gateway",))
     assert notice is not None
-    assert "example-primary-node LiteLLM" in notice
-    assert state.open_incidents == ("example-primary-node LiteLLM",)
+    assert "example-primary-node model gateway" in notice
+    assert state.open_incidents == ("example-primary-node model gateway",)
 
 
 def test_the_same_failure_repeating_says_nothing_more() -> None:
     """9시간 52회가 52통이 되면 그 알림은 곧 무시된다."""
-    state, _ = plan_notice(NotifyState(), failing=("example-primary-node LiteLLM",))
+    state, _ = plan_notice(NotifyState(), failing=("example-primary-node model gateway",))
     for _ in range(50):
-        state, notice = plan_notice(state, failing=("example-primary-node LiteLLM",))
+        state, notice = plan_notice(state, failing=("example-primary-node model gateway",))
         assert notice is None
-    assert state.open_incidents == ("example-primary-node LiteLLM",)
+    assert state.open_incidents == ("example-primary-node model gateway",)
 
 
 def test_many_checks_failing_at_once_are_one_message() -> None:
@@ -100,8 +100,8 @@ def test_check_names_takes_the_name_out_of_a_sweep_definition() -> None:
     from automation.healthcheck_notify import check_names
 
     assert check_names(
-        ("example-primary-node LiteLLM|http_200|example-primary-node|ops|http://127.0.0.1:4000/health",)
-    ) == ("example-primary-node LiteLLM",)
+        ("example-primary-node model gateway|http_200|example-primary-node|ops|http://127.0.0.1:4000/health",)
+    ) == ("example-primary-node model gateway",)
 
 
 def test_check_names_keeps_a_bare_name_and_drops_empties() -> None:

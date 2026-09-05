@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import http.client
-import json
 import re
 import shutil
 import shlex
@@ -13,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from automation.codex_llm import CodexError, complete as codex_complete
 from automation.repair.repair_ops_git import GitRepository, RepairOpsError
 from automation.repair.repair_ops_approval import (
     ApprovalReaction,  # noqa: F401 - stable public adapter re-export
@@ -89,58 +88,18 @@ class CodexPlanner:
         patch = directory / "patch.diff"
         if not repro.is_file() or not patch.is_file():
             raise RepairOpsError("repair plan must contain repro.sh and patch.diff")
-        completed = subprocess.run(
-            ("hermes", "-z", "--provider", "openai-codex", "-m", "gpt-5.4", "-t", "todo"),
-            input=private_log,
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=300,
-        )
-        if completed.returncode != 0:
-            raise RepairOpsError(f"codex diagnosis failed: {redact(completed.stderr)[:180]}")
-        return RepairPlan(ticket_id, safe_diagnosis(completed.stdout), repro, patch, _bank_scenario(ticket_id, directory))
-
-
-@dataclass(frozen=True, slots=True)
-class LiteLLMPlanner:
-    """Default internal diagnosis path; only a redacted excerpt leaves the ops boundary."""
-
-    plan_root: Path
-    key_file: Path
-
-    def plan(self, ticket_id: str, private_log: str) -> RepairPlan:
-        """Call glm-main with redacted diagnostics and retain a local, reviewable diff."""
-        directory = self.plan_root / ticket_id
-        repro = directory / "repro.sh"
-        patch = directory / "patch.diff"
-        if not repro.is_file() or not patch.is_file():
-            raise RepairOpsError("repair plan must contain repro.sh and patch.diff")
         excerpt = safe_diagnosis(private_log)
-        payload = json.dumps(
-            {
-                "model": "glm-main",
-                "messages": [{"role": "user", "content": f"Diagnose this redacted repair excerpt: {excerpt}"}],
-            }
-        ).encode()
-        key = self.key_file.read_text(encoding="utf-8").strip()
-        connection = http.client.HTTPConnection("127.0.0.1", 4000, timeout=60)
         try:
-            connection.request(
-                "POST",
-                "/v1/chat/completions",
-                body=payload,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            )
-            response = connection.getresponse()
-            _ = response.read()
-            if response.status != 200:
-                raise RepairOpsError("glm-main diagnosis returned a non-success status")
-        except OSError as error:
-            raise RepairOpsError("glm-main diagnosis request failed") from error
-        finally:
-            connection.close()
-        return RepairPlan(ticket_id, f"glm-main: {excerpt}", repro, patch, _bank_scenario(ticket_id, directory))
+            diagnosis = codex_complete(f"Diagnose this redacted repair excerpt: {excerpt}")
+        except CodexError as error:
+            raise RepairOpsError(f"Codex OAuth diagnosis failed: {redact(str(error))[:180]}") from error
+        return RepairPlan(
+            ticket_id,
+            safe_diagnosis(diagnosis),
+            repro,
+            patch,
+            _bank_scenario(ticket_id, directory),
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -58,7 +58,7 @@ class _FakeLlm:
 
 @dataclass(frozen=True, slots=True)
 class _FakeLlmFactory:
-    """Stands in for ``LiteLlmClient`` at the narrowest seam the CLI uses."""
+    """Stands in for ``CodexLlmClient`` at the narrowest seam the CLI uses."""
 
     client: _FakeLlm
 
@@ -117,10 +117,9 @@ def _run_with_fake_llm(
     capsys: pytest.CaptureFixture[str],
     extra: tuple[str, ...],
 ) -> dict[str, JsonValue]:
-    monkeypatch.setenv("LITELLM_AGENT_KEY", "unit-test-placeholder")
     monkeypatch.setattr(
         shadow_cli,
-        "LiteLlmClient",
+        "CodexLlmClient",
         _FakeLlmFactory(_FakeLlm(responses=[_twin_response()], prompts=[])),
     )
     exit_code = shadow_cli.main(["--memory-dir", str(memory_dir), *extra])
@@ -133,9 +132,9 @@ def test_offline_run_emits_the_shadow_schema_without_calling_an_llm(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: a populated memory dir and no LiteLLM credential anywhere in the env.
+    # Given: a populated memory dir and no reachable Codex OAuth tier in the env.
     memories = _memory_dir(tmp_path)
-    monkeypatch.delenv("LITELLM_AGENT_KEY", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
 
     # When: the owner runs the shadow diagnostic offline.
     exit_code = shadow_cli.main(
@@ -204,22 +203,23 @@ def test_limit_caps_the_number_of_classified_entries(
     assert sum(_as_int(_as_dict(routes[route])["count"]) for route in routes) == 1
 
 
-def test_missing_litellm_key_refuses_on_stderr_without_a_traceback(
+def test_unavailable_codex_oauth_refuses_on_stderr_without_a_traceback(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: an online run with no LiteLLM credential available.
+    # Given: an online run whose environment cannot reach the Codex OAuth tier.
     memories = _memory_dir(tmp_path)
-    monkeypatch.delenv("LITELLM_AGENT_KEY", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
 
     # When: the owner runs the shadow diagnostic without --offline.
     exit_code = shadow_cli.main(["--memory-dir", str(memories)])
 
-    # Then: it refuses with one masked line and prints no report at all.
+    # Then: it refuses with one masked line, names Codex, and prints no report at all.
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "MEMORY-SHADOW-REFUSED" in captured.err
+    assert "Codex OAuth" in captured.err
     assert "Traceback" not in captured.err
     assert captured.out == ""
 

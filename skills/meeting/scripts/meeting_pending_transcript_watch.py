@@ -30,12 +30,11 @@ LIMIT_ENV: Final = "MEETING_PENDING_LIMIT"
 DEFAULT_LIMIT: Final = 3
 CHILD_TIMEOUT: Final = 1800.0
 #: 자식이 필요로 하는 것 전부. `DRIVE_PUBLISH_ENABLED` 가 빠지면 자식은 Drive 를 건드리지
-#: 않아 원장도 관리번호도 없는 회의록이 나온다.
+#: 않아 원장도 관리번호도 없는 회의록이 나온다. 모델 호출은 Codex OAuth 하나뿐이고 그
+#: 자격증명은 키가 아니라 HOME 아래 저장소에 있으므로, 여기서 넘길 게이트웨이 키는 없다 —
+#: 부모의 HOME 이 자식 env 로 그대로 간다(아래 `child_environment`).
 SECRET_KEYS: Final = (
     "OPENAI_API_KEY",
-    "LITELLM_AGENT_KEY",
-    "LITELLM_BASE_URL",
-    "LITELLM_MASTER_KEY",
     "DISCORD_BOT_TOKEN",
     "DRIVE_PUBLISH_ENABLED",
     "DRIVE_GWS_BIN",

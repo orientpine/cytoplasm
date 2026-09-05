@@ -102,7 +102,8 @@ def test_cron_discovery_when_user_is_ops_reference_reaches_proposed(
     monkeypatch.setattr(memory_relocate_watch, "MEMORY_DIR", tmp_path)
     monkeypatch.setattr("automation.memory_curator.classify.classify_entries", fake_classify)
     monkeypatch.setattr("automation.rag_ingest.sensitivity.load_rules", fake_rules)
-    monkeypatch.setenv("LITELLM_AGENT_KEY", "fixture-only")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(tmp_path / "hermes"))
 
     # When: the no-agent discovery seam runs without posting or deleting anything.
     proposed = memory_relocate_watch._discover_and_propose(
@@ -116,6 +117,46 @@ def test_cron_discovery_when_user_is_ops_reference_reaches_proposed(
     assert record.source_kind == "user"
     assert record.status == "proposed"
     assert record.entry_sha256 == entry_digest("user", text)
+
+
+def test_cron_discovery_fails_closed_when_codex_oauth_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: an eligible USER entry, but an environment that cannot reach Codex OAuth.
+    text = "user-store operational reference"
+    _ = (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+    _ = (tmp_path / "USER.md").write_text(text, encoding="utf-8")
+    classified: list[str] = []
+
+    def recording_classify(
+        entries_by_kind: Mapping[MemoryKind, tuple[MemoryEntry, ...]],
+        *,
+        client: LlmClient,
+        rules: Sequence[SensitivityRule],
+    ) -> tuple[EntryVerdict, ...]:
+        del entries_by_kind, client, rules
+        classified.append("called")
+        return ()
+
+    def fake_rules(_path: Path) -> tuple[SensitivityRule, ...]:
+        return ()
+
+    monkeypatch.setattr(memory_relocate_watch, "MEMORY_DIR", tmp_path)
+    monkeypatch.setattr("automation.memory_curator.classify.classify_entries", recording_classify)
+    monkeypatch.setattr("automation.rag_ingest.sensitivity.load_rules", fake_rules)
+    monkeypatch.delenv("AUTOPHAGY_HERMES_BIN", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+
+    # When: the no-agent discovery seam runs with no credential-bearing home.
+    proposed = memory_relocate_watch._discover_and_propose(
+        empty_state(),
+        datetime(2026, 8, 16, 12, 0, tzinfo=UTC),
+    )
+
+    # Then: nothing was classified on a downgraded tier and no proposal was invented.
+    assert classified == []
+    assert proposed.relocations == {}
 
 
 def test_select_candidate_skips_entries_already_handled() -> None:

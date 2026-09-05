@@ -42,7 +42,7 @@ author: autophagy-agents
 |---|---|
 | `auto`(기본) | 로컬 도구가 해석되면 로컬, 아니면 API |
 | `local` | 로컬만. 도구가 없으면 **exit 4 로 중단하고 절대 네트워크로 폴백하지 않는다** |
-| `api` | OpenAI 호환 `/v1/audio/transcriptions` (LiteLLM 게이트웨이도 같은 경로) |
+| `api` | OpenAI 호환 `/v1/audio/transcriptions` (`SPEECHTOTEXT_BASE_URL` 로 대체 가능) |
 
 ## 2시간이 넘는 단일 녹취
 
@@ -156,15 +156,45 @@ python3 /srv/autophagy-skills/live/speechtotext/scripts/speechtotext_cli.py poli
 
 ### 용어집 — 이름을 한 곳에만 적는다
 
-용어집은 **두 계층**이다.
+용어집의 정본은 **Drive 이고, 산출물 트리와 같은 모양으로 중첩**된다. 각 층에 `용어집.csv` 를 두면
+되고, 안쪽 층이 같은 표기를 다르게 적으면 **깊은 쪽이 이긴다**.
 
 | 어디에 | 무엇을 | 우선순위 |
 |---|---|---|
-| Drive `autophagy/전사본/<과제>/용어집.txt` | 그 과제의 기관·업체·사람·장비 이름 | 높음 |
-| 노드 `~/.hermes/speechtotext/glossary.txt`(`SPEECHTOTEXT_GLOSSARY`) | 과제와 무관한 일반 오인식(영무→업무) | 낮음 |
+| Drive `autophagy/전사본/<과제>/용어집.csv` | 그 과제의 기관·업체·사람·장비 이름 | 가장 높음 |
+| Drive `autophagy/전사본/용어집.csv` | 전사 전반의 일반 오인식(영무→업무) | 중간 |
+| Drive `autophagy/용어집.csv` | 모든 산출물에 걸리는 이름 | 낮음 |
+| 노드 `~/.hermes/speechtotext/glossary.txt` | 위 Drive 층들의 **캐시**(정본 아님) | Drive 불통 시에만 |
 
-과제 용어집이 같은 표기를 다르게 적으면 **과제 쪽이 이긴다** — 기관명은 한 과제의 사실이지 모든
-회의의 사실이 아니다. 과제 용어집은 소유자가 Drive 에서 직접 고치면 다음 전사부터 반영된다.
+층은 없어도 된다 — 없는 폴더는 건너뛰고 있는 층만 합친다. 조회는 `find_folder_path` 라 **용어집을
+찾는 것만으로 폴더가 생기지 않는다**.
+
+**적는 법은 바른 용어 한 줄에 하나다.** 틀린 표기는 적지 않아도 된다 — 모델이 어떻게 잘못 들을지는
+소유자가 미리 알 수 없고, 그것까지 적게 하는 순간 소유자가 모르는 오인식은 영영 고쳐지지 않는다.
+전사 후 각 어절의 앞머리를 바른 용어와 **자모 단위로** 대조해, 가까우면 그 자리만 고친다
+(`열기환기`·`열기완기` → `열교환기`, `항정기술하고` → `한전기술하고` — 조사·구두점은 그대로).
+
+소리가 멀리 빗나간 오인식은 두 칸(`틀린표기,올바른표기`)으로 짚어 준다 — `영무,업무` 처럼. 두 형식은
+같은 파일에 섞어 써도 되고, 두 칸 행의 **오른쪽도 바른 용어**로 취급돼 근접 교정의 목표가 된다. 그래서
+이미 1:1 로 써 둔 용어집은 고쳐 적지 않아도 그대로 더 많이 잡는다(실측: 실제 회의 전사본에서 그 파일이
+놓친 오인식 7건을 추가로 교정, 무관한 낱말 교체 0건 / 9,625 어절).
+
+일부러 고치지 않는 것들 — 잘못 고치는 것이 안 고치는 것보다 나쁘다: 두 음절 미만 용어(닮은 낱말이 너무
+많다), 음절 수가 다른 말(`고신뢰` 는 `고신뢰성` 이 아니다), 한 낱말이 두 용어에 동시에 가까운 경우,
+그리고 낱말 **속** 조각(`선금` 을 적어도 `기성금` 은 안전하다 — 1:1 치환이 실제로 깨뜨렸던 그 사고다).
+
+**무엇이 무엇으로 바뀌었는지는 로그에 남는다** — `~/.hermes/speechtotext/logs/corrections.jsonl` 에
+바뀐 어절이 한 줄씩 적힌다(`kind` 로 소유자 치환/기계 교정을 가르고, `stage` 로 어느 경로가 고쳤는지).
+문장·문맥은 적지 않고 파일은 0600 이다. 기계가 추측한 교정을 훑어보려면 그 파일에서 `kind=fuzzy` 만
+보면 된다. 상세: [교정 로그](../../docs/기능소개/교정-로그.md).
+
+`#` 로 시작하는 줄은 주석이고 **작성 예시는 [`configs/용어집.example.csv`](configs/용어집.example.csv) 에
+각주로 달아 두었다**. `.csv` 인 이유는 Drive 가 표를 Sheets 로 열어 주기 때문이다(같은 이유로 회의
+action item 원장도 `.csv` 다). 예전 `용어집.txt`(`틀린표기=올바른표기`)도 계속 읽으며, 한 폴더에 둘 다
+있으면 `.csv` 가 이긴다.
+
+기관명은 한 과제의 사실이지 모든 회의의 사실이 아니다 — 그래서 안쪽이 이긴다. 어느 층이든 소유자가
+Drive 에서 직접 고치면 다음 전사부터 반영된다(노드에 손댈 일이 없다).
 
 **과제는 파일 이름이 정한다**: `_` 로 나눈 토큰 중 **날짜가 아닌 첫 토큰**. `20260825_해양고신뢰성.m4a`
 와 `해양고신뢰성_킥오프.m4a` 는 같은 과제이고, 이름이 날짜뿐이면 과제 없음(예전처럼 연도 폴더에
@@ -172,7 +202,10 @@ python3 /srv/autophagy-skills/live/speechtotext/scripts/speechtotext_cli.py poli
 meeting 이 같은 과제 이름으로 `회의록/<과제>/<YYYY>/` 에 놓는다.
 
 Drive 용어집 조회는 다른 Drive 접근과 같은 옵트인(`DRIVE_PUBLISH_ENABLED=1`)을 따른다 — 꺼져 있으면
-과제 용어집 없이 전역 용어집만 쓴다.
+노드 캐시만 쓴다. 그래서 캐시가 중요하다: plaud 라이프로그는 `DRIVE_PUBLISH_ENABLED=0` 으로 도는데,
+마지막으로 받아 둔 Drive 용어집이 노드에 남아 있으면 그 경로도 같은 이름 교정을 받는다. Drive 가
+답했는데 어느 층에도 용어집이 없으면 **비어 있는 것이 정답**이라 캐시도 비운다(`GLOSSARY-DRIVE-ABSENT`);
+Drive 가 아예 답하지 않으면 캐시로 답하고 `GLOSSARY-FETCH-FAIL` 한 줄을 남긴다.
 
 형식(두 계층 모두 같다) — 한 줄씩:
 
@@ -217,7 +250,8 @@ best-effort 발행된다(실패해도 로컬 전사본과 회의록은 그대로
 | `SPEECHTOTEXT_MAX_REPEAT` | 반복 붕괴 판정 임계(최다 8어절 점유율) | `0.08` |
 | `SPEECHTOTEXT_WHISPER_CONTEXT` | whisper `-mc` 값. `-1`이면 문맥 이월 복원 | `0`(이월 끔) |
 | `SPEECHTOTEXT_PROMPT` | 고유명사 힌트(로컬·API 양쪽에 전달). 미설정 시 용어집에서 만든다 | 없음 |
-| `SPEECHTOTEXT_GLOSSARY` | 용어집 파일(`틀린표기=올바른표기`) | `~/.hermes/speechtotext/glossary.txt` |
+| `SPEECHTOTEXT_GLOSSARY` | 용어집 파일을 **명시**하면 Drive 를 조회하지 않는다(샌드박스·오프라인) | 미설정 = Drive 정본 + 노드 캐시 |
+| `SPEECHTOTEXT_CORRECTION_LOG` | 교정 로그 경로(무엇이 무엇으로 바뀌었는지) | `~/.hermes/speechtotext/logs/corrections.jsonl` |
 | `SPEECHTOTEXT_TRANSCRIPT_DIR` · `SPEECHTOTEXT_STATE_FILE` | 전사본·처리 상태 | `~/.hermes/speechtotext/` |
 | `SPEECHTOTEXT_DIARIZE_BIN` | sherpa-onnx 화자 분리 바이너리. **셋 중 하나라도 비면 화자 분리를 하지 않는다** | 없음 = 화자 없음 |
 | `SPEECHTOTEXT_DIARIZE_SEGMENTATION` | pyannote segmentation onnx 모델 경로 | 없음 |

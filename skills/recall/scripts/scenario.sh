@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Sandbox scenario for the recall skill (W1-8 pipeline stage 1 / post-mount smoke).
 # Fully offline: fixture rows exercise the recall-v1 schema, threshold+grounding
-# classification, BOTH sensitivity branches of the v2 model-route guard
-# (GLM route -> exclusion / non-GLM route -> sentinel release), the no-result
+# classification, BOTH sensitivity branches of the v3 model-route guard
+# (off-tier route -> exclusion / Codex OAuth route -> sentinel release), the no-result
 # "기억 없음" contract, and the RAG-down "unavailable" fallback (exactly 1
 # attempt, no retry). RECALL_HERMES_CONFIG is pinned to scenario-owned files so
 # the run is deterministic on any account — both sandbox and post-mount smoke run
@@ -53,17 +53,17 @@ cat > "$work/rows.json" <<'JSON'
 JSON
 
 # --- model-route pins (v2 sensitivity guard input, never the live config) ----
-cat > "$work/hermes-glm.yaml" <<'YAML'
+cat > "$work/hermes-off-tier.yaml" <<'YAML'
 model:
-  default: glm-main
-  provider: custom:litellm
+  default: unspecified-main
+  provider: custom:unspecified
 YAML
 cat > "$work/hermes-sol.yaml" <<'YAML'
 model:
   default: gpt-5.6-sol
   provider: openai-codex
 YAML
-export RECALL_HERMES_CONFIG="$work/hermes-glm.yaml"
+export RECALL_HERMES_CONFIG="$work/hermes-off-tier.yaml"
 
 # --- 1) hit: schema + attribution + threshold floor --------------------------
 RECALL_FAKE_RESULTS="$work/rows.json" cli search "pistachio-5501 배양기 코드네임" --json \
@@ -91,15 +91,15 @@ PY
 grep -Fxq '1건은 민감 분류로 제외' "$work/hit-summary.out" \
   || fail "sensitive exclusion summary is missing or unmasked"
 
-# --- 1b) same rows, non-GLM primary route -> sensitive row released + sentinel
+# --- 1b) same rows, Codex OAuth primary route -> sensitive row released + sentinel
 RECALL_FAKE_RESULTS="$work/rows.json" RECALL_HERMES_CONFIG="$work/hermes-sol.yaml" \
   cli search "pistachio-5501 배양기 코드네임" --json \
   > "$work/hit-sol.out" 2> "$work/hit-sol-summary.out"
-python3 - "$work/hit-sol.out" <<'PY' || fail "non-GLM sentinel release assertions failed"
+python3 - "$work/hit-sol.out" <<'PY' || fail "Codex-tier sentinel release assertions failed"
 import json, sys
 r = json.load(open(sys.argv[1], encoding="utf-8"))
 assert r["status"] == "hit", f"status={r['status']}"
-assert len(r["results"]) == 3, "sensitive row must be released on a non-GLM route"
+assert len(r["results"]) == 3, "sensitive row must be released on the Codex OAuth route"
 sensitive = [x for x in r["results"] if x["source"] == "wiki:민감-검색.md#c0000"]
 assert len(sensitive) == 1, "released sensitive row missing"
 assert sensitive[0]["excerpt"].startswith("[[PATENT-SENSITIVE-RECALL]]"), "sentinel marker missing"

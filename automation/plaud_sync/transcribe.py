@@ -25,6 +25,7 @@ from typing import Final, Literal, Protocol, TypeAlias
 
 from .audio import AudioSource
 from .binding import PlaudHashFields, plaud_action_hash
+from .fetch import CloudTranscript
 from .lifelog_model import ExtractionOutcome, LifelogExtractError
 from .model import PlaudSyncRecord, PlaudSyncState
 from .note import LifelogRecording, plan_lifelog_note, split_lifelog_body
@@ -84,6 +85,8 @@ class TranscribeEffects(Protocol):
     def fetch_source(self, recording_id: str) -> AudioSource: ...
 
     def fetch_summary(self, recording_id: str) -> str: ...
+
+    def fetch_transcript(self, recording_id: str) -> CloudTranscript: ...
 
     def download(self, source: AudioSource) -> Path: ...
 
@@ -222,13 +225,27 @@ def _fallback(
     attempts: int,
     reason: str,
 ) -> Outcome:
-    _, cloud = split_lifelog_body(draft)
+    draft_summary, _ = split_lifelog_body(draft)
+    summary = effects.fetch_summary(record.recording_id) or (
+        "" if draft_summary == _NO_SUMMARY else draft_summary
+    )
+    cloud = effects.fetch_transcript(record.recording_id)
+    missing = [
+        name
+        for name, content, placeholder in (
+            ("요약", summary, _NO_SUMMARY),
+            ("전사", cloud.text, _NO_TRANSCRIPT),
+        )
+        if not content.strip() or content == placeholder
+    ]
+    if len(missing) == 2:
+        return _block(record, effects, f"클라우드 폴백 보류: {'과 '.join(missing)}가 없다", attempts=attempts)
     recording = _recording(
         source,
         draft,
-        summary=effects.fetch_summary(record.recording_id),
-        transcript_text="" if cloud == _NO_TRANSCRIPT else cloud,
-        transcript_source=f"PLAUD 클라우드 전사(로컬 전사 {attempts}회 실패: {reason[:80]})",
+        summary=summary,
+        transcript_text=cloud.text,
+        transcript_source=f"{cloud.source_label}(로컬 전사 {attempts}회 실패: {reason[:80]})",
     )
     try:
         promoted, body = _promote(replace(record, transcribe_attempts=attempts), recording, effects)

@@ -1,7 +1,8 @@
 """Deterministic classification prompt for ONE native-memory entry.
 
-A downstream module sends the rendered prompt to ``glm-main`` once per entry
-and parses the reply against the ``route``/``evidence``/``reason`` contract in
+A downstream module sends the rendered prompt to the Codex OAuth tier
+(:mod:`automation.codex_llm`) once per entry and parses the reply against the
+``route``/``evidence``/``reason`` contract in
 :mod:`automation.memory_curator.classify_model`.
 
 Pure string building: no I/O, no clock, no randomness, no LLM call.  That is

@@ -64,8 +64,6 @@ readonly -a SSH_OPTIONS
 # Add an ordinary deployed service by adding one line here. Fields are:
 # display name | probe type | node | account | target
 readonly -a LIVE_CHECKS=(
-  "$PRIMARY_NODE LiteLLM|http_200|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|http://127.0.0.1:4000/health/liveliness"
-  "$PRIMARY_NODE LiteLLM completion|litellm_completion|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|http://127.0.0.1:4000"
   "$PRIMARY_NODE $NODE_AGENT_ACCOUNT $NODE_AGENT_GATEWAY_UNIT|user_unit_active|${PRIMARY_NODE}|$NODE_AGENT_ACCOUNT|$NODE_AGENT_GATEWAY_UNIT"
   "$PRIMARY_NODE $NODE_PEER_ACCOUNT $NODE_PEER_GATEWAY_UNIT|user_unit_active|${PRIMARY_NODE}|$NODE_PEER_ACCOUNT|$NODE_PEER_GATEWAY_UNIT"
   "$RAG_NODE embedding|embedding_health|${RAG_NODE}|$NODE_OPS_ACCOUNT|http://127.0.0.1:8001/health"
@@ -177,38 +175,6 @@ report_repair() {
 # An unreachable origin degrades to a PASS + BEHIND-UNKNOWN, never a cry-wolf fail.
 # probe_skill_mounts_current lives in skill_mount_probe.sh (LOC gate) — sourced above.
 
-probe_litellm_completion() {
-  local node="$1" account="$2" url="$3"
-  local env_file="${HEALTHCHECK_LITELLM_ENV_FILE:-/home/ops/litellm-gateway/.env}"
-  local script remote_command response verdict status error_type error_code extra
-  valid_account "$account" && valid_http_url "${url}/" && valid_abs_path "$env_file" || return 1
-  read -r -d '' script <<'REMOTE' || true
-set -a; . "$1"; set +a
-: "${LITELLM_MASTER_KEY:?}"
-body=$(mktemp); trap 'rm -f -- "$body"' EXIT
-curl_rc=0
-status=$(curl --silent --max-time 20 --output "$body" --write-out '%{http_code}' --header 'Content-Type: application/json' --header "Authorization: Bearer ${LITELLM_MASTER_KEY}" --data '{"model":"glm-main","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' "$2/chat/completions") || curl_rc=$?
-python3 -c 'import json,re,sys
-try: payload=json.load(open(sys.argv[3], encoding="utf-8"))
-except (OSError, ValueError): payload={}
-error=payload.get("error", {}) if isinstance(payload, dict) else {}
-def field(name):
- value=error.get(name) if isinstance(error, dict) else None
- return re.sub(r"\s+", " ", str(value)) if isinstance(value, (str, int, float)) else "none"
-choices=payload.get("choices") if isinstance(payload, dict) else None
-healthy=sys.argv[1] == "0" and sys.argv[2] == "200" and isinstance(choices, list) and bool(choices)
-print("PASS" if healthy else "FAIL", sys.argv[2] or "000", field("type"), field("code"), sep="\t")' "$curl_rc" "$status" "$body"
-REMOTE
-  printf -v remote_command 'sudo -n -u %s -H bash -o pipefail -c %q _ %q %q' "$account" "$script" "$env_file" "$url"
-  if ! response="$(capture_on_node "$node" "$remote_command")"; then
-    printf '[healthcheck] HTTP_STATUS=000 ERROR_TYPE=none ERROR_CODE=none\n' >&2; return 1
-  fi
-  IFS=$'\t' read -r verdict status error_type error_code extra <<< "$response"
-  [[ "$verdict" == PASS && "$status" == 200 && -z "$extra" ]] && return 0
-  printf '[healthcheck] HTTP_STATUS=%s ERROR_TYPE=%s ERROR_CODE=%s\n' "${status:-000}" "${error_type:-none}" "${error_code:-none}" >&2
-  return 1
-}
-
 run_check() {
   local definition="$1"
   local check_name probe_type node account target
@@ -216,7 +182,6 @@ run_check() {
   IFS='|' read -r check_name probe_type node account target <<< "$definition"
   case "$probe_type" in
     http_200) probe_http_200 "$node" "$account" "$target" ;;
-    litellm_completion) probe_litellm_completion "$node" "$account" "$target" ;;
     user_unit_active) probe_user_unit_active "$node" "$account" "$target" ;;
     http_unauth_401) probe_http_unauth_401 "$node" "$account" "$target" ;;
     embedding_health) probe_embedding_health "$node" "$account" "$target" ;;
@@ -263,7 +228,7 @@ main() {
   # cron 은 이 sweep 을 */5 로 부르지만 최근 400 회 실행의 중앙값은 4048 초였다(p90 14760 초,
   # 최대 39020 초). 틱 간격보다 한 자릿수 길어 틱이 겹쳐 쌓였고, 2026-08-31 에 동시 실행
   # 114 개가 관측됐다. 그 폭주 아래에서 SSH 프로브가 간헐 타임아웃해 **거짓** 수리 티켓을
-  # 냈다 — t_2578c8ed(LiteLLM)·t_2524fe33(peer 게이트웨이)는 16:30:02Z 에 시작한 실행이
+  # 냈다 — t_2578c8ed(게이트웨이)·t_2524fe33(peer 게이트웨이)는 16:30:02Z 에 시작한 실행이
   # 18:25:23Z 에 보고한 것이고, 같은 프로브는 다른 모든 실행에서 PASS 였다.
   # 그래서 겹친 틱은 sweep 을 **시작하지 않고** 양보한다: 양보는 실패가 아니라 다음 틱에
   # 넘기는 것이므로 rc 0 이다(automation/pipeline_lock.py 와 같은 규약). lock 을 열지도

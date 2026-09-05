@@ -14,6 +14,7 @@ meeting skill's job and this module does not reach into it.
 
 from __future__ import annotations
 
+import csv
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -21,9 +22,13 @@ from pathlib import Path
 from typing import Final
 
 import stt_blocks
+import stt_gap
+import stt_terms
 
 GLOSSARY_ENV: Final = "SPEECHTOTEXT_GLOSSARY"
 DEFAULT_GLOSSARY: Final = "~/.hermes/speechtotext/glossary.txt"
+#: 표의 머리글 — Drive 에서 열었을 때 어느 칸이 무엇인지 보이라고 두지만 항목은 아니다.
+GLOSSARY_HEADER: Final = ("틀린표기", "올바른표기")
 
 _RULE_LINE: Final = re.compile(r"(?m)^---\s*$\n?")
 # The body's grammar (sentence boundary, block size, header) lives in one place so
@@ -45,6 +50,9 @@ class Polished:
     substitutions: int
     blocks: tuple[stt_blocks.Block, ...] = ()
     timed: tuple[stt_blocks.TimedSentence, ...] = ()
+    #: 무엇이 무엇으로 바뀌었는지. substitutions 는 이제 이것의 길이다 — 카운트만으로는
+    #: 퍼지 교정이 낱말을 잘못 고쳐도 사후에 찾을 방법이 없다.
+    corrections: tuple[stt_terms.Correction, ...] = ()
 
     def summary(self) -> str:
         """What the document IS — never what this pass did.
@@ -73,19 +81,37 @@ def load_glossary(env: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
 
 
 def parse_glossary(content: str) -> tuple[tuple[str, str], ...]:
-    """`틀린표기=올바른표기` per line — the one format, wherever the text came from.
+    """`틀린표기,올바른표기` per row — a two-column table, wherever the text came from.
 
-    A project's glossary arrives as Drive bytes rather than a local file, and both
-    must be read the same way or the two sources drift.
+    Two separators, one meaning. The glossary is a table, so a row is `,` separated and
+    Drive opens it as a spreadsheet; the `=` form still reads because a file the owner
+    already wrote must not stop working when the name of the file changes. `=` wins when
+    a row has both, so a value may contain a comma.
+
+    A `#` row is a note — that is where the writing example lives — and the header row is
+    a column label, not an entry.
     """
     pairs: list[tuple[str, str]] = []
     for line in content.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
+        if not stripped or stripped.startswith("#"):
             continue
-        wrong, _, right = stripped.partition("=")
-        if wrong.strip() and right.strip():
-            pairs.append((wrong.strip(), right.strip()))
+        if "=" in stripped:
+            wrong, _, right = stripped.partition("=")
+        else:
+            # Sheets quotes a field that contains a comma, so the row is read as CSV
+            # rather than split by hand — a hand split turns `"서울, 부산",…` into garbage.
+            row = next(csv.reader([stripped]), [])
+            if not row:
+                continue
+            # 한 칸짜리 행은 **바른 용어**다. 틀리는 방식은 모델이 정하지 소유자가 아니므로,
+            # 그것까지 적게 하면 소유자가 모르는 오인식은 영영 고쳐지지 않는다.
+            second = row[1].strip() if len(row) > 1 else ""
+            wrong, right = row[0], second or row[0]
+        wrong, right = wrong.strip(), right.strip()
+        if not wrong or not right or wrong in GLOSSARY_HEADER:
+            continue
+        pairs.append((wrong, right))
     return tuple(pairs)
 
 
@@ -108,15 +134,29 @@ def split_sentences(text: str) -> tuple[str, ...]:
     return stt_blocks.split_sentences(text)
 
 
-def apply_glossary(text: str, glossary: Glossary) -> tuple[str, int]:
+def apply_glossary(
+    text: str, glossary: Glossary
+) -> tuple[str, tuple[stt_terms.Correction, ...]]:
+    """소유자가 지목한 치환 먼저, 그다음 바른 용어로 남은 오인식을 고친다.
+
+    두 칸 행은 소유자가 직접 짝지은 교정이라 문자열 그대로 바꾸고, 바른 표기 전부(한 칸 행과
+    두 칸 행의 오른쪽)는 근접 대조의 목표가 된다 — 그래서 이미 쓰인 1:1 용어집도 고쳐 적지
+    않고 그대로 더 많이 잡는다(실측: 그 파일의 바른 용어만으로 놓쳤던 오인식 7회를 더 고쳤다).
+    """
     substituted = text
-    hits = 0
+    exact: list[stt_terms.Correction] = []
     for wrong, right in glossary:
+        if wrong == right:
+            continue
         found = substituted.count(wrong)
         if found:
             substituted = substituted.replace(wrong, right)
-            hits += found
-    return substituted, hits
+            exact.extend(
+                stt_terms.Correction(before=wrong, after=right, term=right, kind=stt_terms.EXACT)
+                for _ in range(found)
+            )
+    substituted, repaired = stt_terms.correct(substituted, tuple(r for _w, r in glossary))
+    return substituted, (*exact, *repaired)
 
 
 def collapse_repeats(sentences: Sequence[str]) -> tuple[tuple[str, ...], int]:
@@ -161,11 +201,17 @@ def polish_sentences(
     Correction and collapse happen per sentence rather than over one joined string,
     which is what keeps each line's timing attached to the words it belongs to.
     """
-    substitutions = 0
+    corrections: list[stt_terms.Correction] = []
     corrected: list[stt_blocks.TimedSentence] = []
     for sentence in sentences:
-        text, hits = apply_glossary(sentence.text, glossary)
-        substitutions += hits
+        # The glossary corrects misheard speech. The gap marker is not speech, and one
+        # entry matching a word inside it would quietly rewrite the line that says
+        # which minutes are missing — and then nothing downstream would recognize it.
+        if stt_gap.is_marker(sentence.text):
+            corrected.append(sentence)
+            continue
+        text, changed = apply_glossary(sentence.text, glossary)
+        corrections.extend(changed)
         corrected.append(
             stt_blocks.TimedSentence(
                 text=text,
@@ -187,9 +233,10 @@ def polish_sentences(
         sentences=len(kept),
         paragraphs=len(blocks),
         collapsed=collapsed,
-        substitutions=substitutions,
+        substitutions=len(corrections),
         blocks=blocks,
         timed=tuple(kept),
+        corrections=tuple(corrections),
     )
 
 

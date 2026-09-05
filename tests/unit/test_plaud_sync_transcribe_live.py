@@ -80,6 +80,7 @@ Path(os.environ["FAKE_CLI_LOG"]).write_text(json.dumps({
     "argv": sys.argv[1:],
     "backend": os.environ.get("SPEECHTOTEXT_BACKEND"),
     "drive": os.environ.get("DRIVE_PUBLISH_ENABLED"),
+    "incomplete": os.environ.get("SPEECHTOTEXT_ALLOW_INCOMPLETE"),
     "transcript_dir": os.environ.get("SPEECHTOTEXT_TRANSCRIPT_DIR"),
 }), encoding="utf-8")
 code = int(os.environ.get("FAKE_CLI_EXIT", "0"))
@@ -220,6 +221,7 @@ def test_transcribe_effect_runs_the_cli_with_local_backend_and_no_drive_publicat
         "argv": ["transcribe", "--file", str(audio), "--label", "2026-09-01-standup--08008c284627"],
         "backend": "local",
         "drive": "0",
+        "incomplete": "1",
         "transcript_dir": str(work),
     }
     assert effects.read_transcript(result.transcript_path or Path()).startswith("# x 전사본")

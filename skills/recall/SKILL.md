@@ -91,20 +91,20 @@ python3 /srv/autophagy-skills/live/recall/scripts/recall_reference.py "<질의>"
 - **종료 코드는 항상 0**이고 사유는 본문에 적힌다 — 근거를 못 찾은 것은 실패가 아니다.
   못 찾았으면 지어내지 말고 "참고자료에서 근거를 찾지 못했다"고 답한다.
 
-## 특허 민감 분류 경계 (v2, model-aware — 2026-07-22)
+## 특허 민감 분류 경계 (v3, model-aware — 2026-09-04)
 
 `metadata.sensitivity == "patent-sensitive"`인 결과는 기본적으로 제외한다.
-단 하나의 예외: 에이전트의 **주 모델 경로가 non-GLM으로 기계 검증**될 때
-(recall이 `~/.hermes/config.yaml`의 `model.default`/`model.provider`를 직접 읽어
-판정, 판정 불가시 fail-closed=제외) 포함하되, 각 행 content 앞에
-`[[PATENT-SENSITIVE-RECALL]]` 센티널을 부착한다.
+단 하나의 예외: 에이전트의 **주 모델 경로가 Codex OAuth 티어(provider
+`openai-codex`)로 기계 검증**될 때(recall이 `~/.hermes/config.yaml`의
+`model.default`/`model.provider`를 직접 읽어 판정, 판정 불가시 fail-closed=제외)
+포함하되, 각 행 content 앞에 `[[PATENT-SENSITIVE-RECALL]]` 센티널을 부착한다.
 
 - 제외 시: 원문·출처·식별자 없이 건수만 `N건은 민감 분류로 제외`로 알린다.
-- 포함 시: `N건 patent-sensitive 포함 — 주 모델 non-GLM 확인 …` 안내가 함께 출력된다.
-- **GLM 폴백 윈도우 폐쇄**: 주 모델 장애/쿼터로 대화가 glm-main 폴백으로
-  넘어가도 LiteLLM 게이트웨이 pre-call 가드가 센티널을 실은 요청을 HTTP 403으로
-  거부한다(`configs/litellm-staging/custom_callbacks.py`) — 특허 내용은 어떤
-  경로로도 GLM 제공자에 도달하지 않는다.
+- 포함 시: `N건 patent-sensitive 포함 — 주 모델 Codex OAuth 확인 …` 안내가 함께 출력된다.
+- **폴백 윈도우 없음**: 모델 티어가 하나뿐이고 공용 클라이언트가
+  `--ignore-user-config`로 호출하므로, 주 모델 장애·쿼터에도 다른 제공자로
+  내려가지 않는다(자격증명이 없으면 호출 자체가 거부된다). 센티널은 방출된
+  행마다 남는 **감사 마커**로 계속 유지한다.
 - recall에는 호출자가 포함을 강제할 CLI 표면이 없다(재포함 opt-in 없음) —
   판정은 오직 결정론적 모델-경로 가드만 내린다.
 - `sensitivity` 키가 없는 행은 비민감으로 취급하지만, Obsidian 특허 문서는 이

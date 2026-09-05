@@ -99,7 +99,9 @@ def _discover_and_propose(state: RelocationState, now: datetime) -> RelocationSt
 
     Without this, reclamation only advances when a human runs the CLI.  Classifying and
     proposing is not an external effect — the proposal still has to win cha's ✅ before a
-    single byte is written or deleted — so the node may do it unattended.  One at a time:
+    single byte is written or deleted — so the node may do it unattended.  The classifier
+    authenticates through Codex OAuth like every other non-interactive path; an unavailable
+    tier leaves the state untouched rather than proposing from a downgraded model.  One at a time:
     a new candidate is only sought while no relocation is pending, which also caps the owner
     to one approval DM per cycle.  Any classifier failure leaves the state untouched.
     """
@@ -111,13 +113,13 @@ def _discover_and_propose(state: RelocationState, now: datetime) -> RelocationSt
         from automation.memory_relocate.discover import select_candidate
         from automation.memory_relocate.propose import build_proposed_record
         from automation.rag_ingest.sensitivity import load_rules
-        from automation.twin_distill.llm import LiteLlmClient
+        from automation.twin_distill.llm import CodexLlmClient
 
         files = {kind: read_native(MEMORY_DIR, kind)[1] for kind in ("memory", "user")}
         rules = load_rules(_REPO_ROOT / "configs" / "sensitivity-rules.yaml")
         verdicts = classify_entries(
             {kind: files[kind].entries for kind in ("memory", "user")},
-            client=LiteLlmClient.from_environment(os.environ),
+            client=CodexLlmClient.from_environment(os.environ),
             rules=rules,
         )
         known = frozenset(record.entry_sha256 for record in state.relocations.values())

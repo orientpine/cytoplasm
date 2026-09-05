@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Final
 
 
-GLM_PROVIDER: Final = "custom:litellm"
-GLM_MODEL: Final = "glm-main"
 CODEX_PROVIDER: Final = "openai-codex"
 CODEX_MODEL: Final = "gpt-5.4"
 
@@ -66,7 +64,12 @@ def load_rules(path: Path) -> tuple[TagRule, ...]:
 
 
 def route_proposal(content: str, rules: tuple[TagRule, ...]) -> Route:
-    """Route sensitive proposal content to Codex before prompt construction."""
+    """Classify sensitivity, then route every proposal to the one Codex OAuth tier.
+
+    The classification still decides how the content is handled downstream (audit,
+    Drive gating, refine-host allowlist); it no longer selects a provider, because
+    there is exactly one tier and no tier to be protected against.
+    """
     lowered = content.lower()
     tags = tuple(
         rule.tag
@@ -75,4 +78,4 @@ def route_proposal(content: str, rules: tuple[TagRule, ...]) -> Route:
         or any(re.search(pattern, content) is not None for pattern in rule.patterns)
     )
     sensitive = "patent-sensitive" in tags
-    return Route(CODEX_PROVIDER if sensitive else GLM_PROVIDER, CODEX_MODEL if sensitive else GLM_MODEL, sensitive, tags)
+    return Route(CODEX_PROVIDER, CODEX_MODEL, sensitive, tags)

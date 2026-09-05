@@ -382,17 +382,17 @@ def test_proposal_cli_identity_transport_reports_explicit_no_op(
     assert report["rules_applied"] == []
 
 
-def test_patent_section_refuses_glm_before_transport() -> None:
+def test_patent_section_refuses_a_non_codex_host_before_transport() -> None:
     transport = RecordingTransport()
     body = "# 발명 개요\n\n특허 출원 전략을 수립한다.\n"
 
     with pytest.raises(RouteRefused, match="owner-controlled host"):
-        _ = refine_section(body, transport, host="litellm-glm")
+        _ = refine_section(body, transport, host="off-tier-host")
 
     assert transport.calls == []
 
 
-def test_no_non_glm_host_skips_without_failing_and_records_manifest(
+def test_non_codex_host_skips_without_failing_and_records_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     body = "# 발명 개요\n\n특허 출원 전략을 수립한다.\n"
@@ -402,7 +402,7 @@ def test_no_non_glm_host_skips_without_failing_and_records_manifest(
     transport = RecordingTransport()
     _configure(monkeypatch, tmp_path)
 
-    result = refine_version("demo", transport=transport, host="litellm-glm")
+    result = refine_version("demo", transport=transport, host="off-tier-host")
 
     assert result.refined is False
     assert result.reason == "route-refused"

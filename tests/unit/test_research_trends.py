@@ -18,6 +18,11 @@ sys.path.insert(0, str(_RUNTIME))
 from automation.research_trends import research_trends, research_trends_core as core  # noqa: E402
 from automation.research_trends.research_trends import OwnerDmDeliveryError  # noqa: E402
 
+#: 프롬프트 템플릿이 분기하는 1차 종합 STAGE 라벨 (제공자 이름이 아니다).
+_SYNTHESIS = research_trends._STAGE_SYNTHESIS
+#: 자식 프로세스 환경에 절대 나타나면 안 되는 자리표시자 (실제 비밀 아님).
+_SECRET_SENTINEL = "must-not-reach-the-child"
+
 
 ATOM = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <feed xmlns=\"http://www.w3.org/2005/Atom\">
@@ -78,58 +83,85 @@ def test_parse_arxiv_invalid_response_raises_typed_error() -> None:
 
 def test_unreachable_topic_yields_partial_report_without_llm_call() -> None:
     # Given
-    glm_topics: list[str] = []
-    codex_topics: list[str] = []
+    draft_topics: list[str] = []
+    korean_topics: list[str] = []
 
     def fetch(topic: str) -> tuple[core.Paper, ...]:
         if topic == "unreachable":
             raise core.ArxivUnavailable("connection refused")
         return core.parse_arxiv_feed(ATOM)
 
-    def glm(topic: str, papers: tuple[core.Paper, ...]) -> str:
-        glm_topics.append(topic)
+    def draft(topic: str, papers: tuple[core.Paper, ...]) -> str:
+        draft_topics.append(topic)
         return f"draft {len(papers)}"
 
-    def codex(topic: str, papers: tuple[core.Paper, ...], draft: str) -> str:
-        codex_topics.append(topic)
-        return f"정리 {draft}"
+    def korean(topic: str, papers: tuple[core.Paper, ...], summary: str) -> str:
+        korean_topics.append(topic)
+        return f"정리 {summary}"
 
     # When
-    outcomes = core.run_topics(("autophagy", "unreachable"), fetch, glm, codex)
+    outcomes = core.run_topics(("autophagy", "unreachable"), fetch, draft, korean)
     report = core.assemble_report("2026-07-16", outcomes)
 
     # Then
-    assert glm_topics == ["autophagy"]
-    assert codex_topics == ["autophagy"]
+    assert draft_topics == ["autophagy"]
+    assert korean_topics == ["autophagy"]
     assert "## autophagy" in report
     assert "https://arxiv.org/abs/2607.00001" in report
     assert "## unreachable" in report
     assert "출처 조회 실패" in report
 
 
-def test_glm_child_receives_key_from_secrets_when_cron_environment_lacks_it(
+def test_llm_child_runs_the_codex_oauth_argv_with_no_inherited_credential(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Given
+    # Given: a hermes stand-in that refuses anything but the measured Codex OAuth argv
+    # and records the environment the child was actually handed.
     binary = tmp_path / ".local" / "bin" / "hermes"
     binary.parent.mkdir(parents=True)
+    child_env = tmp_path / "child-env.txt"
     _ = binary.write_text(
-        '#!/bin/sh\n[ -n "$LITELLM_AGENT_KEY" ] || exit 9\nprintf "summary"\n',
+        "#!/bin/sh\n"
+        'case " $* " in *" --ignore-user-config "*) ;; *) exit 8 ;; esac\n'
+        'case " $* " in *" --provider openai-codex "*) ;; *) exit 7 ;; esac\n'
+        f"env > '{child_env}'\n"
+        'printf "summary"\n',
         encoding="utf-8",
     )
     _ = binary.chmod(0o755)
-    secrets_file = tmp_path / ".env.secrets"
-    _ = secrets_file.write_text("LITELLM_AGENT_KEY=cron-fallback-key\n", encoding="utf-8")
-    monkeypatch.delenv("LITELLM_AGENT_KEY", raising=False)
+    monkeypatch.setenv("AGENT_MODEL_GATEWAY_KEY", _SECRET_SENTINEL)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("RESEARCH_TRENDS_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setattr(research_trends, "SECRETS", secrets_file)
+    monkeypatch.delenv(f"RESEARCH_TRENDS_FAKE_{_SYNTHESIS.upper()}", raising=False)
 
     # When
-    result = research_trends._run_llm("glm", "custom:litellm", "glm-main", "topic", "prompt")
+    result = research_trends._run_llm(_SYNTHESIS, "topic", "prompt")
 
-    # Then
+    # Then: the call succeeds on OAuth alone — no gateway credential is forwarded.
     assert result == "summary"
+    assert _SECRET_SENTINEL not in child_env.read_text(encoding="utf-8")
+
+
+def test_llm_stage_fails_closed_when_codex_oauth_has_no_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: the measured fail-closed signal — rc 1, empty stdout, credentials message.
+    binary = tmp_path / ".local" / "bin" / "hermes"
+    binary.parent.mkdir(parents=True)
+    _ = binary.write_text(
+        "#!/bin/sh\n>&2 printf 'agent failed: No Codex credentials stored\\n'\nexit 1\n",
+        encoding="utf-8",
+    )
+    _ = binary.chmod(0o755)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("RESEARCH_TRENDS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv(f"RESEARCH_TRENDS_FAKE_{_SYNTHESIS.upper()}", raising=False)
+
+    # When / Then: the stage fails as this week's summary failure, with no second tier.
+    with pytest.raises(research_trends.LlmInvocationError):
+        research_trends._run_llm(_SYNTHESIS, "topic", "prompt")
+    # 요약 실패로 접혀 보고서가 부분 생성된다 (다른 제공자 재시도 없음).
+    assert issubclass(research_trends.LlmInvocationError, research_trends.core.SummaryUnavailable)
 
 
 def test_bot_token_raises_typed_owner_dm_error_when_unavailable(

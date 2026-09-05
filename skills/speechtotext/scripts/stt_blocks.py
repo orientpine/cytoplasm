@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+import stt_gap
+
 # A word whose segment carried no offsets: the timing is absent, not zero.
 UNKNOWN_MS: Final = -1
 UNKNOWN_CLOCK: Final = "--:--:--"
@@ -126,8 +128,36 @@ def words_from_whisper(segments: object) -> tuple[TimedWord, ...]:
 def sentences_from_words(words: Sequence[TimedWord]) -> tuple[TimedSentence, ...]:
     """Concatenate the words back into speech, then cut it into sentences.
 
-    A sentence spans the words it is made of — that is what lets a line say when
-    it was spoken."""
+    A gap marker is not speech — it is the transcript saying which minutes are
+    missing — so it is never concatenated with the words around it. Measured on the
+    2026-09-04 recording: the window before the gap ended without punctuation, the
+    marker was appended to it, and the sentence that came out spanned 916 seconds;
+    the speaker splitter then cut it into eleven pieces and the owner read `[전사`.
+    """
+    made: list[TimedSentence] = []
+    spoken: list[TimedWord] = []
+    for word in words:
+        if not stt_gap.is_marker(word.text):
+            spoken.append(word)
+            continue
+        made.extend(_spoken_sentences(spoken))
+        spoken = []
+        made.append(_marker_sentence(word))
+    made.extend(_spoken_sentences(spoken))
+    return tuple(made)
+
+
+def _marker_sentence(word: TimedWord) -> TimedSentence:
+    """One gap marker as one sentence, keeping the span of the window it stands for."""
+    return TimedSentence(
+        word.text.strip(),
+        None if word.start_ms == UNKNOWN_MS else word.start_ms,
+        None if word.end_ms == UNKNOWN_MS else word.end_ms,
+    )
+
+
+def _spoken_sentences(words: Sequence[TimedWord]) -> tuple[TimedSentence, ...]:
+    """A run of spoken words, joined back together and cut on sentence enders."""
     pieces: list[str] = []
     spans: list[tuple[int, int, TimedWord]] = []
     cursor = 0
@@ -171,12 +201,23 @@ def sentences_from_text(text: str) -> tuple[TimedSentence, ...]:
 
 
 def group(sentences: Sequence[TimedSentence]) -> tuple[Block, ...]:
-    """Blocks: a run of one speaker, or — with nobody attributed — a paragraph."""
+    """Blocks: a run of one speaker, or — with nobody attributed — a paragraph.
+
+    A gap marker gets a block of its own, with the timestamp of the minutes it stands
+    for. It is the one line in the document that is about the document, so burying it
+    mid-paragraph is exactly where the owner would not look for it.
+    """
     attributed = any(sentence.speaker for sentence in sentences)
     blocks: list[Block] = []
     chunk: list[TimedSentence] = []
     size = 0
     for sentence in sentences:
+        if stt_gap.is_marker(sentence.text):
+            if chunk:
+                blocks.append(_block(chunk))
+                chunk, size = [], 0
+            blocks.append(_block((sentence,)))
+            continue
         if chunk and attributed and sentence.speaker != chunk[0].speaker:
             blocks.append(_block(chunk))
             chunk, size = [], 0

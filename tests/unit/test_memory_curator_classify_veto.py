@@ -138,7 +138,7 @@ def test_pre_llm_veto_uses_collapsed_length_boundary() -> None:
 def test_pre_llm_veto_allows_plain_ops_fact() -> None:
     # Given a long operations fact with no native-rule cue
     text = (
-        "LiteLLM 서비스는 127.0.0.1 포트 4000에서 작동하며 config 파일은 "
+        "모델 프록시 서비스는 127.0.0.1 포트 4000에서 작동하며 config 파일은 "
         "~/.hermes/ 아래에 있고 운영 로그는 별도 디렉터리에 기록된다"
     )
 

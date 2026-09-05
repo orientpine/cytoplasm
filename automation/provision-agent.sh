@@ -5,10 +5,8 @@ readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 eval "$(python3 "$REPO_ROOT/automation/node_config_sh.py" --print-env)"
 SERVICE_NAME="$NODE_AGENT_GATEWAY_UNIT"
 readonly HERMES_INSTALLER_URL="https://hermes-agent.nousresearch.com/install.sh"
-readonly LITELLM_BASE_URL="http://127.0.0.1:4000/v1"
-readonly LITELLM_MODEL="glm-main"
-readonly FALLBACK_PROVIDER="openai-codex"
-readonly FALLBACK_MODEL="gpt-5.3-codex"
+readonly CODEX_PROVIDER="openai-codex"
+readonly CODEX_MODEL="gpt-5.6-sol"
 
 log() {
   printf '[provision-agent] %s\n' "$*"
@@ -25,7 +23,8 @@ Usage: provision-agent.sh <account>
 
 Provision the named existing Linux account with the W1-2 Phase-A Hermes
 configuration. The account must already own a mode-0600 ~/.env.secrets file
-containing DISCORD_BOT_TOKEN and its account-specific LiteLLM key.
+containing DISCORD_BOT_TOKEN. Codex OAuth credentials must already be stored with
+`hermes auth`; provisioning never installs a fallback provider.
 EOF
   exit 2
 }
@@ -87,7 +86,7 @@ validate_account_and_prerequisites() {
     die "$SECRETS_FILE must be owned by '$ACCOUNT' and mode 600 (found owner=$owner mode=$mode)"
   run_as_account test -r "$SECRETS_FILE" || die "$SECRETS_FILE is not readable by '$ACCOUNT'"
 
-  for variable_name in DISCORD_BOT_TOKEN "$LITELLM_KEY_ENV"; do
+  for variable_name in DISCORD_BOT_TOKEN; do
     required_secret_is_present "$variable_name" || \
       die "$SECRETS_FILE is missing a non-empty $variable_name entry"
   done
@@ -136,25 +135,9 @@ install_hermes_if_needed() {
 render_config() {
   cat <<EOF
 model:
-  provider: custom:litellm
-  default: ${LITELLM_MODEL}
-
-custom_providers:
-  - name: litellm
-    base_url: ${LITELLM_BASE_URL}
-    key_env: ${LITELLM_KEY_ENV}
-    api_mode: chat_completions
-    default_model: ${LITELLM_MODEL}
+  provider: ${CODEX_PROVIDER}
+  default: ${CODEX_MODEL}
 EOF
-
-  if [[ "$ACCOUNT" == "$NODE_AGENT_ACCOUNT" ]]; then
-    cat <<EOF
-
-fallback_providers:
-  - provider: ${FALLBACK_PROVIDER}
-    model: ${FALLBACK_MODEL}
-EOF
-  fi
 
   cat <<'EOF'
 
@@ -313,9 +296,6 @@ if [[ "$ACCOUNT" == "$NODE_PEER_ACCOUNT" ]]; then
   SERVICE_NAME="$NODE_PEER_GATEWAY_UNIT"
 fi
 
-ACCOUNT_ENV_SUFFIX="$(printf '%s' "$ACCOUNT" | LC_ALL=C tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9_' '_')"
-LITELLM_KEY_ENV="LITELLM_${ACCOUNT_ENV_SUFFIX}_KEY"
-
 ACCOUNT_HOME=""
 ACCOUNT_UID=""
 USER_RUNTIME_DIR=""
@@ -337,7 +317,7 @@ WORK_DIR="$(mktemp -d)"
 chmod 755 "$WORK_DIR"
 trap 'rm -rf -- "$WORK_DIR"' EXIT
 
-log "provisioning account '$ACCOUNT' with key variable $LITELLM_KEY_ENV"
+log "provisioning account '$ACCOUNT' with Codex OAuth"
 ensure_initial_config_and_dropin
 install_hermes_if_needed
 ensure_gateway_service

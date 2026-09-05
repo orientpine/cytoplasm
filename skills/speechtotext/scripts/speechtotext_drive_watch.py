@@ -35,9 +35,6 @@ _RELEASE_CURRENT: Final = Path("/srv/autophagy-agent-current")
 _MIRROR_CHECKOUT: Final = Path("/srv/autophagy-agents")
 _SECRET_KEYS: Final = (
     "OPENAI_API_KEY",
-    "LITELLM_AGENT_KEY",
-    "LITELLM_BASE_URL",
-    "LITELLM_MASTER_KEY",
     "DISCORD_BOT_TOKEN",
 )
 _CHILD_TIMEOUT: Final = 21600.0

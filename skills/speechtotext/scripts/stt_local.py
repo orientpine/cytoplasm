@@ -2,13 +2,17 @@
 
 The sensitivity gate sees text too late to protect cloud-bound audio, so local is
 preferred. ffmpeg normalizes input to whisper.cpp's 16 kHz mono PCM contract.
+
+Since 2026-09-04 the recording is transcribed **one window at a time** (see
+`stt_window`): a 2-hour file used to be a single process and a single JSON read, so
+one undecodable byte at minute 118 threw away two hours of speech. Now a window that
+fails is quarantined alone, its minutes are marked in the transcript, every other
+window still reaches the document, and what succeeded is cached so a re-run resumes.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -23,14 +27,14 @@ import stt_client
 import stt_coverage
 import stt_diarize
 import stt_media
+import stt_window
+import stt_window_run
+import stt_window_store
 
 DEFAULT_LANGUAGE: Final = "ko"
 DEFAULT_TIMEOUT: Final = 14400.0
 _CONVERT_TIMEOUT: Final = 900.0
 _MAX_THREADS: Final = 16
-_WHITESPACE: Final = re.compile(r"\s+")
-
-_MIN_REPEAT_WORDS: Final = 120
 # Context carry-over is what lets a decode feed itself its own output until a window
 # is consumed by one repeated sentence. Measured on a 94-minute Korean recording:
 # carry-over on collapsed 28% of the transcript (one phrase, 910 times); the same
@@ -51,6 +55,19 @@ TRUNCATED_NOTICE: Final = (
     "SPEECHTOTEXT_ALLOW_INCOMPLETE=1 로 진행해 주세요."
 )
 
+# A refusal must never leave the owner empty-handed: what was transcribed is written
+# to a file first, and the refusal says where it is.
+PARTIAL_NOTICE: Final = " 여기까지 전사된 부분 전사본은 {path} 에 남겨 두었습니다."
+PARTIAL_UNSAVED: Final = " (부분 전사본을 저장하지 못했습니다.)"
+
+ALL_QUARANTINED_NOTICE: Final = (
+    "전사 전 구간 실패: {count}개 구간을 모두 전사하지 못했습니다. 격리된 원본은 "
+    "{path} 에 있습니다. 표지만 남은 전사본을 회의록으로 넘기지 않고 중단합니다."
+)
+
+#: A window smaller than this is a typo, not a plan — the default is used instead.
+MIN_CONFIGURED_WINDOW_MS: Final = 30_000
+
 
 @dataclass(frozen=True, slots=True)
 class LocalToolchain:
@@ -67,6 +84,8 @@ class LocalToolchain:
     prompt: str
     repeat_limit: float
     max_context: str
+    window_ms: int
+    overlap_ms: int
 
 
 def _threads(env: Mapping[str, str]) -> int:
@@ -99,8 +118,18 @@ def resolve_toolchain(env: Mapping[str, str]) -> LocalToolchain | None:
         prompt=env.get("SPEECHTOTEXT_PROMPT", ""),
         repeat_limit=_ratio(env.get("SPEECHTOTEXT_MAX_REPEAT", "")),
         max_context=env.get("SPEECHTOTEXT_WHISPER_CONTEXT") or DEFAULT_MAX_CONTEXT,
+        window_ms=_whole(
+            env, "SPEECHTOTEXT_WINDOW_MS", stt_window.DEFAULT_WINDOW_MS,
+            floor=MIN_CONFIGURED_WINDOW_MS,
+        ),
+        overlap_ms=_whole(env, "SPEECHTOTEXT_WINDOW_OVERLAP_MS", stt_window.DEFAULT_OVERLAP_MS),
         timeout=float(raw_timeout) if raw_timeout.replace(".", "", 1).isdigit() else DEFAULT_TIMEOUT,
     )
+
+
+def _whole(env: Mapping[str, str], name: str, fallback: int, *, floor: int = 0) -> int:
+    raw = env.get(name, "").strip()
+    return int(raw) if raw.isdigit() and int(raw) >= floor else fallback
 
 
 def _ratio(raw: str) -> float:
@@ -148,28 +177,15 @@ def transcribe(
             "오디오 변환",
             _CONVERT_TIMEOUT,
         )
-        out = base / "transcript"
-        _run(
-            [
-                str(toolchain.binary), "-m", str(toolchain.model), "-f", str(wav),
-                "-l", toolchain.language, "-t", str(toolchain.threads),
-                # -ojf keeps per-segment timings (the completeness evidence).
-                # Deliberately absent: -nf (disables the temperature fallback that
-                # rescues a failed window), --vad (trims quiet Korean speech) and
-                # -mc (truncates carried context) — each one can drop real speech.
-                "-ojf", "-of", str(out), "-np",
-                *(("--prompt", hint) if (hint := (prompt or toolchain.prompt)) else ()),
-                *(("-mc", toolchain.max_context) if toolchain.max_context else ()),
-            ],
-            "로컬 전사",
-            toolchain.timeout,
+        windows = _plan(wav, toolchain)
+        store = stt_window_store.resolve_store(
+            os.environ, audio=audio.path, model=toolchain.model, windows=windows
         )
-        payload = out.with_suffix(".json")
-        try:
-            data = json.loads(payload.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as failure:
-            raise stt_client.SttError("로컬 전사 결과를 읽지 못했습니다.") from failure
-        segments = data.get("transcription", []) if isinstance(data, dict) else []
+        report = stt_window_run.run_windows(
+            wav, windows, toolchain,
+            workdir=base, prompt=prompt or toolchain.prompt, store=store,
+        )
+        segments = list(stt_window.merge(report.results))
         sentences = stt_blocks.sentences_from_words(stt_blocks.words_from_whisper(segments))
         if diarizer is not None:
             try:
@@ -178,16 +194,21 @@ def transcribe(
                 print(f"DIARIZE-FAIL {failure}", file=sys.stderr)
             else:
                 sentences = stt_diarize.assign(sentences, turns)
-    joined = " ".join(
-        str(segment.get("text", "")).strip()
-        for segment in segments
-        if isinstance(segment, dict)
-    )
-    text = _WHITESPACE.sub(" ", joined).strip()
+    text = stt_window.text_of(segments)
     if not text:
         raise stt_audio.TranscriptionRefused(stt_audio.EMPTY_TRANSCRIPT_NOTICE, exit_code=5)
-    _assert_not_collapsed(text, toolchain)
-    coverage = _coverage(audio, segments, toolchain)
+    if len(report.quarantined) == len(windows):
+        raise stt_audio.TranscriptionRefused(
+            ALL_QUARANTINED_NOTICE.format(
+                count=len(windows), path=store.root / "quarantine" / store.key
+            ),
+            exit_code=8,
+        )
+    _assert_not_collapsed(text, toolchain, store)
+    coverage = _coverage(audio, segments, toolchain, store, text)
+    # Only a run that lost nothing may forget its windows; anything else stays resumable.
+    if not report.quarantined:
+        store.clear()
     return stt_client.Transcription(
         text=text,
         model=f"local:{toolchain.model.stem}",
@@ -197,35 +218,48 @@ def transcribe(
     )
 
 
-def _assert_not_collapsed(text: str, toolchain: LocalToolchain) -> None:
+def _plan(wav: Path, toolchain: LocalToolchain) -> tuple[stt_window.Window, ...]:
+    """Windows over the normalized wav — one unbounded pass when its length is unreadable.
+
+    The wav is ours (ffmpeg just wrote it to whisper.cpp's contract), so its own header
+    gives the duration without a second probe process. With no readable length there is
+    no plan to make, and the run falls back to exactly the single pass it did before.
+    """
+    duration = stt_media.wav_duration_ms(wav)
+    planned = stt_window.plan_windows(
+        duration, window_ms=toolchain.window_ms, overlap_ms=toolchain.overlap_ms
+    )
+    return planned or (stt_window.Window(index=0, start_ms=0, length_ms=0),)
+
+
+def _preserved(store: stt_window_store.WindowStore, text: str) -> str:
+    """Write the partial transcript before refusing, and say where it landed."""
+    kept = store.preserve(text)
+    return PARTIAL_NOTICE.format(path=kept) if kept is not None else PARTIAL_UNSAVED
+
+
+def _assert_not_collapsed(
+    text: str, toolchain: LocalToolchain, store: stt_window_store.WindowStore
+) -> None:
     """Refuse a transcript whose words collapsed into one repeated phrase."""
-    if len(text.split()) < _MIN_REPEAT_WORDS:
-        return
-    ratio, phrase = stt_coverage.dominant_repeat(text)
-    if ratio <= toolchain.repeat_limit:
+    ratio, phrase = stt_coverage.collapsed(text, limit=toolchain.repeat_limit)
+    if not ratio:
         return
     if toolchain.allow_incomplete:
         print(f"REPETITION-ACCEPTED ratio={ratio:.2f}", file=sys.stderr)
         return
     raise stt_audio.TranscriptionRefused(
-        REPETITION_NOTICE.format(ratio=ratio, phrase=phrase[:40]), exit_code=8
+        REPETITION_NOTICE.format(ratio=ratio, phrase=phrase[:40]) + _preserved(store, text),
+        exit_code=8,
     )
 
 
-def _spans(segments: object) -> tuple[tuple[int, int], ...]:
-    found: list[tuple[int, int]] = []
-    for segment in segments if isinstance(segments, list) else []:
-        offsets = segment.get("offsets") if isinstance(segment, dict) else None
-        if not isinstance(offsets, dict):
-            continue
-        start, end = offsets.get("from"), offsets.get("to")
-        if isinstance(start, (int, float)) and isinstance(end, (int, float)):
-            found.append((int(start), int(end)))
-    return tuple(found)
-
-
 def _coverage(
-    audio: stt_audio.CheckedAudio, segments: object, toolchain: LocalToolchain
+    audio: stt_audio.CheckedAudio,
+    segments: object,
+    toolchain: LocalToolchain,
+    store: stt_window_store.WindowStore,
+    text: str,
 ) -> stt_coverage.Coverage | None:
     if toolchain.ffprobe is None:
         print("COVERAGE-UNKNOWN reason=no-ffprobe", file=sys.stderr)
@@ -234,7 +268,7 @@ def _coverage(
     if not duration:
         print("COVERAGE-UNKNOWN reason=unprobeable", file=sys.stderr)
         return None
-    verdict = stt_coverage.assess(_spans(segments), duration)
+    verdict = stt_coverage.assess(stt_window.spans(segments), duration)
     if not verdict.complete and not toolchain.allow_incomplete:
         raise stt_audio.TranscriptionRefused(
             TRUNCATED_NOTICE.format(
@@ -242,7 +276,8 @@ def _coverage(
                 ratio=verdict.ratio,
                 gaps=len(verdict.gaps),
                 tail=verdict.trailing_gap_ms / 60_000,
-            ),
+            )
+            + _preserved(store, text),
             exit_code=8,
         )
     return verdict

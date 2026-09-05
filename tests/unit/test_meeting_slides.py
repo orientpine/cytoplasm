@@ -227,7 +227,7 @@ def test_patent_material_in_the_deck_alone_makes_the_meeting_sensitive(
     deck = tmp_path / "deck.md"
     deck.write_text("청구항 1항의 범위를 넓힌다", encoding="utf-8")
     result = _ingest(tmp_path, capsys, "--slides", str(deck))
-    assert result["sensitive"] is True, "발표자료가 게이트를 우회해 GLM 으로 새는 경로가 열렸다"
+    assert result["sensitive"] is True, "발표자료가 게이트를 우회해 무통제로 새는 경로가 열렸다"
 
 
 def test_clean_deck_keeps_the_meeting_non_sensitive_and_labels_it(
@@ -259,8 +259,6 @@ def test_ingest_without_slides_is_unchanged(tmp_path, monkeypatch, capsys):
     assert "발표자료" not in note
 
 
-def test_call_litellm_still_refuses_sensitive_slide_material():
+def test_extraction_still_refuses_a_non_codex_route_for_sensitive_slide_material():
     with pytest.raises(meeting_llm.PatentRoutingError):
-        meeting_llm.call_litellm(
-            "청구항", sensitive=True, base_url="http://127.0.0.1:1", api_key="n"
-        )
+        meeting_llm.call_codex("청구항", sensitive=True, provider="third-party-tier")

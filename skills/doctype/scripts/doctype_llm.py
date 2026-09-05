@@ -1,25 +1,32 @@
-"""Fail-closed LLM routing for private document-type extraction and drafting."""
+"""Fail-closed Codex OAuth routing for private document-type extraction and drafting.
+
+There is one model tier: the shared client in ``automation.codex_llm`` (provider
+``openai-codex``). The routing gate that used to keep sensitivity-gated text off a
+second provider now proves the opposite property — that the resolved route IS the
+pinned Codex OAuth tier, argv included — and refuses before transport otherwise.
+"""
 from __future__ import annotations
 
 import fcntl
 import json
 import os
-import shutil
-import subprocess
-import urllib.error
-import urllib.request
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final
+from types import ModuleType
+from typing import Any, Final
 
 
-GLM_MODEL: Final = "glm-main"
 CODEX_PROVIDER: Final = "openai-codex"
 CODEX_MODEL: Final = "gpt-5.4"
+# Load bearing: without it Hermes reads the user config and may switch providers.
+_IGNORE_USER_CONFIG: Final = "--ignore-user-config"
+_BINARY_ENV: Final = "AUTOPHAGY_HERMES_BIN"
+_RELEASE_ROOT: Final = "/srv/autophagy-agent-current"
 
 
 class PatentRoutingError(RuntimeError):
-    """A caller attempted to route sensitivity-gated text to GLM."""
+    """The resolved route is not the pinned Codex OAuth tier, so nothing is sent."""
 
 
 class LlmCallError(RuntimeError):
@@ -50,73 +57,48 @@ def _log_call(*, provider: str, model: str, purpose: str, sensitive: bool, opaqu
     path.chmod(0o600)
 
 
-def _run_stub(binary: str, prompt: str, timeout: float) -> str:
+def _repo_root() -> Path:
+    """Where the shared client lives; resolved lazily so the skill mount stays importable."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "automation" / "skill_mount.py").is_file():
+            return parent
+    return Path(_RELEASE_ROOT)
+
+
+def _codex() -> ModuleType:
+    """Import the shared Codex client; an unavailable client refuses the call."""
+    root = str(_repo_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
     try:
-        completed = subprocess.run(
-            [binary], input=prompt, capture_output=True, text=True, timeout=timeout, check=False
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise LlmCallError(error.__class__.__name__) from error
-    if completed.returncode != 0 or not completed.stdout.strip():
-        raise LlmCallError(f"GLM stub rc={completed.returncode}")
-    return completed.stdout.strip()
+        from automation import codex_llm  # noqa: PLC0415 - lazy repo-root import
+    except ImportError as error:
+        raise LlmCallError(f"Codex OAuth client unavailable: {error.__class__.__name__}") from None
+    return codex_llm
 
 
-def _litellm_key() -> str:
-    key = os.environ.get("LITELLM_AGENT_KEY", "")
-    if key:
-        return key
-    try:
-        lines = (Path.home() / ".env.secrets").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        lines = []
-    for line in lines:
-        if line.startswith("LITELLM_AGENT_KEY="):
-            return line.partition("=")[2].strip()
-    raise LlmCallError("LITELLM_AGENT_KEY is required for a GLM call")
-
-
-def call_glm(
-    prompt: str,
-    *,
-    sensitive: bool,
-    purpose: str = "unspecified",
-    opaque_id: str = "-",
-    timeout: float = 180.0,
-) -> str:
-    """Call GLM only for explicitly non-sensitive paths; sensitive input fails closed."""
-    if sensitive:
-        raise PatentRoutingError("sensitivity gate hit: GLM is forbidden for this document")
-    stub = os.environ.get("DOCTYPE_GLM_BIN", "")
+def _client_environment() -> dict[str, str]:
+    """Keep the documented DOCTYPE_HERMES_BIN offline hook pointing at the shared client."""
+    environment = dict(os.environ)
+    stub = environment.get("DOCTYPE_HERMES_BIN", "").strip()
     if stub:
-        result = _run_stub(stub, prompt, timeout)
-        _log_call(provider=GLM_MODEL, model=GLM_MODEL, purpose=purpose, sensitive=False, opaque_id=opaque_id)
-        return result
-    base_url = os.environ.get("DOCTYPE_LITELLM_BASE_URL", "http://127.0.0.1:4000/v1")
-    payload = json.dumps(
-        {
-            "model": GLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "metadata": {"tags": ["doctype"]},
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/chat/completions",
-        data=payload,
-        headers={"Authorization": f"Bearer {_litellm_key()}", "Content-Type": "application/json"},
-        method="POST",
-    )
+        environment[_BINARY_ENV] = stub
+    return environment
+
+
+def _codex_client(codex: ModuleType, timeout: float) -> Any:
+    """Build the pinned client and prove the route before any document text moves."""
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            decoded = json.loads(response.read().decode("utf-8"))
-        result = decoded["choices"][0]["message"]["content"]
-    except (KeyError, OSError, TypeError, urllib.error.URLError, json.JSONDecodeError) as error:
-        raise LlmCallError(f"GLM call failed: {error.__class__.__name__}") from None
-    if not isinstance(result, str) or not result.strip():
-        raise LlmCallError("GLM returned no text")
-    _log_call(provider=GLM_MODEL, model=GLM_MODEL, purpose=purpose, sensitive=False, opaque_id=opaque_id)
-    return result.strip()
+        client = codex.CodexClient.from_environment(_client_environment(), timeout=timeout)
+    except codex.CodexError as error:
+        raise LlmCallError(f"Codex OAuth tier unavailable: {error}") from None
+    argv = client.argv("")
+    if codex.PROVIDER != CODEX_PROVIDER or _IGNORE_USER_CONFIG not in argv:
+        raise PatentRoutingError("routing gate: only the pinned Codex OAuth tier may receive this document")
+    return client.with_model(CODEX_MODEL)
 
 
 def call_codex(
@@ -127,23 +109,12 @@ def call_codex(
     opaque_id: str = "-",
     timeout: float = 600.0,
 ) -> str:
-    """Use the mandatory non-GLM Korean/gist tier and log only masked routing facts."""
-    binary = os.environ.get("DOCTYPE_HERMES_BIN") or shutil.which("hermes") or "~/.local/bin/hermes"
-    command = [binary, "-z", prompt, "--provider", CODEX_PROVIDER, "-m", CODEX_MODEL, "-t", "todo"]
-    environment = {**os.environ, "PATH": f"{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
+    """Use the mandatory Codex OAuth tier and log only masked routing facts."""
+    codex = _codex()
+    client = _codex_client(codex, timeout)
     try:
-        completed = subprocess.run(
-            command,
-            cwd=Path.home(),
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise LlmCallError(error.__class__.__name__) from error
-    if completed.returncode != 0 or not completed.stdout.strip():
-        raise LlmCallError(f"Codex one-shot rc={completed.returncode}")
+        result = client.complete(prompt)
+    except codex.CodexError as error:
+        raise LlmCallError(f"Codex one-shot failed: {error}") from None
     _log_call(provider=CODEX_PROVIDER, model=CODEX_MODEL, purpose=purpose, sensitive=sensitive, opaque_id=opaque_id)
-    return completed.stdout.strip()
+    return result

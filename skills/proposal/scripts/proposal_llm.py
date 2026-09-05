@@ -1,28 +1,28 @@
-"""One-shot Hermes LLM calls for private proposal drafting and review."""
+"""One-shot Codex OAuth LLM calls for private proposal drafting and review.
+
+Every call goes through the one shared client (``automation.codex_llm``): a single
+provider, no fallback and no retry. A route that does not name the Codex OAuth tier
+— and a client that cannot be imported — refuses the call instead of reaching for
+another provider.
+"""
 
 from __future__ import annotations
 
 import json
 import os
-import subprocess
-from collections.abc import Callable
-from dataclasses import dataclass
+import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Final
+
+CODEX_PROVIDER: Final = "openai-codex"
+FINAL_REVIEW_MODEL: Final = "gpt-5.4"
+_TIMEOUT_SECONDS: Final = 600.0
+_RELEASE_ROOT: Final = "/srv/autophagy-agent-current"
 
 
 class LlmInvocationError(RuntimeError):
-    """Hermes did not return a usable one-shot response."""
-
-
-@dataclass(frozen=True, slots=True)
-class InvocationResult:
-    """Minimal subprocess result contract that unit tests can fake."""
-
-    returncode: int
-    stdout: str
-
-
-Invoke = Callable[[tuple[str, ...]], InvocationResult]
+    """The Codex OAuth tier did not return a usable one-shot response."""
 
 
 def _log(stage: str, provider: str, model: str, sensitive: bool) -> None:
@@ -47,66 +47,48 @@ def _log(stage: str, provider: str, model: str, sensitive: bool) -> None:
     path.chmod(0o600)
 
 
-def _litellm_key() -> str:
-    key = os.environ.get("LITELLM_AGENT_KEY", "")
-    if key:
-        return key
+def _repo_root() -> Path:
+    """Where the shared client lives; skills resolve it lazily, never at import time."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "automation" / "skill_mount.py").is_file():
+            return parent
+    return Path(_RELEASE_ROOT)
+
+
+def _codex() -> ModuleType:
+    """Import the shared Codex client; an unavailable client refuses, never falls back."""
+    root = str(_repo_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
     try:
-        lines = (Path.home() / ".env.secrets").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        lines = []
-    for line in lines:
-        if line.startswith("LITELLM_AGENT_KEY="):
-            return line.partition("=")[2].strip()
-    raise LlmInvocationError("LITELLM_AGENT_KEY is unavailable")
+        from automation import codex_llm  # noqa: PLC0415 - lazy repo-root import
+    except ImportError as error:
+        raise LlmInvocationError(
+            f"Codex OAuth client unavailable: {error.__class__.__name__}"
+        ) from None
+    return codex_llm
 
 
-def _invoke(command: tuple[str, ...], *, litellm_key: str | None = None) -> InvocationResult:
-    environment = {**os.environ, "PATH": f"{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
-    if litellm_key is not None:
-        environment["LITELLM_AGENT_KEY"] = litellm_key
+def _run(stage: str, prompt: str, provider: str, model: str, sensitive: bool) -> str:
+    """Refuse anything that is not the Codex OAuth tier, then make exactly one call."""
+    if provider != CODEX_PROVIDER:
+        raise LlmInvocationError(f"{stage} refused: {provider!r} is not the Codex OAuth tier")
+    codex = _codex()
+    _log(stage, CODEX_PROVIDER, model, sensitive)
     try:
-        completed = subprocess.run(
-            command,
-            cwd=Path.home(),
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise LlmInvocationError(error.__class__.__name__) from error
-    return InvocationResult(completed.returncode, completed.stdout)
+        return codex.complete(prompt, model=model, timeout=_TIMEOUT_SECONDS)
+    except codex.CodexError as error:
+        raise LlmInvocationError(f"{stage} failed: {error}") from None
 
 
-def _run(
-    stage: str,
-    prompt: str,
-    provider: str,
-    model: str,
-    sensitive: bool,
-    invoke: Invoke | None = None,
-) -> str:
-    _log(stage, provider, model, sensitive)
-    command = ("hermes", "-z", prompt, "--provider", provider, "-m", model, "-t", "todo")
-    if invoke is not None:
-        result = invoke(command)
-    else:
-        key = _litellm_key() if provider == "custom:litellm" else None
-        result = _invoke(command, litellm_key=key)
-    if result.returncode != 0 or not result.stdout.strip():
-        raise LlmInvocationError(f"{stage} rc={result.returncode}")
-    return result.stdout.strip()
+def run_section_draft(prompt: str, provider: str, model: str, sensitive: bool) -> str:
+    """Generate one section draft through the preselected Codex OAuth route."""
+    return _run("section-draft", prompt, provider, model, sensitive)
 
 
-def run_section_draft(
-    prompt: str, provider: str, model: str, sensitive: bool, invoke: Invoke | None = None
-) -> str:
-    """Generate one section draft through the preselected sensitivity route."""
-    return _run("section-draft", prompt, provider, model, sensitive, invoke)
-
-
-def run_final_review(prompt: str, invoke: Invoke | None = None) -> str:
-    """Run exactly one required Codex/gpt-5.4 final review invocation."""
-    return _run("final-review", prompt, "openai-codex", "gpt-5.4", True, invoke)
+def run_final_review(prompt: str) -> str:
+    """Run exactly one required Codex OAuth final review invocation."""
+    return _run("final-review", prompt, CODEX_PROVIDER, FINAL_REVIEW_MODEL, True)

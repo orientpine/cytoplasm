@@ -20,6 +20,7 @@ import stt_client
 import stt_diarize
 import stt_local
 import stt_media
+import stt_correction_log
 import stt_polish
 import stt_runtime
 import stt_speaker_flow
@@ -134,6 +135,9 @@ def cmd_run(args: argparse.Namespace, *, chain: bool) -> int:
         return failure.exit_code
 
     tidied, speakers = stt_speaker_flow.tidy(transcription, pairs)
+    stt_correction_log.record(
+        tidied.corrections, label=label, project=project, stage="transcribe"
+    )
     transcript = stt_transcript.write_transcript(
         stt_runtime.transcript_dir(), label=label, source_name=source.name,
         transcription=transcription, now=now, polish=tidied,
@@ -184,6 +188,7 @@ def cmd_polish(args: argparse.Namespace) -> int:
     if not tidied.body.strip():
         print(stt_audio.EMPTY_TRANSCRIPT_NOTICE)
         return 5
+    stt_correction_log.record(tidied.corrections, label=label, project=project, stage="polish")
     path.write_text(
         stt_transcript.rewrite(
             header,

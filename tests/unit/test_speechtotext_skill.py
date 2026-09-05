@@ -305,9 +305,9 @@ def test_ingest_chains_transcript_into_meeting_with_credentials(
     _cli_env(tmp_path, monkeypatch, fake_meeting)
     # The credential exists only in ~/.env.secrets — never in this process's environ.
     (tmp_path / "home" / ".env.secrets").write_text(
-        "LITELLM_AGENT_KEY=agent-key-fixture\nOPENAI_API_KEY=stt-key-fixture\n", encoding="utf-8"
+        "OPENAI_API_KEY=stt-key-fixture\n", encoding="utf-8"
     )
-    monkeypatch.delenv("LITELLM_AGENT_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     audio = tmp_path / "회의녹음.wav"
     audio.write_bytes((SKILL / "fixtures" / "sample-meeting.wav").read_bytes())
     spoken = tmp_path / "spoken.txt"
@@ -331,7 +331,11 @@ def test_ingest_chains_transcript_into_meeting_with_credentials(
     assert call["argv"][0] == "ingest"
     assert call["argv"][call["argv"].index("--file") + 1] == str(transcript)
     assert call["argv"][call["argv"].index("--label") + 1] == "킥오프"
-    assert call["env"]["LITELLM_AGENT_KEY"] == "agent-key-fixture"
+    assert call["env"]["OPENAI_API_KEY"] == "stt-key-fixture"
+    # The retired gateway credentials are gone from both child forward lists: what the
+    # child is handed explicitly is exactly the transcription and Discord credentials.
+    assert stt_runtime._SECRET_KEYS == ("OPENAI_API_KEY", "DISCORD_BOT_TOKEN")
+    assert watcher._SECRET_KEYS == stt_runtime._SECRET_KEYS
 
 
 def test_ingest_refuses_unsupported_audio_without_calling_meeting(
@@ -413,6 +417,9 @@ def _local_env(monkeypatch, local_toolchain) -> None:
     monkeypatch.setenv("SPEECHTOTEXT_WHISPER_BIN", str(binary))
     monkeypatch.setenv("SPEECHTOTEXT_WHISPER_MODEL", str(model))
     monkeypatch.setenv("SPEECHTOTEXT_FFMPEG_BIN", str(ffmpeg))
+    # The window cache holds transcribed speech; a test must never write it into the
+    # owner's real ~/.hermes tree.
+    monkeypatch.setenv("SPEECHTOTEXT_WINDOW_CACHE", str(binary.parent / "window-cache"))
 
 
 def test_resolve_toolchain_is_none_when_binary_or_model_is_absent(tmp_path, monkeypatch) -> None:
@@ -1291,8 +1298,14 @@ def test_project_is_the_first_token_that_is_not_a_date() -> None:
 
 
 def test_parse_glossary_reads_the_text_the_file_holds() -> None:
-    parsed = stt_polish.parse_glossary("# 주석\n영무=업무\n\n한정기술=한전기술\n잘못된줄\n")
-    assert parsed == (("영무", "업무"), ("한정기술", "한전기술"))
+    """주석과 빈 줄은 항목이 아니고, 한 칸짜리 줄은 **바른 용어**다.
+
+    2026-09-05 전에는 구분자 없는 줄을 버렸다. 그때는 용어집이 1:1 쌍뿐이라 그것이 잘못 쓴
+    줄이었지만, 지금은 소유자가 틀리는 방식을 모른 채 바른 용어만 적는 정상 형식이다.
+    """
+    parsed = stt_polish.parse_glossary("# 주석\n영무=업무\n\n한정기술=한전기술\n열교환기\n")
+
+    assert parsed == (("영무", "업무"), ("한정기술", "한전기술"), ("열교환기", "열교환기"))
 
 
 class _FakeProjectDrive:
@@ -1303,6 +1316,9 @@ class _FakeProjectDrive:
         self.resolved: list[tuple[str, ...]] = []
 
     def ensure_folder_path(self, parts):
+        raise AssertionError(f"용어집 조회가 폴더를 만들었다: {tuple(parts)}")
+
+    def find_folder_path(self, parts):
         self.resolved.append(tuple(parts))
         return "project-folder"
 
@@ -1314,6 +1330,192 @@ class _FakeProjectDrive:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(self.text or "", encoding="utf-8")
         return "sha"
+
+
+class _FakeNestedDrive:
+    """Drive with a 용어집.txt at some folders on the path — and no folder creation."""
+
+    def __init__(self, glossaries, *, folders=None, legacy=None, fails: bool = False) -> None:
+        self.glossaries = {tuple(key): value for key, value in glossaries.items()}
+        self.legacy = {tuple(key): value for key, value in (legacy or {}).items()}
+        known = set(self.glossaries) | set(self.legacy)
+        self.folders = {tuple(f) for f in (known if folders is None else folders)}
+        self.fails = fails
+        self.looked: list[tuple[str, ...]] = []
+
+    def ensure_folder_path(self, parts):
+        raise AssertionError(f"용어집 조회가 폴더를 만들었다: {tuple(parts)}")
+
+    def find_folder_path(self, parts):
+        if self.fails:
+            raise RuntimeError("drive is unreachable")
+        key = tuple(parts)
+        self.looked.append(key)
+        return "|".join(key) if key in self.folders else None
+
+    def list_children(self, folder_id):
+        key = tuple(folder_id.split("|"))
+        kids = []
+        if key in self.glossaries:
+            kids.append({"id": f"{folder_id}|csv", "name": "용어집.csv"})
+        if key in self.legacy:
+            kids.append({"id": f"{folder_id}|txt", "name": "용어집.txt"})
+        return kids
+
+    def download_file(self, file_id: str, dest: Path) -> str:
+        *parts, kind = file_id.split("|")
+        source = self.glossaries if kind == "csv" else self.legacy
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(source[tuple(parts)], encoding="utf-8")
+        return "sha"
+
+
+def test_the_glossary_is_nested_and_the_deeper_folder_wins(tmp_path, monkeypatch) -> None:
+    """트리가 중첩이니 용어집도 중첩이다 — 루트에 한 번 적은 이름이 모든 녹음에 걸린다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+    drive = _FakeNestedDrive(
+        {
+            ("autophagy",): "영무=업무\n한정기술=바깥값\n",
+            ("autophagy", "전사본"): "한정기술=전사본값\n",
+            ("autophagy", "전사본", "해양고신뢰성"): "한정기술=한전기술\n",
+        }
+    )
+
+    merged = dict(stt_runtime.merged_glossary("해양고신뢰성", client=drive))
+
+    assert merged["영무"] == "업무"
+    assert merged["한정기술"] == "한전기술"
+
+
+def test_the_outer_layers_are_looked_up_from_the_root_down(tmp_path, monkeypatch) -> None:
+    """조회는 바깥에서 안으로 — 그리고 조회가 폴더를 만들면 fake 가 실패시킨다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+    drive = _FakeNestedDrive({("autophagy", "전사본"): "영무=업무\n"})
+
+    assert stt_runtime.glossary(client=drive) == (("영무", "업무"),)
+    assert drive.looked == [("autophagy",), ("autophagy", "전사본")]
+
+
+def test_a_missing_outer_folder_does_not_hide_the_inner_glossary(tmp_path, monkeypatch) -> None:
+    """바깥 층이 없는 것은 정상이다 — 안쪽 층이 그 때문에 사라지면 안 된다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+    drive = _FakeNestedDrive(
+        {("autophagy", "전사본", "해양고신뢰성"): "한정기술=한전기술\n"},
+        folders={("autophagy", "전사본", "해양고신뢰성")},
+    )
+
+    assert dict(stt_runtime.merged_glossary("해양고신뢰성", client=drive)) == {"한정기술": "한전기술"}
+
+
+def test_a_fetched_glossary_is_cached_on_the_node(tmp_path, monkeypatch) -> None:
+    """캐시가 있어야 Drive 옵트아웃 경로(plaud lifelog)도 같은 이름을 고친다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+
+    stt_runtime.glossary(client=_FakeNestedDrive({("autophagy", "전사본"): "영무=업무\n"}))
+
+    cached = tmp_path / ".hermes/speechtotext/glossary.txt"
+    assert cached.read_text(encoding="utf-8") == "영무=업무\n"
+    assert stt_polish.load_glossary({}) == (("영무", "업무"),)
+
+
+def test_a_correct_term_is_cached_as_one_column(tmp_path, monkeypatch) -> None:
+    """캐시는 정본의 거울이다 — 한 칸으로 받은 것을 두 칸으로 적으면 형식을 오해하게 된다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+
+    stt_runtime.glossary(client=_FakeNestedDrive({("autophagy", "전사본"): "열교환기\n영무,업무\n"}))
+
+    cached = tmp_path / ".hermes/speechtotext/glossary.txt"
+    assert cached.read_text(encoding="utf-8") == "열교환기\n영무=업무\n"
+
+
+def test_the_node_cache_answers_when_drive_will_not(tmp_path, monkeypatch, capsys) -> None:
+    """Drive 불통이 용어집을 비우면 안 된다 — 그 침묵이 오인식을 굳힌다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+    cached = tmp_path / ".hermes/speechtotext/glossary.txt"
+    cached.parent.mkdir(parents=True)
+    cached.write_text("영무=업무\n", encoding="utf-8")
+
+    pairs = stt_runtime.glossary(client=_FakeNestedDrive({}, fails=True))
+
+    assert pairs == (("영무", "업무"),)
+    assert "GLOSSARY-FETCH-FAIL" in capsys.readouterr().err
+
+
+def test_a_glossary_absent_from_drive_is_absent_here_too(tmp_path, monkeypatch, capsys) -> None:
+    """Drive 가 정본이므로 거기 없으면 없는 것이다 — 낡은 캐시를 정본으로 승격하지 않는다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+    cached = tmp_path / ".hermes/speechtotext/glossary.txt"
+    cached.parent.mkdir(parents=True)
+    cached.write_text("영무=업무\n", encoding="utf-8")
+
+    assert stt_runtime.glossary(client=_FakeNestedDrive({}, folders={("autophagy",)})) == ()
+    assert cached.read_text(encoding="utf-8") == ""
+    assert "GLOSSARY-DRIVE-ABSENT" in capsys.readouterr().err
+
+
+def test_an_explicit_glossary_path_is_read_without_touching_drive(tmp_path, monkeypatch) -> None:
+    """명시한 파일은 명시한 대로 — 샌드박스·오프라인의 결정성이 여기 걸려 있다."""
+    local = tmp_path / "glossary.txt"
+    local.write_text("영무=업무\n", encoding="utf-8")
+    monkeypatch.setenv("SPEECHTOTEXT_GLOSSARY", str(local))
+    drive = _FakeNestedDrive({("autophagy", "전사본"): "영무=틀린값\n"})
+
+    assert stt_runtime.glossary(client=drive) == (("영무", "업무"),)
+    assert drive.looked == []
+
+
+def test_a_glossary_row_may_be_a_table_row_or_an_equals_line() -> None:
+    """표(csv)로 적든 예전처럼 =로 적든 같은 용어집이다 — 머리글과 주석은 읽지 않는다."""
+    parsed = stt_polish.parse_glossary(
+        "틀린표기,올바른표기\n영무,업무\n한정기술=한전기술\n# 작성 예시\n# 포스텔,포스텍\n"
+    )
+
+    assert parsed == (("영무", "업무"), ("한정기술", "한전기술"))
+
+
+def test_a_quoted_table_field_keeps_its_comma() -> None:
+    """Sheets 는 쉼표가 든 칸을 따옴표로 감싼다 — 손으로 자르면 그 줄이 쓰레기가 된다."""
+    parsed = stt_polish.parse_glossary('"서울, 부산","서울·부산"\n영무,업무\n')
+
+    assert parsed == (("서울, 부산", "서울·부산"), ("영무", "업무"))
+
+
+def test_the_table_glossary_wins_over_a_legacy_text_file(tmp_path, monkeypatch) -> None:
+    """한 폴더에 둘 다 있으면 새 이름이 정본이다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+    drive = _FakeNestedDrive(
+        {("autophagy", "전사본"): "영무,업무\n"},
+        legacy={("autophagy", "전사본"): "영무=옛값\n"},
+    )
+
+    assert stt_runtime.glossary(client=drive) == (("영무", "업무"),)
+
+
+def test_a_legacy_text_glossary_is_still_read(tmp_path, monkeypatch) -> None:
+    """이미 Drive 에 있는 용어집.txt 가 이름이 바뀌었다고 안 읽히면 조용한 회귀다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SPEECHTOTEXT_GLOSSARY", raising=False)
+    drive = _FakeNestedDrive({}, legacy={("autophagy", "전사본"): "영무=업무\n"})
+
+    assert stt_runtime.glossary(client=drive) == (("영무", "업무"),)
+
+
+def test_the_shipped_example_documents_the_format_without_adding_entries() -> None:
+    """예시 파일을 그대로 올려도 항목이 생기지 않는다 — 전부 주석이어야 한다."""
+    example = (
+        Path(__file__).resolve().parents[2]
+        / "skills/speechtotext/configs/용어집.example.csv"
+    )
+
+    assert stt_polish.parse_glossary(example.read_text(encoding="utf-8")) == ()
 
 
 def test_project_glossary_is_read_from_the_project_folder(monkeypatch) -> None:
@@ -1419,3 +1621,268 @@ def test_project_glossary_never_builds_a_client_without_the_opt_in(monkeypatch) 
 
     assert stt_runtime.project_glossary("해양고신뢰성") == ()
     assert stt_runtime.merged_glossary("해양고신뢰성") == stt_runtime.glossary()
+
+
+# --- 창 단위 전사: 한 구간의 사고가 나머지 전사본을 데려가지 않는다 -------------
+#
+# 2026-09-04(t_4e3d6630): 2시간 녹음이 두 번 실패하고 요약도 전사본도 없는 노트가
+# 발행됐다. 원인은 두 겹이었다 — (1) whisper.cpp 가 쓴 JSON 의 깨진 UTF-8 을
+# `read_text()` 가 UnicodeDecodeError 로 터뜨렸고 그 예외는 `json.JSONDecodeError`
+# 핸들러를 그대로 빠져나갔다, (2) 2시간을 한 번의 프로세스·한 번의 읽기로 처리해
+# 바이트 하나가 두 시간을 전부 버렸다. 아래 테스트는 그 두 겹을 각각 고정한다.
+
+_FAKE_FFMPEG_WAV = '''#!/usr/bin/env python3
+"""ffmpeg stand-in: a real 16 kHz mono wav whose length the window planner can read."""
+import os
+import sys
+import wave
+
+seconds = float(os.environ.get("FAKE_WAV_SECONDS", "330"))
+with wave.open(sys.argv[-1], "wb") as handle:
+    handle.setnchannels(1)
+    handle.setsampwidth(2)
+    handle.setframerate(16000)
+    handle.writeframes(b"\\0" * int(16000 * 2 * seconds))
+'''
+
+_FAKE_WHISPER_WINDOWS = '''#!/usr/bin/env python3
+"""whisper-cli stand-in: one payload per window, as described by a plan file."""
+import json
+import os
+import sys
+
+argv = sys.argv[1:]
+
+
+def flag(name, fallback=""):
+    return argv[argv.index(name) + 1] if name in argv else fallback
+
+
+offset = int(flag("-ot", "0"))
+duration = int(flag("-d", "0"))
+out = flag("-of")
+with open(os.environ["FAKE_WHISPER_PLAN"], encoding="utf-8") as handle:
+    plan = json.load(handle)
+with open(os.environ["FAKE_WHISPER_LOG"], "a", encoding="utf-8") as handle:
+    handle.write("%d,%d\\n" % (offset, duration))
+behaviour = plan.get(str(offset), plan.get("default", "ok"))
+if behaviour == "rc":
+    sys.stderr.write("fake whisper refused window %d\\n" % offset)
+    raise SystemExit(3)
+end = offset + duration if duration else int(float(os.environ["FAKE_WAV_SECONDS"]) * 1000)
+text = " 구간 %d 발화입니다." % offset
+if behaviour == "bad-utf8":
+    text = " 구간 %d @@발화입니다." % offset
+if behaviour == "repeat":
+    text = " 같은 말을 반복합니다." * 400
+raw = json.dumps(
+    {"transcription": [{"offsets": {"from": offset, "to": end}, "text": text}]},
+    ensure_ascii=False,
+).encode("utf-8")
+if behaviour == "bad-utf8":
+    raw = raw.replace(b"@@", b"\\xed\\xa0")
+if behaviour == "invalid-json":
+    raw = raw[: len(raw) // 2]
+with open(out + ".json", "wb") as handle:
+    handle.write(raw)
+'''
+
+
+def _windowed_env(
+    tmp_path: Path,
+    monkeypatch,
+    behaviour: dict[str, str],
+    *,
+    seconds: float = 330.0,
+    probe_seconds: float | None = None,
+) -> tuple[Path, Path, Path]:
+    """A 5.5-minute recording, 2-minute windows: three windows over one wav."""
+    binary = tmp_path / "whisper-cli"
+    binary.write_text(_FAKE_WHISPER_WINDOWS, encoding="utf-8")
+    binary.chmod(0o755)
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.write_text(_FAKE_FFMPEG_WAV, encoding="utf-8")
+    ffmpeg.chmod(0o755)
+    ffprobe = tmp_path / "ffprobe"
+    ffprobe.write_text(
+        f'#!/bin/sh\nprintf \'{{"format":{{"duration":"{probe_seconds or seconds}"}}}}\'\n',
+        encoding="utf-8",
+    )
+    ffprobe.chmod(0o755)
+    model = tmp_path / "ggml-large-v3-turbo-q5_0.bin"
+    model.write_bytes(b"ggml-model-fixture")
+    plan = tmp_path / "whisper-plan.json"
+    plan.write_text(json.dumps(behaviour), encoding="utf-8")
+    log = tmp_path / "whisper-calls.log"
+    cache = tmp_path / "window-cache"
+    monkeypatch.setenv("SPEECHTOTEXT_WHISPER_BIN", str(binary))
+    monkeypatch.setenv("SPEECHTOTEXT_WHISPER_MODEL", str(model))
+    monkeypatch.setenv("SPEECHTOTEXT_FFMPEG_BIN", str(ffmpeg))
+    monkeypatch.setenv("SPEECHTOTEXT_FFPROBE_BIN", str(ffprobe))
+    monkeypatch.setenv("SPEECHTOTEXT_WINDOW_MS", "120000")
+    monkeypatch.setenv("SPEECHTOTEXT_WINDOW_OVERLAP_MS", "15000")
+    monkeypatch.setenv("SPEECHTOTEXT_WINDOW_CACHE", str(cache))
+    monkeypatch.setenv("FAKE_WHISPER_PLAN", str(plan))
+    monkeypatch.setenv("FAKE_WHISPER_LOG", str(log))
+    monkeypatch.setenv("FAKE_WAV_SECONDS", str(seconds))
+    monkeypatch.delenv("SPEECHTOTEXT_ALLOW_INCOMPLETE", raising=False)
+    return plan, log, cache
+
+
+def _recording(tmp_path: Path) -> stt_audio.CheckedAudio:
+    audio = tmp_path / "2시간회의.m4a"
+    audio.write_bytes(b"long-audio-fixture")
+    return stt_audio.check_audio(audio)
+
+
+def _windowed_transcribe(tmp_path: Path):
+    return stt_local.transcribe(
+        _recording(tmp_path), stt_local.resolve_toolchain(dict(os.environ))
+    )
+
+
+def _calls(log: Path) -> list[tuple[int, int]]:
+    if not log.exists():
+        return []
+    return [
+        (int(line.split(",")[0]), int(line.split(",")[1]))
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _cache_entries(cache: Path) -> list[str]:
+    return [path.name for path in cache.iterdir() if path.name not in {"quarantine", "partial"}]
+
+
+def test_each_window_runs_its_own_whisper_process_over_the_same_wav(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """한 번의 프로세스로 두 시간을 걸지 않는다 — 창마다 -ot/-d 로 따로 건다."""
+    _plan, log, _cache = _windowed_env(tmp_path, monkeypatch, {})
+
+    result = _windowed_transcribe(tmp_path)
+
+    assert _calls(log) == [(0, 120_000), (105_000, 120_000), (210_000, 120_000)]
+    assert result.text == (
+        "구간 0 발화입니다. 구간 105000 발화입니다. 구간 210000 발화입니다."
+    )
+    assert result.coverage is not None and result.coverage.complete is True
+
+
+def test_a_window_with_broken_utf8_keeps_its_words_instead_of_killing_the_run(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """사고 재현: JSON 한복판의 깨진 UTF-8 — 깨진 자리만 대체되고 전사는 이어진다."""
+    _windowed_env(tmp_path, monkeypatch, {"105000": "bad-utf8"})
+
+    result = _windowed_transcribe(tmp_path)
+
+    assert "구간 0 발화입니다." in result.text
+    assert "구간 210000 발화입니다." in result.text
+    assert "구간 105000" in result.text
+    assert "\ufffd" in result.text
+    assert "WHISPER-WINDOW-REPAIRED index=1" in capsys.readouterr().err
+
+
+def test_a_window_that_fails_is_quarantined_and_the_others_still_reach_the_transcript(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """사고 재현: 한 창의 실패가 두 시간을 버리던 자리 — 이제 그 창만 비어 있다."""
+    _windowed_env(tmp_path, monkeypatch, {"105000": "rc"})
+
+    result = _windowed_transcribe(tmp_path)
+
+    assert "구간 0 발화입니다." in result.text
+    assert "구간 210000 발화입니다." in result.text
+    # 창 1 은 00:01:45–00:03:45 지만 마지막 15초는 창 2 와 겹치고 그 겹침은 창 2 가
+    # 전사했다. 표지가 부르는 것은 **아무 창도 전사하지 못한 분**뿐이다.
+    assert "[전사 실패 구간 00:01:45–00:03:30" in result.text
+    stderr = capsys.readouterr().err
+    assert "WHISPER-WINDOW-QUARANTINED index=1 reason=rc=3" in stderr
+    assert result.coverage is not None and result.coverage.complete is True
+
+
+def test_an_unparseable_window_payload_is_copied_out_for_forensics(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _plan, _log, cache = _windowed_env(tmp_path, monkeypatch, {"210000": "invalid-json"})
+
+    result = _windowed_transcribe(tmp_path)
+
+    copies = sorted((cache / "quarantine").rglob("*.json"))
+    assert len(copies) == 1
+    assert copies[0].read_bytes().startswith(b'{"transcription"')
+    assert "[전사 실패 구간 00:03:30–00:05:30" in result.text
+    assert "구간 0 발화입니다." in result.text
+    assert "reason=invalid-json" in capsys.readouterr().err
+
+
+def test_a_window_that_collapsed_into_one_phrase_is_dropped_alone(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """반복 붕괴는 그 창의 사고다 — 나머지 창의 말까지 버릴 이유가 없다."""
+    _windowed_env(tmp_path, monkeypatch, {"105000": "repeat"})
+
+    result = _windowed_transcribe(tmp_path)
+
+    assert "구간 0 발화입니다." in result.text
+    assert "구간 210000 발화입니다." in result.text
+    assert "같은 말을 반복합니다" not in result.text
+    assert "WHISPER-WINDOW-QUARANTINED index=1 reason=repetition" in capsys.readouterr().err
+
+
+def test_a_rerun_reuses_the_cached_windows_and_only_retries_the_failed_one(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """45분짜리 로컬 전사가 살아남는 이유 — 성공한 창은 다시 돌리지 않는다."""
+    plan, log, cache = _windowed_env(tmp_path, monkeypatch, {"105000": "rc"})
+
+    first = _windowed_transcribe(tmp_path)
+
+    assert "[전사 실패 구간" in first.text
+    assert [call[0] for call in _calls(log)] == [0, 105_000, 210_000]
+    assert _cache_entries(cache)  # 완전 성공이 아니었으니 캐시는 남는다
+    log.unlink()
+    # 재실행에서 다시 불리면 실패하도록 바꿔 둔다: 캐시를 쓰지 않으면 바로 드러난다.
+    plan.write_text(json.dumps({"0": "rc", "210000": "rc"}), encoding="utf-8")
+
+    second = stt_local.transcribe(
+        stt_audio.check_audio(tmp_path / "2시간회의.m4a"),
+        stt_local.resolve_toolchain(dict(os.environ)),
+    )
+
+    assert [call[0] for call in _calls(log)] == [105_000]
+    assert "[전사 실패 구간" not in second.text
+    assert "구간 0 발화입니다." in second.text
+    assert "구간 105000 발화입니다." in second.text
+    assert "WHISPER-WINDOW-CACHED index=0" in capsys.readouterr().err
+    assert _cache_entries(cache) == []  # 완전 성공 뒤에는 지운다
+
+
+def test_a_refusal_keeps_and_names_the_partial_transcript(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """거부하더라도 이미 전사한 말은 파일로 남기고 그 경로를 알린다."""
+    _plan, _log, cache = _windowed_env(tmp_path, monkeypatch, {}, probe_seconds=7200.0)
+
+    with pytest.raises(stt_audio.TranscriptionRefused) as caught:
+        _windowed_transcribe(tmp_path)
+
+    assert caught.value.exit_code == 8
+    kept = sorted((cache / "partial").glob("*.md"))
+    assert len(kept) == 1
+    assert str(kept[0]) in caught.value.notice
+    assert "구간 0 발화입니다." in kept[0].read_text(encoding="utf-8")
+
+
+def test_every_window_failing_refuses_instead_of_publishing_only_markers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _windowed_env(tmp_path, monkeypatch, {"default": "rc"})
+
+    with pytest.raises(stt_audio.TranscriptionRefused) as caught:
+        _windowed_transcribe(tmp_path)
+
+    assert caught.value.exit_code == 8
+    assert "전사" in caught.value.notice

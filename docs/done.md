@@ -388,3 +388,12 @@
   한눈에 줄에 적히며, 전송·파싱 실패는 전사 시도로 세지 않고 대기한다. 승인 카드 v3 는 한눈에 줄을 먼저 인용한다.
   [소개](기능소개/plaud-lifelog-노트-v2-양식.md) · `automation/plaud_sync/{lifelog_model,lifelog_fields,lifelog_extract,lifelog_extract_live}.py` ·
   계획 `.omo/plans/plaud-lifelog-format-v2.md`.
+
+### 닫힌 수리 카드의 재발이 새 카드를 연다 (2026-09-04)
+
+- **재발 재발급** — `RepairRegistry.claim` 이 저장된 카드의 상태를 보고 `done`·`archived` 면 새 카드를 발급해
+  occurrence 를 1 부터 다시 센다. 본문 `Supersedes closed card: t_…` 로 두 카드를 잇고, 멱등키에 그 id 를 붙여
+  `--idempotency-key` 의 "non-archived 동일 키 → 기존 id 반환" 계약(`docs/qa/RRC-0/01-cli-contract.md` ④)을 피한다.
+- **읽을 수 없는 보드는 예전 동작** — 상태 조회만 전용 10초 상한을 쓰고(mutation 은 60초 유지), 실패·미주입·판정 불가는
+  기존 중복 제거(occurrence 증가)로 떨어진다.
+  [소개](기능소개/수리-티켓-재발-재발급.md) · `automation/repair/{repair_core,repair_cli}.py` · 회귀 `tests/unit/test_repair_tickets.py`.

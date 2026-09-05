@@ -108,7 +108,7 @@ def test_full_offline_pipeline_on_fixture(tmp_path, monkeypatch, capsys):
     assert rc == 0
     result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert result["todos"] >= 3 and result["milestones"] >= 2
-    assert result["glm_called"] is False and result["provider"] == "recorded"
+    assert result["codex_called"] is False and result["provider"] == "recorded"
     cards = (tmp_path / "plan/kanban-plan.jsonl").read_text().splitlines()
     assert len(cards) >= 3
     state = (tmp_path / "state/milestones.yaml").read_text()
@@ -214,11 +214,64 @@ def test_unsupported_extension(tmp_path):
 # --- patent routing + sanitization ---------------------------------------------
 
 
-def test_call_litellm_refuses_sensitive():
+def test_extraction_refuses_any_route_other_than_codex_oauth():
+    """민감 텍스트를 다른 티어로 보내려는 호출은 프롬프트가 나가기 전에 거부된다."""
     with pytest.raises(meeting_llm.PatentRoutingError):
-        meeting_llm.call_litellm(
-            "x", sensitive=True, base_url="http://127.0.0.1:1", api_key="none"
+        meeting_llm.call_codex("x", sensitive=True, provider="third-party-tier")
+    with pytest.raises(meeting_llm.PatentRoutingError):
+        meeting_llm.call_codex("x", sensitive=False, provider="third-party-tier")
+
+
+def test_extraction_fails_closed_when_codex_credentials_are_missing(tmp_path, monkeypatch):
+    """자격증명이 없으면 rc 1 + 빈 stdout — 다른 티어로 내려가지 않고 예외로 멈춘다."""
+    hermes = tmp_path / "hermes"
+    hermes.write_text(
+        '#!/bin/sh\necho "No Codex credentials stored." >&2\nexit 1\n', encoding="utf-8"
+    )
+    hermes.chmod(0o755)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
+
+    with pytest.raises(meeting_llm.ExtractionUnavailableError):
+        meeting_llm.extract(
+            "회의 본문",
+            sensitive=False,
+            prompt_path=REPO / "prompts/meeting-extraction-v3.md",
+            my_names="cha",
         )
+
+
+def test_ingest_fails_visibly_when_the_codex_tier_is_unavailable(tmp_path, monkeypatch, capsys):
+    """야간 배치 포함 모든 비대화형 경로: 조용한 성공도 대체 티어도 없다 — exit 6."""
+    hermes = tmp_path / "hermes"
+    hermes.write_text(
+        '#!/bin/sh\necho "No Codex credentials stored." >&2\nexit 1\n', encoding="utf-8"
+    )
+    hermes.chmod(0o755)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
+    monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
+    monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
+    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
+    monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
+    monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
+    monkeypatch.setenv("MEETING_CONFIG", str(tmp_path / "absent.json"))
+
+    rc = meeting_cli.main(
+        ["ingest", "--file", str(FIXTURES / "meeting-clean.md"), "--offline",
+         "--notify-channel", "TEST"]
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 6
+    assert "회의록 추출 실패" in out
+    log_line = next((tmp_path / "logs").glob("*.jsonl")).read_text(encoding="utf-8").splitlines()
+    record = json.loads(log_line[-1])
+    assert record["exit"] == 6 and record["error"] == "ExtractionUnavailableError"
+    assert record["codex_called"] is False
+    assert "provider" not in record, "실패한 호출은 성공한 공급자로 기록되지 않는다"
+    assert not list((tmp_path / "notes").glob("*.md")), "실패했는데 회의록이 생기면 안 된다"
 
 
 def test_sensitive_cards_and_milestones_sanitized(tmp_path):

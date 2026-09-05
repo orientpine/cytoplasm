@@ -2,9 +2,9 @@
 
 stdlib only (repo convention): the multipart body is assembled by hand and sent
 with ``urllib.request`` so no third-party SDK enters the runtime. ``base_url``
-is a plain override, which is what makes a LiteLLM gateway
-(``model_info.mode: audio_transcription``) a drop-in replacement for the
-provider endpoint without touching a caller.
+is a plain override, which is what makes any OpenAI-compatible transcription
+endpoint a drop-in replacement for the provider endpoint without touching a
+caller.
 
 Failure is always fail-closed and never echoes the credential: a missing key
 refuses before a byte leaves the node, and a provider error is reduced to

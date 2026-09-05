@@ -64,7 +64,12 @@ class RepairRegistry:
         self._state_file = state_file
         self._lock_file = state_file.with_suffix(".lock")
 
-    def claim(self, signature: str, create_ticket: Callable[[], str]) -> RepairClaim:
+    def claim(
+        self,
+        signature: str,
+        create_ticket: Callable[[str | None], str],
+        is_ticket_closed: Callable[[str], bool | None] | None = None,
+    ) -> RepairClaim:
         """Reserve one occurrence under an exclusive lock and create at most one card."""
         self._state_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self._lock_file.open("a+", encoding="utf-8") as lock_handle:
@@ -72,7 +77,7 @@ class RepairRegistry:
             tickets = self._load()
             current = tickets.get(signature)
             if current is None:
-                ticket_id = create_ticket()
+                ticket_id = create_ticket(None)
                 tickets[signature] = {"ticket_id": ticket_id, "occurrences": 1}
                 self._save(tickets)
                 return RepairClaim(ticket_id=ticket_id, occurrence=1, created=True)
@@ -80,6 +85,16 @@ class RepairRegistry:
             stored_occurrence = current["occurrences"]
             if not isinstance(ticket_id, str) or not isinstance(stored_occurrence, int):
                 raise RepairStateError("repair state entry is malformed")
+            try:
+                is_closed = None if is_ticket_closed is None else is_ticket_closed(ticket_id)
+            except Exception:  # a board we cannot read must not mint duplicate cards
+                is_closed = None
+            if is_closed is True:
+                superseded = ticket_id
+                ticket_id = create_ticket(superseded)
+                tickets[signature] = {"ticket_id": ticket_id, "occurrences": 1}
+                self._save(tickets)
+                return RepairClaim(ticket_id=ticket_id, occurrence=1, created=True)
             occurrence = stored_occurrence + 1
             tickets[signature] = {"ticket_id": ticket_id, "occurrences": occurrence}
             self._save(tickets)
@@ -112,16 +127,27 @@ class RepairRegistry:
 class RepairService:
     """Convert one raw failure into private storage plus a redacted repair card."""
 
-    def __init__(self, kanban: KanbanPort, private_logs: PrivateLogPort, registry: RepairRegistry) -> None:
+    def __init__(
+        self,
+        kanban: KanbanPort,
+        private_logs: PrivateLogPort,
+        registry: RepairRegistry,
+        is_ticket_closed: Callable[[str], bool | None] | None = None,
+    ) -> None:
         self._kanban = kanban
         self._private_logs = private_logs
         self._registry = registry
+        self._is_ticket_closed = is_ticket_closed
 
     def record(self, event: RepairEvent) -> RepairResult:
         """Create or update a blocked ticket without sending the raw log to Kanban."""
         safe_excerpt = excerpt(event.raw_log)
         signature = digest(f"{event.source}\n{event.location}\n{_error_class(safe_excerpt)}")
-        claim = self._registry.claim(signature, lambda: self._create_ticket(event, signature, safe_excerpt))
+        claim = self._registry.claim(
+            signature,
+            lambda superseded: self._create_ticket(event, signature, safe_excerpt, superseded),
+            self._is_ticket_closed,
+        )
         private_path = self._private_logs.write(claim.ticket_id, claim.occurrence, event.raw_log)
         log_hash = digest(event.raw_log)
         self._kanban.comment(
@@ -138,11 +164,21 @@ class RepairService:
             signature=signature,
         )
 
-    def _create_ticket(self, event: RepairEvent, signature: str, safe_excerpt: str) -> str:
+    def _create_ticket(
+        self, event: RepairEvent, signature: str, safe_excerpt: str, superseded: str | None
+    ) -> str:
+        body = f"Repair ticket. Redacted excerpt: {safe_excerpt}\nSignature: {signature}"
+        idempotency_key = f"repair-{signature}"
+        if superseded is not None:
+            # The board returns the existing non-archived task for a repeated dedup key, so a
+            # superseding card must ask for a key the closed card never owned; reusing it would
+            # hand the recurrence straight back to the card it is meant to replace.
+            body = f"{body}\nSupersedes closed card: {superseded}"
+            idempotency_key = f"{idempotency_key}-after-{superseded}"
         ticket_id = self._kanban.create(
             title=f"수리: {event.source}",
-            body=f"Repair ticket. Redacted excerpt: {safe_excerpt}\nSignature: {signature}",
-            idempotency_key=f"repair-{signature}",
+            body=body,
+            idempotency_key=idempotency_key,
         )
         self._kanban.block_for_repair(ticket_id, "Needs human repair review; do not dispatch an LLM worker.")
         return ticket_id
