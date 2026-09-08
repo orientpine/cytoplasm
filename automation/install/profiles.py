@@ -21,15 +21,17 @@ class InstallProfile:
     name: str
     #: Service groups in `HEALTHCHECK_SERVICE_GROUPS` order (core report-hub rag).
     healthcheck_services: tuple[str, ...]
+    components: tuple[str, ...] = ()
 
 
 HEALTHCHECK_DECLARATION_PATH: Final = Path("/etc/autophagy/healthcheck.env")
 
 PROFILES: Final[Mapping[str, InstallProfile]] = {
     "core": InstallProfile("core", ("core",)),
+    # RAG는 RAG_NODE에 deploy.sh가 SSH로 배포하므로 주 노드 설치기 컴포넌트가 아니다.
     "rag": InstallProfile("rag", ("core", "rag")),
-    "report-hub": InstallProfile("report-hub", ("core", "report-hub")),
-    "full": InstallProfile("full", ("core", "report-hub", "rag")),
+    "report-hub": InstallProfile("report-hub", ("core", "report-hub"), ("report-hub",)),
+    "full": InstallProfile("full", ("core", "report-hub", "rag"), ("report-hub",)),
 }
 
 

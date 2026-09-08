@@ -1,25 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage() {
-    echo 'Usage: run.sh [--evidence-dir DIR] [--keep] [-- <command...>]'
-}
+usage() { echo '사용법: run.sh [--evidence-dir DIR] [--keep] [--stub-hermes] [-- <명령...>]'; }
 
 harness_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(git -C "$harness_dir" rev-parse --show-toplevel)
-evidence_dir=/tmp/install-systemd-qa
-keep=false
+evidence_dir=/tmp/install-systemd-qa keep=false stub_hermes=false
 while (($#)); do
     case "$1" in
         --evidence-dir)
-            if (($# < 2)) || [[ -z $2 ]]; then
-                usage >&2
-                exit 2
-            fi
-            evidence_dir=$2
-            shift 2
-            ;;
+            if (($# < 2)) || [[ -z $2 ]]; then usage >&2; exit 2; fi
+            evidence_dir=$2; shift 2 ;;
         --keep) keep=true; shift ;;
+        --stub-hermes) stub_hermes=true; shift ;;
         --) shift; break ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
@@ -40,32 +33,25 @@ container_name=autophagy-install-qa-$$
 # Freeze HEAD once: other workers may advance the branch during a build.
 revision=$(git -C "$repo" rev-parse HEAD)
 started=$SECONDS
-temporary=''
-boot_directory=''
-container_attempted=false
+temporary='' boot_directory='' container_attempted=false
 cleanup() {
     local rc=$?
     trap - EXIT
-    if [[ -n $temporary ]]; then
-        if ! rm -rf -- "$temporary"; then
-            echo 'HARNESS-CLEANUP-FAIL: cannot remove temporary key directory' >&2
-            rc=125
-        fi
+    if [[ -n $temporary ]] && ! rm -rf -- "$temporary"; then
+        echo 'HARNESS-CLEANUP-FAIL: 임시 키 디렉터리 삭제 실패' >&2; rc=125
     fi
     if "$container_attempted"; then
         if "$keep"; then
             printf 'Kept container: %s (remove with docker rm -f %s)\n' "$container_name" "$container_name"
         elif ! docker rm -f "$container_name" > /dev/null; then
-            echo "HARNESS-CLEANUP-FAIL: cannot remove $container_name" >&2
-            rc=125
+            echo "HARNESS-CLEANUP-FAIL: 컨테이너 삭제 실패: $container_name" >&2; rc=125
         fi
     fi
     if [[ -n $boot_directory ]]; then
         if "$keep"; then
             printf 'After removing the kept container: rm -rf -- %q\n' "$boot_directory"
         elif ! rm -rf -- "$boot_directory"; then
-            echo 'HARNESS-CLEANUP-FAIL: cannot remove boot notification directory' >&2
-            rc=125
+            echo 'HARNESS-CLEANUP-FAIL: 부팅 알림 디렉터리 삭제 실패' >&2; rc=125
         fi
     fi
     exit "$rc"
@@ -86,10 +72,8 @@ boot_directory=$(mktemp -d)
 # race creation of /run/systemd/private. No sleeps or readiness polling.
 boot_rc=0
 python3 - "$container_name" "$image_digest" "$boot_directory" <<'PY' > "$evidence_dir/boot-state.txt" 2>&1 || boot_rc=$?
-import socket
-import subprocess
-import sys
-import time
+from __future__ import annotations
+import socket, subprocess, sys, time
 from pathlib import Path
 
 name, image, temporary = sys.argv[1:]
@@ -104,10 +88,9 @@ def remaining():
 try:
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver:
         receiver.bind(str(Path(temporary) / 'notify'))
-        subprocess.run([
-            'docker', 'run', '-d', '--name', name, '--hostname', name,
-            '--privileged', '--cgroupns=host', '--tmpfs', '/run',
-            '--tmpfs', '/run/lock', '-v', '/sys/fs/cgroup:/sys/fs/cgroup:rw',
+        subprocess.run(['docker', 'run', '-d', '--name', name, '--hostname', name,
+            '--privileged', '--cgroupns=host', '--tmpfs', '/run', '--tmpfs', '/run/lock',
+            '-v', '/sys/fs/cgroup:/sys/fs/cgroup:rw',
             '--mount', f'type=bind,src={temporary},dst=/run/host', image,
             '/sbin/init', 'systemd.set_credential=vmm.notify_socket:/run/host/notify',
         ], check=True, timeout=remaining())
@@ -115,9 +98,8 @@ try:
             receiver.settimeout(remaining())
             if b'READY=1' not in receiver.recv(4096).splitlines():
                 continue
-            result = subprocess.run([
-                'docker', 'exec', name, 'systemctl', 'is-system-running', '--wait',
-            ], capture_output=True, text=True, timeout=remaining())
+            result = subprocess.run(['docker', 'exec', name, 'systemctl', 'is-system-running', '--wait'],
+                                    capture_output=True, text=True, timeout=remaining())
             print(result.stdout.strip(), flush=True)
             if result.stdout.strip() not in ('running', 'degraded'):
                 raise RuntimeError(f'state rc={result.returncode}: {result.stderr.strip()}')
@@ -137,8 +119,7 @@ boot_state=$(tail -n 1 "$evidence_dir/boot-state.txt")
 # reconstructs mounts, and fails if even an unrelated bind source was deleted.
 printf 'systemctl is-system-running: %s\n' "$boot_state"
 docker exec "$container_name" mkdir -p /root/autophagy-agents
-git -C "$repo" archive "$revision" | docker exec -i "$container_name" \
-    tar -x -C /root/autophagy-agents --exclude='.omo' --exclude='.venv' --exclude='.env.secrets'
+git -C "$repo" archive "$revision" | docker exec -i "$container_name" tar -x -C /root/autophagy-agents --exclude='.omo' --exclude='.venv' --exclude='.env.secrets'
 
 temporary=$(mktemp -d)
 ssh-keygen -q -t ed25519 -N '' -C install-systemd-qa -f "$temporary/trust"
@@ -147,21 +128,15 @@ rm -rf -- "$temporary"
 temporary=''
 
 docker exec -i -w /root/autophagy-agents "$container_name" python3 - <<'PY' | tee "$evidence_dir/config-notes.txt"
-import json
-import socket
-import tomllib
+from __future__ import annotations
+import json, socket, tomllib
 from pathlib import Path
 from automation.node_config import NodeConfigError, load_node_config
 
 values = tomllib.loads(Path('configs/node.example.toml').read_text())
-values.update(
-    origin_url='https://github.com/orientpine/cytoplasm.git',
-    require_signed_updates=True,
-    deploy_ssh_host='',
-    primary_node_name=socket.gethostname(),
-    rag_node_name=socket.gethostname(),
-    operator_account='root',
-)
+values.update(origin_url='https://github.com/orientpine/cytoplasm.git',
+              require_signed_updates=True, deploy_ssh_host='', operator_account='root',
+              primary_node_name=socket.gethostname(), rag_node_name=socket.gethostname())
 path = Path('/root/node.toml')
 def write_config():
     path.write_text(''.join(f'{key} = {json.dumps(value)}\n' for key, value in values.items()))
@@ -178,16 +153,48 @@ except NodeConfigError as error:
 print('CONFIG-VALID: /root/node.toml (operator_account=root; require_signed_updates=true)')
 PY
 
-printf 'WORKING: execute installer command\n'
-set +e
-docker exec -e PYTHONUNBUFFERED=1 -w /root/autophagy-agents "$container_name" \
-    "${command[@]}" 2>&1 | tee "$evidence_dir/install-transcript.txt"
-statuses=("${PIPESTATUS[@]}")
-set -e
-rc=${statuses[0]}
-if ((statuses[1] != 0)); then
-    echo 'HARNESS-EVIDENCE-FAIL: tee failed' >&2
-    exit 125
+: > "$evidence_dir/install-transcript.txt"
+run_installer() {
+    printf 'WORKING: 설치 명령 실행\n'
+    set +e
+    docker exec -e PYTHONUNBUFFERED=1 -w /root/autophagy-agents "$container_name" "${command[@]}" 2>&1 | tee -a "$evidence_dir/install-transcript.txt"
+    statuses=("${PIPESTATUS[@]}")
+    set -e
+    rc=${statuses[0]}
+    if ((statuses[1] != 0)); then echo 'HARNESS-EVIDENCE-FAIL: 증적 기록 실패' >&2; exit 125; fi
+}
+run_installer
+if "$stub_hermes"; then
+    if ! grep -q '^\[FAIL\] hermes-gateway:' "$evidence_dir/install-transcript.txt"; then
+        echo 'HARNESS-STUB-FAIL: 1차 실행이 hermes-gateway 경계에 도달하지 않았다' >&2; exit 125
+    fi
+    printf 'WORKING: Hermes 시험용 스텁 설치\n'
+    docker exec -i -w /root/autophagy-agents "$container_name" python3 - <<'PY'
+from __future__ import annotations
+import os, pwd, subprocess
+from pathlib import Path
+from automation.node_config import load_node_config
+
+config = load_node_config(Path('/root/node.toml'))
+for account, home, unit in ((config.agent_account, config.agent_home, config.agent_gateway_unit),
+                            (config.peer_account, config.peer_home, config.peer_gateway_unit)):
+    user = pwd.getpwnam(account)
+    files = (
+        (home / '.local/bin/hermes', 0o755, '#!/bin/sh\n[ "$1" = --version ] || exit 2\necho "hermes 0.0.0-harness-stub"\n'),
+        (home / '.config/systemd/user' / unit, 0o644, '[Service]\nType=simple\nExecStart=/bin/sleep infinity\n\n[Install]\nWantedBy=default.target\n'),
+    )
+    for path, mode, content in files:
+        subprocess.run(['install', '-d', '-o', account, '-g', str(user.pw_gid), str(path.parent)], check=True)
+        path.write_text(content)
+        path.chmod(mode)
+        os.chown(path, user.pw_uid, user.pw_gid)
+    subprocess.run(['systemctl', 'start', f'user@{user.pw_uid}.service'], check=True)
+    prefix = ['runuser', '-u', account, '--', 'env', f'HOME={home}', f'XDG_RUNTIME_DIR=/run/user/{user.pw_uid}', 'systemctl', '--user']
+    subprocess.run([*prefix, 'daemon-reload'], check=True)
+    subprocess.run([*prefix, 'enable', '--now', unit], check=True)
+PY
+    printf '\n===== HARNESS-PASS-2: Hermes 스텁 적용 후 재실행 =====\n' | tee -a "$evidence_dir/install-transcript.txt"
+    run_installer
 fi
 
 # Read actual filesystem/account state, never private key contents. This is
@@ -195,8 +202,8 @@ fi
 verification_rc=0
 if "$default_command"; then
     docker exec -i -w /root/autophagy-agents "$container_name" python3 - <<'PY' > "$evidence_dir/mutation-state.txt" 2>&1 || verification_rc=$?
-import pwd
-import subprocess
+from __future__ import annotations
+import pwd, subprocess
 from pathlib import Path
 from automation.install.assets import build_inputs
 from automation.install.state import inspect_state
@@ -208,9 +215,7 @@ inputs = build_inputs(Path.cwd(), config, Path('/root/trust.pub').read_text())
 state = inspect_state(inputs)
 for account in ('agent', 'peer', 'ops'):
     assert account in state.ready_accounts, f'account not converged: {account}'
-    linger = subprocess.check_output(
-        ['loginctl', 'show-user', account, '--property=Linger', '--value'], text=True
-    ).strip()
+    linger = subprocess.check_output(['loginctl', 'show-user', account, '--property=Linger', '--value'], text=True).strip()
     assert linger == 'yes', f'linger not enabled: {account}'
     print(f'ACCOUNT-VERIFIED: {account} uid={pwd.getpwnam(account).pw_uid} Linger={linger}')
 assert config.private_root in state.directories
@@ -219,15 +224,14 @@ print('MUTATION-VERIFIED: directories and peer-attest key ownership/modes/public
 PY
 fi
 
-python3 - "$evidence_dir" "$image_digest" "$revision" "$boot_state" "$rc" "$((SECONDS - started))" "${command[@]}" <<'PY'
-import re
-import shlex
-import sys
+python3 - "$evidence_dir" "$image_digest" "$revision" "$boot_state" "$rc" "$((SECONDS - started))" "$stub_hermes" "${command[@]}" <<'PY'
+from __future__ import annotations
+import re, shlex, sys
 from pathlib import Path
 
-folder, digest, revision, boot, rc, elapsed, *command = sys.argv[1:]
+folder, digest, revision, boot, rc, elapsed, stub, *command = sys.argv[1:]
 root = Path(folder)
-lines = (root / 'install-transcript.txt').read_text().splitlines()
+lines = (root / 'install-transcript.txt').read_text().split('===== HARNESS-PASS-2: Hermes 스텁 적용 후 재실행 =====\n')[-1].splitlines()
 plan = [line for line in lines if re.match(r'^\d+\. ', line)]
 boundary = next((line for line in lines if '[FAIL]' in line or 'INSTALL-BLOCK' in line), 'none')
 # The installer prints the WHOLE plan up front. Only result lines demonstrate
@@ -257,7 +261,7 @@ for line in lines:
 summary = '\n'.join([
     f'image_digest={digest}', f'repository_revision={revision}',
     f'command={shlex.join(command)}', f'rc={rc}', f'boot_state={boot}',
-    f'elapsed_seconds={elapsed}', f'first_boundary={boundary}',
+    f'elapsed_seconds={elapsed}', f'stub_hermes={stub}', f'first_boundary={boundary}',
     f'highest_action_reached={plan[reached] if reached >= 0 else "none evidenced"}',
 ]) + '\n'
 (root / 'summary.txt').write_text(summary)

@@ -6,13 +6,17 @@ import os
 import pwd
 import stat
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
+from automation.install.components import EnableUserUnit
+from automation.install.healthcheck_probe_asset import inspect_probe
 from automation.install.plan import (
     DirectoryState,
     EnsureDirectory,
     FileState,
     InstallInputs,
+    ProvisionHealthcheckProbe,
     SystemState,
     build_plan,
 )
@@ -82,6 +86,11 @@ def inspect_state(inputs: InstallInputs) -> SystemState:
         if (origin := _repository_origin(path)) is not None
     }
     timers = frozenset(timer for timer in inputs.timers if _timer_enabled(timer))
+    try:
+        operator_home = Path(pwd.getpwnam(config.operator_account).pw_dir)
+    except KeyError:
+        operator_home = None
+    probe = next(action for action in desired.actions if isinstance(action, ProvisionHealthcheckProbe))
     return SystemState(
         accounts=accounts,
         ready_accounts=ready_accounts,
@@ -92,7 +101,13 @@ def inspect_state(inputs: InstallInputs) -> SystemState:
         peer_attest_keys=peer_attest_keys,
         repositories=repositories,
         enabled_timers=timers,
+        enabled_user_units=frozenset(unit for unit in inputs.components.user_units if _user_unit_enabled(unit)),
+        symlinks=frozenset(link for link in inputs.components.symlinks
+                          if link.path.is_symlink() and link.path.readlink() == link.target
+                          and _owner(link.path) == (link.owner, link.owner)),
         gitleaks_version=_gitleaks_version(),
+        operator_home=operator_home,
+        healthcheck_probe_ready=inspect_probe(replace(probe, operator_home=operator_home)) if operator_home is not None else False,
     )
 
 
@@ -219,6 +234,15 @@ def _timer_enabled(name: str) -> bool:
             stderr=subprocess.DEVNULL,
         )
     except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
+def _user_unit_enabled(unit: EnableUserUnit) -> bool:
+    try:
+        result = subprocess.run((*unit.command(), "is-enabled", "--quiet", unit.name),
+                                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (KeyError, FileNotFoundError):
         return False
     return result.returncode == 0
 

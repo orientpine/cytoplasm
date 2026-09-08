@@ -4,9 +4,10 @@ import json
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Final
+from typing import Final, assert_never
 
-from automation.install.components import resolve_components
+from automation.install.components import EnableUserUnit, EnsureSymlink, resolve_components
+from automation.install.component_assets import build_component_assets
 from automation.install.libexec_assets import libexec_files
 from automation.install.profiles import (
     HEALTHCHECK_DECLARATION_PATH,
@@ -28,6 +29,7 @@ from automation.install.plan import (
     InstallGitleaks,
     InstallInputs,
     InstallPlan,
+    ProvisionHealthcheckProbe,
 )
 from automation.install.trust_key_bootstrap import plan_install
 from automation.node_asset_renderer import render_asset
@@ -73,7 +75,7 @@ class InstallAssetError(RuntimeError):
 
 
 def describe_action(action: InstallAction) -> str:
-    match action:  # noqa: MATCH_OK - InstallAction is exhaustively consumed.
+    match action:
         case EnsureAccount(name=name, home=home):
             return f"account {name} home={home}"
         case EnsureGroup(name=name, members=members):
@@ -97,14 +99,22 @@ def describe_action(action: InstallAction) -> str:
                 f"peer-attest-key private={private_path} public={public_path} "
                 f"owner={owner} comment={comment} private-content=never-printed"
             )
+        case ProvisionHealthcheckProbe(operator_home=home, private_path=key):
+            return f"healthcheck-probe 키={key} 래퍼={home}/.local/libexec/autophagy-healthcheck-probe"
         case InstallGitleaks(version=version):
             return f"gitleaks version={version}"
         case EnsureRepository(path=path, origin_url=origin):
             return f"repository {path} origin={origin}"
         case EnableTimer(name=name):
             return f"timer {name} enabled"
+        case EnsureSymlink(path=path, target=target, owner=owner):
+            return f"symlink {path} 대상={target} 소유자={owner}"
+        case EnableUserUnit(name=name, owner=owner):
+            return f"user-unit {name} 사용자={owner} 활성화"
         case Check(name=name):
             return f"check {name}"
+        case _:
+            assert_never(action)
 
 
 def render_plan(plan: InstallPlan) -> str:
@@ -150,8 +160,10 @@ def build_inputs(
 ) -> InstallInputs:
     config = replace(config, peer_attest_mode="signed")
     _validate_release_layout(config)
-    selected = resolve_components(components)
-    declaration = None if profile is None else healthcheck_env(resolve_profile(profile))
+    chosen_profile = None if profile is None else resolve_profile(profile)
+    names = (*components, *(chosen_profile.components if chosen_profile is not None else ()))
+    selected = build_component_assets(repo_root, config, resolve_components(names))
+    declaration = None if chosen_profile is None else healthcheck_env(chosen_profile)
     automation = repo_root / "automation"
     root = "root"
     ops = config.ops_account
@@ -197,21 +209,7 @@ def build_inputs(
             )
         )
 
-    # Opt-in components are appended in the same shape as the always-on units, so the
-    # existing digest/enabled-timer comparison in build_plan gives them idempotency for
-    # free: a second run re-derives identical FileSpecs and skips the already-enabled timer.
-    for component in selected:
-        component_source = repo_root / component.source
-        for name in component.units:
-            files.append(
-                _file(
-                    Path("/etc/systemd/system") / name,
-                    _rendered(component_source / name, config),
-                    0o644,
-                    root,
-                    root,
-                )
-            )
+    files.extend(selected.files)
 
     sudoers_source = automation / "sudoers.d"
     for name in SUDOERS_ASSETS:
@@ -261,7 +259,4 @@ def build_inputs(
             ),
         )
     )
-    timers = ENABLED_TIMERS + tuple(
-        name for component in selected for name in component.timers
-    )
-    return InstallInputs(config, tuple(files), timers)
+    return InstallInputs(config, tuple(files), ENABLED_TIMERS + selected.timers, components=selected)

@@ -189,19 +189,49 @@ INSTALL PLAN
 `--profile <core|rag|report-hub|full>`로 이 노드가 운영할 묶음을 고른다. 위·아래 명령의
 `core`는 예시이므로 실제 용도에 맞게 바꾸되 dry-run과 apply에는 **같은 값**을 쓴다.
 
-| 프로필 | `HEALTHCHECK_SERVICES` 선언 |
-|---|---|
-| `core` | `core` |
-| `rag` | `core rag` |
-| `report-hub` | `core report-hub` |
-| `full` | `core report-hub rag` |
+| 프로필 | `HEALTHCHECK_SERVICES` 선언 | 자동 선택 컴포넌트 |
+|---|---|---|
+| `core` | `core` | 없음 |
+| `rag` | `core rag` | 없음 |
+| `report-hub` | `core report-hub` | `report-hub` |
+| `full` | `core report-hub rag` | `report-hub` |
 
-설치기는 `/etc/autophagy/healthcheck.env`를 `root:root 0644`로 배치한다
-(`automation/install/profiles.py:26–45`, `automation/install/assets.py:229–230`).
-**프로필은 감시 범위 선언이지 RAG 스택·report-hub 유닛 설치가 아니다.** 추가 서비스 배치는
-별도이며 `--with-component`와도 구별한다.
+설치기는 `/etc/autophagy/healthcheck.env`를 `root:root 0644`로 배치한다.
+`report-hub`와 `full`은 보고 허브 컴포넌트도 설치한다. **RAG는 별도 노드 배포**다:
+`automation/rag_stack/deploy.sh`가 SSH로 `RAG_NODE`에 배포하며, 주 노드만 다루는
+설치기에는 RAG 컴포넌트가 없다. `rag`·`full`의 RAG 선택은 원격 감시 선언이다.
 
-`--profile`을 생략하면 이전과 바이트 동일한 계획을 유지하며 선언 파일을 새로 만들거나
+### 선택 컴포넌트
+
+`--with-component <managed-sync|report-hub>`를 반복해 명시적으로 추가할 수 있다.
+프로필 선택과 합친 뒤 이름순으로 중복을 제거한다. 예를 들어 `--profile core
+--with-component report-hub`도 허브를 설치하되 헬스체크 선언은 `core`로 유지한다.
+감시까지 함께 원하면 `--profile report-hub`를 쓴다. 미선택 컴포넌트의 파일·유닛은
+계획에 없고, 다른 프로필로 재실행해도 이미 설치한 컴포넌트를 제거하지는 않는다.
+`managed-sync`는 기존처럼 root system 유닛과 타이머만 추가한다.
+
+`report-hub`가 추가하는 것은 다음과 같다(경로·계정은 노드 config 기준).
+
+- ops 홈의 `.config/systemd/user/`에 collector·dashboard 유닛 2개(`ops:ops 0644`).
+  system 유닛으로 바꾸지 않으며 ops 사용자 매니저에서 `enable --now`한다.
+- ops 홈의 `report-hub/` 디렉터리(`ops:ops 0750`)와
+  `automation -> <release_current>/automation` 심볼릭 링크.
+- `report-hub/hub.env` 빈 주석 템플릿(`ops:ops 0600`, 최초 한 번만 생성).
+  재실행은 운영자가 채운 값을 덮어쓰지 않는다.
+
+ops로 `hub.env`를 편집해 `REPORT_HUB_GUILD_ID`, `REPORT_HUB_DB`,
+`REPORT_HUB_QUARANTINE_LOG`, `REPORT_HUB_PEERS_FILE`, `REPORT_HUB_DASHBOARD_USER`,
+`REPORT_HUB_DASHBOARD_PASSWORD_SHA256`(64자리 SHA256 hex)를 채운다. 콜렉터의
+`DISCORD_BOT_TOKEN`은 ops의 `.env.secrets`에 둘 수 있다. 비공개 peers 파일과 데이터
+경로도 직접 준비한다. 선택 설정은 주석을 유지하면 채널 `agents-log`, 폴링 10초,
+바인드 `127.0.0.1:8800` 기본값을 쓴다. 원격 접속은 자기 tailnet 주소를 지정한다.
+
+**활성화(enabled)는 서비스 정상 동작(active)과 다르다.** 최초 릴리스 수렴 전에는
+링크 대상 코드가 없어 재시작을 반복할 수 있다. 인증 설정이 없으면 대시보드는
+기동을 거부한다. 코드·설정을 준비한 뒤 ops 사용자 유닛을 재시작하고 유닛 active 및
+무인증 HTTP 401을 확인한다. 자세한 수동·설치기 경로는 [보고 허브 가이드](report-hub.md).
+
+`--profile`을 생략하면 선언 파일을 새로 만들거나
 지우지 않는다. 기존 파일·환경 선언도 없으면 **모든 프로브가 그대로 돈다**.
 실행 환경에서 export한 `HEALTHCHECK_SERVICES`가 파일보다 우선한다. 빈 값을 export해도
 파일을 무시하고 모든 프로브를 켠다(`automation/healthcheck_registry.sh:21–32,52–60`).

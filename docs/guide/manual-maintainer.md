@@ -252,8 +252,14 @@ gh release create v1.0.1 --repo orientpine/cytoplasm \
 # 개인키 경로다(`public_export.sh` 가 `ssh-keygen -y` 로 공개키를 유도한다) — 그 변수를 여기에
 # 그대로 넣으면 개인키가 공개 asset 이 된다. 업로드 전에 첫 낱말이 `ssh-ed25519` 인지 본다.
 head -c 11 ~/.ssh/autophagy_update_trust.pub; echo   # → ssh-ed25519
-gh release upload v1.0.1 --repo orientpine/cytoplasm \
-    ~/.ssh/autophagy_update_trust.pub#update-trust.pub
+
+# asset 이름은 올리는 **파일 이름 그대로**가 된다. `gh release upload <파일>#<이름>` 의 `#` 뒤는
+# 라벨일 뿐이라 이름을 바꾸지 못한다 — 2026-09-08 v1.6.0 실측에서 asset 이
+# `autophagy_update_trust.pub` 로 올라가 install.md §1·manual-member.md §1 이 안내하는
+# `<bundle>/update-trust.pub` 와 어긋났다. 문서가 약속한 이름으로 **복사한 뒤** 올린다.
+cp ~/.ssh/autophagy_update_trust.pub /tmp/update-trust.pub
+gh release upload v1.0.1 --repo orientpine/cytoplasm /tmp/update-trust.pub
+rm -f /tmp/update-trust.pub
 ```
 
 `gh release view v1.0.1 --repo orientpine/cytoplasm --json assets` 로 `update-trust.pub`

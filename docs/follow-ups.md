@@ -202,17 +202,7 @@ PR #413은 동시 `--apply` 회귀의 release FIFO를 O_RDWR로 유지해 CI 경
 
 ## 설치 마법사·프로필 착지 후 남긴 것 (2026-09-08)
 
-- **`rag`·`report-hub` 프로필은 헬스체크 선언만 정하고 RAG 스택·report-hub 유닛을 배치하지 않는다** →
-  다음 단계로 `OPT_IN_COMPONENTS` 확장을 설계 판단한다(`automation/install/components.py:39–49`).
-  **영향: 추가 서비스 배치는 별도 준비 · 동작은 정상 · 심각도 낮음**.
-- **healthcheck SSH forced-command 래퍼는 여전히 owner-run 별도 절차다** →
-  `automation/provision-healthcheck-probe.sh:2–6`의 절차를 설치 자산으로 편입할지 검토한다.
-  **영향: 신규 노드의 `check healthcheck`가 `INFRA_FAILURE`로 FAIL할 수 있음 · 심각도 중**.
-- **컨테이너 실제 설치 검증은 `hermes-gateway` 외부 전제에서 멈춘다** →
-  실호스트 첫 완주 때 아래 QA 디렉터리에 증적을 추가한다(**OBSERVE**).
-  **영향: Hermes·Discord 뒤 타이머·최종 healthcheck 완주 근거가 아직 없음 · 심각도 낮음**.
-
-증적: [docs/qa/INSTALL-TUI/](qa/INSTALL-TUI/) · [systemd 하네스](../tests/e2e/install/systemd_container/README.md).
+> ↳ 2026-09-08 설치기 착지로 이관 — 원문·처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
 
 ## 제안서 엔진 내제화 착지 후 남긴 것 (2026-09-08)
 
@@ -232,3 +222,4 @@ PR #413은 동시 `--apply` 회귀의 release FIFO를 O_RDWR로 유지해 CI 경
 ## v1.6.0 릴리스 착지 후 남긴 것 (2026-09-08)
 
 - **소유자 ✅ 를 받은 릴리스 요청이 태그 전에 origin/main 이 전진하면 영구히 실행 불가가 되는데, `release.sh` 의 자동 회수는 `bound_pending` 만 다루고 완결 타이머는 매 틱 `RELEASE-DECISION: live request is bound to a different HEAD` 로 조용히 끝난다(2026-09-07 17:46 KST v1.6.0@2a0a20267 실측 — 승인 뒤 main 이 75커밋 전진, 다음 날 `release.sh` 는 `RELEASE-RETIRE-BLOCK: pending release does not match the latest signed head` 로 exit 4, 사람이 `release_approval_remote.sh abandon --version --head --message-id --reason` 을 돌려야 풀렸고 그동안 완결기는 18시간 동안 2분마다 같은 줄만 남겼다) → ① `release.sh` 가 시작 시 approved 이면서 head ≠ origin/main tip 인 레코드를 같은 감사형 abandon 으로 자가 회수하고 새 요청을 정확히 한 번 게시한다(새 요청은 옛 승인 범위의 상위집합이므로 재승인이 fail-closed 로 맞다), ② 완결 타이머는 같은 조건을 만나면 침묵하지 말고 소유자 통지를 에피소드당 1건 남긴다(매 틱 반복 금지). 인가 경계는 넓히지 않는다 — 옛 승인으로 새 tip 을 태그하는 경로는 만들지 않는다.** **영향: 릴리스 파이프라인 가용성(승인이 tip 전진보다 늦게 오는 모든 릴리스), 프로덕션 코드·노드 무영향 · 심각도 중**.
+- **감사형 abandon 은 Discord 를 건드리지 않으므로(`release_abandon` A3) 죽은 승인 카드가 채널에 그대로 남고, 카드 제목은 버전뿐이라 살아 있는 카드와 구분되지 않는다 — v1.6.0 은 같은 제목의 카드가 4장(`e638ea5cd`·`2a0a20267`·`21f673f7b`·`efb8dba9d`) 쌓였고 소유자가 어느 것을 눌러야 하는지 본문의 `배포 기준: <sha>` 로만 판별할 수 있었다(2026-09-08 소유자 질문) → abandon 이 원 메시지에 상태 회신 한 줄(예: `⛔ 만료 — <새 head> 로 재요청됨`)을 남기거나 카드 제목/본문에 접두어를 붙이도록 한다. 소유자 결정을 파괴하지 않는다는 A3 의 취지는 리액션을 지우지 않는 것이므로, 읽기 전용 표시 추가는 그 불변식과 충돌하지 않는다.** **영향: 승인 표면의 오독 위험(엉뚱한 카드에 ✅ → 아무 일도 일어나지 않아 대기가 길어진다), 실행 경로 무영향 · 심각도 낮음**.

@@ -2,67 +2,23 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, assert_never
 
+from automation.install.components import EnableUserUnit as EnableUserUnit, EnsureSymlink as EnsureSymlink
+from automation.install.component_assets import (
+    ComponentAssets,
+    DirectorySpec as DirectorySpec, DirectoryState as DirectoryState,
+    FileSpec as FileSpec, FileState as FileState,
+)
 from automation.node_config import NodeConfig
 
 
-CheckName: TypeAlias = Literal[
-    "hermes-gateway",
-    "discord-readiness",
-    "deploy-key-registration",
-    "update-trust",
-    "group-skill-trust",
-    "healthcheck",
+CheckName: TypeAlias = Literal["hermes-gateway", "discord-readiness", "deploy-key-registration",
+    "update-trust", "group-skill-trust", "healthcheck",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class DirectoryState:
-    mode: int
-    owner: str
-    group: str
-
-
-@dataclass(frozen=True, slots=True)
-class FileState:
-    digest: str
-    mode: int
-    owner: str
-    group: str
-
-
-@dataclass(frozen=True, slots=True)
-class DirectorySpec:
-    path: Path
-    mode: int
-    owner: str
-    group: str
-
-    def state(self) -> DirectoryState:
-        return DirectoryState(self.mode, self.owner, self.group)
-
-
-@dataclass(frozen=True, slots=True)
-class FileSpec:
-    path: Path
-    content: str
-    mode: int
-    owner: str
-    group: str
-    #: Place it once, then leave it alone. The owner-notice credential lives at such a
-    #: path: the operator types secrets into it, so converging it back to the shipped
-    #: template would destroy them on the next run. Ownership and mode drift is accepted
-    #: as the cheaper failure — never touching a credential beats correcting its bits.
-    create_only: bool = False
-
-    def state(self) -> FileState:
-        digest = hashlib.sha256(self.content.encode()).hexdigest()
-        return FileState(digest, self.mode, self.owner, self.group)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +58,17 @@ class EnsurePeerAttestKey:
 
 
 @dataclass(frozen=True, slots=True)
+class ProvisionHealthcheckProbe:
+    operator_account: str
+    operator_home: Path
+    ops_account: str
+    ops_home: Path
+    private_path: Path
+    source_dir: Path
+    node_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class InstallGitleaks:
     version: str
 
@@ -124,16 +91,9 @@ class Check:
 
 
 InstallAction: TypeAlias = (
-    EnsureAccount
-    | EnsureGroup
-    | EnsureDirectory
-    | EnsureFile
-    | GenerateDeployKey
-    | EnsurePeerAttestKey
-    | InstallGitleaks
-    | EnsureRepository
-    | EnableTimer
-    | Check
+    EnsureAccount | EnsureGroup | EnsureDirectory | EnsureFile | GenerateDeployKey | EnsurePeerAttestKey
+    | ProvisionHealthcheckProbe | InstallGitleaks | EnsureRepository | EnableTimer | Check
+    | EnableUserUnit | EnsureSymlink
 )
 
 
@@ -144,35 +104,24 @@ class InstallInputs:
     timers: tuple[str, ...]
     gitleaks_version: str = "8.30.1"
     trust_checks: tuple[CheckName, ...] = ("update-trust",)
-
-
-def _empty_groups() -> Mapping[str, frozenset[str]]:
-    return {}
-
-
-def _empty_directories() -> Mapping[Path, DirectoryState]:
-    return {}
-
-
-def _empty_files() -> Mapping[Path, FileState]:
-    return {}
-
-
-def _empty_repositories() -> Mapping[Path, str]:
-    return {}
+    components: ComponentAssets = ComponentAssets()
 
 
 @dataclass(frozen=True, slots=True)
 class SystemState:
     accounts: frozenset[str] = frozenset()
     ready_accounts: frozenset[str] = frozenset()
-    groups: Mapping[str, frozenset[str]] = field(default_factory=_empty_groups)
-    directories: Mapping[Path, DirectoryState] = field(default_factory=_empty_directories)
-    files: Mapping[Path, FileState] = field(default_factory=_empty_files)
+    groups: Mapping[str, frozenset[str]] = field(default_factory=dict[str, frozenset[str]])
+    directories: Mapping[Path, DirectoryState] = field(default_factory=dict[Path, DirectoryState])
+    files: Mapping[Path, FileState] = field(default_factory=dict[Path, FileState])
     private_keys: frozenset[Path] = frozenset()
     peer_attest_keys: frozenset[Path] = frozenset()
-    repositories: Mapping[Path, str] = field(default_factory=_empty_repositories)
+    repositories: Mapping[Path, str] = field(default_factory=dict[Path, str])
+    operator_home: Path | None = None
+    healthcheck_probe_ready: bool = False
     enabled_timers: frozenset[str] = frozenset()
+    enabled_user_units: frozenset[EnableUserUnit] = frozenset()
+    symlinks: frozenset[EnsureSymlink] = frozenset()
     gitleaks_version: str | None = None
 
     @classmethod
@@ -190,9 +139,12 @@ class SystemState:
         peer_attest_keys: set[Path] = set()
         repositories: dict[Path, str] = {}
         enabled_timers: set[str] = set()
+        enabled_user_units: set[EnableUserUnit] = set()
+        symlinks: set[EnsureSymlink] = set()
         gitleaks_version: str | None = None
+        healthcheck_probe_ready = False
         for action in actions:
-            match action:  # noqa: MATCH_OK - InstallAction is exhaustively consumed.
+            match action:
                 case EnsureAccount(name=name):
                     accounts.add(name)
                     ready_accounts.add(name)
@@ -206,14 +158,22 @@ class SystemState:
                     private_keys.add(private_path)
                 case EnsurePeerAttestKey(private_path=private_path):
                     peer_attest_keys.add(private_path)
+                case ProvisionHealthcheckProbe():
+                    healthcheck_probe_ready = True
                 case InstallGitleaks(version=version):
                     gitleaks_version = version
                 case EnsureRepository(path=path, origin_url=origin_url):
                     repositories[path] = origin_url
                 case EnableTimer(name=name):
                     enabled_timers.add(name)
+                case EnableUserUnit():
+                    enabled_user_units.add(action)
+                case EnsureSymlink():
+                    symlinks.add(action)
                 case Check():
                     continue
+                case _:
+                    assert_never(action)
         return cls(
             accounts=frozenset(accounts),
             ready_accounts=frozenset(ready_accounts),
@@ -224,7 +184,10 @@ class SystemState:
             peer_attest_keys=frozenset(peer_attest_keys),
             repositories=repositories,
             enabled_timers=frozenset(enabled_timers),
+            enabled_user_units=frozenset(enabled_user_units),
+            symlinks=frozenset(symlinks),
             gitleaks_version=gitleaks_version,
+            healthcheck_probe_ready=healthcheck_probe_ready,
         )
 
 
@@ -277,7 +240,7 @@ def build_plan(inputs: InstallInputs, state: SystemState) -> InstallPlan:
     current_members = state.groups.get(config.service_group)
     if current_members is None or not frozenset(members).issubset(current_members):
         actions.append(EnsureGroup(config.service_group, members))
-    for spec in _directories(config):
+    for spec in (*_directories(config), *inputs.components.directories):
         if state.directories.get(spec.path) != spec.state():
             actions.append(EnsureDirectory(spec))
     if config.peer_attest_mode == "signed":
@@ -285,9 +248,7 @@ def build_plan(inputs: InstallInputs, state: SystemState) -> InstallPlan:
         if peer_private_key not in state.peer_attest_keys:
             actions.append(
                 EnsurePeerAttestKey(
-                    peer_private_key,
-                    Path(f"/etc/autophagy/peer-attest-{config.peer_account}.pub"),
-                    config.peer_account,
+                    peer_private_key, Path(f"/etc/autophagy/peer-attest-{config.peer_account}.pub"), config.peer_account,
                     f"{config.peer_account}@{config.primary_node_name}-peer-attest",
                 )
             )
@@ -307,9 +268,15 @@ def build_plan(inputs: InstallInputs, state: SystemState) -> InstallPlan:
             continue
         if state.files.get(spec.path) != spec.state():
             actions.append(EnsureFile(spec))
+    actions.extend(link for link in inputs.components.symlinks if link not in state.symlinks)
+    if not state.healthcheck_probe_ready:
+        home = state.operator_home or (Path('/root') if config.operator_account == 'root' else Path('/home') / config.operator_account)
+        actions.append(ProvisionHealthcheckProbe(config.operator_account, home, config.ops_account, config.ops_home,
+                       config.ops_home / '.ssh/autophagy-healthcheck', config.deploy_checkout, config.primary_node_name))
     for timer in inputs.timers:
         if timer not in state.enabled_timers:
             actions.append(EnableTimer(timer))
+    actions.extend(unit for unit in inputs.components.user_units if unit not in state.enabled_user_units)
     actions.extend(Check(name) for name in inputs.trust_checks)
     actions.append(Check("healthcheck"))
     return InstallPlan(tuple(actions))

@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import os
 import platform
+import pwd
 import shlex
 import shutil
 import subprocess
 import tempfile
 from importlib import import_module
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, assert_never
 
 from automation.git_remote_url import GitRemoteUrlError, validate_remote_url
 from automation.install.checks import CheckResult, Status
+from automation.install.components import EnableUserUnit, EnsureSymlink
 from automation.install.gitleaks import expected_archive_sha256, verify_archive
+from automation.install.healthcheck_probe_asset import provision_probe
 from automation.install.known_hosts import missing_known_host
 from automation.install.plan import (
     Check,
@@ -27,6 +30,7 @@ from automation.install.plan import (
     InstallAction,
     InstallGitleaks,
     InstallPlan,
+    ProvisionHealthcheckProbe,
 )
 from automation.node_config import NodeConfig
 
@@ -52,17 +56,10 @@ class SystemMutator:
         env: dict[str, str] | None = None,
         cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-            cwd=cwd,
-        )
+        return subprocess.run(command, check=True, capture_output=True, text=True, env=env, cwd=cwd)
 
     def apply(self, action: InstallAction) -> None:
-        match action:  # noqa: MATCH_OK - InstallAction is exhaustively consumed.
+        match action:
             case EnsureAccount():
                 self._account(action)
             case EnsureGroup():
@@ -81,29 +78,32 @@ class SystemMutator:
                     "ensure_peer_attest_key",
                 )
                 helper(action, self.run, self._write_file)
+            case ProvisionHealthcheckProbe():
+                provision_probe(action, self.run)
             case InstallGitleaks(version=version):
                 self._install_gitleaks(version)
             case EnsureRepository():
                 self._repository(action)
             case EnableTimer(name=name):
                 self._timer(name)
+            case EnsureSymlink(path=path, target=target, owner=owner):
+                path.unlink(missing_ok=True)
+                path.symlink_to(target)
+                account = pwd.getpwnam(owner)
+                os.chown(path, account.pw_uid, account.pw_gid, follow_symlinks=False)
+            case EnableUserUnit():
+                command = action.command()
+                _ = self.run((*command, "daemon-reload"))
+                _ = self.run((*command, "enable", "--now", action.name))
             case Check():
                 raise MutationDispatchError
+            case _:
+                assert_never(action)
 
     def _account(self, action: EnsureAccount) -> None:
         result = subprocess.run(("id", "-u", action.name), check=False, capture_output=True)
         if result.returncode != 0:
-            _ = self.run(
-                (
-                    "useradd",
-                    "-m",
-                    "-d",
-                    str(action.home),
-                    "-s",
-                    "/bin/bash",
-                    action.name,
-                )
-            )
+            _ = self.run(("useradd", "-m", "-d", str(action.home), "-s", "/bin/bash", action.name))
         action.home.mkdir(parents=True, exist_ok=True)
         os.chmod(action.home, 0o700)
         shutil.chown(action.home, user=action.name, group=action.name)

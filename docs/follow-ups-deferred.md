@@ -1819,3 +1819,22 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   보존해 허용목록 매니페스트·래퍼 입력 지문이 불변이다. 회귀는
   `tests/unit/test_healthcheck_registry.py`.
 
+## 설치 마법사·프로필 착지 후 남긴 것 (2026-09-08)
+
+> [이관 2026-09-08 · 해소] 설치기 착지 결과를 회계 원문과 함께 보존한다. RAG 원격 배포와 실호스트 관측은 아래 처리 상태를 따른다.
+
+- **`rag`·`report-hub` 프로필은 헬스체크 선언만 정하고 RAG 스택·report-hub 유닛을 배치하지 않는다** →
+  다음 단계로 `OPT_IN_COMPONENTS` 확장을 설계 판단한다(`automation/install/components.py:39–49`).
+  **영향: 추가 서비스 배치는 별도 준비 · 동작은 정상 · 심각도 낮음**.
+  ↳ 처리(2026-09-08): `report-hub`는 `OPT_IN_COMPONENTS`와 사용자 유닛 자산으로 설치되므로 해소했다. `rag`는 `automation/rag_stack/deploy.sh`가 별도 `RAG_NODE`에 배포하므로 주 노드 설치기 범위 밖의 OWNER/BLOCKED로 남긴다.
+- **healthcheck SSH forced-command 래퍼는 여전히 owner-run 별도 절차다** →
+  `automation/provision-healthcheck-probe.sh:2–6`의 절차를 설치 자산으로 편입할지 검토한다.
+  **영향: 신규 노드의 `check healthcheck`가 `INFRA_FAILURE`로 FAIL할 수 있음 · 심각도 중**.
+  ↳ 처리(2026-09-08): 설치기 `ProvisionHealthcheckProbe` 작업이 키·강제명령 래퍼·바인딩을 수렴하므로 해소했다. 기존 노드는 소유자가 설치기를 한 번 수동 실행해야 한다.
+- **컨테이너 실제 설치 검증은 `hermes-gateway` 외부 전제에서 멈춘다** →
+  실호스트 첫 완주 때 아래 QA 디렉터리에 증적을 추가한다(**OBSERVE**).
+  **영향: Hermes·Discord 뒤 타이머·최종 healthcheck 완주 근거가 아직 없음 · 심각도 낮음**.
+  ↳ 처리(2026-09-08): `--stub-hermes` 하네스의 상한은 `discord-readiness`다. Hermes와 토큰이 있는 실제 호스트에서만 그 경계 뒤의 완주를 관측한다(OBSERVE).
+
+증적: [docs/qa/INSTALL-TUI/](qa/INSTALL-TUI/) · [systemd 하네스](../tests/e2e/install/systemd_container/README.md).
+

@@ -96,24 +96,21 @@ def _parser() -> argparse.ArgumentParser:
             "GROUP-DISCORD-FORBIDDEN: never receive it through the group Discord channel"
         ),
     )
-    # Opt-in: repeatable, empty by default. An unnamed component is not installed at all,
-    # so omitting this flag reproduces the plan that existed before components existed.
+    # 프로필이 선택한 컴포넌트도 유지해야 명시적 추가 옵션이 감시 대상을 누락시키지 않는다.
     _ = parser.add_argument(
         "--with-component",
         action="append",
         default=[],
         metavar="NAME",
         choices=sorted(OPT_IN_COMPONENTS),
-        help="install an optional component (repeatable); default: none",
+        help="선택 컴포넌트 추가(반복 가능); 프로필 선택과 합쳐 설치",
     )
-    # A profile fixes HEALTHCHECK_SERVICES at install time (root-owned
-    # /etc/autophagy/healthcheck.env). Omitting it plans exactly what was planned before
-    # profiles existed: every probe stays on, and narrowing remains an explicit choice.
+    # 생략 시 기존 선언을 덮지 않아 이미 운영 중인 노드의 감시 범위를 보존한다.
     _ = parser.add_argument(
         "--profile",
         default=None,
         choices=sorted(PROFILES),
-        help="service groups this node runs; writes the healthcheck declaration",
+        help="헬스체크 선언과 주 노드 컴포넌트 선택; RAG 배포는 별도 노드",
     )
     return parser
 
@@ -173,11 +170,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(render((result,), verdict_label="INSTALLED"))
             return 1
+        profile_components = () if args.profile is None else PROFILES[args.profile].components
+        components = tuple(sorted(set((*args.with_component, *profile_components))))
         inputs = build_inputs(
             repo_root,
             config,
             key_text,
-            components=args.with_component,
+            components=components,
             profile=args.profile,
         )
         group_expected = args.expect_group_skill_fingerprint
