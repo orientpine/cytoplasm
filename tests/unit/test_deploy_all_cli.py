@@ -15,6 +15,9 @@ from typing import Final
 _REPO: Final = Path(__file__).resolve().parents[2]
 _COMMAND: Final = _REPO / "automation" / "deploy_all.sh"
 _EXAMPLE_CONFIG: Final = _REPO / "configs" / "node.example.toml"
+# 60 seconds avoids false failures on loaded CI runners (run 33972730381).
+# A genuine deadlock must fail without making the handshake clock-driven.
+_CONCURRENT_APPLY_TIMEOUT_SECONDS: Final = 60
 
 
 def _stub_ssh(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -40,6 +43,12 @@ def _stub_ssh(tmp_path: Path) -> tuple[Path, Path, Path]:
         '  exit 0\n'
         "fi\n"
         'if [[ "$cmd" == *"--format actions"* ]]; then\n'
+        '  if [[ -n "${FAKE_DEPLOYED:-}" && -e "$FAKE_DEPLOYED" ]]; then\n'
+        '    printf "DEPLOY-ALL: clean\\n"; exit 0\n'
+        '  fi\n'
+        '  if [[ -n "${FAKE_DEPLOYER:-}" ]]; then\n'
+        '    printf "ACT|run-deployer|%s\\n" "$FAKE_DEPLOYER"; exit 1\n'
+        '  fi\n'
         '  printf "ACT|restart-gateway|agent+peer\\n"; exit 1\n'
         "fi\n"
         'if [[ "$cmd" == *"systemctl --user restart"* ]]; then\n'
@@ -92,6 +101,7 @@ def _run(
         "FAKE_STALE_UNTIL": str(stale_until),
         "DEPLOY_ALL_CONVERGE_SECONDS": converge_seconds,
         "DEPLOY_ALL_CONVERGE_POLL_SECONDS": poll_seconds,
+        "DEPLOY_ALL_LOCK_DIR": str(tmp_path / "locks"),
         "HEALTHCHECK_NODE_CONFIG_PATH": str(_EXAMPLE_CONFIG),
     }
     return subprocess.run(
@@ -174,6 +184,115 @@ def test_help_succeeds_without_contacting_the_node(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "usage:" in result.stdout
     assert not (tmp_path / "calls.log").exists()
+
+
+def test_apply_serializes_concurrent_deployers_and_rechecks_after_waiting(
+    tmp_path: Path,
+) -> None:
+    """Given: two applies start together before deployment completes.
+
+    When: the first deployer is released.
+    Then: the follower re-probes clean without running a deployer.
+    """
+    fake_bin, calls, receipt = _stub_ssh(tmp_path)
+    deployer = tmp_path / "deployer.sh"
+    _ = deployer.write_text(
+        "#!/usr/bin/env bash\n"
+        + 'printf "deploy\\n" >> "$FAKE_DEPLOYER_CALLS"\n'
+        + 'if mkdir "$FAKE_DEPLOYER_HOLDER" 2>/dev/null; then\n'
+        + '  printf "ready\\n" > "$FAKE_DEPLOYER_READY"\n'
+        + '  read -r _ < "$FAKE_DEPLOYER_RELEASE"\n'
+        + '  : > "$FAKE_DEPLOYED"\n'
+        + "fi\n",
+        encoding="utf-8",
+    )
+    deployer.chmod(0o755)
+    barrier_arrived, barrier_release, deployer_ready, deployer_release = (
+        tmp_path / name
+        for name in ("barrier-arrived", "barrier-release", "deployer-ready", "deployer-release")
+    )
+    for fifo in (barrier_arrived, barrier_release, deployer_ready, deployer_release):
+        os.mkfifo(fifo)
+    real_git = subprocess.run(
+        ("which", "git"), check=True, capture_output=True, text=True
+    ).stdout.strip()
+    git = fake_bin / "git"
+    _ = git.write_text(
+        "#!/usr/bin/env bash\n"
+        + 'if [[ "$*" == *"rev-parse HEAD"* ]]; then\n'
+        + '  printf "ready\\n" > "$FAKE_BARRIER_ARRIVED"\n'
+        + '  read -r _ < "$FAKE_BARRIER_RELEASE"\n'
+        + "fi\n"
+        + 'exec "$FAKE_REAL_GIT" "$@"\n',
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+    head = subprocess.check_output(
+        ("git", "rev-parse", "HEAD"), cwd=_REPO, text=True
+    ).strip()
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "DEPLOY_SSH_HOST": "fake-node",
+        "DEPLOY_ALL_RECEIPT_DIR": str(tmp_path / "private" / "deploy-all"),
+        "DEPLOY_ALL_LOCK_DIR": str(tmp_path / "locks"),
+        "FAKE_CALLS": str(calls),
+        "FAKE_RECEIPT": str(receipt),
+        "FAKE_HEAD": head,
+        "FAKE_READLINK_COUNTER": str(tmp_path / "readlink-counter"),
+        "FAKE_STALE_UNTIL": "0",
+        "FAKE_DEPLOYER": os.path.relpath(deployer, _REPO),
+        "FAKE_DEPLOYER_CALLS": str(tmp_path / "deployer-calls"),
+        "FAKE_DEPLOYER_HOLDER": str(tmp_path / "deployer-holder"),
+        "FAKE_DEPLOYER_READY": str(deployer_ready),
+        "FAKE_DEPLOYER_RELEASE": str(deployer_release),
+        "FAKE_DEPLOYED": str(tmp_path / "deployed"),
+        "FAKE_BARRIER_ARRIVED": str(barrier_arrived),
+        "FAKE_BARRIER_RELEASE": str(barrier_release),
+        "FAKE_REAL_GIT": real_git,
+        "HEALTHCHECK_NODE_CONFIG_PATH": str(_EXAMPLE_CONFIG),
+    }
+    first, second = [
+        subprocess.Popen(
+            ("bash", str(_COMMAND), "--apply"),
+            cwd=_REPO,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    with os.fdopen(os.open(barrier_arrived, os.O_RDWR), encoding="utf-8") as arrived:
+        assert arrived.readline() == "ready\n"
+        assert arrived.readline() == "ready\n"
+    barrier_release_writer = os.fdopen(
+        os.open(barrier_release, os.O_RDWR), "w", encoding="utf-8"
+    )
+    barrier_release_writer.write("go\ngo\n")
+    barrier_release_writer.flush()
+    with deployer_ready.open(encoding="utf-8") as ready:
+        assert ready.readline() == "ready\n"
+    deployer_release_writer = os.fdopen(
+        os.open(deployer_release, os.O_RDWR), "w", encoding="utf-8"
+    )
+    deployer_release_writer.write("go\n")
+    deployer_release_writer.flush()
+    first_stdout, first_stderr = first.communicate(
+        timeout=_CONCURRENT_APPLY_TIMEOUT_SECONDS
+    )
+    second_stdout, second_stderr = second.communicate(
+        timeout=_CONCURRENT_APPLY_TIMEOUT_SECONDS
+    )
+    barrier_release_writer.close()
+    deployer_release_writer.close()
+
+    assert first.returncode == 0, first_stdout + first_stderr
+    assert second.returncode == 0, second_stdout + second_stderr
+    assert (tmp_path / "deployer-calls").read_text(encoding="utf-8") == "deploy\n"
+    assert "already fully deployed after waiting for the apply lock" in (
+        first_stderr + second_stderr
+    )
 
 
 def test_command_ships_executable() -> None:

@@ -114,3 +114,27 @@ def notify_owner(notice: str) -> bool:
         print(f"[owner-notice] NOTIFY-FAILED: {type(error).__name__}", file=sys.stderr)
         return False
     return True
+
+
+def notify_owner_dm(notice: str) -> bool:
+    """DM 으로만 배달한다 — 소유자가 DM 을 명시한 통지 전용(릴리스 적용 완료가 첫 소비자).
+
+    `notify_owner` 와 갈라지는 지점은 단 하나: 통지 채널이 설정돼 있어도 그리로 새지
+    않는다. 지시가 "승인 요청 채널에만 머물지 말고 소유자 DM"이라 대상 자체가 요구다.
+    DM 오픈은 여전히 이 파사드 안에서만 일어난다(ON-2/ON-3) — 호출자는 문구만 준다.
+    실패는 False, 예외는 절대 나가지 않는다(모듈 docstring 의 계약 그대로).
+    """
+    token = os.environ.get("DISCORD_BOT_TOKEN", "")
+    owner_id = _config_owner_id()
+    if not token or not owner_id:
+        print(
+            "[owner-notice] NOTIFY-UNCONFIGURED: owner credential missing, notice not sent",
+            file=sys.stderr,
+        )
+        return False
+    try:
+        send_notice(token, owner_dm_channel(token, owner_id), notice)
+    except Exception as error:  # noqa: BLE001 - see docstring: escaping would stop prod
+        print(f"[owner-notice] NOTIFY-FAILED: {type(error).__name__}", file=sys.stderr)
+        return False
+    return True

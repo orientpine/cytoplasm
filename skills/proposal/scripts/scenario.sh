@@ -30,38 +30,17 @@ export PROPOSAL_RESEARCH_TRANSPORT=fake
 export PROPOSAL_IMAGE_TRANSPORT=fake
 export PROPOSAL_REFINE_TRANSPORT=fake
 export DRIVE_TRANSPORT=fake
-export PROPOSAL_DOCBOT_ROOT="$work/docbot"
-export PROPOSAL_DOCBOT_PIN=0000000000000000000000000000000000000000
 # style-edit, not identity: refine reports honestly, so a transport that returns its
 # input byte-for-byte is NO_CHANGE (refined=false, no refined draft written) — a real
 # result, but one that proves nothing about the invariant gates or the output document.
 : "${PROPOSAL_REFINE_FAKE_MODE:=style-edit}"
 export PROPOSAL_REFINE_FAKE_MODE
-mkdir -m 700 -p "$HOME" "$PROPOSAL_DOCBOT_ROOT" "$work/bin"
+mkdir -m 700 -p "$HOME" "$work/bin"
 
 cli=(python3 -I "$script_dir/proposal_cli.py")
 
-# The corpus command has no fake-runner environment seam. This tiny uv shim proves
-# both converter invocation and the lint gate without requiring KD or a network.
-cat >"$work/bin/uv" <<'SH'
-#!/bin/sh
-set -eu
-case "$*" in
-  *" kimm-docbot research-convert "*)
-    out=""
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--out" ]; then out="$2"; break; fi
-      shift
-    done
-    [ -n "$out" ]
-    mkdir -p "$out"
-    printf '%s\n' '---' 'sensitivity: public' '---' 'Offline validated research corpus.' >"$out/research-scenario.md"
-    ;;
-  *" kimm-docbot corpus-lint "*) exit 0 ;;
-  *) printf 'unexpected fake uv invocation: %s\n' "$*" >&2; exit 64 ;;
-esac
-SH
-chmod 700 "$work/bin/uv"
+# The corpus command calls the in-tree engine in this process, so its converters and
+# lint gate run for real here — no shim, and nothing to keep in step with the engine.
 export PATH="$work/bin:${PATH:-/usr/bin:/bin}"
 
 # research: fake collection plus the production validator (20 claims, 8 domains,
@@ -174,14 +153,21 @@ PY
 printf 'SUBCOMMAND-OK:refine\n'
 
 # render: in this sandbox the KD engine is intentionally unavailable. The exact
-# fail-closed preflight (exit 4 plus marker) is the render-stage proof.
+# The engine ships in this repository, so render no longer stops at a pin naming another
+# checkout. It stops at the engine's OWN input contract instead: this sandbox's fake draft
+# never writes the planspec/pms sidecars a real draft emits, and before internalization the
+# pin check exited 4 first, so render was never actually reached here. Reaching the engine's
+# input gate - with no pin marker anywhere - is the proof that the external gate is gone.
 set +e
 render_output="$("${cli[@]}" render --slug demo --mode replay --json 2>&1)"
 render_rc=$?
 set -e
-[[ "$render_rc" -eq 4 ]] || fail "render preflight did not exit 4 (rc=$render_rc)"
-grep -Fq 'ENGINE-PIN-BLOCK:' <<<"$render_output" || fail "render preflight block marker missing"
 printf '%s\n' "$render_output"
+if grep -Fq 'ENGINE-PIN-BLOCK' <<<"$render_output"; then
+  fail "render still consults an external engine pin"
+fi
+grep -Fq 'refined drafts sidecar source is missing' <<<"$render_output" \
+  || fail "render did not reach the engine input contract (rc=$render_rc)"
 printf 'SUBCOMMAND-OK:render\n'
 
 # publish: fake Drive still executes folder creation, upload, owner-only permission

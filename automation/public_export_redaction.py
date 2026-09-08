@@ -72,10 +72,62 @@ def redact_vendor_tree(snapshot_root: Path) -> None:
             raise PublicExportRedactionError(f"cannot write vendored export copy: {relative}") from error
 
 
+# The manifest decides WHICH files are published; until 2026-09-07 nothing decided what
+# VALUES they carried. An installation's tailnet address and production hostname reached
+# the public repository and were found by a third-party installer reading the code, not
+# by a check. Deleting those values closes one instance; this closes the class.
+#
+# Scope is measured, not assumed. Over the exported set these two patterns match six
+# times with no false positive, while RFC1918 matches a dependency lockfile and a
+# synthetic corpus, and a loose ``ori[0-9a-z]+`` matches 1484 times (``origin``,
+# ``orientpine``, ``original``). A guard that cries wolf earns an exception list, and an
+# exception list is how this class comes back.
+_TAILNET_ADDRESS: Final = re.compile(
+    r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b"
+)
+_PRODUCTION_NODE_HOST: Final = re.compile(r"\bori[0-9a-f]{4,}\b")
+_TOPOLOGY_RULES: Final = (
+    ("tailnet address", _TAILNET_ADDRESS),
+    ("production node hostname", _PRODUCTION_NODE_HOST),
+)
+
+
+def assert_no_private_topology(snapshot_root: Path) -> None:
+    """Refuse a snapshot that still names one installation's addresses or hosts.
+
+    Runs AFTER :func:`redact_vendor_tree`, so the byte-preserved vendor copies it already
+    de-identifies are judged in their published form rather than their tracked one.
+
+    Undecodable files are skipped: this reads published source, and the directories that
+    hold binary evidence are excluded from the export outright. A readable neighbour is
+    still judged, so one archive cannot silence the check.
+    """
+    offences: list[str] = []
+    for path in sorted(snapshot_root.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        relative = path.relative_to(snapshot_root).as_posix()
+        for label, pattern in _TOPOLOGY_RULES:
+            found = sorted({match.group(0) for match in pattern.finditer(text)})
+            if found:
+                offences.append(f"{relative}: {label} {', '.join(found)}")
+    if offences:
+        raise PublicExportRedactionError(
+            "public snapshot still carries installation topology:\n  "
+            + "\n  ".join(offences)
+        )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise PublicExportRedactionError("usage: public_export_redaction.py SNAPSHOT_ROOT")
-    redact_vendor_tree(Path(sys.argv[1]))
+    snapshot_root = Path(sys.argv[1])
+    redact_vendor_tree(snapshot_root)
+    assert_no_private_topology(snapshot_root)
     return 0
 
 

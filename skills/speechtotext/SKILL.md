@@ -1,7 +1,7 @@
 ---
 name: speechtotext
 description: "Google Drive 폴더에 올려둔 음성 녹취를 전사본(.md)으로 만들고, 그 전사본을 meeting 스킬로 넘겨 회의록까지 잇는 스킬. 전사는 기본이 로컬(whisper.cpp)이고, 2시간이 넘는 단일 녹취도 누락 검증을 통과해야만 회의록으로 넘어간다."
-version: 1.2.0
+version: 1.3.0
 author: autophagy-agents
 ---
 
@@ -46,8 +46,8 @@ author: autophagy-agents
 
 ## 2시간이 넘는 단일 녹취
 
-- **로컬**: 분할하지 않고 한 번에 처리한다(whisper.cpp 의 장문 디코딩이 그렇게 설계돼 있고,
-  외부 분할은 이음매에서 말을 자른다). 25MiB 상한은 API 업로드 제약일 뿐 로컬에는 없다.
+- **로컬**: 기본 15분 창 + 15초 겹침으로 구간마다 whisper.cpp를 실행한다. 이음매는 다음
+  창이 소유하며, 실패한 창만 격리하고 나머지는 보존한다. 25MiB 상한은 로컬에는 없다.
 - **API**: 25MiB를 넘으면 15분 창 + 10초 겹침으로 나눠 올리고, **겹친 구간에서 실제로
   반복되는 텍스트만** 지운 뒤 순서대로 잇는다(일치하지 않으면 양쪽을 모두 남긴다 —
   중복은 불편이지만 누락은 실패다).
@@ -57,15 +57,25 @@ author: autophagy-agents
   알 수 없으면 완결을 주장하지 않는다(`COVERAGE-UNKNOWN`).
 - **반복 붕괴 검사**: 커버리지는 "구간이 비었는가"만 본다. 디코더가 무너지면 타임스탬프는
   그대로 채워진 채 같은 문장만 되풀이되므로 커버리지는 통과한다. 그래서 최다 8어절의
-  점유율을 따로 재고, 기본 8%를 넘으면 같은 exit 8로 거부한다(`SPEECHTOTEXT_MAX_REPEAT`).
+  점유율을 따로 잰다(`SPEECHTOTEXT_MAX_REPEAT`, 기본 8%). 여러 창 중 반복이 의심되는 창은
+  기존 실패 표식 아래 `<details><summary>⚠ 반복 의심 구간 … (repetition=…) — 접힘</summary>`으로
+  문장 원문을 보존한다. 펼치면 읽을 수 있고, 재다듬기·화자 처리도 내부 줄을 바꾸지 않는다.
+  meeting 추출 입력은 접힌 본문을 제외하지만 부록 원문에는 그대로 남긴다. JSON 파싱 불가 등은
+  표식만 남으며, `SPEECHTOTEXT_ALLOW_INCOMPLETE=1`인 라이프로그는 이전처럼 접지 않는다.
+  단일 창·접힌 본문 밖의 전체 반복 검사는 기존 exit 8 거부를 유지한다.
   실측: 정상 구간 1.2% vs 붕괴한 94분 녹취 57.1%.
 - **문맥 이월은 기본으로 끈다(`-mc 0`)**. 원래는 "문맥을 자르면 연속성이 준다"는 이유로 쓰지
   않았는데, 실제 94분 한국어 녹취가 그 가정을 뒤집었다 — 이월을 켜면 디코더가 자기 출력을
   되먹어 전사본의 28%가 한 문장 910회 반복이 됐고, 같은 구간을 `-mc 0` 으로 다시 디코딩하니
   정상 수준(1.2%)으로 돌아오며 사라졌던 28분치 발화가 복구됐다. 되돌리려면
   `SPEECHTOTEXT_WHISPER_CONTEXT=-1`.
-- 그 외 완결성을 해치는 플래그는 여전히 쓰지 않는다: `-nf`(실패한 창을 구제하는 온도 폴백을
-  끈다) · `--vad`(조용한 한국어 발화를 잘라낸다).
+- `-nf`는 쓰지 않는다(실패한 창을 구제하는 온도 폴백을 끈다). `--vad`는 기본으로 끄되
+  `SPEECHTOTEXT_VAD_MODEL`을 명시하면 켤 수 있다(조용한 발화가 잘릴 수 있음).
+- **창 캐시는 인식 조건까지 묶는다.** 오디오 SHA·모델·실행 파일 지문·창 계획뿐 아니라
+  언어·실제 prompt·문맥 길이·디코딩 플래그·DTW·부분 전사 허용 여부가 키에 들어간다.
+  조건을 바꾸면 옛 창을 재사용하지 않고, 같은 조건으로 재시도하면 성공 창부터 이어 간다.
+- **`--dtw`는 옵트인**이다. `SPEECHTOTEXT_WHISPER_DTW`에 모델 프리셋(예: `large-v3-turbo`)을
+  명시한 경우에만 붙인다. 미설정이면 기존 토큰 시각을 쓰며, DTW를 자동으로 켜지 않는다.
 
 ## 전사본 다듬기 (정리)
 
@@ -110,23 +120,97 @@ author: autophagy-agents
 
 ## 화자 구분
 
-로컬 whisper.cpp 경로에서만 동작하며, 화자 분리는 **sherpa-onnx 바이너리를 노드에서 직접 실행**한다.
-음성은 어떤 경우에도 노드 밖으로 나가지 않는다(전사 백엔드를 로컬로 두는 이유와 같다). 분리 결과는
-`speaker_00` 같은 클러스터 번호이고, 이것을 전사본에 처음 나온 순서대로 `화자1`, `화자2` … 로 매긴다.
-문장은 겹침이 가장 큰 turn 에 붙고, 겹치는 turn 이 없으면 중점이 2초 이내인 가장 가까운 turn 에,
-그것도 없으면 직전 문장의 화자를 잇는다.
-화자를 붙이기 전에 문장을 먼저 쪼갠다 — 한 문장을 두 화자 이상이 각각 1초 넘게 나눠 가졌으면 화자가
-바뀌는 자리에서, whisper 가 구두점을 내지 않아 문장이 길어지면 15초마다, 가장 가까운 띄어쓰기에서
-자른다(문장 하나에는 화자 하나만 붙으므로, 쪼개지 않으면 4명이 말한 57초가 통째로 화자1 이 된다).
+로컬 whisper.cpp 경로에서만 동작한다. 기본은 **sherpa-onnx**, 선택은
+`SPEECHTOTEXT_DIARIZE_BACKEND=pyannote`와 격리 `stt-engines` CLI다. 추론은 노드 안에서 하며
+원음을 외부 전사 API로 보내지 않는다. 관측된 turn의 첫 시각 순서로 `화자1`, `화자2` … 를 매긴다.
 
-- **fail-soft**: 도구·모델이 없거나 실행이 실패하면 stderr 에 `DIARIZE-FAIL <사유>` 를 찍고 **화자 없이
-  전사를 계속한다**. 화자 분리 때문에 전사가 실패하는 일은 없다. 도구가 없는 노드의 출력은 화자 헤더만
-  빠진 문장 줄 문서다.
+**단어 시각이 있으면 문장보다 먼저 화자를 배정한다.** BPE 조각을 낱말로 묶고 정수 밀리초
+겹침·최소 지지·우세 차이로 판정한 뒤 같은 판정끼리 문장을 조립한다. 지지가 없을 때의 근접
+허용은 200ms이며, 경계 동률·낮은 지지·시각 부재는 미상이다. **직전 화자를 상속하지 않는다.**
+동시 발화는 참여자를 보존하는 겹침 판정이고, 미상과 겹침 모두 본문에는 `화자0`으로 표시한다.
+`화자0`은 사람이 아니라 불확실성 표식이라 자기소개·LLM·소유자 이름 배정 대상에서 제외한다.
+세그먼트 시각만 있는 옛 입력은 화자 경계·15초 분할 경로를 유지하되 근거 없는 상속은 미상으로 바꾼다.
+
+- **fail-soft**: 도구·모델 부재나 실행 실패는 `DIARIZE-FAIL <사유>` 후 전사를 계속한다.
+  분리 결과가 아예 없으면 화자 헤더 없이 계속한다. 배정이 실행됐으나 근거 없는 발화는
+  `화자0`으로 남고, 누락 표식은 발화로 배정하지 않는다.
+- **강제 정렬은 별도 옵트인**: `SPEECHTOTEXT_ALIGN_BACKEND=whisperx`면 격리 CLI의 문자 시각을
+  원 토큰에 되돌린다. 기본 `none`은 정렬 subprocess를 만들지 않는다. 실패는 `ALIGN-FAIL` 후
+  원 토큰 시각을 보존하며, 숫자·기호 등 정렬 불가 문자를 임의 보간하지 않는다.
+  전사본 머리말의 `- 토큰 시각:`은 `offsets`·`dtw:<프리셋>`·`aligned:whisperx`를 구별하고,
+  `- 화자 배정:`은 `word`·`legacy`를 구별한다(배정 미실행 시 그 줄은 없다).
 - `--speaker-count N`: 화자 수를 알면 클러스터 수를 고정한다(`--clustering.num-clusters`).
 - `--no-diarize`: 이번 실행만 화자 분리를 건너뛴다.
-- `SPEECHTOTEXT_DIARIZE_THRESHOLD`(기본 `0.9`): 화자 수를 모를 때 쓰는 군집 임계값. **낮추면 화자를 더
+- `SPEECHTOTEXT_DIARIZE_THRESHOLD`(기본 `1.0`): 화자 수를 모를 때 쓰는 군집 임계값. **낮추면 화자를 더
   잘게 쪼개고(같은 사람이 둘로 갈릴 수 있다), 올리면 서로 다른 사람이 한 화자로 합쳐진다.**
+  기본값이 `1.35`이던 동안 소유자가 화자 3명·4명으로 확인한 라이프로그 두 녹음이 **둘 다 화자
+  1명**으로 나왔다(2026-09-07 노드 실측). 발화 시간 5% 이상만 화자로 센 실질 화자 수와 턴 수:
+
+  | 임계값 | 272.5초 (정답 3인) | 549.4초 (정답 4인) |
+  | --- | --- | --- |
+  | 0.8 | 6명 / 43턴 | 7명 / 150턴 |
+  | **1.0** | **4명 / 40턴** | **4명 / 139턴** |
+  | 1.2 | 2명 / 30턴 | 2명 / 104턴 |
+  | 1.35 (옛 기본값) | 1명 / 12턴 | 1명 / 51턴 |
+
+  옛 `1.35`는 64분 2인 녹음에서 골랐지만 그 표는 `--min-duration-on/off`를 **주지 않고** 잰
+  것이고 프로덕션은 그 가드와 함께 돈다 — 실행 조건과 다른 조건에서 고른 값이었다. 과분할은
+  상한 재클러스터링과 잔여 프룬으로 복구되지만 **과병합은 복구 수단이 없어** 낮은 쪽으로
+  치우친다. 화자 수를 알면 `--speaker-count`가 이 추정을 이긴다.
+- **잔여 군집은 화자가 아니다**: 발화 시간 5% 미만 군집의 turn 은 분리기 경계에서 빠진다
+  (`stt_diarize.substantial`, `RESIDUAL_SHARE_FLOOR`). 임계값을 낮추면 부스러기 군집이 함께
+  생기는데(549.4초 녹음은 1.0 에서 22군집 중 실질 4명), 그것을 화자로 세면 아무도 하지 않은
+  말에 화자5..화자22 가 붙는다. 빠진 낱말은 다른 화자로 넘어가지 않고 근거를 잃어 `화자0`
+  으로 남는다. 전부 바닥 아래면 전원을 남긴다 — 라벨 0개는 뭉뚱그린 화자보다 나쁘다.
+- 파싱된 turn 이 있으면 cap 판정 **전에** stderr 에 항상
+  `DIARIZE-CLUSTERS speakers=<N> threshold=<T> turns=<N>` 한 줄을 남긴다. 이 마커는 군집 수,
+  실제 임계값, turn 수를 진단하기 위한 기계 판독용 출력이며, 상한 초과여도 남는다.
+- `SPEECHTOTEXT_DIARIZE_MAX_SPEAKERS`(기본 `8`): 파싱된 고유 화자 클러스터 수의 상한. 초과하면
+  **라벨을 버리지 않고** `--clustering.num-clusters=<상한>`으로 한 번 다시 묶는다(stderr 에
+  `DIARIZE-RECLUSTERED speakers=<N> max=<N>`). 그 플래그는 "정확히 k"가 아니라 **"최대 k"**라
+  없는 화자를 만들지 않는다 — 133초 2인 샘플에서 k=3·4·6·8 이 모두 화자 2를 냈고, 데이터가
+  받쳐주는 15분 회의에서만 k=3·4 가 3·4를 냈다. **다시 묶어도** 상한을 넘길 때만
+  `DIARIZE-OVERSEGMENTED`를 남기고 화자 없는 전사로 계속한다. 2인 녹음이 화자 102명으로 나온
+  적이 있고(2026-09-05), 그때 라벨을 통째로 버리면 소유자가 받는 것은 화자 없는 문서였다.
+- `SPEECHTOTEXT_DIARIZE_MIN_SPEECH`(기본 `0.5`) · `SPEECHTOTEXT_DIARIZE_MIN_SILENCE`(기본 `0.0`):
+  sherpa `--min-duration-on/off`. **이름이 닮았을 뿐 하는 일이 다르다** — `on` 은 그 길이 미만
+  조각을 버리고, `off` 는 같은 화자의 그 간격 미만을 **재귀적으로 이어 붙인다**.
+  `on=0.5` 는 유지한다: sherpa 기본 0.3 은 far-field 에 너무 짧아 불안정한 임베딩이 가짜
+  화자를 만든다. `off` 는 `0.8`에서 `0.0`으로 내렸다 — 그 병합이 4.5분 라이프로그를 턴 12개·
+  중앙값 16.65초로 만들어 문서에서 발화 구분을 지웠고, 이어 붙인 침묵이 전사 커버리지의
+  speech time 까지 부풀렸다(261.8초로 보고, 실제 244.3초). 같은 임계값에서 `off`만 0 으로
+  바꾼 2026-09-07 실측은 턴 40→82 · 139→193 이고 **실질 화자 수는 바뀌지 않았다**.
+- `SPEECHTOTEXT_DIARIZE_SPEAKERS`(기본 없음): 아는 화자 수를 못박는다. `--speaker-count`와 같은
+  자리이고, 선언되면 임계값 추정도 상한 보수도 돌지 않는다. **큰 회의는 과병합될 수 있으므로**(15분 실회의 실측
+  1.35=1 · 1.30=2 · 1.10=9) 화자 수를 알면 이쪽이 정답이다.
+- `SPEECHTOTEXT_SPEAKER_COUNT_LLM=1`(기본 off): **화자 수 질의 패스**. 1차 분리로 만든 초안을
+  모델에게 보여 주고 화자 수만 물어, 답이 지금과 다르면 그 수를 `--clustering.num-clusters` 로
+  못박아 **한 번만** 재분리한다. 낱말은 바뀌지 않고 화자 라벨만 바뀐다. 초안은 `unlabelled` 이
+  화자 라벨을 걷어낸 상태로 가고 시각은 남는다 — 라벨을 남기면 모델이 그것을 그대로 세어
+  돌려준다(실측: 같은 초안에 라벨 있으면 2명, 없으면 3명=기준점). 정수 하나가 아닌 답
+  ("3~4"·"세 명"·범위 밖)은 받지 않고, 소유자가 `--speaker-count` 를 선언했으면 묻지 않는다.
+  초안이 `patent-sensitive` 면 모델을 부르지 않으며(`RECOUNT-SKIP`), 민감도 규칙을 읽지
+  못해도 묻지 않는다(`RECOUNT-FAIL rules-unreadable`). stderr 에
+  `DIARIZE-RECOUNT observed=<N> asked=<N> redo=<N|None>` 한 줄을 남긴다. 질의 실패도 재분리
+  실패도 1차 결과를 그대로 쓴다.
 - API 백엔드에는 구간 타임스탬프가 없어 화자 분리를 하지 않는다.
+
+### 무음 환각을 줄이는 노브 (기본은 whisper 자신의 값)
+
+짧은 녹음이 `감사합니다` 한 줄로 붕괴하는 것은 whisper 가 무음에서 그럴듯한 말을 만드는
+문서화된 현상이다(2026-09-05 실측 2건). 그 완화책을 코드 변경 없이 켤 수 있다 — **아무것도
+켜지 않으면 명령줄은 예전과 바이트 동일**하고, 오타·범위 밖 값·없는 VAD 모델 파일은 조용히
+무시돼 whisper 자신의 기본값이 선다(설정 실수 하나가 전 녹음을 멈추지 않는다).
+
+| 환경변수 | whisper 플래그 | 쓰임 |
+|---|---|---|
+| `SPEECHTOTEXT_WHISPER_NO_SPEECH` | `-nth` | 무음 판정을 엄하게 (whisper 기본 `0.60`) |
+| `SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH=1` | `-sns` | 비발화 토큰 억제 |
+| `SPEECHTOTEXT_WHISPER_BEAM_SIZE` | `-bs` | 빔 폭 (whisper 기본 `5`) |
+| `SPEECHTOTEXT_VAD_MODEL` | `--vad -vm` | Silero VAD 전처리 |
+
+VAD 는 조용한 한국어 발화를 잘라낼 수 있어 기본이 아니다 — 환각한 녹음에만 켜고 그 녹음만
+다시 돌린다.
 
 ## 화자 이름
 
@@ -219,6 +303,14 @@ meeting 이 같은 과제 이름으로 `회의록/<과제>/<YYYY>/` 에 놓는�
 때문에 `unset` 으로는 막히지 않는다) 공용 파사드로 `autophagy/전사본/<YYYY>/` 에
 best-effort 발행된다(실패해도 로컬 전사본과 회의록은 그대로 진행).
 
+## 사용 중 평가 자료 수집
+
+로컬 전사는 평가용 가설 스냅샷을 함께 남긴다. Drive 워처는 오디오 SHA와 원본 Drive id를
+`STT_EVAL_ROOT/manifest.jsonl`에 묶고 스냅샷을 비공개 평가 루트로 옮긴다. 수집 실패는
+`STT-EVAL-` 진단으로 드러나며 기존 전사·회의록 성공 판정을 바꾸지 않는다.
+소유자가 고친 전사본은 별도 `stt_eval_capture_watch`가 읽어 정답으로 모은다. 원문·정답·가설은
+체크아웃 밖에만 저장하며, `automation.stt_eval`의 비교 보고는 모델 자동 교체를 하지 않는다.
+
 ## 설정
 
 | 키 | 뜻 | 기본 |
@@ -236,12 +328,23 @@ best-effort 발행된다(실패해도 로컬 전사본과 회의록은 그대로
 | `SPEECHTOTEXT_PROMPT` | 고유명사 힌트(로컬·API 양쪽에 전달). 미설정 시 용어집에서 만든다 | 없음 |
 | `SPEECHTOTEXT_GLOSSARY` | 전사 힌트에 쓸 용어집 파일을 **명시**하면 Drive 를 조회하지 않는다(샌드박스·오프라인) | 미설정 = Drive 정본 + 노드 캐시 |
 | `SPEECHTOTEXT_TRANSCRIPT_DIR` · `SPEECHTOTEXT_STATE_FILE` | 전사본·처리 상태 | `~/.hermes/speechtotext/` |
-| `SPEECHTOTEXT_DIARIZE_BIN` | sherpa-onnx 화자 분리 바이너리. **셋 중 하나라도 비면 화자 분리를 하지 않는다** | 없음 = 화자 없음 |
+| `SPEECHTOTEXT_DIARIZE_BACKEND` · `SPEECHTOTEXT_DIARIZE_MODE` | sherpa / pyannote, pyannote의 regular / exclusive | `sherpa` / `regular` |
+| `SPEECHTOTEXT_DIARIZE_BIN` | sherpa 또는 격리 stt-engines 실행 파일. sherpa는 아래 두 모델도 필요 | 없음 = 분리 생략 |
+| `SPEECHTOTEXT_ALIGN_BACKEND` · `SPEECHTOTEXT_ALIGN_BIN` | none / whisperx, 격리 정렬 CLI 경로 | `none` / venv 또는 PATH |
+| `SPEECHTOTEXT_WHISPER_DTW` | whisper DTW 모델 프리셋 | 없음 = `--dtw` 미사용 |
+| `STT_EVAL_ROOT` | 체크아웃 밖 오디오 원장·정답·가설·보고 루트 | `~/.hermes/stt-eval` |
 | `SPEECHTOTEXT_DIARIZE_SEGMENTATION` | pyannote segmentation onnx 모델 경로 | 없음 |
 | `SPEECHTOTEXT_DIARIZE_EMBEDDING` | 화자 임베딩 onnx 모델 경로 | 없음 |
-| `SPEECHTOTEXT_DIARIZE_THRESHOLD` | 군집 임계값(화자 수 미지정일 때만 사용) | `0.9` |
+| `SPEECHTOTEXT_DIARIZE_THRESHOLD` | 군집 임계값(화자 수 미지정일 때만 사용) | `1.0` |
 | `SPEECHTOTEXT_DIARIZE_THREADS` | segmentation·embedding 스레드 수 | CPU 수(≤8) |
 | `SPEECHTOTEXT_DIARIZE_TIMEOUT` | 화자 분리 상한(초). 넘기면 `DIARIZE-FAIL` 후 계속 | `3600` |
+| `SPEECHTOTEXT_DIARIZE_MAX_SPEAKERS` | 군집 수 상한. 넘으면 그 수로 재클러스터링(`DIARIZE-RECLUSTERED`) | `8` |
+| `SPEECHTOTEXT_DIARIZE_MIN_SPEECH` · `SPEECHTOTEXT_DIARIZE_MIN_SILENCE` | sherpa `--min-duration-on/off`. `on` 은 짧은 조각을 버리고 `off` 는 같은 화자의 간격을 재귀적으로 이어 붙인다(둘 다 군집 수는 안 바꾼다) | `0.5` / `0.0` |
+| `SPEECHTOTEXT_DIARIZE_SPEAKERS` | 아는 화자 수 고정(`--speaker-count` 와 같은 자리) | 없음 = 임계값 추정 |
+| `SPEECHTOTEXT_SPEAKER_COUNT_LLM=1` | 전사본 초안에 화자 수를 물어 그 수로 재분리(옵트인) | off = 1차 분리 결과 그대로 |
+| `SPEECHTOTEXT_WHISPER_BEAM_SIZE` · `SPEECHTOTEXT_WHISPER_NO_SPEECH` | whisper `-bs` · `-nth` | 없음 = whisper 기본(`5` / `0.60`) |
+| `SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH=1` | whisper `-sns`(비발화 토큰 억제) | off |
+| `SPEECHTOTEXT_VAD_MODEL` | Silero VAD 모델 경로. 있으면 `--vad -vm` 을 붙인다 | 없음 = VAD 끔 |
 
 ## 로컬 전사 도구 설치 (노드 1회)
 
@@ -288,5 +391,7 @@ sherpa-onnx/
 - 회의록 생성 본체: [`meeting`](../meeting/SKILL.md) — 민감도 게이트·칸반·통지·Drive 발행 소유
 - 발행 규약: [`drive-publish`](../../docs/guide/drive-publish.md)
 - 워처 규약: [`watcher-cron-설계규약`](../../docs/guide/watcher-cron-설계규약.md)
+- 이번 개선: [전사 정확도 사용 중 개선 루프](../../docs/기능소개/전사-정확도-사용중-개선-루프.md)
+- 격리 엔진 설치·토큰·모델 동의 계약: [stt-engines](../../configs/stt-engines/README.md)
 - 소개: [`음성-녹취-회의록-자동화`](../../docs/기능소개/음성-녹취-회의록-자동화.md) ·
   [`전사본-화자-구분과-문장-단위-출력`](../../docs/기능소개/전사본-화자-구분과-문장-단위-출력.md)

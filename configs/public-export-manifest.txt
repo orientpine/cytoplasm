@@ -41,6 +41,12 @@ configs/public-export-review.txt
 configs/public-export-baseline-additions.txt
 configs/freeze-inventory.txt
 tests/unit/test_public_export_manifest_coverage.py
+tests/unit/test_public_export_ledger_order.py
+
+# F2 LOC-exception registry conformance. automation/final/f2_loc_exceptions.txt stays public
+# (f2_quality.sh reads it) but names manifest-excluded engine files, so this test cannot pass
+# inside the exported tree (2026-09-08 v1.6.0 export replica).
+tests/unit/test_f2_loc_exceptions.py
 
 # Installation-specific and personal operations runbooks.
 docs/guide/cost-report.md
@@ -130,7 +136,7 @@ docs/기능소개/제안서-제출본-완성.md
 configs/public-export-grandfathered.txt
 
 # Private engine integration: pins two private repositories a public subscriber cannot reach.
-docs/guide/kd-at-두-저장소-운영.md
+docs/guide/제안서-윤문-호스트-운영.md
 automation/proposal_engine_provision.sh
 tests/unit/test_proposal_engine_provision.py
 
@@ -139,3 +145,19 @@ docs/기능소개/obsidian-write-클론-위생.md
 docs/기능소개/배포-미선언-홈-산출물-관측.md
 docs/기능소개/실행경로-가드-일반화.md
 docs/기능소개/전사본-화자-경계-문장-분할.md
+
+# 수리 스윕-4 기능 소개: 노드 운영 경로·마커·계정 세부가 실려 공개 대상이 아니다.
+docs/기능소개/릴리스-적용-완료-DM-통지.md
+docs/기능소개/릴리스-승인-메시지-상세-분할.md
+docs/기능소개/스킬-제작-전-기존-스킬-대조.md
+
+# The HWPX render engine internalized from the private kimm-docbot repository
+# (2026-09-08). It is excluded so this change does not silently alter what is
+# public: the engine has never been published, and promoting it is an owner call.
+skills/proposal/engine/
+# Tests whose only input is that private engine — they import skills.proposal.engine at
+# collection/runtime and cannot pass inside the exported tree, where public_export.sh
+# re-runs pytest (2026-09-08 v1.6.0 export replica: ModuleNotFoundError). They are
+# promoted together with the engine when the owner publishes it.
+tests/unit/test_proposal_render.py
+tests/unit/test_proposal_engine_in_tree.py

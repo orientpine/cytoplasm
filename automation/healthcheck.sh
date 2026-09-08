@@ -8,6 +8,8 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"; eval "$(python3 "$REPO_ROOT/automation/node_config_sh.py" --print-env)"
 export RUNTIME_RELEASE_CURRENT="${RUNTIME_RELEASE_CURRENT:-$NODE_RELEASE_CURRENT}" HEALTHCHECK_RECONCILE_STATE="${HEALTHCHECK_RECONCILE_STATE:-$NODE_PRIVATE_ROOT/deploy-reconcile/state.json}"
+readonly PRIMARY_NODE="$NODE_PRIMARY_NODE_NAME"
+readonly RAG_NODE="$NODE_RAG_NODE_NAME"
 
 # The deploy-checkout drift verdict + its recovery text live in a sibling library
 # so this file stays under the 250 pure-LOC gate. It runs LOCALLY (no ssh/sudo).
@@ -22,6 +24,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/checkout_mirror_probe.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/skill_mount_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/selfskill_root_probe.sh"
 # shellcheck source=automation/release_store_probe.sh
 source "$(dirname "${BASH_SOURCE[0]}")/release_store_probe.sh"
+# shellcheck source=automation/peer_gateway_probe.sh
+source "$(dirname "${BASH_SOURCE[0]}")/peer_gateway_probe.sh"
 # shellcheck source=automation/release_helper_probe.sh
 # shellcheck source=automation/watcher_drift_probe.sh
 # shellcheck source=automation/healthcheck_wrapper_probe.sh
@@ -36,12 +40,33 @@ source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_command_builder.sh"; source "
 # shellcheck source=automation/update_trust_probe.sh
 # shellcheck source=automation/healthcheck_roster_probe.sh
 source "$(dirname "${BASH_SOURCE[0]}")/update_trust_probe.sh"; source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_roster_probe.sh"
+# shellcheck source=automation/healthcheck_registry.sh
+source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_registry.sh"
+# shellcheck source=automation/healthcheck_suggest.sh
+source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_suggest.sh"
+
+# Static-view compatibility for legacy source scanners; runtime data lives above.
+: <<'HEALTHCHECK_REGISTRY_STATIC_VIEW'
+  "$PRIMARY_NODE signed update trust|update_trust|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_DEPLOY_CHECKOUT"
+  "$PRIMARY_NODE ops checkout mirrors origin/main|checkout_mirrors_origin|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_DEPLOY_CHECKOUT"
+  "$PRIMARY_NODE release matches origin/main|release_matches_origin|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_DEPLOY_CHECKOUT"
+  "$PRIMARY_NODE privileged release helpers match release|release_helper_drift|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_LIBEXEC_DIR"
+  "$PRIMARY_NODE skill mounts match the release|skill_mounts_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
+  "$PRIMARY_NODE agent selfskill root topology|agent_selfskill_root_topology|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
+  "$PRIMARY_NODE release store usage|release_store_usage|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_RELEASE_STORE"
+  "$PRIMARY_NODE watcher wrappers match the release|watcher_wrappers_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_WATCHER_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/watcher-deploy-manifest.txt}"
+  "$PRIMARY_NODE runtime packages match the release|primary_runtime_packages_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}"
+  "$RAG_NODE personal RAG source and MCP image match the release|rag_stack_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}"
+  "$PRIMARY_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh"
+readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage release_fully_deployed peer_ignored_channels"
+agent_selfskill_root_topology) selfskill_root_guidance ;;
+agent_selfskill_root_topology) probe_selfskill_root_topology "$node" "$account" "$target" ;;
+release_store_usage) probe_release_store_usage "$node" "$account" "$target" ;;
+HEALTHCHECK_REGISTRY_STATIC_VIEW
 
 readonly LOG_DIR="${HEALTHCHECK_LOG_DIR:-$NODE_PRIVATE_ROOT/runtime-logs/healthcheck}"
 # 겹친 cron 틱이 서로를 보는 유일한 지점 — main() 의 양보 가드가 이 파일을 잡는다.
 readonly LOCK_FILE="${HEALTHCHECK_LOCK_FILE:-$LOG_DIR/healthcheck.lock}"
-readonly PRIMARY_NODE="$NODE_PRIMARY_NODE_NAME"
-readonly RAG_NODE="$NODE_RAG_NODE_NAME"
 if [[ -v HEALTHCHECK_SSH_IDENTITY ]]; then
   readonly SSH_IDENTITY="$HEALTHCHECK_SSH_IDENTITY"
 elif [[ -r "$HOME/.ssh/autophagy-healthcheck" ]]; then
@@ -61,35 +86,6 @@ if [[ -n "$SSH_IDENTITY" ]]; then
 fi
 readonly -a SSH_OPTIONS
 
-# Add an ordinary deployed service by adding one line here. Fields are:
-# display name | probe type | node | account | target
-readonly -a LIVE_CHECKS=(
-  "$PRIMARY_NODE $NODE_AGENT_ACCOUNT $NODE_AGENT_GATEWAY_UNIT|user_unit_active|${PRIMARY_NODE}|$NODE_AGENT_ACCOUNT|$NODE_AGENT_GATEWAY_UNIT"
-  "$PRIMARY_NODE $NODE_PEER_ACCOUNT $NODE_PEER_GATEWAY_UNIT|user_unit_active|${PRIMARY_NODE}|$NODE_PEER_ACCOUNT|$NODE_PEER_GATEWAY_UNIT"
-  "$RAG_NODE embedding|embedding_health|${RAG_NODE}|$NODE_OPS_ACCOUNT|http://127.0.0.1:8001/health"
-  "$RAG_NODE Qdrant|qdrant_health|${RAG_NODE}|$NODE_OPS_ACCOUNT|http://127.0.0.1:6333/healthz"
-  "$RAG_NODE MCP|mcp_health|${RAG_NODE}|$NODE_OPS_ACCOUNT|http://127.0.0.1:8765/health"
-  "$PRIMARY_NODE report-hub collector|user_unit_active|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|report-hub-collector.service"
-  "$PRIMARY_NODE report-hub dashboard|user_unit_active|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|report-hub-dashboard.service"
-  "$PRIMARY_NODE report-hub dashboard auth|http_unauth_401|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|http://100.116.248.95:8800/"
-  "$PRIMARY_NODE signed update trust|update_trust|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_DEPLOY_CHECKOUT"
-  "$PRIMARY_NODE ops checkout mirrors origin/main|checkout_mirrors_origin|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_DEPLOY_CHECKOUT"
-  "$PRIMARY_NODE release matches origin/main|release_matches_origin|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_DEPLOY_CHECKOUT"
-  "$PRIMARY_NODE privileged release helpers match release|release_helper_drift|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_LIBEXEC_DIR"
-  "$PRIMARY_NODE skill mounts match the release|skill_mounts_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
-  "$PRIMARY_NODE agent selfskill root topology|agent_selfskill_root_topology|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_SKILL_STORE/live"
-  "$PRIMARY_NODE release store usage|release_store_usage|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|$NODE_RELEASE_STORE"
-  "$PRIMARY_NODE release fully deployed|release_fully_deployed|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_DEPLOY_ALL_RECEIPT:-$NODE_PRIVATE_ROOT/deploy-all/receipt.json}"
-  "$PRIMARY_NODE watcher wrappers match the release|watcher_wrappers_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_WATCHER_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/watcher-deploy-manifest.txt}"
-  "$PRIMARY_NODE runtime packages match the release|primary_runtime_packages_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}" "$RAG_NODE personal RAG source and MCP image match the release|rag_stack_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}" "$PRIMARY_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh" "$RAG_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh"
-)
-
-# Probes that run HERE, not over ssh. They must stay out of the remote tally: during a
-# fleet-wide SSH outage they still pass, and counting them keeps the all-remote-down
-# guard from collapsing N tickets into one INFRA_FAILURE (regression d7ed0ad / γ).
-# One declaration on purpose — the same rule lived in two comparisons and the second
-# copy is always the one that gets forgotten.
-readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage release_fully_deployed"
 UPDATE_TRUST_BLOCK_REPORTED=0
 RELEASE_STALE_REPORTED=0
 
@@ -99,11 +95,14 @@ log() {
 
 usage() {
   cat >&2 <<'EOF'
-Usage: healthcheck.sh [--synthetic-failure]
+Usage: healthcheck.sh [--suggest | --synthetic-failure]
 
-Without arguments, check the deployed services. --synthetic-failure performs
-one read-only is-active probe for a deliberately nonexistent ops user unit; it
-exists only to prove failure reporting without disrupting a real service.
+Without arguments, check the deployed services. --suggest reports which service
+groups this installation appears to run and prints the HEALTHCHECK_SERVICES line
+to declare them; it probes read-only, raises no ticket and changes nothing.
+--synthetic-failure performs one read-only is-active probe for a deliberately
+nonexistent ops user unit; it exists only to prove failure reporting without
+disrupting a real service.
 EOF
   exit 2
 }
@@ -132,21 +131,6 @@ setup_log() {
   log "log=${LOG_FILE}"
 }
 
-# A repair ticket carries the check name, which is all an operator needs when the
-# remedy is obvious (restart, re-auth). Deploy-checkout drift is the case where
-# it is not: the commits stranded in the checkout exist nowhere else, so the
-# reflexive repair - discard and realign - destroys them. Probe types without a
-# rule here ship the name alone.
-repair_guidance() {
-  case "$1" in
-    checkout_mirrors_origin)
-      checkout_mirror_guidance "${HEALTHCHECK_OPS_CHECKOUT:-$NODE_DEPLOY_CHECKOUT}"
-      ;;
-    skill_mounts_current) skill_mount_guidance ;;
-    agent_selfskill_root_topology) selfskill_root_guidance ;; release_store_usage) release_store_guidance ;;
-    *) ;;
-  esac
-}
 
 report_repair() {
   local check_name="$1"
@@ -165,53 +149,16 @@ report_repair() {
   fi
 }
 
-# The deploy checkout is a one-way mirror of origin/main. This probe runs LOCALLY:
-# healthcheck runs as ops on the primary node and the checkout is local there, so it
-# needs neither ssh (allowlist-denied) nor sudo (sudoers-denied) - both rc=126. The
-# verdict (clean/dirty/ahead/behind/unknown-remote) and the grading that turns it into
-# pass/fail both live in checkout_mirror_probe.sh - this file is wiring, and grading a
-# behind mirror needs what production runs, which is more than one line's worth.
-# Read-only: it uses git ls-remote (no local ref written), never fetch/pull/reset.
-# An unreachable origin degrades to a PASS + BEHIND-UNKNOWN, never a cry-wolf fail.
-# probe_skill_mounts_current lives in skill_mount_probe.sh (LOC gate) — sourced above.
-
-run_check() {
-  local definition="$1"
-  local check_name probe_type node account target
-
-  IFS='|' read -r check_name probe_type node account target <<< "$definition"
-  case "$probe_type" in
-    http_200) probe_http_200 "$node" "$account" "$target" ;;
-    user_unit_active) probe_user_unit_active "$node" "$account" "$target" ;;
-    http_unauth_401) probe_http_unauth_401 "$node" "$account" "$target" ;;
-    embedding_health) probe_embedding_health "$node" "$account" "$target" ;;
-    qdrant_health) probe_qdrant_health "$node" "$account" "$target" ;;
-    mcp_health) probe_mcp_health "$node" "$account" "$target" ;;
-    update_trust)
-      probe_update_trust "$node" "$account" "$target" \
-        || { UPDATE_TRUST_BLOCK_REPORTED=1; return 1; }
-      ;;
-    checkout_mirrors_origin) probe_checkout_mirrors_origin "$node" "$account" "$target" ;;
-    release_matches_origin) probe_release_matches_origin "$node" "$account" "$target" ;;
-    release_helper_drift) probe_release_helper_drift "$node" "$account" "$target" ;;
-    skill_mounts_current) probe_skill_mounts_current "$node" "$account" "$target" ;;
-    release_store_usage) probe_release_store_usage "$node" "$account" "$target" ;;
-    release_fully_deployed) probe_release_fully_deployed "$node" "$account" "$target" ;;
-    agent_selfskill_root_topology) probe_selfskill_root_topology "$node" "$account" "$target" ;;
-watcher_wrappers_current) probe_watcher_wrappers_current "$node" "$account" "$target" ;; primary_runtime_packages_current) probe_primary_runtime_packages_current "$node" "$account" "$target" ;; rag_stack_current) probe_rag_stack_current "$node" "$account" "$target" ;;
-healthcheck_wrapper_current) probe_healthcheck_wrapper_current "$node" "$account" "$target" ;;
-    *) log "ERROR: ${check_name} has unsupported probe type ${probe_type}"; return 1 ;;
-  esac
-}
 
 main() {
   local -a checks=("${LIVE_CHECKS[@]}")
   local definition check_name probe_type
   local -a failed_checks=()
-  local remote_total=0 remote_failed=0
+  local remote_total=0 remote_failed=0 suggest_mode=0 hint
 
   case "${1:-}" in
     "") ;;
+    --suggest) suggest_mode=1 ;;
     --synthetic-failure)
       checks=("synthetic nonexistent ops unit|user_unit_active|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|autophagy-healthcheck-synthetic-does-not-exist.service")
       ;;
@@ -223,6 +170,14 @@ main() {
   if [[ -n "$SSH_IDENTITY" && ! -r "$SSH_IDENTITY" ]]; then
     printf '[healthcheck] ERROR: SSH identity is not readable: %s\n' "$SSH_IDENTITY" >&2
     return 1
+  fi
+
+  # An operator asking what to declare is not a sweep: it must not take the sweep's lock,
+  # write its log, notify, or raise a ticket. It reuses the same probes, so it needs no
+  # command the SSH forced-command allowlist does not already carry.
+  if (( suggest_mode == 1 )); then
+    healthcheck_suggest_run
+    return $?
   fi
 
   # cron 은 이 sweep 을 */5 로 부르지만 최근 400 회 실행의 중앙값은 4048 초였다(p90 14760 초,
@@ -254,6 +209,12 @@ main() {
       log "PASS ${check_name}"
     else
       log "FAIL ${check_name}"
+      # The operator who met this as a bare FAIL had to go find the documentation to learn
+      # that an optional group can be declined. The answer belongs at the question.
+      hint="$(healthcheck_optional_group_hint "$check_name")" || hint=""
+      if [[ -n "$hint" ]]; then
+        log "$hint"
+      fi
       failed_checks+=("$definition")
       [[ " $LOCAL_PROBES " == *" $probe_type "* ]] || remote_failed=$(( remote_failed + 1 ))
     fi

@@ -145,10 +145,11 @@ def _speakers(extraction: Extraction) -> list[str]:
     표 밖 한 줄로 둔다: 표 안에 넣으면 라벨이 많은 회의에서 셀 하나가 줄바꿈 없이 늘어나
     머리말이 읽히지 않는다. 이름을 모르는 라벨도 적는다 — 누락과 미상은 다른 사실이다.
     """
-    if not extraction.speakers:
+    speakers = tuple(speaker for speaker in extraction.speakers if speaker.label != "화자0")
+    if not speakers:
         return []
     entries = " · ".join(
-        f"{speaker.label}={speaker.name or '미상'}" for speaker in extraction.speakers
+        f"{speaker.label}={speaker.name or '미상'}" for speaker in speakers
     )
     return [f"- 화자: {entries}", ""]
 

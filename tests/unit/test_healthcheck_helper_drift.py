@@ -98,6 +98,25 @@ def _matching_files(tmp_path: Path) -> tuple[Path, Path, Path]:
     # 공유하지만 별개 파일이다 — 한쪽만 신선해지는 상황이 실제로 일어난다.
     (converge / "release_store.py").write_bytes(helper.read_bytes())
     (converge / "release_provenance.py").write_bytes(provenance.read_bytes())
+    # 리컨실러가 import 하는 패키지 사본 — libexec 루트에는 없는 파일들이라 위 목록과
+    # 겹치지 않는다. 프로브가 이것들을 보기 시작한 뒤로(2026-09-07) 완비된 설치를
+    # 모델하려면 여기에도 있어야 한다.
+    package = converge / "automation"
+    package.mkdir()
+    for relative, name in (
+        ("automation/__init__.py", "__init__.py"),
+        ("automation/git_tag_signature.py", "git_tag_signature.py"),
+        ("automation/update_trust.py", "update_trust.py"),
+        ("automation/update_trust_state.py", "update_trust_state.py"),
+        ("automation/node_config.py", "node_config.py"),
+        ("configs/node.example.toml", "node.example.toml"),
+    ):
+        payload = f"{name}-v1\n".encode()
+        origin = source.parent / relative
+        origin.parent.mkdir(parents=True, exist_ok=True)
+        _ = origin.write_bytes(payload)
+        _ = (package / name).write_bytes(payload)
+
     return helper, provenance, source.parent
 
 

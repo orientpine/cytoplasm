@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Final
 
 from automation.install.components import resolve_components
+from automation.install.libexec_assets import libexec_files
+from automation.install.profiles import (
+    HEALTHCHECK_DECLARATION_PATH,
+    healthcheck_env,
+    resolve_profile,
+)
 from automation.install.plan import (
     Check,
     EnableTimer,
@@ -39,11 +45,27 @@ SYSTEM_UNITS: Final = (
 ENABLED_TIMERS: Final = tuple(name for name in SYSTEM_UNITS if name.endswith(".timer"))
 SUDOERS_ASSETS: Final = (
     "autophagy-deploy-reconcile",
+    "autophagy-healthcheck-peer-read",
     "autophagy-orchestration",
     "autophagy-release-store",
     "autophagy-skill-store",
     "autophagy-supply-chain-resume",
 )
+
+
+#: The reconcile unit loads this with no `-` prefix, so an absent file is a hard
+#: EnableTimer failure on a new node — which is exactly what a 2026-09-07 installation
+#: hit. An EMPTY one is fine: owner_notice.py answers NOTIFY-UNCONFIGURED and convergence
+#: still runs, so the node loses notices, not deployment.
+OWNER_NOTICE_CREDENTIAL: Final = Path("/etc/autophagy/repair-approval.env")
+OWNER_NOTICE_CREDENTIAL_TEMPLATE: Final = """\
+# Owner-notice credentials, read by automation/owner_notice.py.
+# Leaving this empty is valid: notices are skipped and convergence is unaffected.
+# Fill these in to receive reconcile-failure and deploy-drift notices.
+# DISCORD_BOT_TOKEN=
+# AUTOPHAGY_OWNER_ID=
+# OWNER_NOTICE_CHANNEL_ID=
+"""
 
 
 class InstallAssetError(RuntimeError):
@@ -124,10 +146,12 @@ def build_inputs(
     update_trust_key: str,
     *,
     components: Sequence[str] = (),
+    profile: str | None = None,
 ) -> InstallInputs:
     config = replace(config, peer_attest_mode="signed")
     _validate_release_layout(config)
     selected = resolve_components(components)
+    declaration = None if profile is None else healthcheck_env(resolve_profile(profile))
     automation = repo_root / "automation"
     root = "root"
     ops = config.ops_account
@@ -201,38 +225,22 @@ def build_inputs(
             )
         )
 
-    helper_sources = (
-        (automation / "release_store.py", config.libexec_dir / "autophagy-install-release", 0o755),
-        (automation / "release_provenance.py", config.libexec_dir / "release_provenance.py", 0o644),
-        (automation / "skill_store.py", config.libexec_dir / "autophagy-install-skill", 0o755),
-        (
-            automation / "converge_origin_main.sh",
-            config.libexec_dir / "autophagy-converge-origin-main",
-            0o755,
-        ),
-        (
-            automation / "libexec" / "autophagy-resume-deploy",
-            config.libexec_dir / "autophagy-resume-deploy",
-            0o755,
-        ),
-        (
-            automation / "origin_snapshot.sh",
-            config.libexec_dir / "autophagy-converge.d" / "origin_snapshot.sh",
-            0o755,
-        ),
-        (
-            automation / "release_store.py",
-            config.libexec_dir / "autophagy-converge.d" / "release_store.py",
-            0o755,
-        ),
-        (
-            automation / "release_provenance.py",
-            config.libexec_dir / "autophagy-converge.d" / "release_provenance.py",
-            0o644,
-        ),
+    files.extend(libexec_files(repo_root, config))
+    if declaration is not None:
+        files.append(_file(HEALTHCHECK_DECLARATION_PATH, declaration, 0o644, root, root))
+
+    files.append(
+        replace(
+            _file(
+                OWNER_NOTICE_CREDENTIAL,
+                OWNER_NOTICE_CREDENTIAL_TEMPLATE,
+                0o640,
+                root,
+                config.ops_account,
+            ),
+            create_only=True,
+        )
     )
-    for source, destination, mode in helper_sources:
-        files.append(_file(destination, _rendered(source, config), mode, root, root))
 
     hook_source = automation / "hooks"
     files.extend(

@@ -92,6 +92,29 @@ def test_empty_state_has_no_records_and_no_watermark() -> None:
     assert state.version == 1
 
 
+def test_schedule_roundtrips_when_present_and_legacy_rows_still_load() -> None:
+    # Given
+    from automation.plaud_sync.model import parse_record, serialize_record
+    row = serialize_record(_BASE)
+    row["next_transcribe_at"] = "2026-09-05T13:00:00+00:00"
+    # When
+    parsed = parse_record(row)
+    # Then
+    assert serialize_record(parsed) == row
+    assert parse_record(serialize_record(_BASE)).next_transcribe_at is None
+
+
+@pytest.mark.parametrize("stamp", ["bad", "2026-09-05T13:00:00", "2026-09-05T13:00:00+09:00", 5])
+def test_invalid_schedule_is_rejected_when_state_is_loaded(stamp: str | int) -> None:
+    # Given
+    from automation.plaud_sync.model import parse_record, serialize_record
+    row = serialize_record(_BASE)
+    row["next_transcribe_at"] = stamp
+    # When / Then
+    with pytest.raises(PlaudSyncError):
+        parse_record(row)
+
+
 def test_records_mapping_is_immutable() -> None:
     state = PlaudSyncState(version=1, last_poll_at=None, records={"rec-001": _record()})
     with pytest.raises(TypeError):

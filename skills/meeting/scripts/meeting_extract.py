@@ -6,6 +6,7 @@ run the sensitivity gate (meeting_gate) on the returned text before routing.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +92,23 @@ def extract_file(path: Path, *, pdf_runner: PdfRunner = run_pdftotext) -> Extrac
             raise ExtractionRefused(MANUAL_CONVERSION_NOTICE, exit_code=4)
         return ExtractedText(text=text, kind="pdf", input_bytes=size)
     raise ExtractionRefused(UNSUPPORTED_NOTICE, exit_code=5)
+
+
+def strip_folded(text: str) -> str:
+    """Remove details regions, including nested or unclosed folds; preserve other bytes."""
+    kept: list[str] = []
+    depth, cursor = 0, 0
+    for tag in re.finditer(r"<(/?)details\b[^>]*>", text, re.IGNORECASE):
+        closing = bool(tag.group(1))
+        if depth == 0:
+            kept.append(text[cursor:tag.start()])
+            if closing:
+                kept.append(tag.group())
+        depth = max(depth - 1, 0) if closing else depth + 1
+        cursor = tag.end()
+    if depth == 0:
+        kept.append(text[cursor:])
+    return "".join(kept)
 
 
 def extract_body(body: str) -> ExtractedText:

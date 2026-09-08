@@ -136,7 +136,7 @@ personal_provenance_check() { # personal_provenance_check <personal-repo> [appro
   fi
 
   local tracked_dirty
-  tracked_dirty="$(git -C "$repo_root" status --porcelain --untracked-files=no)" || {
+  tracked_dirty="$(git -C "$repo_root" -c core.quotepath=false status --porcelain --untracked-files=no)" || {
     deploy_provenance_log "DEPLOY-BLOCK: cannot inspect personal repository worktree"
     return 1; }
   if [[ -n "$tracked_dirty" ]]; then
@@ -146,7 +146,7 @@ personal_provenance_check() { # personal_provenance_check <personal-repo> [appro
   fi
 
   local untracked
-  untracked="$(git -C "$repo_root" ls-files --others --exclude-standard -- .)" || {
+  untracked="$(git -C "$repo_root" -c core.quotepath=false ls-files --others --exclude-standard -- .)" || {
     deploy_provenance_log "DEPLOY-BLOCK: cannot list untracked files in personal repository"
     return 1; }
   if [[ -n "$untracked" ]]; then

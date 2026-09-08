@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
 from automation.codex_llm import CodexClient, CodexUnavailableError
-from automation.plaud_sync.lifelog_extract import extract
+from automation.plaud_sync.lifelog_extract import extract, summarize
 from automation.plaud_sync.lifelog_model import (
     ExtractionOutcome,
     ExtractionSkipped,
@@ -27,10 +28,12 @@ _GATE_REASON: Final = "민감도 게이트"
 _NO_RULES_REASON: Final = "민감도 규칙 없음"
 _NO_LLM_REASON: Final = "LLM 미설정"
 _RULES_RELPATH: Final = ("configs", "sensitivity-rules.yaml")
-_TEMPLATE_RELPATH: Final = ("prompts", "lifelog-extraction-v1.md")
+_TEMPLATE_RELPATH: Final = ("prompts", "lifelog-extraction-v4.md")
+_SUMMARY_RELPATH: Final = ("prompts", "lifelog-summary-v1.md")
 _PROMPT_ANCHOR: Final = "<<<PROMPT>>>"
 _TIMEOUT_ENV: Final = "PLAUD_SYNC_LLM_TIMEOUT"
 _PROMPT_ENV: Final = "PLAUD_SYNC_EXTRACT_PROMPT"
+_SUMMARY_PROMPT_ENV: Final = "PLAUD_SYNC_SUMMARY_PROMPT"
 _DEFAULT_TIMEOUT: Final = 120.0
 
 
@@ -43,9 +46,13 @@ def build_extractor(
     """녹취 하나를 추출 결과로 바꾸는 Extractor. 규칙·템플릿은 최초 사용 때 한 번만 읽는다."""
     rules_path = repo_root.joinpath(*_RULES_RELPATH)
     template_path = _template_path(environment, repo_root)
+    summary_path = _template_path(
+        environment, repo_root, env_name=_SUMMARY_PROMPT_ENV, relpath=_SUMMARY_RELPATH
+    )
     completer = complete if complete is not None else _live_completer(environment)
     rules_cell: list[SensitivityRules | None] = []
     template_cell: list[str] = []
+    summary_cell: list[str] = []
 
     def _extract(recording: LifelogRecording) -> ExtractionOutcome:
         if not rules_cell:
@@ -62,14 +69,32 @@ def build_extractor(
             return ExtractionSkipped(_NO_LLM_REASON)
         if not template_cell:
             template_cell.append(_read_template(template_path))
-        return extract(recording, template=template_cell[0], complete=completer)
+        outcome = extract(recording, template=template_cell[0], complete=completer)
+        if outcome.summary.strip() or recording.summary_markdown.strip():
+            return outcome
+        # 요약이 정말 없다 — Plaud 도 첫 추출도 주지 못했다. 요약만 한 번 더 묻는다.
+        # 그 호출이 실패해도 이미 얻은 사람·장소·결정·할 일은 버리지 않는다: 추출은
+        # 성공했고, 이번 폴을 실패시키면 그 결과가 사라진다.
+        try:
+            if not summary_cell:
+                summary_cell.append(_read_template(summary_path))
+            repaired = summarize(recording, template=summary_cell[0], complete=completer)
+        except LifelogExtractError:
+            return outcome
+        return replace(outcome, summary=repaired) if repaired else outcome
 
     return _extract
 
 
-def _template_path(environment: Mapping[str, str], repo_root: Path) -> Path:
-    override = environment.get(_PROMPT_ENV, "").strip()
-    return Path(override) if override else repo_root.joinpath(*_TEMPLATE_RELPATH)
+def _template_path(
+    environment: Mapping[str, str],
+    repo_root: Path,
+    *,
+    env_name: str = _PROMPT_ENV,
+    relpath: tuple[str, ...] = _TEMPLATE_RELPATH,
+) -> Path:
+    override = environment.get(env_name, "").strip()
+    return Path(override) if override else repo_root.joinpath(*relpath)
 
 
 def _load_rules(path: Path) -> SensitivityRules | None:

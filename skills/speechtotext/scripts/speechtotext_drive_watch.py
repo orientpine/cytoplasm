@@ -11,6 +11,7 @@ processed only after its ingest succeeded (f).
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import shutil
@@ -20,7 +21,7 @@ import tempfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, cast
 
 _LIVE_SCRIPTS: Final = "/srv/autophagy-skills/live/speechtotext/scripts"
 _SCRIPTS = Path(os.environ.get("SPEECHTOTEXT_SCRIPTS", _LIVE_SCRIPTS)).expanduser()
@@ -30,6 +31,7 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import stt_drive  # noqa: E402
+import stt_media  # noqa: E402
 
 _RELEASE_CURRENT: Final = Path("/srv/autophagy-agent-current")
 _MIRROR_CHECKOUT: Final = Path("/srv/autophagy-agents")
@@ -92,9 +94,31 @@ def cli_path(env: Mapping[str, str]) -> Path:
 
 def _default_runner(argv: list[str], env: dict[str, str]) -> int:
     completed = subprocess.run(  # noqa: S603 - argv built from resolved interpreter + CLI path
-        argv, env=env, check=False, timeout=_CHILD_TIMEOUT
+        argv, env=env, check=False, timeout=_CHILD_TIMEOUT, stdout=subprocess.PIPE, text=True,
     )
+    print(completed.stdout, end="")
+    _move_snapshot(completed.stdout, env)
     return completed.returncode
+
+
+def _move_snapshot(stdout: str, env: Mapping[str, str]) -> None:
+    """CLI가 실제로 반환한 전사 경로만 사용하고 ingest의 성공·실패는 바꾸지 않는다."""
+    try:
+        lines = stdout.strip().splitlines()
+        if not lines:
+            return
+        summary = cast(object, json.loads(lines[-1]))
+        if not isinstance(summary, dict):
+            return
+        path = cast(dict[str, object], summary).get("transcript_path")
+        if not isinstance(path, str):
+            return
+        _ = _repo_root(env)
+        module = importlib.import_module("automation.stt_eval.snapshot")
+        move_snapshot = cast(Callable[[Path, Mapping[str, str]], Path | None], module.move_snapshot)
+        _ = move_snapshot(Path(path), env)
+    except (ImportError, OSError, ValueError, TypeError) as error:
+        print(f"STT-EVAL-SNAPSHOT-FAIL reason={type(error).__name__}", file=sys.stderr)
 
 
 def run_once(
@@ -118,7 +142,7 @@ def run_once(
         try:
             client.verify_owner_only(audio.file_id)
         except Exception:  # noqa: BLE001 - a shared recording is skipped, never ingested
-            summary["skipped"] = int(summary["skipped"]) + 1
+            summary["skipped"] = int(cast(int, summary["skipped"])) + 1
             print(f"SPEECHTOTEXT-SKIP reason=not-owner-only id={audio.file_id}", file=sys.stderr)
             continue
         workdir = Path(tempfile.mkdtemp(prefix="stt-drive-"))
@@ -134,16 +158,43 @@ def run_once(
                 "--label",
                 audio.label,
             ]
-            code = runner(argv, child_env(env))
+            try:
+                code = runner(argv, child_env(env))
+            finally:
+                _record_manifest(audio, digest, local, env, now)
             if code == 0:
                 stt_drive.mark_processed(state_file, audio, now=now, digest=digest)
-                summary["ingested"] = int(summary["ingested"]) + 1
+                summary["ingested"] = int(cast(int, summary["ingested"])) + 1
             else:
-                summary["failed"] = int(summary["failed"]) + 1
+                summary["failed"] = int(cast(int, summary["failed"])) + 1
                 print(f"SPEECHTOTEXT-INGEST-FAIL rc={code} id={audio.file_id}", file=sys.stderr)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
     return summary
+
+
+def _record_manifest(
+    audio: stt_drive.DriveAudio, digest: str, local: Path, env: Mapping[str, str], now: datetime,
+) -> None:
+    """이미 Drive에 있는 원본은 업로드 없이 기록하며 ingest 결과는 바꾸지 않는다."""
+    try:
+        _ = _repo_root(env)
+        from automation.plaud_sync.audio_manifest import ManifestEntry, record_manifest
+
+        duration = 0
+        try:
+            ffprobe = stt_media.resolve_ffprobe(env, ffmpeg=stt_media.resolve_ffmpeg(env))
+            if ffprobe is not None:
+                duration = max(stt_media.probe_duration_ms(local, ffprobe=ffprobe) or 0, 0)
+        except (OSError, ValueError, OverflowError) as error:
+            print(f"SPEECHTOTEXT-DURATION-UNKNOWN reason={type(error).__name__}", file=sys.stderr)
+        if duration == 0:
+            print("SPEECHTOTEXT-DURATION-UNKNOWN duration_ms=0", file=sys.stderr)
+        entry = ManifestEntry(digest, audio.file_id, duration, audio.label, now.isoformat(), domain="meeting")
+        _ = record_manifest(entry, env)
+    except Exception as error:
+        reason = "STT-EVAL-ROOT-REFUSED" if str(error) == "STT-EVAL-ROOT-REFUSED" else type(error).__name__
+        print(f"SPEECHTOTEXT-MANIFEST-FAIL reason={reason}", file=sys.stderr)
 
 
 def _repo_root(env: Mapping[str, str]) -> str:

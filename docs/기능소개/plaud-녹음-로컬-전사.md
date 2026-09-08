@@ -18,13 +18,20 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
   없으면 exit 4 로 멈추고 API 로 폴백하지 않으며, `DRIVE_PUBLISH_ENABLED=0` 으로 개인 녹음이 Drive
   `전사본/` 폴더에 올라가지 않는다 — 승인된 Obsidian 노트가 유일한 목적지다.
 
+## 시각 정규화
+
+로컬 전사에서만 본문 시각이 제목·경로보다 9시간 이르던 결함을 고쳤다. 증명된 결함은 `get_file`의 오프셋 없는 UTC 문자열을 현지 시각으로 읽은 것이다 — 회귀 테스트는 명시적 UTC 오프셋을 단 발견 기준 입력과 오프셋 없는 `get_file` 입력을 대조하며, 모든 `list_files` 응답이 오프셋을 단다고 주장하지는 않는다. 실측 스모크에서는 합성 09:30 UTC 가 제목·frontmatter·한눈에·출처 전부 18:30 Asia/Seoul 로 찍히고 전사 본문은 그대로였다. 이제 `get_file` 경계에서 오프셋 없는 `created_at`·`start_at`을 `+00:00`으로 정규화하고, 출처 줄도 제목·frontmatter·`녹음::`과 같은 현지 시각을 쓴다. 이미 vault에 작성된 세 노트의 보정은 소유자 결정 전까지 범위 밖이다.
+
 ## 어떻게 (틱 한 번)
 
-1. **discovery**(30분 게이트) — 새 녹음을 `planned` 대신 `transcribing` 으로 동결한다(초안 = Plaud 요약 +
-   클라우드 전사, hash 는 finalize 때 다시 계산).
+1. **discovery**(30분 게이트) — 최소 길이(기본 5초) 미만은 건너뛰고, 나머지 새 녹음을 `planned` 대신 `transcribing` 으로 동결한다(초안 = Plaud 요약 +
+   클라우드 전사, hash 는 finalize 때 다시 계산). **Plaud 가 요약도 전사도 만들지 않은 녹음도 동결한다** — 그런
+   녹음이 이 경로가 있는 이유다(2026-09-05 까지는 빈 노트 가드가 `initial_status` 앞에 있어 매 폴 skip 됐고, 64분
+   녹음이 로컬 전사에 닿지 못했다).
 2. **resolve** — 카드 게시·✅ 판독·vault 저장(watch.lock 아래, 기존 그대로). `transcribing` 은 건드리지 않는다.
-3. **watch.lock 을 푼다** → 전사 스텝(`transcribe_live.run_transcribe_step`, 틱당 1건): 
-   `pipeline_lock`(speechtotext 워처와 공유 — whisper 는 같은 자원, 못 잡으면 busy 한 줄 양보) →
+3. **watch.lock 을 푼다** → 전사 스텝(`transcribe_live.run_transcribe_step`, 틱당 1건 — **시도 횟수가 적은 녹음부터**, 같으면 예전 순):
+   보류 건의 클라우드 재확인(전사 슬롯과 별도, 잠금이 바빠도 수행) →
+   `pipeline_lock`(speechtotext 워처와 공유 — whisper 는 같은 자원, 못 잡으면 로컬 전사 양보) →
    `get_file` presigned URL(24h, JSON 뒤 산문이 붙어 `raw_decode`) → 스트리밍 다운로드(상한 1 GiB,
    `audio/<id>.mp3`, 캐시) → speechtotext CLI `transcribe --file … --label <stem>` → 전사본을
    `transcripts/<stem>.md` 에 저장 → 요약을 `get_note` 로 갱신하고 노트 본문을 재조립 →
@@ -32,7 +39,7 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
    재검사한 뒤 한 번 저장** → 오디오 삭제 → `planned`.
 4. 승격된 건이 있으면 같은 틱에서 resolve 를 한 번 더 돌려 카드를 바로 올린다(다음 틱 10분을 기다리지 않는다).
 
-117분 녹음은 노드에서 약 45분 걸린다(0.4× 실시간). 그동안 watch.lock 이 비어 있으므로 다음 틱들은 ✅ 를
+117분 녹음은 노드에서 약 45분 걸린다(0.4× 실시간 추정; 2026-09-05 실측은 CUDA 노드에서 64분 → 약 6분, 0.1×). 그동안 watch.lock 이 비어 있으므로 다음 틱들은 ✅ 를
 정상 소비하고, 전사 스텝만 pipeline_lock 에 막혀 양보한다.
 
 ## 실패 분류
@@ -40,7 +47,7 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
 | 종류 | 예 | 처리 |
 |---|---|---|
 | 환경(노드) | rc=3(governed 거부)·rc=4(whisper/sherpa 없음), CLI 미마운트, MCP 오류, 네트워크 | **카운트 안 함**, 사유를 `last_block_reason` 에 적고 매 틱 재시도 |
-| 녹음 | rc≠0(빈 전사·잘림·미지원 형식), 시간 초과, 오디오 상한 초과 | `transcribe_attempts`+1; 상한(기본 2) 도달 시 **클라우드 전사로 폴백**해 `planned`, 노트 출처 줄에 `PLAUD 클라우드 전사(로컬 전사 N회 실패: …)` |
+| 녹음 | rc≠0(빈 전사·잘림·미지원 형식), 시간 초과, 오디오 상한 초과 | `transcribe_attempts`+1; 상한(기본 2) 도달 시 **클라우드 전사로 폴백**해 `planned`, 노트 출처 줄에 `PLAUD 클라우드 전사(로컬 전사 N회 실패: …)`; 클라우드도 요약·전사가 없으면 `planned` 로 올리지 않고 `transcribing` 에 보류한 뒤 1·2·4·8·16·24시간 상한 백오프로 로컬 재시도한다. 클라우드는 매 틱 확인하고, 총 실패 상한(기본 5)에도 비어 있으면 `abandoned`로 닫는다. 대기 건은 전사 슬롯을 쓰지 않는다 |
 | stale | commit 시점에 레코드가 바뀌어 있음 | 아무것도 덮어쓰지 않는다 |
 
 ## 사용 시나리오
@@ -55,6 +62,9 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
    가 매 틱 그대로다. 노드 `~/.env.secrets` 의 `SPEECHTOTEXT_WHISPER_BIN/MODEL`·`SPEECHTOTEXT_DIARIZE_*` 를 고치면
    다음 틱에 진행한다. 당장 옛 동작(클라우드 전사로 바로 카드)이 필요하면 `PLAUD_SYNC_TRANSCRIBE=0`.
 
+현재 정책 상세는 [전사 정책 게이트](plaud-전사-정책-게이트.md)를 따른다. Plaud 요약이 없으면 같은 필드 추출 호출에서
+얻은 요약으로 채운다. 아래 실측은 정책 적용 전의 역사이며 2초 녹음·빈 요약 사례는 현재 기본 동작이 아니다.
+
 ## 실측 (2026-09-04)
 
 - `get_file` 은 `{id,name,created_at,start_at,duration,presigned_url,source_list,note_list}` + 산문 꼬리. presigned
@@ -63,14 +73,25 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
   `transcribing 1 → planned 1`, `transcripts/<stem>.md` 생성, `audio/` 비움, body sha 일치. whisper 실행 자체는
   노드 릴리스 뒤 첫 `transcribing` 레코드에서 확인한다(워크스테이션에 whisper 가 없다).
 
+## 실측 (2026-09-05, 노드 첫 로컬 전사)
+
+- 대상: 9/4 사고 녹음(Plaud 표기 64분 6초, mp3 실측 61분 10초 · 56 MiB — S3 Content-Range 총량과 바이트 일치, 다운로드 완전).
+  9/4 에는 UTF-8 결함으로 2회 실패 → 빈 노트가 vault 에 쓰였고, 9/5 재발견은 "요약도 전사도 없다"로 매 폴 skip 됐다(위 수리).
+- 레코드를 `transcribing` 으로 되돌린 뒤 틱 1회: whisper-cli(CUDA, large-v3-turbo-q5_0) 약 6분 → `transcripts/<stem>.md`
+  46 KB · 문장 1,138 · 화자 블록 529 · 격리 구간 0 · 커버리지 64.7%(나머지는 침묵) → 노트 649 B → 52 KB(한눈에 사람·장소,
+  결정 · 할 일 추출 성공, `## 요약` 은 Plaud 요약이 없어 `(요약 없음)`, 출처 `로컬 전사 local:ggml-large-v3-turbo-q5_0 · 화자 분리`)
+  → 같은 틱에서 카드 `posted`. 오디오 캐시와 구간 캐시는 성공 후 비워졌다.
+- 화자 분리는 화자1~41 이 전부 `미상`(과분할) — 전사 자체는 막지 않지만 범례가 읽기 어렵다(후속 과제).
+
 ## 관련
 
 - 코드: `automation/plaud_sync/audio.py`(URL·다운로드) · `transcribe.py`(순수 스텝·실패 분류·폴백) ·
   `transcribe_live.py`(MCP·S3·subprocess·잠금·commit) · `cron/plaud_sync_watch.py`(lock 해제 순서) ·
-  `model.py`(`transcribing`, `transcribe_attempts`) · `skills/plaud`(status 1.1.0)
+  `model.py`(`transcribing`, `transcribe_attempts`, `next_transcribe_at`) · `skills/plaud`(status 1.1.1)
 - 테스트: `tests/unit/test_plaud_sync_{audio,transcribe,transcribe_live,transcribing_status}.py`
-- env(`configs/env.example`): `PLAUD_SYNC_TRANSCRIBE`(1) · `PLAUD_SYNC_TRANSCRIBE_PER_TICK`(1) ·
-  `PLAUD_SYNC_TRANSCRIBE_ATTEMPTS`(2) · `PLAUD_SYNC_TRANSCRIBE_TIMEOUT`(21600) · `PLAUD_SYNC_MAX_AUDIO_BYTES`(1 GiB);
+- env(노드의 기존 환경 설정 경로): `PLAUD_SYNC_TRANSCRIBE`(1) · `PLAUD_SYNC_TRANSCRIBE_PER_TICK`(1) ·
+  `PLAUD_SYNC_TRANSCRIBE_ATTEMPTS`(2) · `PLAUD_SYNC_TRANSCRIBE_GIVE_UP`(5) · `PLAUD_SYNC_MIN_DURATION_MS`(5000) ·
+  `PLAUD_SYNC_TRANSCRIBE_TIMEOUT`(21600) · `PLAUD_SYNC_MAX_AUDIO_BYTES`(1 GiB);
   CLI 경로 주입은 `SPEECHTOTEXT_CLI` / `SPEECHTOTEXT_SCRIPTS`
 - 규약: `automation/pipeline_lock.py`(규약 (n) — plaud 도 같은 lock), [plaud lifelog 동기화](plaud-lifelog-동기화.md),
   [음성 녹취 → 전사본 → 회의록](음성-녹취-회의록-자동화.md)

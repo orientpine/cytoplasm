@@ -39,7 +39,10 @@ then
     | remote "set -eu; umask 077; rm -rf '$incoming'; mkdir -p '$incoming'; tar -xf - -C '$incoming'; printf '%s\n' '$archive_sha' > '$incoming/.archive-sha256'; rm -rf '$stage'; mv '$incoming' '$stage'"
 fi
 
-prefix="set -a; . '$agent_home/.env.secrets'; set +a; cd '$stage'; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='$stage' python3 -m automation.release_approval"
+# 실행 모듈은 호출자가 고른다 — 같은 권한 경계(agent 시크릿 + 스테이징된 커밋 트리)를
+# 쓰는 생산자가 둘 이상이라 전송로를 복사하지 않기 위한 유일한 이음매다.
+module="${RELEASE_APPROVAL_MODULE:-automation.release_approval}"
+prefix="set -a; . '$agent_home/.env.secrets'; set +a; cd '$stage'; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='$stage' python3 -m $module"
 if [[ "${1:-}" == "request" && "${2:-}" == "--plan-file" && -n "${3:-}" && $# == 3 ]]
 then
   # Python reopening /dev/stdin after ssh→sudo crosses an fd owned by the

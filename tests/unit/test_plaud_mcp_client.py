@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 
 import pytest
@@ -43,6 +44,15 @@ for raw_line in sys.stdin:
 
 def _server_argv(mode: str = "normal") -> tuple[str, ...]:
     return (sys.executable, "-c", FAKE_MCP_SERVER, mode)
+
+
+def test_transport_exports_reader_protocol_types_when_client_is_split() -> None:
+    # Given: the MCP client keeps its public facade.
+    # When: the sibling transport module is imported.
+    transport = importlib.import_module("automation.plaud_sync.mcp_transport")
+
+    # Then: it owns the moved stdio reader protocol types and JSON helper.
+    assert {"_Response", "_ReaderFailure", "_EndOfStream", "_json_value"} <= vars(transport).keys()
 
 
 def test_handshake_and_list_tools_when_server_is_ready() -> None:

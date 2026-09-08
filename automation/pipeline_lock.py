@@ -23,7 +23,7 @@ import fcntl
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Final, TextIO
+from typing import Final, Literal, TextIO
 
 LOCK_NAME: Final = "transcript-pipeline.lock"
 STATE_ROOT_ENV: Final = "HERMES_STATE_ROOT"
@@ -68,7 +68,7 @@ class hold:
             return False
         return True
 
-    def __exit__(self, *_exception: object) -> bool:
+    def __exit__(self, *_exception: object) -> Literal[False]:
         if self._handle is not None:
             self._handle.close()
             self._handle = None

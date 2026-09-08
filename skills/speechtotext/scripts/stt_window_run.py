@@ -10,8 +10,9 @@ Two rules decide everything:
 
 * **A window fails alone.** Non-zero rc, timeout, unreadable payload, JSON that stays
   invalid after the replacement decode, or a repetition collapse inside that window —
-  each costs that window and nothing else. The raw payload is copied out for forensics,
+  each affects that window and nothing else. The raw payload is copied for forensics,
   one machine-readable line goes to stderr, and a gap marker takes its place.
+  Repetition keeps the sentences folded under that marker, never as trusted speech.
 * **Nothing valid is decoded twice, nothing invalid is trusted.** A window whose JSON
   already parsed is reused from the store; a cached payload that does not parse is a
   cache miss, not a failure — whisper simply runs that window again.
@@ -20,6 +21,7 @@ Two rules decide everything:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -36,19 +38,34 @@ import stt_window_store
 BUDGET_FACTOR: Final = 4.0
 MIN_BUDGET: Final = 900.0
 QUARANTINED: Final = "WHISPER-WINDOW-QUARANTINED"
+BEAM_ENV: Final = "SPEECHTOTEXT_WHISPER_BEAM_SIZE"
+NO_SPEECH_ENV: Final = "SPEECHTOTEXT_WHISPER_NO_SPEECH"
+SUPPRESS_ENV: Final = "SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH"
+VAD_MODEL_ENV: Final = "SPEECHTOTEXT_VAD_MODEL"
+DTW_ENV: Final = "SPEECHTOTEXT_WHISPER_DTW"
 
 
 class Toolchain(Protocol):
     """The parts of `stt_local.LocalToolchain` a window run actually needs."""
 
-    binary: Path
-    model: Path
-    threads: int
-    language: str
-    timeout: float
-    allow_incomplete: bool
-    max_context: str
-    repeat_limit: float
+    @property
+    def binary(self) -> Path: ...
+    @property
+    def model(self) -> Path: ...
+    @property
+    def threads(self) -> int: ...
+    @property
+    def language(self) -> str: ...
+    @property
+    def timeout(self) -> float: ...
+    @property
+    def allow_incomplete(self) -> bool: ...
+    @property
+    def max_context(self) -> str: ...
+    @property
+    def repeat_limit(self) -> float: ...
+    @property
+    def decode_flags(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +103,56 @@ def argv_for(
         *(("-ot", str(window.start_ms), "-d", str(window.length_ms)) if sliced else ()),
         *(("--prompt", prompt) if prompt else ()),
         *(("-mc", toolchain.max_context) if toolchain.max_context else ()),
+        # 설치가 켠 것만 뒤에 붙는다. 아무것도 켜지 않으면 argv 는 예전과 바이트 동일하다.
+        *toolchain.decode_flags,
+        *dtw_flag(os.environ),
     ]
+
+
+def decode_flags(env: Mapping[str, str]) -> tuple[str, ...]:
+    """The extra whisper-cli switches this installation asked for; empty when it asked none.
+
+    whisper.cpp's own defaults stay the defaults — we do not pick them. What this adds is a
+    way to turn the documented knobs without a code change, because the value that helps is
+    measured per recording:
+
+    * ``-nth``/``-sns`` are whisper's documented mitigations for the hallucination on near
+      silence. Measured 2026-09-05: two short lifelog recordings came back as one polite
+      sentence each.
+    * ``-bs`` widens the beam — slower, sometimes more accurate.
+    * ``--vad``/``-vm`` preprocess with Silero. Opt-in on purpose: VAD trims quiet Korean
+      speech, which is why the window argv never enabled it. A missing model file is not an
+      error here — it simply leaves VAD off rather than failing every window.
+    """
+    flags: list[str] = []
+    beam = (env.get(BEAM_ENV) or "").strip()
+    if beam.isdigit() and int(beam) > 0:
+        flags += ["-bs", beam]
+    threshold = _ratio(env.get(NO_SPEECH_ENV))
+    if threshold is not None:
+        flags += ["-nth", threshold]
+    if (env.get(SUPPRESS_ENV) or "").strip() == "1":
+        flags.append("-sns")
+    raw_model = (env.get(VAD_MODEL_ENV) or "").strip()
+    model = Path(raw_model).expanduser() if raw_model else None
+    if model is not None and model.is_file():
+        flags += ["--vad", "-vm", str(model)]
+    return tuple(flags)
+
+
+def dtw_flag(env: Mapping[str, str]) -> tuple[str, ...]:
+    """설치가 고른 DTW 모델만 토큰 시각 계산에 넘긴다."""
+    preset = (env.get(DTW_ENV) or "").strip()
+    return ("-dtw", preset) if preset else ()
+
+
+def _ratio(raw: str | None) -> str | None:
+    """A no-speech threshold only inside (0, 1]; anything else leaves whisper's default."""
+    try:
+        value = float((raw or "").strip())
+    except ValueError:
+        return None
+    return f"{value:g}" if 0.0 < value <= 1.0 else None
 
 
 def budget(window: stt_window.Window, toolchain: Toolchain, deadline: float) -> float:
@@ -161,7 +227,7 @@ def accept(
     if not repetition or toolchain.allow_incomplete:
         return kept, ""
     ratio, _phrase = stt_coverage.collapsed(stt_window.text_of(kept), limit=toolchain.repeat_limit)
-    return (None, f"repetition={ratio:.2f}") if ratio else (kept, "")
+    return kept, f"repetition={ratio:.2f}" if ratio else ""
 
 
 def run_windows(
@@ -180,24 +246,29 @@ def run_windows(
     quarantined: list[int] = []
     for position, window in enumerate(windows):
         cached = store.load(window)
-        segments = None if cached is None else accept(cached, window, toolchain,
-                                                      repetition=sliced)[0]
-        if segments is not None:
+        segments, reason = (None, "") if cached is None else accept(
+            cached, window, toolchain, repetition=sliced,
+        )
+        if segments is not None and not reason:
             print(f"WHISPER-WINDOW-CACHED index={window.index}", file=sys.stderr)
             results.append(stt_window.WindowResult(window, segments))
             continue
+        segments = None
         raw, reason = _run_window(
             wav, window, toolchain, workdir=workdir, prompt=prompt,
             sliced=sliced, deadline=deadline,
         )
         if raw is not None:
             segments, reason = accept(raw, window, toolchain, repetition=sliced)
-        if segments is None or raw is None:
+        if segments is None or raw is None or reason:
             print(f"{QUARANTINED} index={window.index} reason={reason}", file=sys.stderr)
             if raw is not None:
                 store.quarantine(window, raw)
             quarantined.append(window.index)
-            results.append(stt_window.gap_result(window, until=_owns_until(windows, position)))
+            results.append(
+                stt_window.gap_result(window, until=_owns_until(windows, position))
+                if segments is None else stt_window.WindowResult(window, segments, folded_reason=reason)
+            )
             continue
         store.save(window, raw)
         results.append(stt_window.WindowResult(window, segments))

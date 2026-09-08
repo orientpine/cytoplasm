@@ -19,6 +19,7 @@ from typing import Final
 from automation import term_correction
 
 from .binding import PlaudHashFields, plaud_action_hash
+from .duration import DEFAULT_MIN_DURATION_MS
 from .lifelog_fields import DEFAULT_TIMEZONE
 from .lifelog_model import ExtractionOutcome, ExtractionSkipped, Extractor, LifelogExtractError
 from .model import PlaudStatus, PlaudSyncRecord, PlaudSyncState
@@ -36,6 +37,7 @@ class DiscoveryResult:
     bodies: Mapping[str, str]
     planned: tuple[str, ...]
     skipped: tuple[str, ...]
+    skipped_durations: tuple[tuple[str, int], ...] = ()
     #: Recordings whose field extraction failed this poll — not frozen, retried next poll.
     deferred: tuple[str, ...] = ()
     #: (녹음 이름, 그 노트에서 고친 어절들). 감사 로그는 효과 경계가 남긴다.
@@ -43,6 +45,15 @@ class DiscoveryResult:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bodies", MappingProxyType(dict(self.bodies)))
+
+    @property
+    def skipped_lines(self) -> tuple[str, ...]:
+        durations = dict(self.skipped_durations)
+        return tuple(
+            f"plaud-sync: recording_id={key} outcome=skipped duration_ms={durations[key]} reason=최소 길이 미만"
+            if key in durations else f"plaud-sync: unplannable recording skipped: {key}"
+            for key in self.skipped
+        )
 
 
 def poll_due(state: PlaudSyncState, now: datetime, interval_seconds: int) -> bool:
@@ -67,21 +78,32 @@ def plan_new_records(
     tz: tzinfo = DEFAULT_TIMEZONE,
     initial_status: PlaudStatus = "planned",
     glossary: term_correction.Glossary = (),
+    min_duration_ms: int = DEFAULT_MIN_DURATION_MS,
 ) -> DiscoveryResult:
     records = dict(state.records)
     bodies: dict[str, str] = {}
     planned: list[str] = []
     skipped: list[str] = []
+    skipped_durations: list[tuple[str, int]] = []
     deferred: list[str] = []
     corrections: list[tuple[str, tuple[term_correction.Correction, ...]]] = []
 
     for recording in recordings:
         if recording.id in records:
             continue
-        if not (recording.summary_markdown.strip() or recording.transcript_text.strip()):
+        if recording.duration_ms < min_duration_ms:
+            skipped.append(recording.id)
+            skipped_durations.append((recording.id, recording.duration_ms))
+            continue
+        if initial_status != "transcribing" and not (
+            recording.summary_markdown.strip() or recording.transcript_text.strip()
+        ):
             # Plaud has not produced anything yet (transcription pending or failed):
             # freezing an empty note would post an approval card for nothing and
             # pin the recording forever, so leave it for a later poll instead.
+            # When the node transcribes locally the cloud text is only a draft — an
+            # empty one is exactly the recording that path exists for (2026-09-05 실측:
+            # a 64-minute recording Plaud never processed was skipped at every poll).
             skipped.append(recording.id)
             continue
         try:
@@ -141,6 +163,7 @@ def plan_new_records(
         bodies=bodies,
         planned=tuple(planned),
         skipped=tuple(skipped),
+        skipped_durations=tuple(skipped_durations),
         deferred=tuple(deferred),
         corrections=tuple(corrections),
     )

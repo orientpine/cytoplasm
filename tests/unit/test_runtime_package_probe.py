@@ -39,7 +39,7 @@ def _run(tmp_path: Path, manifest: Path) -> subprocess.CompletedProcess[str]:
             **os.environ,
             "HEALTHCHECK_RELEASE_SOURCE_ROOT": str(tmp_path / "release"),
             "HEALTHCHECK_RUNTIME_PACKAGE_ROOT": str(tmp_path / "home"),
-            "NODE_RAG_NODE_NAME": "ori4eae",
+            "NODE_RAG_NODE_NAME": "example-rag-node",
         },
     )
 
@@ -205,15 +205,15 @@ def test_rag_node_column_is_resolved_for_remote_snapshot(tmp_path: Path) -> None
     journal = tmp_path / "node.txt"
     digest = hashlib.sha256(b"same\n").hexdigest()
     script = f'''source "{_PROBE}"
-NODE_RAG_NODE_NAME=ori4eae
+NODE_RAG_NODE_NAME=example-rag-node
 capture_on_node() {{ printf '%s' "$1" > "{journal}"; printf 'SNAPSHOT-V1\\n%s|item.py\\n' "{digest}"; }}
-HEALTHCHECK_RELEASE_SOURCE_ROOT="{tmp_path / 'release'}" probe_runtime_packages_current ori0a83 ops "{manifest}"
+HEALTHCHECK_RELEASE_SOURCE_ROOT="{tmp_path / 'release'}" probe_runtime_packages_current example-primary-node ops "{manifest}"
 '''
 
     result = subprocess.run(("bash", "-c", script), capture_output=True, text=True, check=False)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert journal.read_text(encoding="utf-8") == "ori4eae"
+    assert journal.read_text(encoding="utf-8") == "example-rag-node"
 
 
 def test_running_mcp_image_diff_fails_closed(tmp_path: Path) -> None:
@@ -223,7 +223,7 @@ def test_running_mcp_image_diff_fails_closed(tmp_path: Path) -> None:
     stale = "0" * 64
     script = f'''source "{_PROBE}"
 capture_on_node() {{ printf '%s  /app/src/rag_mcp/app.py\\n%s  /app/src/rag_mcp/store.py\\n' "{stale}" "{stale}"; }}
-runtime_package_verify_rag_image ori4eae ops "{release}" automation/rag_stack/deploy.sh
+runtime_package_verify_rag_image example-rag-node ops "{release}" automation/rag_stack/deploy.sh
 '''
 
     result = subprocess.run(("bash", "-c", script), capture_output=True, text=True, check=False)

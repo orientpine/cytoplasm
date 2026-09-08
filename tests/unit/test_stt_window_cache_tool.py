@@ -43,6 +43,7 @@ def _store_key(tmp_path: Path, *, tool_bytes: bytes) -> str:
         model=tmp_path / "ggml-large-v3-turbo-q5_0.bin",
         windows=_windows(),
         tool=tool,
+        asr_fingerprint="test-fingerprint",
     ).key
 
 
@@ -61,25 +62,29 @@ def test_a_changed_transcriber_build_gets_a_different_resume_key(tmp_path: Path)
 
 
 def test_the_key_still_separates_audio_model_and_plan(tmp_path: Path) -> None:
+    fingerprint = "test-fingerprint"
     base = stt_window.cache_key(
-        audio_sha256="abc", model="ggml", tool="tool-a", windows=_windows()
+        audio_sha256="abc", model="ggml", tool="tool-a", windows=_windows(),
+        asr_fingerprint=fingerprint,
     )
-
     assert base == stt_window.cache_key(
-        audio_sha256="abc", model="ggml", tool="tool-a", windows=_windows()
+        audio_sha256="abc", model="ggml", tool="tool-a", windows=_windows(),
+        asr_fingerprint=fingerprint,
     )
     assert base != stt_window.cache_key(
-        audio_sha256="def", model="ggml", tool="tool-a", windows=_windows()
+        audio_sha256="def", model="ggml", tool="tool-a", windows=_windows(),
+        asr_fingerprint=fingerprint,
     )
     assert base != stt_window.cache_key(
-        audio_sha256="abc", model="other", tool="tool-a", windows=_windows()
+        audio_sha256="abc", model="other", tool="tool-a", windows=_windows(),
+        asr_fingerprint=fingerprint,
     )
     assert base != stt_window.cache_key(
-        audio_sha256="abc", model="ggml", tool="tool-b", windows=_windows()
+        audio_sha256="abc", model="ggml", tool="tool-b", windows=_windows(),
+        asr_fingerprint=fingerprint,
     )
     assert base != stt_window.cache_key(
-        audio_sha256="abc",
-        model="ggml",
-        tool="tool-a",
+        audio_sha256="abc", model="ggml", tool="tool-a",
         windows=stt_window.plan_windows(600_000, window_ms=100_000, overlap_ms=20_000),
+        asr_fingerprint=fingerprint,
     )

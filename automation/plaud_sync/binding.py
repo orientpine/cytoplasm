@@ -80,5 +80,6 @@ def finalize(
             )
         ),
         last_block_reason=None,
+        next_transcribe_at=None,
     )
     return promoted, plan.body, note.corrections

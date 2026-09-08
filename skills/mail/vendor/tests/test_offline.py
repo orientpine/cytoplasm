@@ -1290,7 +1290,9 @@ def test_send_tokenizes_each_recipient_individually():
 
 def test_send_browser_uses_isolated_session():
     """send must NOT share the sync browser session (2026-07-20: concurrent
-    send killed a running sent-folder sync sharing session mailon-sync)."""
+    send killed a running sent-folder sync sharing session mailon-sync), and two
+    concurrent sends must not share one another's either (2026-09-07: both
+    clobbered the same login form and ended as auth_error)."""
     from mailon.main import _make_send_browser
 
     class Cfg:
@@ -1298,7 +1300,9 @@ def test_send_browser_uses_isolated_session():
         headless = True
 
     browser = _make_send_browser(Cfg())
-    assert browser.session_name == "mailon-sync-send"
+    assert browser.session_name.startswith("mailon-sync-send")
+    assert browser.session_name != _make_send_browser(Cfg()).session_name
+    assert browser.ephemeral
 
 
 def test_split_addresses_normalizes_comma_joined_values():

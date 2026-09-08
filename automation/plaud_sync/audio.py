@@ -4,7 +4,8 @@
 2026-09-04 실측), so the object is read with ``raw_decode`` rather than ``loads``.
 The presigned S3 URL signs GET only (HEAD → 403), so the size cap is enforced on
 ``Content-Length`` when present and on the byte stream always; a download that
-breaks the cap leaves no file behind. Writes are atomic (temp + replace), which is
+breaks the cap — or ends short of ``Content-Length`` (``http.client`` returns ``b""`` on an
+early close instead of raising ``IncompleteRead``) — leaves no file behind. Writes are atomic (temp + replace), which is
 what lets an existing non-empty destination count as a complete cache hit.
 """
 
@@ -16,6 +17,7 @@ import tempfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Final, Protocol
 from urllib.parse import urlsplit
@@ -61,6 +63,15 @@ def _text_field(payload: dict[str, object], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def normalize_utc_timestamp(value: str) -> str:
+    """Mark Plaud's offset-free get_file timestamp as UTC without changing known offsets."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return value if parsed.tzinfo is not None else f"{value}+00:00"
+
+
 def parse_source(text: str, recording_id: str) -> AudioSource:
     try:
         payload, _ = json.JSONDecoder().raw_decode(text.lstrip())
@@ -85,8 +96,8 @@ def parse_source(text: str, recording_id: str) -> AudioSource:
     return AudioSource(
         recording_id=recording_id,
         name=_text_field(payload, "name"),
-        created_at=_text_field(payload, "created_at"),
-        start_at=_text_field(payload, "start_at"),
+        created_at=normalize_utc_timestamp(_text_field(payload, "created_at")),
+        start_at=normalize_utc_timestamp(_text_field(payload, "start_at")),
         duration_ms=duration_ms,
         url=url,
         suffix=suffix,
@@ -139,6 +150,10 @@ def download(
                 total = _stream(response, handle, max_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())
+        if declared is not None and total != declared:
+            raise AudioError(
+                f"오디오 본문 {total} B 가 Content-Length {declared} B 보다 짧다 — 연결이 중간에 끊겼다"
+            )
         if total == 0:
             raise AudioError("오디오 본문이 비어 있다")
         os.chmod(temporary, 0o600)

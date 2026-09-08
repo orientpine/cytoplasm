@@ -5,10 +5,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Mapping, Protocol
+
+from automation.node_config import load_node_config
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +104,21 @@ def make_basic_auth_probe(url: str, username: str, password: str) -> HttpProbe:
     return HttpProbe(url, "GET", (("Authorization", f"Basic {encoded}"),), None)
 
 
+
+# The dashboards bind to this installation's tailnet interface, not to loopback
+# (docs/guide/report-hub.md), so the rotation probe needs a reachable host name. Until
+# 2026-09-07 that was one installation's literal address, sitting in a file the public
+# export publishes. The host is installation data: it comes from the node configuration,
+# and an operator whose tailnet name does not resolve locally overrides it by env.
+def _dashboard_host() -> str:
+    override = os.environ.get("CREDENTIAL_ROTATION_DASHBOARD_HOST", "").strip()
+    if override:
+        return override
+    return load_node_config().primary_node_name
+
+
+_DASHBOARD_HOST: Final = _dashboard_host()
+
 _KANBAN_PROVIDER: Final = ProviderContext(
     interpreter=Path("/home/agent/.hermes/hermes-agent/venv/bin/python"),
     working_directory=Path("/home/agent/.hermes/hermes-agent"),
@@ -118,7 +136,7 @@ ROTATION_TARGETS: Final[Mapping[str, RotationTarget]] = MappingProxyType(
             password_hasher=hash_with_dashboard_provider,
             provider=_KANBAN_PROVIDER,
             unit_name="hermes-dashboard.service",
-            probe_url="http://100.116.248.95:9119/auth/password-login",
+            probe_url=f"http://{_DASHBOARD_HOST}:9119/auth/password-login",
             probe_builder=make_password_login_probe,
             probe_success_status=200,
         ),
@@ -132,7 +150,7 @@ ROTATION_TARGETS: Final[Mapping[str, RotationTarget]] = MappingProxyType(
             password_hasher=hash_with_sha256,
             provider=None,
             unit_name="report-hub-dashboard.service",
-            probe_url="http://100.116.248.95:8800/",
+            probe_url=f"http://{_DASHBOARD_HOST}:8800/",
             probe_builder=make_basic_auth_probe,
             probe_success_status=200,
         ),

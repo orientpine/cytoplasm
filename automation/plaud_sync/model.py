@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, Literal, TypeGuard
 
@@ -37,7 +38,7 @@ _RECORD_KEYS: Final = frozenset(
         "last_block_reason",
     }
 )
-_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "transcribe_attempts"})
+_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "transcribe_attempts", "next_transcribe_at"})
 
 
 class PlaudSyncError(ValueError):
@@ -67,6 +68,7 @@ class PlaudSyncRecord:
     last_block_reason: str | None
     approval_thread_id: str | None = None
     transcribe_attempts: int = 0
+    next_transcribe_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +105,19 @@ def _string_or_none(value: object, field: str) -> str | None:
     if value is None:
         return None
     return _string(value, field)
+
+
+def _schedule(value: object) -> str | None:
+    parsed = _string_or_none(value, "next_transcribe_at")
+    if parsed is None:
+        return None
+    try:
+        stamp = datetime.fromisoformat(parsed)
+    except ValueError as error:
+        raise PlaudSyncError("next_transcribe_at must be an ISO-8601 UTC timestamp") from error
+    if stamp.utcoffset() != timedelta(0):
+        raise PlaudSyncError("next_transcribe_at must be an ISO-8601 UTC timestamp")
+    return parsed
 
 
 def _integer(value: object, field: str) -> int:
@@ -158,6 +173,7 @@ def parse_record(raw: object) -> PlaudSyncRecord:
             data.get("approval_thread_id"), "approval_thread_id"
         ),
         transcribe_attempts=_integer(data.get("transcribe_attempts", 0), "transcribe_attempts"),
+        next_transcribe_at=_schedule(data.get("next_transcribe_at")),
     )
 
 
@@ -204,6 +220,8 @@ def serialize_record(record: PlaudSyncRecord) -> dict[str, object]:
         row["approval_thread_id"] = record.approval_thread_id
     if record.transcribe_attempts:
         row["transcribe_attempts"] = record.transcribe_attempts
+    if record.next_transcribe_at is not None:
+        row["next_transcribe_at"] = record.next_transcribe_at
     return row
 
 

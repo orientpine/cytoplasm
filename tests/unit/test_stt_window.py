@@ -14,11 +14,20 @@ import json
 import sys
 from functools import partial
 from pathlib import Path
+from typing import Protocol
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "skills" / "speechtotext" / "scripts"))
 
 import stt_window  # noqa: E402
+
+
+class _MonkeyPatch(Protocol):
+    """환경을 바꾸는 pytest fixture의 필요한 표면만 적는다."""
+
+    def setenv(self, name: str, value: str) -> None: ...
+
+    def delenv(self, name: str, *, raising: bool = True) -> None: ...
 
 
 # --- 계획: 어느 밀리초도 어느 창에도 안 들어가는 일이 없어야 한다 ---------------
@@ -185,12 +194,28 @@ def test_text_of_joins_the_segments_the_way_the_document_reads_them() -> None:
 def test_the_cache_key_changes_when_the_plan_changes() -> None:
     short = stt_window.plan_windows(240_000, window_ms=100_000, overlap_ms=20_000)
     long = stt_window.plan_windows(240_000, window_ms=200_000, overlap_ms=20_000)
-    key = partial(stt_window.cache_key, tool="whisper-build")
+    key = partial(stt_window.cache_key, tool="whisper-build", asr_fingerprint="fingerprint-a")
     same = key(audio_sha256="abc", model="ggml", windows=short)
     assert same == key(audio_sha256="abc", model="ggml", windows=short)
     assert same != key(audio_sha256="abc", model="ggml", windows=long)
     assert same != key(audio_sha256="def", model="ggml", windows=short)
     assert same != key(audio_sha256="abc", model="other", windows=short)
+
+
+def test_the_cache_key_changes_when_the_prompt_or_decode_flags_change() -> None:
+    windows = stt_window.plan_windows(240_000, window_ms=100_000, overlap_ms=20_000)
+    base = stt_window.cache_key(
+        audio_sha256="abc", model="ggml", tool="whisper-build",
+        windows=windows, asr_fingerprint="prompt-a|flags-a",
+    )
+    assert base != stt_window.cache_key(
+        audio_sha256="abc", model="ggml", tool="whisper-build",
+        windows=windows, asr_fingerprint="prompt-b|flags-a",
+    )
+    assert base != stt_window.cache_key(
+        audio_sha256="abc", model="ggml", tool="whisper-build",
+        windows=windows, asr_fingerprint="prompt-a|flags-b",
+    )
 
 
 def test_spans_reads_only_the_offsets_a_segment_actually_reported() -> None:
@@ -218,6 +243,7 @@ def _store(tmp_path: Path) -> stt_window_store.WindowStore:
         model=tmp_path / "ggml-large-v3-turbo-q5_0.bin",
         windows=stt_window.plan_windows(240_000, window_ms=100_000, overlap_ms=20_000),
         tool=tool,
+        asr_fingerprint="test-fingerprint",
     )
 
 
@@ -233,6 +259,7 @@ def test_the_window_cache_refuses_to_live_inside_a_git_checkout(tmp_path: Path) 
             model=tmp_path / "m.bin",
             windows=stt_window.plan_windows(60_000),
             tool=tmp_path / "whisper-cli",
+            asr_fingerprint="test-fingerprint",
         )
     except stt_client.SttError as refusal:
         assert "git 체크아웃" in str(refusal)
@@ -287,3 +314,111 @@ def test_the_gap_marker_ends_a_sentence_so_it_stays_its_own_line() -> None:
     marker = stt_window.gap_marker(stt_window.Window(index=2, start_ms=210_000, length_ms=120_000))
     sentences = stt_blocks.split_sentences(f"{marker} 다음 창의 첫 문장입니다.")
     assert sentences == (marker, "다음 창의 첫 문장입니다.")
+
+
+# --- 디코딩 노브: 켜지 않으면 argv 는 예전 그대로다 ---------------------------
+
+
+class _Argv:
+    """argv_for 가 실제로 읽는 필드만 가진 최소 toolchain."""
+
+    binary = Path("/opt/whisper/whisper-cli")
+    model = Path("/opt/whisper/ggml.bin")
+    threads = 4
+    language = "ko"
+    timeout = 14_400.0
+    allow_incomplete = False
+    max_context = "0"
+    repeat_limit = 0.08
+    decode_flags: tuple[str, ...] = ()
+
+
+def _argv(toolchain: object) -> list[str]:
+    return stt_window_run.argv_for(
+        Path("/tmp/in.wav"),
+        stt_window.Window(index=0, start_ms=0, length_ms=0),
+        toolchain,
+        out=Path("/tmp/out"),
+        prompt="",
+        sliced=False,
+    )
+
+
+def test_an_installation_that_turns_nothing_on_keeps_the_argv_it_always_had(
+    monkeypatch: _MonkeyPatch,
+) -> None:
+    """기본값은 whisper.cpp 자신의 것이다 — 우리가 고르지 않는다."""
+    monkeypatch.delenv("SPEECHTOTEXT_WHISPER_DTW", raising=False)
+    assert _argv(_Argv()) == [
+        "/opt/whisper/whisper-cli", "-m", "/opt/whisper/ggml.bin", "-f", "/tmp/in.wav",
+        "-l", "ko", "-t", "4", "-ojf", "-of", "/tmp/out", "-np", "-mc", "0",
+    ]
+
+
+def test_dtw_preset_reaches_the_end_of_the_command(monkeypatch: _MonkeyPatch) -> None:
+    """토큰 시각은 설치가 고른 DTW 모델일 때만 whisper 에 요청한다."""
+    monkeypatch.setenv("SPEECHTOTEXT_WHISPER_DTW", "large-v3-turbo")
+
+    assert _argv(_Argv())[-2:] == ["-dtw", "large-v3-turbo"]
+
+
+def test_dtw_empty_or_whitespace_values_leave_the_argv_unchanged(
+    monkeypatch: _MonkeyPatch,
+) -> None:
+    """빈 옵트인은 whisper 기본 동작을 바꾸지 않는다."""
+    baseline = _argv(_Argv())
+    for value in ("", "   "):
+        monkeypatch.setenv("SPEECHTOTEXT_WHISPER_DTW", value)
+        assert _argv(_Argv()) == baseline
+
+
+def test_dtw_value_remains_one_argv_element(monkeypatch: _MonkeyPatch) -> None:
+    """셸을 거치지 않으므로 공백과 따옴표는 DTW 값 안에 남는다."""
+    value = 'preset with "quotes"'
+    monkeypatch.setenv("SPEECHTOTEXT_WHISPER_DTW", value)
+
+    assert _argv(_Argv())[-2:] == ["-dtw", value]
+
+
+def test_the_decode_flags_this_installation_asked_for_reach_the_command() -> None:
+    class _Tuned(_Argv):
+        decode_flags = ("-bs", "8", "-nth", "0.5", "-sns")
+
+    argv = _argv(_Tuned())
+
+    assert argv[argv.index("-bs") + 1] == "8"
+    assert argv[argv.index("-nth") + 1] == "0.5"
+    assert "-sns" in argv
+    # 노브는 뒤에 붙기만 한다 — 고정 접두부는 그대로다.
+    assert argv[:5] == [str(_Argv.binary), "-m", str(_Argv.model), "-f", "/tmp/in.wav"]
+
+
+def test_decode_flags_stay_empty_until_a_value_is_usable() -> None:
+    """오타·범위 밖 값으로 whisper 의 기본값을 흔들지 않는다."""
+    assert stt_window_run.decode_flags({}) == ()
+    assert stt_window_run.decode_flags({"SPEECHTOTEXT_WHISPER_BEAM_SIZE": "0"}) == ()
+    assert stt_window_run.decode_flags({"SPEECHTOTEXT_WHISPER_BEAM_SIZE": "eight"}) == ()
+    assert stt_window_run.decode_flags({"SPEECHTOTEXT_WHISPER_NO_SPEECH": "1.5"}) == ()
+
+
+def test_decode_flags_carry_the_documented_whisper_switches() -> None:
+    """무음 환각의 표준 완화책 — 실측 2026-09-05: 짧은 녹음 2건이 '감사합니다' 한 줄로 붕괴."""
+    env = {
+        "SPEECHTOTEXT_WHISPER_BEAM_SIZE": "8",
+        "SPEECHTOTEXT_WHISPER_NO_SPEECH": "0.5",
+        "SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH": "1",
+    }
+
+    assert stt_window_run.decode_flags(env) == ("-bs", "8", "-nth", "0.5", "-sns")
+
+
+def test_vad_is_opt_in_and_needs_a_model_that_is_really_there(tmp_path: Path) -> None:
+    """VAD 는 조용한 한국어 발화를 잘라내므로 기본이 아니다 — 환각한 녹음에만 켠다."""
+    assert stt_window_run.decode_flags({"SPEECHTOTEXT_VAD_MODEL": str(tmp_path / "nope.bin")}) == ()
+
+    model = tmp_path / "silero.bin"
+    _ = model.write_bytes(b"x")
+
+    assert stt_window_run.decode_flags({"SPEECHTOTEXT_VAD_MODEL": str(model)}) == (
+        "--vad", "-vm", str(model),
+    )

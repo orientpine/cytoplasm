@@ -4,7 +4,8 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_REPO="${RELEASE_COMPLETE_SOURCE_REPO:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_REPO="${RELEASE_COMPLETE_SOURCE_REPO:-$REPO_ROOT}"
 STATE="${RELEASE_COMPLETE_STATE:-$HOME/.hermes/release-completer}"
 WORKTREE="${RELEASE_COMPLETE_WORKTREE:-$STATE/worktree}"
 
@@ -20,8 +21,14 @@ esac
 umask 077
 mkdir -p -- "$STATE" || { log "STATE-FAIL: $STATE"; exit 1; }
 chmod 0700 "$STATE" || { log "STATE-FAIL: $STATE"; exit 1; }
-exec 9>"$STATE/lock"
-flock -n 9 || exit 0
+# 자기 갱신(SELF-UPDATE) 뒤의 재진입은 잠금 fd 9 를 exec 너머로 물려받는다 — 같은 파일을 다시
+# 열면 새 open file description 이라 잠금이 풀리므로, fd 가 실제로 열려 있을 때만 그 잠금을 믿는다.
+if [[ "${RELEASE_COMPLETE_REEXEC:-}" == 1 ]] && { true >&9; } 2>/dev/null; then
+  :
+else
+  exec 9>"$STATE/lock"
+  flock -n 9 || exit 0
+fi
 export GIT_TERMINAL_PROMPT=0
 
 if [[ ! -d "$WORKTREE" ]]; then
@@ -53,10 +60,29 @@ if ! git -C "$WORKTREE" checkout --quiet --detach origin/main; then
   exit 1
 fi
 
+# 자기 갱신 — 유닛의 ExecStart 는 메인 체크아웃의 이 파일을 가리키지만, 매 틱 origin/main 을
+# 따르는 것은 워크트리뿐이다. 방금 맞춘 워크트리의 사본이 지금 도는 나와 다르면 그 사본으로
+# exec 한다(잠금 fd 9 상속, RELEASE_COMPLETE_REEXEC 재진입 가드). 그래서 이 스크립트 자체의
+# 변경도 메인 체크아웃 ff-pull 없이 다음 틱부터 반영된다(2026-09-05 실측: 두 틱이 옛 사본으로 돌았다).
+fresh="$WORKTREE/automation/release_complete.sh"
+self="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+if [[ "${RELEASE_COMPLETE_REEXEC:-}" != 1 && -f "$fresh" ]] && ! cmp -s "$self" "$fresh"; then
+  log "SELF-UPDATE: origin/main 의 release_complete.sh 가 이 사본과 다르다 — 워크트리 사본으로 exec"
+  export RELEASE_COMPLETE_REEXEC=1
+  exec bash "$fresh" "$@"
+  log "SELF-UPDATE-FAIL: exec 실패 — 이 사본으로 계속"
+fi
+
 head="$(git -C "$WORKTREE" rev-parse HEAD)" || {
   log "HEAD-FAIL: $WORKTREE"
   exit 1
 }
+# 적용 완료 DM 통지 스윕 — **완결 단축회로보다 앞**이어야 한다. 통지 대상은 이미
+# `completed/<sha>` 가 있는 릴리스이므로 단축회로 뒤에 두면 영영 도달하지 못한다.
+# 판정·발신은 전부 파이썬에 있다(bash 에는 배선만). 실패해도 완결을 막지 않는다.
+PYTHONPATH="$REPO_ROOT" python3 -m automation.release_applied_notice \
+  sweep --state "$STATE" --repo "$WORKTREE" || true
+
 marker="$STATE/completed/$head"
 [[ -f "$marker" ]] && exit 0
 

@@ -108,6 +108,7 @@ class FakeEffects:
     commits: list[tuple[PlaudSyncRecord, PlaudSyncRecord, str | None]] = field(default_factory=list)
     stored: list[tuple[str, str]] = field(default_factory=list)
     discarded: list[Path] = field(default_factory=list)
+    archived: list[tuple[Path, AudioSource, str]] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
     terms: tuple[tuple[str, str], ...] = ()
     corrected: list[tuple[str, tuple[Correction, ...]]] = field(default_factory=list)
@@ -161,6 +162,9 @@ class FakeEffects:
     def commit(self, before: PlaudSyncRecord, after: PlaudSyncRecord, body: str | None) -> bool:
         self.commits.append((before, after, body))
         return self.commit_ok
+
+    def archive_audio(self, path: Path, source: AudioSource, stem: str) -> None:
+        self.archived.append((path, source, stem))
 
     def discard_audio(self, path: Path) -> None:
         self.discarded.append(path)
@@ -363,8 +367,8 @@ def test_process_runs_the_extractor_on_the_local_transcript_and_writes_its_field
 
     body = effects.commits[0][2]
     assert body is not None
-    assert "- 사람:: [[김민수]]" in body
-    assert "- 장소:: 회의실" in body
+    assert "- 녹음:: " in body
+    assert "사람::" not in body and "장소::" not in body
     assert len(seen) == 1
     assert "네 알겠습니다." in seen[0].transcript_text, "the extractor must see the LOCAL transcript"
     assert seen[0].summary_markdown == "- 새 요약"
@@ -403,5 +407,19 @@ def test_fallback_also_runs_the_extractor_on_the_cloud_transcript() -> None:
     assert process(once_failed, effects=effects, max_attempts=2) == "fallback"
 
     body = effects.commits[0][2]
-    assert body is not None and "- 사람:: [[박영희]]" in body
+    assert body is not None and "- 녹음:: " in body and "사람::" not in body
     assert len(seen) == 1 and "클라우드 전사 문장" in seen[0].transcript_text
+
+
+def test_candidates_prefers_recordings_not_yet_tried_over_older_exhausted_ones() -> None:
+    # 2026-09-05 실측 예측: 틱당 1건인데 recorded_at 순만 보면 상한에 닿아 매 틱 폴백-보류되는
+    # 옛 1초 녹음이 그 뒤의 모든 녹음을 굶긴다 — 시도 횟수가 적은 것부터, 같으면 예전 순서.
+    exhausted = replace(
+        _RECORD, recording_id="rec-old", recorded_at="2026-08-18T09:00:01", transcribe_attempts=2
+    )
+    fresh = replace(_RECORD, recording_id="rec-new", recorded_at="2026-09-04T09:04:27")
+    state = PlaudSyncState(
+        version=1, last_poll_at=None, records={"rec-old": exhausted, "rec-new": fresh}
+    )
+    assert [r.recording_id for r in candidates(state, limit=1)] == ["rec-new"]
+    assert [r.recording_id for r in candidates(state, limit=2)] == ["rec-new", "rec-old"]

@@ -1,54 +1,38 @@
-"""Synchronous stdio client for the Plaud MCP server."""
+"""Synchronous Plaud MCP facade; stdio transport lives in :mod:`mcp_transport`."""
 
 from __future__ import annotations
 
-import json
-import os
-import queue
-import subprocess
-import threading
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
 from types import TracebackType
-from typing import Final, Self, TypeAlias
+from typing import Final, Self, assert_never
+
+from .mcp_transport import (
+    EndOfStream,
+    JsonObject,
+    JsonValue,
+    PlaudMcpError as PlaudMcpError,
+    ReaderFailure,
+    Response,
+    StdioMcpTransport,
+)
 
 
 DEFAULT_SERVER_ARGV: Final = ("npx", "-y", "@plaud-ai/mcp@0.3.10")
 _INITIALIZE_TIMEOUT: Final = 60.0
-_STDERR_TAIL_LENGTH: Final = 500
 _JSONRPC_VERSION: Final = "2.0"
 _PROTOCOL_VERSION: Final = "2025-03-26"
 _CLIENT_NAME: Final = "autophagy-plaud-sync"
 _CLIENT_VERSION: Final = "0.1.0"
 
-
-JsonValue: TypeAlias = (
-    str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+__all__ = (
+    "DEFAULT_SERVER_ARGV",
+    "JsonObject",
+    "JsonValue",
+    "PlaudMcpClient",
+    "PlaudMcpError",
+    "text_content",
 )
-JsonObject: TypeAlias = dict[str, JsonValue]
-
-
-class PlaudMcpError(RuntimeError):
-    """Raised when the Plaud MCP server cannot complete a protocol operation."""
-
-
-@dataclass(frozen=True, slots=True)
-class _Response:
-    message: JsonObject
-
-
-@dataclass(frozen=True, slots=True)
-class _ReaderFailure:
-    error: PlaudMcpError
-
-
-@dataclass(frozen=True, slots=True)
-class _EndOfStream:
-    pass
-
-
-_Incoming: TypeAlias = _Response | _ReaderFailure | _EndOfStream
 
 
 def text_content(result: JsonObject) -> str:
@@ -69,53 +53,40 @@ def text_content(result: JsonObject) -> str:
 
 
 class PlaudMcpClient:
-    """A mutable process session that owns one initialized Plaud MCP server."""
+    """A mutable protocol session that owns one initialized Plaud MCP server."""
 
     def __init__(
         self,
         argv: tuple[str, ...] = DEFAULT_SERVER_ARGV,
         env: Mapping[str, str] | None = None,
     ) -> None:
-        self._argv: tuple[str, ...] = argv
-        self._extra_env: dict[str, str] = dict(env) if env is not None else {}
-        self._process: subprocess.Popen[str] | None = None
-        self._messages: queue.Queue[_Incoming] = queue.Queue()
-        self._stderr_tail: str = ""
-        self._stderr_lock: threading.Lock = threading.Lock()
-        self._stderr_thread: threading.Thread | None = None
+        self._transport: StdioMcpTransport = StdioMcpTransport(argv, env)
         self._next_id: int = 1
 
     def __enter__(self) -> Self:
         """Spawn and initialize the MCP server."""
-        environment = dict(os.environ)
-        environment.update(self._extra_env)
-        environment["PLAUD_TELEMETRY_DISABLED"] = "1"
+        self._transport.start()
         try:
-            self._process = subprocess.Popen(
-                self._argv,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
-                env=environment,
+            _ = self._send_request(
+                "initialize",
+                {
+                    "protocolVersion": _PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": _CLIENT_NAME, "version": _CLIENT_VERSION},
+                },
             )
-        except OSError as error:
-            raise PlaudMcpError(f"could not start Plaud MCP server: {error}") from error
-
-        try:
-            threading.Thread(target=self._read_stdout, daemon=True).start()
-            self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
-            self._stderr_thread.start()
-            _ = self._send_request("initialize", {"protocolVersion": _PROTOCOL_VERSION, "capabilities": {}, "clientInfo": {"name": _CLIENT_NAME, "version": _CLIENT_VERSION}})
             self._send_notification("notifications/initialized")
         except PlaudMcpError:
             self._shutdown()
             raise
         return self
 
-    def __exit__(self, _exc_type: type[BaseException] | None, _exc: BaseException | None, _traceback: TracebackType | None) -> None:
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
         """Terminate the owned server and close all process pipes."""
         self._shutdown()
 
@@ -136,31 +107,24 @@ class PlaudMcpClient:
             names.append(name)
         return tuple(names)
 
-    def call_tool(self, name: str, arguments: dict[str, JsonValue], timeout: float = 60.0) -> JsonObject:
+    def call_tool(
+        self, name: str, arguments: dict[str, JsonValue], timeout: float = 60.0
+    ) -> JsonObject:
         """Call an MCP tool and return its parsed result."""
         return self._send_request("tools/call", {"name": name, "arguments": arguments}, timeout)
 
-    def _send_request(self, method: str, params: JsonObject, timeout: float = _INITIALIZE_TIMEOUT) -> JsonObject:
+    def _send_request(
+        self, method: str, params: JsonObject, timeout: float = _INITIALIZE_TIMEOUT
+    ) -> JsonObject:
         request_id = self._next_id
         self._next_id += 1
-        self._write_message(
+        self._transport.send(
             {"jsonrpc": _JSONRPC_VERSION, "id": request_id, "method": method, "params": params}
         )
         return self._wait_for_response(request_id, timeout)
 
     def _send_notification(self, method: str) -> None:
-        self._write_message({"jsonrpc": _JSONRPC_VERSION, "method": method})
-
-    def _write_message(self, message: JsonObject) -> None:
-        try:
-            process = self._require_process()
-            stdin = process.stdin
-            if stdin is None:
-                raise PlaudMcpError("MCP server stdin is unavailable")
-            _ = stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
-            stdin.flush()
-        except (BrokenPipeError, OSError) as error:
-            raise PlaudMcpError(self._with_stderr_tail(f"could not write to MCP server: {error}")) from error
+        self._transport.send({"jsonrpc": _JSONRPC_VERSION, "method": method})
 
     def _wait_for_response(self, request_id: int, timeout: float) -> JsonObject:
         if timeout <= 0:
@@ -169,14 +133,13 @@ class PlaudMcpClient:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise PlaudMcpError(self._with_stderr_tail("timed out waiting for MCP response"))
-            try:
-                incoming = self._messages.get(timeout=remaining)
-            except queue.Empty as error:
-                raise PlaudMcpError(self._with_stderr_tail("timed out waiting for MCP response")) from error
+                raise PlaudMcpError(self._transport.with_stderr_tail("timed out waiting for MCP response"))
+            incoming = self._transport.receive(remaining)
+            if incoming is None:
+                raise PlaudMcpError(self._transport.with_stderr_tail("timed out waiting for MCP response"))
 
             match incoming:
-                case _Response(message=message):
+                case Response(message=message):
                     response_id = message.get("id")
                     if response_id is None:
                         continue
@@ -188,10 +151,14 @@ class PlaudMcpClient:
                         raise PlaudMcpError(
                             f"MCP response id mismatch: expected {request_id}, got {response_id}"
                         )
-                case _ReaderFailure(error=error):
+                case ReaderFailure(error=error):
                     raise error
-                case _EndOfStream():
-                    raise PlaudMcpError(self._with_stderr_tail("MCP server closed stdout before responding"))
+                case EndOfStream():
+                    raise PlaudMcpError(
+                        self._transport.with_stderr_tail("MCP server closed stdout before responding")
+                    )
+                case unreachable:
+                    assert_never(unreachable)
 
     def _result_from_response(self, response: JsonObject) -> JsonObject:
         error = response.get("error")
@@ -208,85 +175,5 @@ class PlaudMcpClient:
             raise PlaudMcpError(message if message else "MCP tool returned an error")
         return result
 
-    def _read_stdout(self) -> None:
-        try:
-            process = self._require_process()
-            stdout = process.stdout
-            if stdout is None:
-                raise PlaudMcpError("MCP server stdout is unavailable")
-            for raw_line in stdout:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    decoded: JsonValue = json.loads(line)
-                    parsed = _json_value(decoded)
-                except json.JSONDecodeError as error:
-                    if line.startswith("{"):
-                        self._messages.put(_ReaderFailure(PlaudMcpError(f"malformed MCP JSON response: {error}")))
-                        return
-                    continue
-                except PlaudMcpError as error:
-                    self._messages.put(_ReaderFailure(error))
-                    return
-                if isinstance(parsed, dict):
-                    self._messages.put(_Response(parsed))
-        except ValueError:
-            pass
-        except OSError as error:
-            self._messages.put(_ReaderFailure(PlaudMcpError(f"could not read MCP stdout: {error}")))
-        finally:
-            self._messages.put(_EndOfStream())
-
-    def _read_stderr(self) -> None:
-        try:
-            process = self._require_process()
-            stderr = process.stderr
-            if stderr is None:
-                raise PlaudMcpError("MCP server stderr is unavailable")
-            for chunk in stderr:
-                with self._stderr_lock:
-                    self._stderr_tail = (self._stderr_tail + chunk)[-_STDERR_TAIL_LENGTH:]
-        except OSError:
-            return
-
-    def _require_process(self) -> subprocess.Popen[str]:
-        if self._process is None:
-            raise PlaudMcpError("Plaud MCP client is not running")
-        return self._process
-
-    def _with_stderr_tail(self, message: str) -> str:
-        process = self._process
-        if process is not None and process.poll() is not None and self._stderr_thread is not None:
-            self._stderr_thread.join()
-        with self._stderr_lock:
-            tail = self._stderr_tail
-        return f"{message}; stderr: {tail or '<empty>'}"
-
     def _shutdown(self) -> None:
-        process = self._process
-        if process is None:
-            return
-        if process.poll() is None:
-            process.terminate()
-            try:
-                _ = process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                _ = process.wait()
-        for pipe in (process.stdin, process.stdout, process.stderr):
-            if pipe is not None:
-                pipe.close()
-        self._process = None
-
-
-def _json_value(value: JsonValue) -> JsonValue:
-    """Normalize a decoded JSON value into the module's recursive JSON type."""
-    if isinstance(value, list):
-        return [_json_value(item) for item in value]
-    if isinstance(value, dict):
-        normalized: JsonObject = {}
-        for key, item in value.items():
-            normalized[key] = _json_value(item)
-        return normalized
-    return value
+        self._transport.close()

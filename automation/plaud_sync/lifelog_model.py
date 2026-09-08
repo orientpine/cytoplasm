@@ -47,6 +47,9 @@ class LifelogExtraction:
     places: tuple[str, ...] = ()
     decisions: tuple[LifelogDecision, ...] = ()
     todos: tuple[LifelogTodo, ...] = ()
+    summary: str = ""
+    #: 녹취가 스스로 말하는 제목. Plaud 가 이름을 못 붙인 녹음에서만 이름 자리에 선다.
+    title: str = ""
 
 
 @dataclass(frozen=True, slots=True)

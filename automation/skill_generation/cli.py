@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,7 +33,12 @@ class AuditCommand:
     pass
 
 
-Command = ObserveCommand | PipelineResultCommand | AuditCommand
+@dataclass(frozen=True, slots=True)
+class ReviewCommand:
+    name: str
+
+
+Command = ObserveCommand | PipelineResultCommand | AuditCommand | ReviewCommand
 
 
 def _paths() -> "SkillGenerationPaths":
@@ -69,19 +75,42 @@ def _parse(arguments: tuple[str, ...]) -> Command:
             return PipelineResultCommand(name, int(raw_exit), True)
         case ("audit",):
             return AuditCommand()
+        case ("review", name):
+            return ReviewCommand(name)
         case _:
-            raise SystemExit("usage: observe --text TEXT [--timestamp ISO] | record-pipeline-result NAME EXIT [--request-only] | audit")
+            raise SystemExit(
+                "usage: observe --text TEXT [--timestamp ISO] | record-pipeline-result NAME EXIT [--request-only]"
+                " | audit | review NAME"
+            )
+
+
+def _matched_names(review: dict[str, object] | None) -> str:
+    """대조에서 실제로 낱말이 겹친 기존 스킬 이름 — 운영자가 패치할 대상이다."""
+    matches = review.get("matches") if review is not None else None
+    if not isinstance(matches, list):
+        return "-"
+    names: list[str] = []
+    for match in matches:
+        score = match.get("score") if isinstance(match, dict) else None
+        if isinstance(score, float) and score > 0:
+            names.append(str(match.get("name")))
+    return ",".join(names) if names else "-"
 
 
 def main() -> int:
-    from automation.skill_generation.core import PipelineExit
+    from automation.skill_generation.core import PipelineExit, ProposalStatus
 
     service = _service()
     command = _parse(tuple(sys.argv[1:]))
     match command:
         case ObserveCommand(text=text, timestamp=timestamp):
             proposal = service.observe(text, timestamp)
-            if proposal is not None:
+            if proposal is None:
+                return 0
+            review = service.latest_review(proposal.name)
+            verdict = review.get("verdict") if review is not None else None
+            print(f"PRECHECK {verdict or 'UNKNOWN'} {proposal.name} matches={_matched_names(review)}")
+            if proposal.status is not ProposalStatus.REUSE_EXISTING:
                 print(f"SUGGESTION name={proposal.name} status={proposal.status.value} pipeline=REQUIRED")
             return 0
         case PipelineResultCommand(name=name, exit_code=exit_code, request_only=request_only):
@@ -92,6 +121,13 @@ def main() -> int:
         case AuditCommand():
             for name in service.audit_mounts():
                 print(f"BYPASS-REJECTED name={name}")
+            return 0
+        case ReviewCommand(name=name):
+            review = service.latest_review(name)
+            if review is None:
+                print(f"NO-REVIEW name={name}", file=sys.stderr)
+                return 1
+            print(json.dumps(review, ensure_ascii=False, sort_keys=True))
             return 0
 
 

@@ -14,6 +14,7 @@ from automation.install.checks import CheckResult, Status, exit_code, render
 from automation.install.components import OPT_IN_COMPONENTS, UnknownComponentError
 from automation.install.executor import ExecutionContext, RealExecutor
 from automation.install.plan import FileSpec, build_plan
+from automation.install.profiles import PROFILES
 from automation.install.state import inspect_state
 from automation.install.trust_key_bootstrap import (
     TrustKeyError,
@@ -57,6 +58,7 @@ class _Arguments(argparse.Namespace):
     discord_config: Path | None
     dry_run: bool
     with_component: list[str]
+    profile: str | None
     group_roster: Path | None
     expect_group_skill_fingerprint: str | None
 
@@ -68,6 +70,7 @@ class _Arguments(argparse.Namespace):
         self.discord_config = None
         self.dry_run = False
         self.with_component = []
+        self.profile = None
         self.group_roster = None
         self.expect_group_skill_fingerprint = None
 
@@ -102,6 +105,15 @@ def _parser() -> argparse.ArgumentParser:
         metavar="NAME",
         choices=sorted(OPT_IN_COMPONENTS),
         help="install an optional component (repeatable); default: none",
+    )
+    # A profile fixes HEALTHCHECK_SERVICES at install time (root-owned
+    # /etc/autophagy/healthcheck.env). Omitting it plans exactly what was planned before
+    # profiles existed: every probe stays on, and narrowing remains an explicit choice.
+    _ = parser.add_argument(
+        "--profile",
+        default=None,
+        choices=sorted(PROFILES),
+        help="service groups this node runs; writes the healthcheck declaration",
     )
     return parser
 
@@ -161,7 +173,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(render((result,), verdict_label="INSTALLED"))
             return 1
-        inputs = build_inputs(repo_root, config, key_text, components=args.with_component)
+        inputs = build_inputs(
+            repo_root,
+            config,
+            key_text,
+            components=args.with_component,
+            profile=args.profile,
+        )
         group_expected = args.expect_group_skill_fingerprint
         if args.group_roster is None and group_expected is not None:
             raise TrustKeyError(

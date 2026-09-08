@@ -46,11 +46,11 @@ prerequisites:
 | 단계 | 입력 | 출력 경로 | 게이트/비고 |
 | --- | --- | --- | --- |
 | research | 주제·브리프 요청 | `inputs/RESEARCH_BRIEF.md`, `inputs/SYNTHESIS.md` | 웹 수집 허용 구간. `## Verified Claims` 행마다 출처 URL 필수 |
-| corpus | `inputs/SYNTHESIS.md` | `corpus/*.md` | KD `corpus-lint` 통과 필수, exit 3이면 차단 |
+| corpus | `inputs/SYNTHESIS.md` | `corpus/*.md` | 엔진 `corpus-lint` 통과 필수, exit 3이면 차단 |
 | images | corpus, 도해 지시 | `images/*.png`, `figures.json` | 프롬프트에 `no text, no labels, no numerals`, 캡션은 `그림 N. …`. 렌더 시 그림은 문단 중앙 정렬로 최대 142.9mm(엔진 캡 40,500 HWPUNIT)까지 표시된다. 전송기는 `PROPOSAL_IMAGE_TRANSPORT=fake\|live\|codex`이며, `codex`는 Codex CLI OAuth 세션의 내장 `image_gen`으로 생성하므로 OpenAI API 키가 필요 없다. 지출 원장은 전송기별 청구 주체를 기록해 `live`는 `openai-api` USD를 예약하고, `codex`는 `chatgpt-subscription` 건수·USD 0으로 기록하며 `openai-api`만 `PROPOSAL_IMAGE_MONTHLY_CAP_USD`에 센다 |
-| draft | corpus + figures | `out/drafts.json` | KD `kimm-docbot draft` |
+| draft | corpus + figures | `out/drafts.json` | 엔진 `draft` |
 | refine | `out/drafts.json` | 변경 시 `out/drafts.refined.json`, 항상 `out/refine-report.json` | Codex 윤문, markdown 단계, **렌더 이전**. 결정론 전처리로 그림-주어 문장(`[[FIG:x]]은 …를 나타낸다`)을 주장+괄호 인용(`…를 개발한다 ([[FIG:x]]).`)으로 재작성하고 건수를 `figure_citation_recasts`에 기록. 무변경·호스트 불가 시 refined 파일을 만들지 않고 사유 기록 |
-| render | `out/drafts.refined.json` | `out/proposal.hwpx`, `out/proposal.hwpx.traceability.md` | KD `kimm-docbot render`, 고정 SHA, `--profile 30-page\|10-page`. 근거 추적성(Coverage)은 본문이 아니라 사이드카 md 로만 나간다. `tables.json`에 `kind: "gantt"` 표(행: `[연차, 꼭지, 시작월, 종료월]`, 월은 연차 안 1..12)가 있으면 추진 내용 표를 전 연차로 채운다 — 연차마다 꼭지 정확히 8개, 마지막 연차 종료 전까지 비는 달이 없어야 하며 위반은 렌더 중단 |
+| render | `out/drafts.refined.json` | `out/proposal.hwpx`, `out/proposal.hwpx.traceability.md` | 엔진 `render`, `--profile 30-page\|10-page`. 근거 추적성(Coverage)은 본문이 아니라 사이드카 md 로만 나간다. `tables.json`에 `kind: "gantt"` 표(행: `[연차, 꼭지, 시작월, 종료월]`, 월은 연차 안 1..12)가 있으면 추진 내용 표를 전 연차로 채운다 — 연차마다 꼭지 정확히 8개, 마지막 연차 종료 전까지 비는 달이 없어야 하며 위반은 렌더 중단 |
 | publish | `out/proposal.hwpx` | Drive `autophagy/제안서/<YYYY>/`, `manifest.json`, `publish-receipt.json` | 게시 수신증 보관 |
 | version | 게시 결과 | `HEAD`, `changelog.json`, `CHANGELOG.md` | 다음 판은 `improve --since vN`으로 v_{n+1} |
 
@@ -61,10 +61,11 @@ HWPX에 들어가지 못하고, 그 시점에는 고칠 표면이 바이너리�
 호스트를 호출하지 못했거나 결과가 원문과 같으면 `refined=false`이며, 원문 사본을
 `drafts.refined.json`으로 만들지 않는다. render는 이 명시적 skip 리포트를 확인한 뒤 원본을 사용한다.
 
-docbot 엔진은 고정 SHA 서브프로세스(`PROPOSAL_DOCBOT_PIN=382f1a60a49a0f2f2e6abe21dcced9b6c011358b`)로만 부른다. 핀 없이 실행하지 않는다.
-핀은 저장소가 아니라 런타임 설정값이다 — 엔진을 올리면 노드의 `PROPOSAL_DOCBOT_PIN` 도 같이 올려야 하고,
-어긋나면 `ENGINE-PIN-BLOCK` 으로 렌더가 닫힌다.
-이 핀부터 렌더는 기록 직전 모든 `Contents/section*.xml` 에서 `hp:linesegarray`(한/글 라인 레이아웃 캐시)를 버리고,
+렌더 엔진은 이 저장소가 소유한다 — `skills/proposal/engine/` 의 코드가 같은 프로세스에서 그대로 돈다.
+외부 체크아웃도 고정 SHA 핀도 없으므로 엔진을 고치면 그 커밋이 곧 렌더에 반영되고, 어느 엔진이 산출을
+만들었는지는 manifest 의 `engine_sha` — 엔진 소스와 양식의 내용 digest — 가 기록한다. 그 값은 손에 든
+체크아웃만으로 재현되므로 다른 저장소가 없어도 판정할 수 있다.
+렌더는 기록 직전 모든 `Contents/section*.xml` 에서 `hp:linesegarray`(한/글 라인 레이아웃 캐시)를 버리고,
 하나라도 살아남으면 `validate` 가 산출을 거부한다 — 문단을 지우거나 밴드를 끼우면 그 뒤 문단이 전부 다른 쪽으로 밀려
 캐시가 낡고, 한/글이 그 옛 좌표를 믿어 글줄이 뭉치고 자간이 무시되기 때문이다.
 소유자 비공개 노트는 외부 호스트에 닿지 않는다. 인용·렌더에 들어가는 근거는 PUBLIC뿐이고,

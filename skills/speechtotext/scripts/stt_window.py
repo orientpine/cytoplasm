@@ -24,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, TypeAlias
 
+import stt_blocks
 import stt_gap
 
 DEFAULT_WINDOW_MS: Final = 900_000
@@ -67,6 +68,7 @@ class WindowResult:
     window: Window
     segments: tuple[Segment, ...] = field(default_factory=tuple)
     offset_ms: int = 0
+    folded_reason: str = ""
 
 
 def plan_windows(
@@ -196,6 +198,7 @@ def merge(results: Sequence[WindowResult]) -> tuple[dict[str, object], ...]:
     for position, result in enumerate(ordered):
         lower = result.window.start_ms
         upper = ordered[position + 1].window.start_ms if position + 1 < len(ordered) else None
+        owned: list[dict[str, object]] = []
         for segment in result.segments:
             if not isinstance(segment, Mapping):
                 continue
@@ -205,7 +208,22 @@ def merge(results: Sequence[WindowResult]) -> tuple[dict[str, object], ...]:
                 continue
             if upper is not None and start >= upper:
                 continue
-            merged.append(moved)
+            owned.append(moved)
+        if result.folded_reason:
+            end = result.window.end_ms if upper is None else min(upper, result.window.end_ms)
+            sentences = stt_blocks.sentences_from_words(stt_blocks.words_from_whisper(owned))
+            body = stt_blocks.render(stt_blocks.group(sentences))
+            # Keep document evidence separate from text_of's trusted-speech repetition check.
+            merged.append({
+                "offsets": {"from": lower, "to": end},
+                "text": gap_marker(result.window, until=end),
+                "folded": (
+                    f"<details><summary>⚠ 반복 의심 구간 {clock(lower)}–{clock(end)} "
+                    f"({result.folded_reason}) — 접힘</summary>\n\n{body}\n\n</details>"
+                ),
+            })
+        else:
+            merged.extend(owned)
     return tuple(merged)
 
 
@@ -233,7 +251,8 @@ def text_of(segments: Sequence[Segment]) -> str:
 
 
 def cache_key(
-    *, audio_sha256: str, model: str, tool: str, windows: Sequence[Window]
+    *, audio_sha256: str, model: str, tool: str, windows: Sequence[Window],
+    asr_fingerprint: str,
 ) -> str:
     """Identity of one plan over one recording, by one model and one transcriber build.
 
@@ -244,5 +263,5 @@ def cache_key(
     whisper and re-running the same recording hands back the old output forever.
     """
     plan = ";".join(f"{w.index}:{w.start_ms}:{w.length_ms}" for w in windows)
-    material = f"{audio_sha256}|{model}|{tool}|{plan}"
+    material = f"{audio_sha256}|{model}|{tool}|{asr_fingerprint}|{plan}"
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]

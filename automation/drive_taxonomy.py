@@ -63,6 +63,10 @@ CATEGORIES: Final[dict[str, Category]] = {
         folder="전사본", periodicity="oneshot",
         skill_owned="skills/speechtotext/scripts/speechtotext_cli.py",
     ),
+    "audio": Category(
+        folder="녹음원본", periodicity="oneshot",
+        skill_owned="plaud_sync",
+    ),
     "procurement": Category(folder="구매", periodicity="oneshot"),
     "doctype": Category(folder="문서", periodicity="oneshot"),
     "patent": Category(folder="특허", periodicity="oneshot", gate_only=True),

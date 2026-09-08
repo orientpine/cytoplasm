@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import ipaddress
 import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -42,29 +43,20 @@ class InvocationResult:
     stderr: str
 
 
-Runner = Callable[[tuple[str, ...], Path], InvocationResult]
+Runner = Callable[[tuple[str, ...]], InvocationResult]
 
 
-def _invoke(argv: tuple[str, ...], cwd: Path) -> InvocationResult:
+def _invoke(argv: tuple[str, ...]) -> InvocationResult:
+    """Run an engine subcommand in this process; the engine ships in this repository."""
+    from ..engine.pipeline.cli import main as engine_main
+
+    stdout, stderr = io.StringIO(), io.StringIO()
     try:
-        completed = subprocess.run(
-            argv,
-            cwd=cwd,
-            env=os.environ.copy(),
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise CorpusError(f"KD invocation failed: {error.__class__.__name__}") from error
-    return InvocationResult(completed.returncode, completed.stdout, completed.stderr)
-
-
-def _docbot_root() -> Path:
-    values = dict(os.environ)
-    _ = values.setdefault("PROPOSAL_DOCBOT_PIN", "0" * 40)
-    return proposal_config.load_config(values).docbot_root
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            returncode = engine_main(list(argv))
+    except (OSError, ValueError, RuntimeError) as error:
+        raise CorpusError(f"engine invocation failed: {error.__class__.__name__}") from error
+    return InvocationResult(returncode, stdout.getvalue(), stderr.getvalue())
 
 
 def _pack_from_brief(path: Path) -> proposal_knowledge.EvidencePack:
@@ -157,7 +149,6 @@ def build_corpus(
     synthesis: Path,
     corpus: Path,
     pack: proposal_knowledge.EvidencePack,
-    docbot_root: Path,
     *,
     runner: Runner | None = None,
 ) -> tuple[Path, ...]:
@@ -178,19 +169,17 @@ def build_corpus(
     try:
         converted = execute(
             (
-                "uv", "run", "kimm-docbot", "research-convert", str(synthesis),
+                "research-convert", str(synthesis),
                 "--out", str(candidate), "--sensitivity", "public",
-            ),
-            docbot_root,
+            )
         )
         if converted.returncode != 0:
             raise CorpusError(f"research-convert failed rc={converted.returncode}")
         linted = execute(
             (
-                "uv", "run", "kimm-docbot", "corpus-lint", "--corpus", str(baseline),
+                "corpus-lint", "--corpus", str(baseline),
                 "--candidate-dir", str(candidate),
-            ),
-            docbot_root,
+            )
         )
         if linted.returncode != 0:
             raise CorpusLintError(f"corpus-lint failed rc={linted.returncode}")
@@ -225,7 +214,7 @@ def command(args: argparse.Namespace, *, runner: Runner | None = None) -> int:
         _ = proposal_research.validate_synthesis(inputs / "SYNTHESIS.md")
         pack = _pack_from_brief(inputs / "RESEARCH_BRIEF.md")
         files = build_corpus(
-            inputs / "SYNTHESIS.md", corpus, pack, _docbot_root(), runner=runner
+            inputs / "SYNTHESIS.md", corpus, pack, runner=runner
         )
         payload = {
             "corpus": str(corpus),

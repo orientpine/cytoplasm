@@ -175,7 +175,7 @@ def _clean_speakers(raw: object) -> tuple[SpeakerRef, ...]:
         if not isinstance(entry, dict):
             continue
         label = str(entry.get("label") or "").strip()
-        if not _SPEAKER_LABEL.fullmatch(label):
+        if label == "화자0" or not _SPEAKER_LABEL.fullmatch(label):
             continue
         name = str(entry.get("name") or "").strip()
         speakers.append(SpeakerRef(label, name or None, str(entry.get("basis") or "").strip()))

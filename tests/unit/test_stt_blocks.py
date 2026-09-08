@@ -9,7 +9,9 @@ timings were being thrown away on the way to the document.
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 REPO = Path(__file__).resolve().parents[2]
 SKILL = REPO / "skills" / "speechtotext"
@@ -18,6 +20,15 @@ sys.path.insert(0, str(SKILL / "scripts"))
 import stt_blocks  # noqa: E402
 import stt_polish  # noqa: E402
 import stt_transcript  # noqa: E402
+
+
+class _MonkeyPatch(Protocol):
+    """환경을 바꾸는 pytest fixture의 필요한 표면만 적는다."""
+
+    def setenv(self, name: str, value: str) -> None: ...
+
+    def delenv(self, name: str, *, raising: bool = True) -> None: ...
+
 
 _SAID = (
     "혹시 중앙중 교수님 이 계통 열수력 평가 이걸로 정리를 해도 좋을 것 같습니다. "
@@ -36,6 +47,25 @@ def _tokens(*pairs: tuple[str, int, int]) -> list[dict[str, object]]:
     return [
         {"text": text, "offsets": {"from": start, "to": end}} for text, start, end in pairs
     ]
+
+
+def test_todo9_characterization_normalized_assembly_and_cached_document() -> None:
+    """좌표를 추가하기 전 조립 시각과 저장된 문서 바이트를 고정한다."""
+    words = (
+        stt_blocks.TimedWord("  가\t", 100, 200),
+        stt_blocks.TimedWord(" 나.\n", 300, 400),
+        stt_blocks.TimedWord(" 다.", 500, 600),
+    )
+    sentences = stt_blocks.sentences_from_words(words)
+    assert [(s.text, s.start_ms, s.end_ms) for s in sentences] == [
+        ("가 나.", 100, 400), ("다.", 500, 600),
+    ]
+    cached = (
+        "[00:00:01] 화자1\n가.\n나.\n\n"
+        "<details><summary>cached</summary>\n\n가.  가.\n</details>\n\n"
+        "[--:--:--] 화자2\n다."
+    )
+    assert stt_blocks.render(stt_blocks.group(stt_blocks.parse(cached))).encode() == cached.encode()
 
 
 # --- whisper.cpp tokens -> words ---------------------------------------------
@@ -74,6 +104,57 @@ def test_a_segment_without_usable_tokens_falls_back_to_its_own_offsets() -> None
     ]
     assert (words[0].start_ms, words[0].end_ms) == (3_000, 6_500)
     assert (words[1].start_ms, words[1].end_ms) == (6_500, 7_000)
+    assert [word.timing_source for word in words] == ["segment", "segment"]
+
+
+def test_token_offsets_and_segment_inheritance_keep_distinct_timing_sources() -> None:
+    """토큰 시각만 token 이고 세그먼트에서 물려받은 값은 segment 다."""
+    words = stt_blocks.words_from_whisper([
+        {
+            "text": " 토큰 시각입니다.",
+            "offsets": {"from": 1_000, "to": 2_000},
+            "tokens": _tokens((" 토큰", 1_000, 1_500), (" 시각입니다.", 1_500, 2_000)),
+        },
+        {
+            "text": " 상속 시각입니다.",
+            "offsets": {"from": 2_000, "to": 3_000},
+            "tokens": [{"text": " 상속 시각입니다."}],
+        },
+    ])
+
+    assert [word.timing_source for word in words] == ["token", "token", "segment"]
+
+
+def test_legacy_transcript_header_and_body_still_round_trip() -> None:
+    """새 provenance 줄을 모르는 옛 문서도 본문 파스는 그대로다."""
+    legacy = "# 옛 전사본\n\n- 원본 음성: old.m4a\n\n---\n\n[00:00:01] 화자1\n안녕하세요."
+    header, body = stt_polish.split_document(legacy)
+    polished = stt_polish.polish(body)
+
+    document = stt_transcript.rewrite(header, polished, label="옛")
+
+    assert stt_polish.split_document(document)[1] == polished.body + "\n"
+
+
+def test_transcript_header_records_dtw_or_plain_offsets(monkeypatch: _MonkeyPatch) -> None:
+    """새 전사본은 토큰 시각을 DTW preset 또는 기본 offsets 로 밝힌다."""
+    class _Transcription:
+        text = "안녕하세요."
+        model = "local:test"
+
+    monkeypatch.setenv("SPEECHTOTEXT_WHISPER_DTW", "large-v3-turbo")
+    dtw = stt_transcript.render(
+        label="테스트", source_name="a.wav", transcription=_Transcription(),
+        now=datetime(2026, 9, 7),
+    )
+    monkeypatch.delenv("SPEECHTOTEXT_WHISPER_DTW")
+    offsets = stt_transcript.render(
+        label="테스트", source_name="a.wav", transcription=_Transcription(),
+        now=datetime(2026, 9, 7),
+    )
+
+    assert "- 토큰 시각: dtw:large-v3-turbo\n" in dtw
+    assert "- 토큰 시각: offsets\n" in offsets
 
 
 def test_sentences_span_the_words_that_make_them() -> None:
@@ -92,13 +173,53 @@ def test_sentences_span_the_words_that_make_them() -> None:
     assert (sentences[1].start_ms, sentences[1].end_ms) == (2_400, 4_200)
 
 
-def test_word_boundaries_never_glue_two_words_together() -> None:
-    """A space is inserted at a segment seam only when neither side already has one."""
-    words = (
-        stt_blocks.TimedWord("회의를", 0, 900),
-        stt_blocks.TimedWord("시작합니다.", 900, 2_000),
-    )
-    assert stt_blocks.sentences_from_words(words)[0].text == "회의를 시작합니다."
+def test_whisper_tokens_are_concatenated_verbatim_inside_a_word() -> None:
+    """whisper 토큰은 낱말 조각이다 — 사이에 공백을 넣으면 없는 띄어쓰기가 생긴다.
+
+    이 테스트는 2026-09-06 이전 규칙("양쪽에 공백이 없으면 넣는다")을 뒤집는다. 그 규칙은
+    whisper 가 내지 않는 픽스처(앞 공백 없는 *낱말* 둘)로 고정돼 있었고, 실제 입력인 토큰
+    열에 걸리면 낱말을 조각냈다. 노드 실측(한국어 133초, 36 세그먼트): 그대로 이어 붙이면
+    whisper 자신의 text 와 36/36 일치, 옛 규칙은 0/36 이었고 '통신 규약 같은 거' 가
+    '통 신 규 약 같은 거' 로 나왔다.
+    """
+    segments = [
+        {
+            "text": " 통신 규약 같은 거.",
+            "offsets": {"from": 0, "to": 2_000},
+            "tokens": [
+                {"text": " 통", "offsets": {"from": 0, "to": 300}},
+                {"text": "신", "offsets": {"from": 300, "to": 600}},
+                {"text": " 규", "offsets": {"from": 600, "to": 900}},
+                {"text": "약", "offsets": {"from": 900, "to": 1_200}},
+                {"text": " 같은", "offsets": {"from": 1_200, "to": 1_600}},
+                {"text": " 거", "offsets": {"from": 1_600, "to": 1_900}},
+                {"text": ".", "offsets": {"from": 1_900, "to": 2_000}},
+            ],
+        }
+    ]
+
+    words = stt_blocks.words_from_whisper(segments)
+
+    assert stt_blocks.sentences_from_words(words)[0].text == "통신 규약 같은 거."
+
+
+def test_a_word_split_across_tokens_keeps_its_trailing_punctuation() -> None:
+    """실측 전사본의 '감사합니다 .' — 마침표 앞 공백이 조립 결함의 서명이었다."""
+    segments = [
+        {
+            "text": " 감사합니다.",
+            "offsets": {"from": 0, "to": 1_000},
+            "tokens": [
+                {"text": " 감사", "offsets": {"from": 0, "to": 400}},
+                {"text": "합니다", "offsets": {"from": 400, "to": 800}},
+                {"text": ".", "offsets": {"from": 800, "to": 1_000}},
+            ],
+        }
+    ]
+
+    words = stt_blocks.words_from_whisper(segments)
+
+    assert stt_blocks.sentences_from_words(words)[0].text == "감사합니다."
 
 
 def test_hhmmss_reads_as_a_clock() -> None:
@@ -159,6 +280,31 @@ def test_render_and_parse_round_trip_through_the_document() -> None:
     assert stt_blocks.render(stt_blocks.group(parsed), names={"화자1": "김민수"}) == body
 
 
+def test_round_trip_preserves_bytes_when_body_contains_a_folded_block() -> None:
+    # Given: whitespace and duplicate lines inside the HTML are opaque evidence.
+    folded = (
+        "<details><summary>repetition=0.18</summary>\n\n"
+        "[00:14:45] 화자1 · 가명\n같은  문장입니다.\n같은  문장입니다.\n\n"
+        "[00:15:00]\n다음 문장입니다.\n</details>"
+    )
+    body = f"앞 문장입니다.\n\n{folded}\n\n뒤 문장입니다."
+    # When
+    rendered = stt_blocks.render(stt_blocks.group(stt_blocks.parse(body)))
+    # Then
+    assert rendered == body
+    assert stt_polish.polish(body).body == body
+
+
+def test_polish_keeps_each_fold_when_folded_blocks_are_adjacent() -> None:
+    # Given
+    fold = "<details><summary>repetition=0.18</summary>\n같은 문장.\n</details>"
+    body = f"{fold}\n\n{fold}"
+    # When
+    polished = stt_polish.polish(body)
+    # Then
+    assert polished.body == body
+
+
 def test_a_block_without_timing_or_speaker_has_no_header() -> None:
     parsed = stt_blocks.parse("안녕하세요.\n킥오프를 시작합니다.")
     body = stt_blocks.render(stt_blocks.group(parsed))
@@ -214,6 +360,76 @@ def test_polish_sentences_keeps_the_timings_and_the_words_it_was_given() -> None
     assert "영무를 잡아놨습니다." in result.body
 
 
+def test_todo9_seven_tokens_keep_normalized_spans_and_original_timing() -> None:
+    words = tuple(
+        stt_blocks.TimedWord(text, start, end)
+        for text, start, end in (
+            (" 통", 0, 300), ("신", 300, 600), (" 규", 600, 900),
+            ("약", 900, 1_200), (" 같은", 1_200, 1_600),
+            (" 거", 1_600, 1_900), (".", 1_900, 2_000),
+        )
+    )
+    sentence = stt_blocks.sentences_from_words(words)[0]
+    carried: tuple[stt_blocks.SentenceWord, ...] = getattr(sentence, "words", ())
+    assert len(carried) == 7
+    assert [(w.source_index, w.start_char, w.end_char) for w in carried] == [
+        (0, 0, 1), (1, 1, 2), (2, 2, 4), (3, 4, 5),
+        (4, 5, 8), (5, 8, 10), (6, 10, 11),
+    ]
+    assert tuple(w.word for w in carried) == words
+    assert all(w.word is words[w.source_index] and not w.clipped for w in carried)
+    assert stt_polish.polish_sentences((sentence,)).timed[0].words == carried
+
+
+def test_todo9_cross_sentence_token_is_shared_without_interpolating() -> None:
+    word = stt_blocks.TimedWord("요. 네.", 100, 900)
+    sentences = stt_blocks.sentences_from_words((word,))
+    assert [s.text for s in sentences] == ["요.", "네."]
+    assert all(len(getattr(s, "words", ())) == 1 for s in sentences)
+    for sentence in sentences:
+        ref = sentence.words[0]
+        assert (ref.source_index, ref.start_char, ref.end_char, ref.clipped) == (0, 0, 2, True)
+        assert ref.word is word
+        assert (sentence.start_ms, sentence.end_ms) == (100, 900)
+
+
+def test_todo9_nfc_clusters_cross_token_boundaries_and_collapse_spaces() -> None:
+    for fragments, normalized in (
+        ((" ᄀ", "ᅡ", "ᆨ", "\t  나."), "각 나."),
+        ((" e", "\u0301", "\t  나."), "é 나."),
+        ((" a", "\u0315", "\u0300", "\t  나."), "à\u0315 나."),
+    ):
+        words = tuple(stt_blocks.TimedWord(text, i * 100, (i + 1) * 100)
+                      for i, text in enumerate(fragments))
+        sentence = stt_blocks.sentences_from_words(words)[0]
+        assert sentence.text == normalized
+        assert len(getattr(sentence, "words", ())) == len(words)
+        cluster_end = normalized.index(" ")
+        assert [(w.start_char, w.end_char) for w in sentence.words[:-1]] == [
+            (0, cluster_end),
+        ] * (len(words) - 1)
+        assert (sentence.words[-1].start_char, sentence.words[-1].end_char) == (
+            cluster_end, len(normalized),
+        )
+        assert tuple(w.word for w in sentence.words) == words
+        assert not any(w.clipped for w in sentence.words)
+
+
+def test_todo9_empty_missing_and_reversed_timings_are_not_fabricated() -> None:
+    assert stt_blocks.sentences_from_words(stt_blocks.words_from_whisper([{}, {"tokens": []}])) == ()
+    words = stt_blocks.words_from_whisper([
+        {"tokens": [{"text": "가."}]},
+        {"tokens": _tokens(("나.", 900, 100))},
+    ])
+    sentences = stt_blocks.sentences_from_words(words)
+    assert all(len(getattr(s, "words", ())) == 1 for s in sentences)
+    assert [(s.start_ms, s.end_ms) for s in sentences] == [(None, None), (900, 100)]
+    assert [(s.words[0].source_index, s.words[0].word.start_ms,
+             s.words[0].word.end_ms, s.words[0].word.timing_source) for s in sentences] == [
+        (0, -1, -1, "segment"), (1, 900, 100, "token"),
+    ]
+
+
 # --- the provenance header the blocks live under ------------------------------
 
 
@@ -237,3 +453,30 @@ def test_rewrite_replaces_managed_lines_and_appends_the_extra_ones() -> None:
     assert "- 원본 음성: a.m4a" in document
     body = stt_polish.split_document(document)[1]
     assert body.strip().splitlines()[0] == stt_polish.split_sentences(_SAID)[0]
+
+
+def test_a_single_speaker_monologue_still_breaks_into_readable_blocks() -> None:
+    """실측(2026-09-07): 화자 하나만 배정된 179문장 라이프로그가 블록 **하나**로 나왔다.
+
+    화자가 바뀔 때만 블록을 닫으면 한 사람이 길게 말한 녹음은 벽 하나가 된다. 화자
+    라벨이 붙었다는 사실은 문단 규칙을 끌 이유가 되지 못한다 — 사람이 읽는 단위는
+    화자와 무관하게 그대로다.
+    """
+    sentences = tuple(
+        stt_blocks.TimedSentence(
+            f"{index}번째 문장입니다 이것은 사람이 읽기에 충분히 긴 문장입니다.",
+            index * 3_000,
+            index * 3_000 + 2_500,
+            "화자1",
+        )
+        for index in range(20)
+    )
+
+    blocks = stt_blocks.group(sentences)
+
+    assert len(blocks) >= 4
+    assert {block.speaker for block in blocks} == {"화자1"}
+    assert max(len(block.sentences) for block in blocks) <= 8
+    starts = [block.start_ms for block in blocks]
+    assert starts == sorted(starts)
+    assert len(set(starts)) == len(blocks)

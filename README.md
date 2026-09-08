@@ -55,29 +55,59 @@
 
 ## 설치
 
-**[docs/guide/install.md](docs/guide/install.md)** 가 설치 절차의 단일 진실이다.
-먼저 [docs/guide/third-party-runtime-prereqs.md](docs/guide/third-party-runtime-prereqs.md)로
+**[docs/guide/install.md](docs/guide/install.md)** 가 설치 절차의 단일 진실이고, 처음 받은
+사람은 표지 문서 [docs/guide/quickstart-install.md](docs/guide/quickstart-install.md)부터
+본다. 먼저 [docs/guide/third-party-runtime-prereqs.md](docs/guide/third-party-runtime-prereqs.md)로
 전제(Discord 앱·봇·채널, 모델 provider, Hermes 게이트웨이, 업데이트 신뢰키)를 준비한 뒤
-설치 가이드를 따른다.
+아래 마법사를 실행한다.
 
-요약하면 이렇다:
+`<bundle>/update-trust.pub` 은 각 릴리스에 asset 으로 동봉되는 업데이트 신뢰키의 공개키다.
+그 지문은 이 README 와 각 릴리스 노트에 공지되며, 키와 **다른 경로로** 받은 지문을
+설치기에 넘겨 대조하는 것이 이 부트스트랩의 핵심이다 — 마법사도 설치기도 지문을 지어내지
+않는다.
+
+### 설치 마법사 (권장)
+
+```bash
+python3 -m automation.install.wizard \
+    --update-trust-key <bundle>/update-trust.pub \
+    --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
+```
+
+마법사는 프로필(`core`·`rag`·`report-hub`·`full`), 업데이트 origin URL, 호스트 이름,
+운영자 계정을 묻고 `~/.config/autophagy/node.toml` 을 대신 쓴 뒤, root 없이 설치 계획을
+받아 한국어 요약을 보여주고 `yes` 를 입력해야만 `sudo` 로 실제 설치에 들어간다.
+설치 로직은 여전히 아래 설치기 하나가 소유한다 — 마법사는 그 인자를 조립할 뿐이다.
+
+- `--profile core` 처럼 값을 미리 주면 그 질문은 건너뛴다. `--config PATH` 로 위치를
+  바꾸거나 이미 있는 config 를 그대로 재사용한다.
+- `--dry-run-only` 는 계획 확인에서 끝난다(`sudo` 0회). `--yes` 는 비대화 실행 전용이다.
+- 확인에 `n` 을 답하면 rc 3 으로 멈추고 아무것도 설치하지 않는다.
+
+### 설치기 직접 실행 (스크립트·수동)
+
+config 를 [docs/guide/install.md §3](docs/guide/install.md) 대로 손으로 쓰거나 마법사가
+만든 파일을 그대로 주고, 같은 설치기를 직접 부른다:
 
 ```bash
 # 무엇이 설치될지 먼저 본다 — root 불필요, 아무것도 쓰지 않는다
 python3 -m automation.install \
-    --config /tmp/node.toml \
+    --config ~/.config/autophagy/node.toml \
+    --profile core \
     --update-trust-key <bundle>/update-trust.pub \
     --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA' \
     --dry-run
 
 # 실제 설치 (멱등 — 막히면 고치고 같은 명령을 다시 실행한다)
-sudo python3 -m automation.install --config /tmp/node.toml \
+sudo python3 -m automation.install \
+    --config ~/.config/autophagy/node.toml \
+    --profile core \
     --update-trust-key <bundle>/update-trust.pub \
     --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
 
-업데이트 신뢰키의 지문은 이 README와 각 릴리스 노트에 공지되며, 설치 직후
-**설치기가 아닌 경로로** 대조하는 것이 이 부트스트랩의 핵심이다.
+`--profile` 은 이 노드가 운영하는 묶음의 헬스체크 선언을 root 소유 파일로 고정한다.
+생략하면 이전과 같은 계획이다.
 
 ## 구조
 
@@ -94,10 +124,10 @@ tests/
 docs/
   guide/            # 가이드 문서 (설치·전제·운영·규약)
   patch/            # 패치 노트
-  qa/               # QA 증적
+  qa/               # QA 증적 (private 개발 origin 전용 — 공개 배포본에는 없다)
   troubleshooting/  # 트러블슈팅
 logs/           # 로그 (git 미추적, 디렉토리만 유지)
-.omo/           # 계획/오케스트레이션 상태 (repo에 포함)
+.omo/           # 계획/오케스트레이션 상태 (private 개발 origin 전용 — 공개 배포본에는 없다)
 ```
 
 ## 보안·버전·지원

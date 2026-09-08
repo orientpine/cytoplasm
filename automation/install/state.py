@@ -179,8 +179,13 @@ def _peer_attest_key_ready(
 def _repository_origin(path: Path) -> str | None:
     if not (path / ".git").is_dir():
         return None
+    # Scoped to this one path, never `--system`: the installer runs as root over
+    # checkouts owned by the ops account, and git's dubious-ownership refusal made this
+    # return None. The planner reads None as "no repository" and drives a bare clone into
+    # a populated directory, so every re-run failed (2026-09-07). Trusting one known path
+    # answers that without making root trust every repository on the host.
     result = subprocess.run(
-        ("git", "-C", str(path), "remote", "get-url", "origin"),
+        ("git", "-c", f"safe.directory={path}", "-C", str(path), "remote", "get-url", "origin"),
         check=False,
         capture_output=True,
         text=True,

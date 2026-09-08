@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
+from meeting_extract import strip_folded
 from meeting_schema import (
     ActionItem,
     Decision,
@@ -109,7 +110,7 @@ def build_prompt(
         raise ValueError("prompt template missing required placeholders")
     prompt = (
         template.replace("{{MY_NAMES}}", my_names)
-        .replace("{{MEETING_TEXT}}", meeting_text)
+        .replace("{{MEETING_TEXT}}", strip_folded(meeting_text))
         .replace("{{SLIDES}}", slides)
         .replace("{{OPEN_ACTIONS}}", open_actions)
     )

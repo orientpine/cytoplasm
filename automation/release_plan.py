@@ -14,6 +14,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from automation.release_notes import COMMIT_FORMAT, BundleMap, ReleaseCommit, parse_commits
 from automation.skill_review import skill_digest
 from automation.watcher_manifest import CENTRAL_MANIFEST, Row, parse_rows
 
@@ -32,6 +33,7 @@ class ReleasePlan:
     surface_digests: tuple[tuple[str, str], ...]
     commit_titles: tuple[str, ...]
     major_signals: tuple[str, ...]
+    commits: tuple[ReleaseCommit, ...]
 
 
 def _git(repo: Path, *arguments: str) -> str:
@@ -210,48 +212,34 @@ def build_plan(
         package_rows = tuple(row for row in rows if row.owning_package == package)
         surfaces[f"home:{package}"] = _home_package_digest(repo, package_rows)
 
-    covered = {
-        path
-        for path in changed
-        if (
-            path.startswith(tuple(f"skills/{skill}/" for skill in skills))
-            or any(path == row.source and row.owning_package in packages for row in rows)
-        )
-    }
-    remaining = tuple(path for path in changed if path not in covered)
-    rag = tuple(
-        path
-        for path in remaining
-        if path.startswith(("configs/rag/", "automation/rag_ingest/", "automation/rag_stack/"))
+    bundle_map = BundleMap(
+        skills=tuple(skills),
+        home_sources=tuple((row.source, f"home:{row.owning_package}") for row in rows),
     )
-    root = tuple(
-        path
-        for path in remaining
-        if path.startswith(("automation/systemd/", "automation/sudoers.d/", "automation/libexec/"))
-    )
-    runtime = tuple(
-        path
-        for path in remaining
-        if path not in rag and path not in root and path.startswith(("automation/", "configs/"))
-    )
-    repo_only = tuple(
-        path for path in remaining if path not in rag and path not in root and path not in runtime
-    )
+    grouped: dict[str, list[str]] = {}
+    for path in changed:
+        for name in bundle_map.bundles(path):
+            grouped.setdefault(name, []).append(path)
     tree_digest = _tree_digest(repo, head)
-    for name, paths in (
-        ("rag", rag),
-        ("root", root),
-        ("runtime", runtime),
-    ):
-        if paths:
-            surfaces[name] = _git_paths_digest(repo, head, paths)
-    if repo_only:
+    for name in ("rag", "root", "runtime"):
+        located = grouped.get(name)
+        if located:
+            surfaces[name] = _git_paths_digest(repo, head, tuple(located))
+    if grouped.get("repo"):
         surfaces["repo"] = tree_digest
 
-    titles = tuple(
-        title.strip()
-        for title in _git(repo, "log", "--reverse", "--format=%s", f"{base}..{head}").splitlines()
-        if title.strip()
+    commits = parse_commits(
+        _git(
+            repo,
+            "-c",
+            "core.quotePath=false",
+            "log",
+            "--reverse",
+            f"--format={COMMIT_FORMAT}",
+            "--name-only",
+            f"{base}..{head}",
+        ),
+        bundle_map,
     )
     return ReleasePlan(
         version=version,
@@ -260,28 +248,7 @@ def build_plan(
         tree_digest=tree_digest,
         changed_paths=changed,
         surface_digests=tuple(sorted(surfaces.items())),
-        commit_titles=titles,
+        commit_titles=tuple(commit.subject for commit in commits),
         major_signals=signals,
-    )
-
-
-def render_patch_notes(plan: ReleasePlan, *, commit_limit: int = 20) -> str:
-    """Render the bounded Discord copy; the complete plan remains machine-readable."""
-    shown = plan.commit_titles[:commit_limit]
-    commit_lines = tuple(f"  - {title}" for title in shown) or ("  - 커밋 없음",)
-    hidden = len(plan.commit_titles) - len(shown)
-    if hidden:
-        commit_lines = (*commit_lines, f"  - +{hidden}건")
-    major_line = (
-        (f"MAJOR: 운영자 조치 필요 — {', '.join(plan.major_signals)}",)
-        if plan.major_signals
-        else ()
-    )
-    return "\n".join(
-        (
-            *major_line,
-            f"- 릴리스 범위: `{plan.base[:12]}..{plan.head[:12]}`",
-            "- 사용자·운영 변경:",
-            *commit_lines,
-        )
+        commits=commits,
     )

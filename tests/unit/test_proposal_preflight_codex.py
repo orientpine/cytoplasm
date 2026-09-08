@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from skills.proposal.scripts import proposal_preflight
 
 
@@ -14,18 +16,18 @@ def _executable(path: Path) -> Path:
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
-    docbot = tmp_path / "docbot"
-    docbot.mkdir()
-    carrier = docbot / "picture-carrier.bin"
-    carrier.write_bytes(b"carrier")
+    # No fabricated engine root: the picture carrier ships with the in-tree engine,
+    # so preflight finds the real one and this fixture cannot mask its absence.
     return {
         "HOME": str(tmp_path / "home"),
         "PATH": str(tmp_path / "bin"),
-        "PROPOSAL_DOCBOT_ROOT": str(docbot),
-        "PROPOSAL_PICTURE_CARRIER": carrier.name,
     }
 
 
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[2] / "skills" / "proposal" / "engine").is_dir(),
+    reason="skills/proposal/engine is manifest-excluded from the public export; this contract holds only where the engine ships",
+)
 def test_codex_oauth_unblocks_images_without_an_image_api_key(tmp_path: Path) -> None:
     environment = _environment(tmp_path)
     bin_dir = Path(environment["PATH"])

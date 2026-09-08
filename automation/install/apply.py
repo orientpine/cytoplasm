@@ -238,29 +238,37 @@ class SystemMutator:
             "GIT_SSH_COMMAND": ssh_command,
             "HOME": str(self._config.ops_home),
         }
+        as_ops = (
+            "runuser",
+            "-u",
+            self._config.ops_account,
+            "--",
+            "env",
+            f"HOME={self._config.ops_home}",
+            f"GIT_SSH_COMMAND={ssh_command}",
+            "git",
+        )
+        if (action.path / ".git").is_dir():
+            # Converging an existing checkout is repointing it, not recreating it. Cloning
+            # into a populated directory fails, and that failure was the whole symptom of
+            # the re-run bug this pairs with.
+            _ = self.run(
+                (*as_ops, "-C", str(action.path), "remote", "set-url", "--", "origin", origin_url),
+                env=environment,
+            )
+            return
         _ = self.run(
-            (
-                "runuser",
-                "-u",
-                self._config.ops_account,
-                "--",
-                "env",
-                f"HOME={self._config.ops_home}",
-                f"GIT_SSH_COMMAND={ssh_command}",
-                "git",
-                "clone",
-                # `--` keeps a dash-leading URL out of git's option namespace.
-                "--",
-                origin_url,
-                str(action.path),
-            ),
+            # `--` keeps a dash-leading URL out of git's option namespace.
+            (*as_ops, "clone", "--", origin_url, str(action.path)),
             env=environment,
         )
 
     def _timer(self, name: str) -> None:
+        # No pre-start. The reconcile unit's WorkingDirectory is the release tree, and the
+        # FIRST convergence is what creates it — so starting the service before its timer
+        # can only fail on a node that has never converged, which is every new node
+        # (2026-09-07). The timer's own tick performs that first convergence.
         _ = self.run(("systemctl", "daemon-reload"))
-        if name == "autophagy-deploy-reconcile.timer":
-            _ = self.run(("systemctl", "start", "autophagy-deploy-reconcile.service"))
         _ = self.run(("systemctl", "enable", "--now", name))
 
 

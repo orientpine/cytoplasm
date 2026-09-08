@@ -29,8 +29,10 @@
 | origin 호스트의 SSH 호스트키가 ops 계정 `known_hosts`에 있을 것 | clone은 `StrictHostKeyChecking=yes`로 수행된다(§4 참조) |
 | 각 서비스 계정의 Hermes 게이트웨이 | **설치기는 Hermes를 설치하지 않는다.** 외부 전제이며, 없으면 fail-closed로 멈추고 안내한다 |
 
-컨테이너에서는 완주할 수 없다 — systemd가 없기 때문이다. 실측은
-`docs/qa/P0-5/03-systemd-boundary.txt`에 있다.
+systemd 없는 slim 컨테이너의 경계는 `docs/qa/P0-5/03-systemd-boundary.txt`에 있다.
+[특권 systemd 컨테이너 하네스](../../tests/e2e/install/systemd_container/README.md)는
+그 경계를 넘어 실제 계정·linger·디렉터리·peer 키까지 확인하지만, Hermes 외부 전제에서
+멈춘다. 최종 설치 완주의 증명은 아니다(§9).
 
 ---
 
@@ -83,6 +85,12 @@ python3 automation/install/trust_key_bootstrap.py install \
 
 ## 3. 노드 config 작성
 
+처음이라면 [빠른 시작의 설치 마법사](quickstart-install.md#4-실행할-한-줄)가 프로필·origin URL·
+호스트 이름·운영자 계정·공지 지문을 묻고 `~/.config/autophagy/node.toml`을 대신 작성한다.
+`--config PATH`로 위치를 바꿀 수 있고, 파일이 이미 있으면 그대로 재사용한다
+(`automation/install/wizard.py:142–218`). 아래처럼 **수동 편집해도 유효하다**.
+마법사가 만든 파일로 아래 명령을 직접 실행한다면 `/tmp/node.toml` 대신 그 경로를 넣는다.
+
 ```bash
 cp configs/node.example.toml /tmp/node.toml
 $EDITOR /tmp/node.toml
@@ -112,8 +120,8 @@ slash command를 건별 mutation하지 않고 한 번에 동기화한다. 설치
 소유하는 desired state이므로 내용·소유권·모드가 달라지면 다음 실행에서 수렴하고,
 이미 같으면 계획에서 빠진다.
 
-`--config`를 생략하면 예제와 동일한 기본값이 쓰이므로, 제3자 설치는 **항상
-`--config`를 명시한다.**
+`--config`를 생략한 dry-run은 예제와 동일한 기본값을 쓰고, 실제 설치는
+`NODE-CONFIG-REQUIRED`로 거부한다. 제3자 설치는 **항상 `--config`를 명시한다.**
 
 ---
 
@@ -122,6 +130,7 @@ slash command를 건별 mutation하지 않고 한 번에 동기화한다. 설치
 ```bash
 python3 -m automation.install \
     --config /tmp/node.toml \
+    --profile core \
     --update-trust-key <bundle>/update-trust.pub \
     --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA' \
     --dry-run
@@ -132,8 +141,9 @@ python3 -m automation.install \
 - 실제 실행이 무엇을 할지 번호가 붙은 액션 목록으로 전부 보여준다.
 - 성공하면 **rc 0**이다.
 
-출력은 이렇게 생겼다(깨끗한 컨테이너 실측 전문:
-`docs/qa/P0-5/01-dry-run-clean-container.txt`):
+아래는 프로필 도입 전 출력 예시다(당시 깨끗한 컨테이너 실측 전문:
+`docs/qa/P0-5/01-dry-run-clean-container.txt`). 현재 번호·건수는 실제 출력으로 확인한다.
+`--profile`을 주면 `/etc/autophagy/healthcheck.env` 파일 계획도 포함된다:
 
 ```
 INSTALL PLAN
@@ -173,6 +183,30 @@ INSTALL PLAN
 [FAIL] update-trust: bundled fingerprint SHA256:... does not match the published value
 --- NOT-INSTALLED: 1건 중 실패 1 / 경고 0
 ```
+
+### 프로필과 헬스체크 선언
+
+`--profile <core|rag|report-hub|full>`로 이 노드가 운영할 묶음을 고른다. 위·아래 명령의
+`core`는 예시이므로 실제 용도에 맞게 바꾸되 dry-run과 apply에는 **같은 값**을 쓴다.
+
+| 프로필 | `HEALTHCHECK_SERVICES` 선언 |
+|---|---|
+| `core` | `core` |
+| `rag` | `core rag` |
+| `report-hub` | `core report-hub` |
+| `full` | `core report-hub rag` |
+
+설치기는 `/etc/autophagy/healthcheck.env`를 `root:root 0644`로 배치한다
+(`automation/install/profiles.py:26–45`, `automation/install/assets.py:229–230`).
+**프로필은 감시 범위 선언이지 RAG 스택·report-hub 유닛 설치가 아니다.** 추가 서비스 배치는
+별도이며 `--with-component`와도 구별한다.
+
+`--profile`을 생략하면 이전과 바이트 동일한 계획을 유지하며 선언 파일을 새로 만들거나
+지우지 않는다. 기존 파일·환경 선언도 없으면 **모든 프로브가 그대로 돈다**.
+실행 환경에서 export한 `HEALTHCHECK_SERVICES`가 파일보다 우선한다. 빈 값을 export해도
+파일을 무시하고 모든 프로브를 켠다(`automation/healthcheck_registry.sh:21–32,52–60`).
+프로필을 준 신규 설치에서는 `healthcheck.sh --suggest`를 따로 돌려 선언을 만들 필요가 없다.
+기존 노드·수동 서비스 변경 뒤의 복구는 [운영 가이드](operations.md#설치가-운영하지-않는-서비스는-선언에서-뺀다)를 따른다.
 
 ---
 
@@ -216,6 +250,7 @@ ApprovalSurfaceError: agent_chat_channel_id is not configured in the interop con
 ```bash
 sudo python3 -m automation.install \
     --config /tmp/node.toml \
+    --profile core \
     --update-trust-key <bundle>/update-trust.pub \
     --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
@@ -223,11 +258,12 @@ sudo python3 -m automation.install \
 **`sudo`는 환경변수를 지운다.** §5에서 `DISCORD_BOT_TOKEN`을 올려두었더라도 위 명령에는
 전달되지 않으므로, 설치기의 `discord-readiness` 체크가 `discord_check.py rc=2`로 실패한다
 — 토큰이 틀린 것이 아니라 아예 도달하지 않은 것이다. 토큰을 넘기려면 `--preserve-env`를
-쓴다(`quickstart.sh`가 하는 것과 같다):
+쓴다(마법사·`quickstart.sh`도 보존을 시도한다):
 
 ```bash
 sudo --preserve-env=DISCORD_BOT_TOKEN python3 -m automation.install \
     --config /tmp/node.toml \
+    --profile core \
     --update-trust-key <bundle>/update-trust.pub \
     --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
@@ -317,7 +353,7 @@ python3 automation/install/trust_key_bootstrap.py verify --expect-fingerprint 'S
 ### `check healthcheck`
 
 ops 계정으로 `automation/healthcheck.sh`를 실행한다. 이 스크립트는 **읽기 전용**이며,
-정의된 프로브를 전부 돌고 마지막 줄에 판정을 남긴다.
+§4의 선언으로 선택된 프로브를 전부 돌고 마지막 줄에 판정을 남긴다.
 
 - 전부 통과: 로그 마지막이 `ALL_HEALTHY`, rc 0 →
   `[PASS] healthcheck: healthcheck.sh ALL_HEALTHY`
@@ -383,24 +419,26 @@ best-effort로 호출한다. `pending`이 1 이상인데 둘째 명령이 실패
 | `[FAIL] discord-readiness: discord_check.py rc=1` | 토큰·인텐트·권한·채널 중 하나 | §5를 단독 실행해 어느 항목인지 본다 |
 | `repository` 액션에서 멈춤 | deploy key 미등록 또는 `known_hosts` 부재 | §6.2 |
 | `TRUST-KEY-FINGERPRINT-MISMATCH` | 번들 키 ≠ 공지 지문 | **진행하지 않는다.** 유지보수자에게 확인 |
+| `SYNC-BLOCK` · `UPDATE-TRUST-BLOCK` · `EnableTimer`/`EnsureRepository` 실패 | 신규 노드에서만 드러나는 설치기 공백 | [신규 노드 설치에서 막히는 6곳](../troubleshooting/신규-노드-설치-공백.md) |
 
 ---
 
 ## 9. 이 문서가 실제로 검증된 범위
 
-정직하게 적는다. 근거는 `docs/qa/P0-5/`에 있다.
+정직하게 적는다. 근거는 `docs/qa/P0-5/`와 [`docs/qa/INSTALL-TUI/`](../qa/INSTALL-TUI/)에 있다.
 
 - **검증됨**: `--dry-run` 전 구간이 깨끗한 컨테이너에서 rc 0. 전제 미충족 6종이 각각
   이름을 지목해 보고된다. 비-root 실행 거부. 신뢰키 지문 대조·불일치 거부.
-- **아직 실호스트에서 검증되지 않음**: 실제 apply → 타이머 활성 → `healthcheck.sh`
-  전부 PASS → 서명 릴리스 push 후 `current` 전진. 컨테이너에는 systemd가 없고,
-  Hermes는 설치기가 설치하지 않는 외부 전제라 컨테이너에서는 구조적으로 도달할 수
-  없다. 이 구간은 실제 Linux+systemd 호스트를 가진 운영자가 처음 완주할 때 닫힌다.
+- **systemd 실제 apply 앞단 검증됨**: 특권 컨테이너에서 계정·linger·디렉터리·peer
+  attestation 키까지 수렴하고 `[FAIL] hermes-gateway`에서 설계대로 멈춘다.
+- **아직 실호스트에서 검증되지 않음**: Hermes·Discord 전제 뒤 clone → 타이머 활성 →
+  `healthcheck.sh` 전부 PASS → 서명 릴리스 push 후 `current` 전진. 하네스는 외부 전제를
+  대신 설치하거나 모의 통과시키지 않는다. 첫 실제 Linux+systemd 호스트 완주 때 닫힌다.
 
 ## 관련
 
 - 전제: [third-party-runtime-prereqs.md](third-party-runtime-prereqs.md)
-- 편의 래퍼(위 §4→§6→§7 순서를 대신 지켜준다. 절차는 이 문서가 그대로 소유한다):
+- 설치 마법사·스크립트 대안(위 §3→§4→§6→§7을 안내한다. 절차는 이 문서가 그대로 소유한다):
   [quickstart-install.md](quickstart-install.md) · [`automation/install/quickstart.sh`](../../automation/install/quickstart.sh)
 - 환경변수 템플릿: [`configs/env.example`](../../configs/env.example)
 - 노드 config 예제: [`configs/node.example.toml`](../../configs/node.example.toml)

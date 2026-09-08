@@ -60,7 +60,6 @@ def _default_refine_host_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("PROPOSAL_DOCBOT_ROOT", str(tmp_path / "docbot"))
     monkeypatch.setenv("PROPOSAL_REFINE_ROOT", str(tmp_path / "refine"))
     monkeypatch.setenv("PROPOSAL_IMAGE_API_KEY_ENV", "TEST_PROPOSAL_IMAGE_KEY")
     monkeypatch.delenv("TEST_PROPOSAL_IMAGE_KEY", raising=False)

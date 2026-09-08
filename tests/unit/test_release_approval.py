@@ -24,7 +24,8 @@ from automation.release_approval import (
     spec_from_record,
 )
 from automation.interop.approval_lifecycle import Probe
-from automation.release_spec import ReleaseSpec, ReleaseSpecError, fit_patch_notes
+from automation.interop.discord_transport import SentMessage
+from automation.release_spec import ReleaseSpec, ReleaseSpecError
 
 
 def _spec() -> ReleaseSpec:
@@ -58,7 +59,7 @@ def _pending(gate_dir: Path) -> dict[str, str]:
     return record
 
 
-def _plan_file(tmp_path: Path) -> str:
+def _plan_file(tmp_path: Path, patch_notes: str = "") -> str:
     spec = _spec()
     path = tmp_path / "plan.json"
     _ = path.write_text(
@@ -67,12 +68,65 @@ def _plan_file(tmp_path: Path) -> str:
                 "version": spec.version,
                 "head": spec.head_sha,
                 "surface_digests": [list(row) for row in spec.surface_digests],
-                "patch_notes": spec.patch_notes,
+                "patch_notes": patch_notes or spec.patch_notes,
             }
         ),
         encoding="utf-8",
     )
     return str(path)
+
+
+_LONG_NOTES = "\n".join(f"- 변경 {index} " + "가" * 60 for index in range(60))
+
+
+class _RecordingTransport:
+    """Discord 대신 순서와 본문만 기록한다 — 테스트는 절대 망을 열지 않는다."""
+
+    def __init__(self, fail_after: int | None = None) -> None:
+        self.sent: list[str] = []
+        self._fail_after = fail_after
+
+    def send(self, body: str) -> tuple[SentMessage, ...]:
+        if self._fail_after is not None and len(self.sent) >= self._fail_after:
+            raise OSError("discord is unreachable")
+        self.sent.append(body)
+        return (SentMessage(message_id=f"detail-{len(self.sent)}"),)
+
+
+class _PostingGate:
+    """카드가 이미 올라간 뒤의 게이트 — 채널과 레코드 경로만 답한다."""
+
+    def __init__(self, gate_dir: Path) -> None:
+        self._path = gate_dir / "pending" / "release.json"
+        self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def channel_id(self) -> str:
+        return "1528936606856122421"
+
+    def path(self) -> Path:
+        return self._path
+
+
+def _posted(
+    monkeypatch: pytest.MonkeyPatch, gate: _PostingGate, transport: _RecordingTransport
+) -> list[str]:
+    """카드가 새로 게시된 경로를 세운다 — 반환값은 transport 가 받은 채널 목록이다."""
+    record = _spec().new_record(_MESSAGE_ID, _binding())
+    channels: list[str] = []
+    monkeypatch.setattr(release_approval, "_gate", lambda spec: gate)
+    monkeypatch.setattr(skill_gate_request, "reuse", lambda gate: None)
+    monkeypatch.setattr(
+        skill_gate_request,
+        "post_request",
+        lambda gate, *, fresh: skill_gate_request.Requested(record, 0, posted=True),
+    )
+
+    def transport_for(channel_id: str) -> _RecordingTransport:
+        channels.append(channel_id)
+        return transport
+
+    monkeypatch.setattr(release_approval, "detail_transport", transport_for)
+    return channels
 
 
 class _StubGate:
@@ -189,6 +243,23 @@ def test_only_a_readable_binding_mismatch_earns_the_extra_line(
     assert "RELEASE-REQUEST-STALE:" not in captured.err
 
 
+def test_decision_names_the_version_bound_to_the_current_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A caller can reuse a live request's immutable version without changing its record."""
+    record = _pending(tmp_path)
+    monkeypatch.setattr(skill_gate, "GATE_DIR", tmp_path)
+    monkeypatch.setattr(release_approval, "_gate", lambda spec: _StubGate(Probe.APPROVED))
+
+    exit_code = release_approval.main(["decision", "--head", record["head_sha"]])
+
+    captured = capsys.readouterr()
+    assert exit_code == DECISION_APPROVED
+    assert captured.err == f"RELEASE-DECISION: approved version={record['version']}\n"
+
+
 def test_release_kind_is_permanently_routed_to_approvals() -> None:
     assert ApprovalKind.RELEASE.value == "release"
     assert required_surface(ApprovalKind.RELEASE) is ApprovalSurface.SKILL_APPROVALS
@@ -232,7 +303,7 @@ def test_record_persists_every_authorizing_field_and_surface_binding() -> None:
     assert record["surface"] == "skill-approvals"
     assert record["channel_id"] == binding.channel_id
     assert record["policy_version"] == str(POLICY_VERSION)
-    assert record["render_version"] == "2"
+    assert record["render_version"] == "3"
     assert spec.bound(spec.render(), record)
 
 
@@ -251,42 +322,85 @@ def test_any_record_or_message_change_breaks_the_binding() -> None:
 
 
 def test_release_message_is_fail_closed_above_1900_characters() -> None:
+    """카드 자체가 한도를 넘으면 게시하지 않는다 — 잘라내기는 어디에도 없다."""
+    crowded = tuple((f"skill:demo-{index:03d}", f"{index:064x}") for index in range(110))
+
     with pytest.raises(ReleaseSpecError, match="1900"):
-        _ = replace(_spec(), patch_notes="x" * 1900).render()
+        _ = replace(_spec(), surface_digests=crowded).render()
 
 
-def test_release_message_prioritizes_human_changes_over_raw_gate_fields() -> None:
+def test_the_card_points_at_the_detail_messages_instead_of_carrying_them() -> None:
+    """Given a v3 release spec / When the card renders / Then it names the bundles,
+    the binding and how many detail messages follow — and no patch-note line."""
     spec = _spec()
 
-    rendered = spec.render()
+    lines = spec.render().splitlines()
 
-    assert spec.patch_notes in rendered
-    assert spec.action_hash() in rendered
-    assert all(name in rendered for name, _digest in spec.surface_digests)
-    assert spec.release_nonce not in rendered
-    assert all(digest not in rendered for _name, digest in spec.surface_digests)
+    assert lines[:5] == [
+        "[release] v1.2.3 배포 승인 요청",
+        f"- 배포 기준: `{spec.head_sha}`",
+        "- 배포 번들 (2): `home:skills/mail`, `skill:meeting`",
+        f"- 승인 바인딩: `{spec.action_hash()}`",
+        f"- 변경 상세: 아래 1개 메시지 (같은 릴리스 v1.2.3 · 기준 {spec.head_sha[:12]})",
+    ]
+    assert lines[5].startswith("- 승인 방법:")
+    assert len(lines) == 6
+    assert spec.patch_notes not in spec.render()
+    assert spec.release_nonce not in spec.render()
+    assert all(digest not in spec.render() for _name, digest in spec.surface_digests)
 
 
-def test_generated_patch_notes_fit_without_weakening_raw_fail_closed() -> None:
-    surfaces = tuple((f"surface-{index}", f"{index:064x}") for index in range(14))
-    notes = "\n".join(f"- change {index} " + "x" * 80 for index in range(20))
+def test_a_major_release_card_carries_the_operator_line_before_the_detail_pointer() -> None:
+    """Given machine-contract signals / When the card renders /
+    Then the operator line stands above the detail pointer."""
+    spec = replace(_spec(), major_note="MAJOR: 운영자 조치 필요 — automation/x.py:SCHEMA_VERSION")
 
-    fitted = fit_patch_notes(
-        version="v1.2.3",
-        head_sha="a" * 40,
-        surface_digests=surfaces,
-        patch_notes=notes,
+    lines = spec.render().splitlines()
+
+    assert lines[4] == spec.major_note
+    assert lines[5].startswith("- 변경 상세: ")
+
+
+def test_the_card_counts_every_detail_message_it_points_at() -> None:
+    """Given change notes longer than one message / When the card renders /
+    Then its count equals the messages the same spec produces."""
+    spec = replace(
+        _spec(),
+        patch_notes="\n".join(f"- 변경 {index} " + "가" * 60 for index in range(60)),
     )
-    rendered = ReleaseSpec(
-        version="v1.2.3",
-        head_sha="a" * 40,
-        release_nonce="b" * 32,
-        surface_digests=surfaces,
-        patch_notes=fitted,
-    ).render()
 
-    assert len(rendered) <= 1900
-    assert fitted != notes
+    messages = spec.detail_messages()
+
+    assert len(messages) > 1
+    assert f"- 변경 상세: 아래 {len(messages)}개 메시지 " in spec.render()
+
+
+def test_the_frozen_v1_and_v2_renders_stay_byte_identical() -> None:
+    """이미 게시된 승인은 그 바이트로만 재검증된다 — 옛 버전 문구는 영구 동결이다."""
+    spec = _spec()
+
+    assert replace(spec, render_version=1).render() == (
+        "[release] v1.2.3 배포 승인 요청\n"
+        "- version: `v1.2.3`\n"
+        f"- HEAD: `{'a' * 40}`\n"
+        f"- release_nonce: `{'b' * 32}`\n"
+        f"- surface `home:skills/mail`: `{'c' * 64}`\n"
+        f"- surface `skill:meeting`: `{'d' * 64}`\n"
+        "- 패치노트:\n"
+        "- mail wrapper\n"
+        "- meeting skill\n"
+        "- 승인 방법: 이 메시지에 cha가 ✅ 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
+    )
+    assert replace(spec, render_version=2).render() == (
+        "[release] v1.2.3 배포 승인 요청\n"
+        f"- 배포 기준: `{'a' * 40}`\n"
+        "- 배포 번들 (2): `home:skills/mail`, `skill:meeting`\n"
+        f"- 승인 바인딩: `{spec.action_hash()}`\n"
+        "- 변경 내용:\n"
+        "- mail wrapper\n"
+        "- meeting skill\n"
+        "- 승인 방법: 이 메시지에 cha가 ✅ 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -360,3 +474,83 @@ def test_decision_exit_maps_owner_probes_and_keeps_uncertainty_pending() -> None
     assert decision_exit(Probe.BOUND_PENDING) == DECISION_PENDING
     assert decision_exit(Probe.UNVERIFIABLE) == DECISION_PENDING
     assert decision_exit(Probe.MISSING) == DECISION_PENDING
+
+
+def test_the_detail_messages_follow_the_freshly_posted_card_in_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Given a card that was just posted / When the request command finishes /
+    Then every detail message reaches the same channel, in order, and is recorded."""
+    transport = _RecordingTransport()
+    gate = _PostingGate(tmp_path)
+    channels = _posted(monkeypatch, gate, transport)
+    plan_file = _plan_file(tmp_path, _LONG_NOTES)
+    expected = spec_from_plan(json.loads(Path(plan_file).read_text("utf-8")), "0" * 32)
+
+    exit_code = release_approval.main(["request", "--plan-file", plan_file])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert len(transport.sent) > 1
+    assert tuple(transport.sent) == expected.detail_messages()
+    assert channels == ["1528936606856122421"]
+    emitted = json.loads(captured.out)
+    posted_ids = [f"detail-{index}" for index in range(1, len(transport.sent) + 1)]
+    assert json.loads(emitted["detail_message_ids"]) == posted_ids
+    stored = json.loads(gate.path().read_text(encoding="utf-8"))
+    assert json.loads(stored["detail_message_ids"]) == posted_ids
+    assert stored["action_hash"] == emitted["action_hash"]
+
+
+def test_a_reused_request_posts_no_detail_messages_again(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Given a live request the owner has not answered / When the command re-runs /
+    Then nothing is posted a second time."""
+    transport = _RecordingTransport()
+    record = _spec().new_record(_MESSAGE_ID, _binding())
+    monkeypatch.setattr(
+        skill_gate_request, "reuse", lambda gate: skill_gate_request.Requested(record, 0)
+    )
+    monkeypatch.setattr(release_approval, "_gate", lambda spec: _PostingGate(tmp_path))
+    monkeypatch.setattr(
+        release_approval, "detail_transport", lambda channel_id: transport
+    )
+
+    exit_code = release_approval.main(
+        ["request", "--plan-file", _plan_file(tmp_path, _LONG_NOTES)]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert transport.sent == []
+    assert "detail_message_ids" not in json.loads(captured.out)
+
+
+def test_a_detail_post_failure_is_loud_and_leaves_the_card_binding_alone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Given Discord fails midway through the detail messages / When the command ends /
+    Then the failure names how many landed and the exit code stays the card's."""
+    transport = _RecordingTransport(fail_after=1)
+    gate = _PostingGate(tmp_path)
+    _ = _posted(monkeypatch, gate, transport)
+    plan_file = _plan_file(tmp_path, _LONG_NOTES)
+    expected = spec_from_plan(json.loads(Path(plan_file).read_text("utf-8")), "0" * 32)
+
+    exit_code = release_approval.main(["request", "--plan-file", plan_file])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert (
+        f"RELEASE-DETAIL-POST-FAIL OSError posted=1/{len(expected.detail_messages())}"
+        in captured.err.splitlines()
+    )
+    stored = json.loads(gate.path().read_text(encoding="utf-8"))
+    assert json.loads(stored["detail_message_ids"]) == ["detail-1"]

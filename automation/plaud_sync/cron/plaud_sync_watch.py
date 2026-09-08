@@ -10,17 +10,12 @@ is skill-unique (e), and records advance only after the effect succeeded (f).
 
 from __future__ import annotations
 
-import fcntl
-import json
 import os
-import re
 import sys
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from collections.abc import Sequence
-from typing import IO, Final, Protocol, TypeAlias
-from zoneinfo import ZoneInfo
 
 
 def _runtime_root() -> Path:
@@ -36,8 +31,9 @@ if (_REPO_ROOT / "automation").is_dir() and str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from automation.interop.approval_surface import POLICY_VERSION  # noqa: E402
+from automation.plaud_sync.duration import DEFAULT_MIN_DURATION_MS  # noqa: E402
 from automation.plaud_sync.lifelog_extract_live import build_extractor  # noqa: E402
-from automation.plaud_sync.lifelog_fields import note_timezone  # noqa: E402
+from automation.plaud_sync import watch_runtime  # noqa: E402
 from automation.plaud_sync.model import PlaudSyncState  # noqa: E402
 from automation.plaud_sync.store import (  # noqa: E402
     PlaudSyncStore,
@@ -49,76 +45,19 @@ from automation.plaud_sync.sync import plan_new_records, poll_due  # noqa: E402
 from automation.plaud_sync import terms, transcribe_live  # noqa: E402
 from automation.plaud_sync.watch_step import ResolveResult, resolve_tick  # noqa: E402
 
-ENV_SECRETS: Final = Path.home() / ".env.secrets"
-INTEROP_CONFIG: Final = Path.home() / ".hermes" / "interop" / "config.json"
-STATE_DIR: Final = Path.home() / ".hermes" / "plaud-sync"
-STATE_PATH: Final = STATE_DIR / "state.json"
-LOCK_PATH: Final = STATE_DIR / "watch.lock"
-JsonValue: TypeAlias = (
-    str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
-)
-
-_LONG_DIGITS = re.compile(r"\d{5,}")
-_SECRET_VALUE = re.compile(r"(?i)(token|secret|password|key)=[^\s]+")
-
-
-class JsonLoader(Protocol):
-    def __call__(self, s: str) -> JsonValue: ...
-
-
-_JSON_LOADS: JsonLoader = json.loads
-
-
-class WatchError(RuntimeError):
-    """Node configuration is insufficient for a fail-closed sync tick."""
-
-
-def _load_env_secrets(path: Path = ENV_SECRETS) -> None:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for raw_line in lines:
-        key, separator, value = raw_line.strip().partition("=")
-        if separator and key and not key.startswith("#") and key not in os.environ:
-            os.environ[key] = value.strip().strip('"').strip("'")
-
-
-def _owner_id(path: Path = INTEROP_CONFIG) -> str:
-    try:
-        payload = _JSON_LOADS(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise WatchError("interop owner configuration is unavailable") from error
-    if not isinstance(payload, dict):
-        raise WatchError("interop owner configuration is malformed")
-    owner_id = payload.get("owner_id")
-    if not isinstance(owner_id, str) or not owner_id:
-        raise WatchError("interop owner configuration has no owner id")
-    return owner_id
-
-
-def acquire_single_instance_lock(lock_path: Path = LOCK_PATH) -> IO[str] | None:
-    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    handle = lock_path.open("a", encoding="utf-8")
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        handle.close()
-        return None
-    return handle
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    return int(raw) if raw.isdigit() and int(raw) > 0 else default
-
-
-def _note_timezone() -> ZoneInfo:
-    """PLAUD_SYNC_TIMEZONE (default Asia/Seoul) — a bad name falls back loudly, not silently."""
-    zone, warning = note_timezone(os.environ)
-    if warning:
-        print(f"plaud-sync: {warning}", file=sys.stderr)
-    return zone
+ENV_SECRETS = watch_runtime.ENV_SECRETS
+INTEROP_CONFIG = watch_runtime.INTEROP_CONFIG
+STATE_DIR = watch_runtime.STATE_DIR
+STATE_PATH = watch_runtime.STATE_PATH
+LOCK_PATH = watch_runtime.LOCK_PATH
+JsonLoader = watch_runtime.JsonLoader
+WatchError = watch_runtime.WatchError
+_load_env_secrets = watch_runtime.load_env_secrets
+_owner_id = watch_runtime.owner_id
+acquire_single_instance_lock = watch_runtime.acquire_single_instance_lock
+_env_int = watch_runtime.env_int
+_note_timezone = watch_runtime.note_timezone
+_masked_error = watch_runtime.masked_error
 
 
 def _discover(state: PlaudSyncState, now: datetime) -> PlaudSyncState:
@@ -143,6 +82,7 @@ def _discover(state: PlaudSyncState, now: datetime) -> PlaudSyncState:
             tz=_note_timezone(),
             initial_status=initial_status,
             glossary=terms.glossary(),
+            min_duration_ms=_env_int("PLAUD_SYNC_MIN_DURATION_MS", DEFAULT_MIN_DURATION_MS),
         )
         for recording_id, body in result.bodies.items():
             save_note_body(STATE_DIR, recording_id, body)
@@ -151,11 +91,8 @@ def _discover(state: PlaudSyncState, now: datetime) -> PlaudSyncState:
             # 그 초안까지 적으면 같은 녹음이 로그에 두 번 남아 오탐을 되짚기 어려워진다.
             for label, corrections in result.corrections:
                 _ = terms.record(corrections, label=label)
-        for recording_id in result.skipped:
-            print(
-                f"plaud-sync: unplannable recording skipped: {recording_id}",
-                file=sys.stderr,
-            )
+        for line in result.skipped_lines:
+            print(line, file=sys.stderr)
         for recording_id in result.deferred:
             print(
                 f"plaud-sync: field extraction failed; retry next poll: {recording_id}",
@@ -242,10 +179,6 @@ def _summary(result: ResolveResult) -> str | None:
     )
 
 
-def _masked_error(error: Exception) -> str:
-    secret_safe = _SECRET_VALUE.sub(r"\1=[MASKED]", str(error))
-    return _LONG_DIGITS.sub("[MASKED-NUM]", secret_safe)[:300]
-
 
 def _repost_posted() -> tuple[str, ...]:
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -257,12 +190,42 @@ def _repost_posted() -> tuple[str, ...]:
     return repost_posted(PlaudSyncStore(STATE_PATH), DiscordTransport(token, _owner_id()))
 
 
+def _reprocess(recording_id: str) -> bool:
+    """Queue one finished recording for a fresh transcription (owner-run, never a sweep)."""
+    from automation.plaud_sync.repost import reprocess
+
+    return reprocess(PlaudSyncStore(STATE_PATH), recording_id)
+
+
+def _reprocess_targets(argv: list[str]) -> tuple[str, ...]:
+    """Pull ``--reprocess <id>`` pairs out of ``argv`` in place; a bare flag is an error."""
+    targets: list[str] = []
+    index = 0
+    while index < len(argv):
+        if argv[index] != "--reprocess":
+            index += 1
+            continue
+        if index + 1 >= len(argv) or argv[index + 1].startswith("--"):
+            raise WatchError("--reprocess needs a recording id")
+        targets.append(argv[index + 1])
+        del argv[index : index + 2]
+    return tuple(targets)
+
+
 def _run(argv: Sequence[str]) -> list[str]:
-    """One tick; ``--repost-posted`` consumes reactions first, re-cards, then posts."""
-    unknown = sorted(set(argv) - {"--repost-posted"})
+    """One tick; ``--repost-posted`` re-cards live requests and ``--reprocess <id>``
+    sends a finished recording back through transcription before the tick runs."""
+    rest = list(argv)
+    targets = _reprocess_targets(rest)
+    unknown = sorted(set(rest) - {"--repost-posted"})
     if unknown:
         raise WatchError(f"unknown argument: {unknown}")
-    lines = [_summary(run_once(datetime.now(UTC)))]
+    lines: list[str | None] = [
+        f"plaud-sync: reprocess {recording_id} "
+        f"{'queued' if _reprocess(recording_id) else 'refused'}"
+        for recording_id in targets
+    ]
+    lines.append(_summary(run_once(datetime.now(UTC))))
     if "--repost-posted" in argv:
         lines.append(f"plaud-sync: reposted={len(_repost_posted())}")
         lines.append(_summary(run_once(datetime.now(UTC))))

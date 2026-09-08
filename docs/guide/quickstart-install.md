@@ -24,7 +24,8 @@
 권한다 — 부족한 항목은 하나씩 이름이 나온다.
 
 호스트 조건 하나만 여기서 못박는다: **Linux + systemd + root 권한.** 리컨실러·워처가
-systemd 타이머라서 컨테이너에서는 완주할 수 없다.
+systemd 타이머라서 systemd 없는 컨테이너는 계획 확인용이다. 특권 systemd 컨테이너로
+검증한 실제 설치 범위와 외부 전제의 경계는 §8에 적었다.
 
 ## 3. 지문부터 대조한다 (사람이 해야 하는 유일한 판단)
 
@@ -33,38 +34,71 @@ systemd 타이머라서 컨테이너에서는 완주할 수 없다.
 
 ## 4. 실행할 한 줄
 
-노드 config를 먼저 만든다([install.md §3](install.md#3-노드-config-작성) — 복사해서
-자기 값으로 고치는 것이 전부다). 그 다음:
+처음에는 **대화형 설치 마법사**로 시작한다. 저장소 체크아웃 안에서:
 
 ```bash
 cd ~/autophagy-agents
-automation/install/quickstart.sh \
-    --config /tmp/node.toml \
-    --update-trust-key <bundle>/update-trust.pub \
-    --expect-update-trust-fingerprint 'SHA256:<공지된-지문>'
+python3 -m automation.install.wizard \
+    --update-trust-key <bundle>/update-trust.pub
 ```
 
-이 스크립트는 설치를 **대신 정의하지 않는다.** `python3 -m automation.install`을
-install.md와 똑같은 인자로 조립해 실행할 뿐이고, 하는 일은 순서를 지켜주는 것이다.
-계획을 직접 보고 손으로 실행하고 싶으면 install.md의 명령을 그대로 써도 결과는 같다.
+프로필(`core`·`rag`·`report-hub`·`full`), 업데이트 origin URL, 호스트 이름, 운영자
+로그인 계정, **별도 경로에서 받은 공지 지문**을 묻고 `node.toml`을 대신 작성한다.
+기본 경로는 `~/.config/autophagy/node.toml`이며, `--config`로 지정한 파일이 이미 있으면
+고치지 않고 재사용한다. 지문은 사용자가 준 값만 넘긴다 — 비우면 기계 대조가 빠지고
+설치기 종료 게이트가 WARN이 된다(`automation/install/wizard.py:142–160`).
 
-자주 쓰는 옵션:
+마법사에는 설치 로직이 없다. `quickstart.sh`처럼 **기존 설치기의 argv만 조립**하고,
+계획 출력에서 집계한 한국어 요약을 보여준다. 직접 실행하고 싶으면
+[install.md §3–§7](install.md#3-노드-config-작성)의 수동 절차도 그대로 유효하다.
+
+자주 쓰는 마법사 옵션:
 
 | 옵션 | 언제 |
 |---|---|
-| `--dry-run-only` | 계획만 보고 끝낸다. `sudo`를 전혀 쓰지 않는다 |
-| `--yes` | 확인 프롬프트를 건너뛴다. **스크립트 실행 전용** |
+| `--profile core` | 프로필 질문에 미리 답한다. 선택지는 `core`·`rag`·`report-hub`·`full` |
+| `--origin-url` / `--node-name` / `--operator` | 새 config에 넣을 값을 미리 준다 |
+| `--config PATH` | config 저장 위치를 바꾸거나 기존 파일을 재사용한다 |
+| `--expect-update-trust-fingerprint 'SHA256:<공지된-지문>'` | 공지 지문을 질문 대신 인자로 준다 |
+| `--dry-run-only` | 계획 확인 뒤 끝낸다. `sudo` 0회지만 config·계획 로그는 남는다 |
+| `--yes` | 확인 프롬프트를 건너뛴다. **비대화 실행 전용**이며 질문에 필요한 값도 모두 줘야 한다 |
 | `--with-component managed-sync` | 관리형 스킬 자동 수신을 함께 설치 (나중에 붙여도 된다) |
-| `--group-roster` / `--expect-group-skill-fingerprint` | 그룹 가입 — 절차는 [manual-member.md §3](manual-member.md) |
+
+**비대화·스크립트 대안**인 `quickstart.sh`도 유지된다. 이쪽은
+[install.md §3](install.md#3-노드-config-작성)대로 config를 먼저 만든 뒤 실행한다:
+
+```bash
+automation/install/quickstart.sh \
+    --config /tmp/node.toml \
+    --update-trust-key <bundle>/update-trust.pub \
+    --expect-update-trust-fingerprint 'SHA256:<공지된-지문>' \
+    --yes
+```
+
+셸 래퍼는 `--profile`을 받지 않는다. 프로필을 쓰는 자동화는 마법사에 값과 `--yes`를
+주거나 설치기를 직접 호출한다. `--group-roster` / `--expect-group-skill-fingerprint`는
+마법사 옵션이 아니라 셸 래퍼·설치기 옵션이다 — 그룹 가입은
+[manual-member.md §3](manual-member.md)가 소유한다.
 
 ## 5. 무엇을 보게 되는가
 
 | 단계 | 무슨 일이 | 멈출 수 있는가 |
 |---|---|---|
-| ① 계획 확인 | `--dry-run`이 먼저 돈다. **root 불필요, 아무것도 쓰지 않는다** | 여기서 실패하면 부족한 전제의 **이름**이 나온다. 아무것도 쓰이지 않은 상태다 |
-| ② 요약 | 계획을 종류별로 세어 보여준다(계정 N·디렉터리 N·파일 N·타이머 N·판정 N) | — |
-| ③ 확인 | `yes`를 직접 입력해야 다음으로 간다 | 그 전까지 `sudo`는 실행되지 않는다. 엔터만 치면 취소다 |
-| ④ 실제 설치 → 종료 게이트 | `sudo`로 같은 명령을 실행하고, 설치기가 마지막에 돌린 `healthcheck` 판정을 요약한다 | 첫 실패에서 멈춘다. **고치고 같은 명령을 다시 실행하면 된다**(멱등) |
+| ① 전제 확인 | Python·systemd·도구·업데이트 신뢰키 준비 상태를 보여준다 | 키를 읽을 수 없으면 이름을 대고 거부한다. 표시된 다른 부족 항목도 실제 설치 전에 준비한다 |
+| ② 질문 → config 작성 | 노드 값을 묻고 `node.toml`을 쓴다. 기존 파일은 재사용한다 | **확인 전에도 config는 남는다**. 질문·확인이 필요한데 터미널이 없으면 거부한다 |
+| ③ dry-run + 한국어 계획 요약 | root 없이 설치 계획을 받고 **그 출력에서** 종류별 건수·판정 목록을 집계한다 | 설치 자산은 쓰지 않고 check도 실행하지 않는다. rc 0은 전제 충족의 증명이 아니다 |
+| ④ yes 확인 | `yes`를 입력해야 실제 설치로 간다(`--yes`는 명시적 비대화 확인) | `n`·엔터 등은 rc 3. 여기까지 `sudo` 0회 |
+| ⑤ sudo apply | 같은 설치기 인자에서 `--dry-run`만 빼고 실행한다. 이미 root면 sudo는 생략한다 | 첫 실패에서 멈춘다. **원인을 고치고 같은 명령을 다시 실행한다**(멱등) |
+| ⑥ 결과 + 다음 행동 | 설치기 판정과 로그 경로, 실패 원인별 조치 또는 설치 후 확인을 안내한다 | 결과는 설치기 종료코드를 그대로 따른다 |
+
+| 종료코드 | 뜻 |
+|---|---|
+| `0` | 설치 완료 또는 `--dry-run-only` 계획 확인 완료(둘은 다르다) |
+| `1` | 설치기 실패. 자식 설치기의 non-zero는 그대로 전파한다 |
+| `2` | 사용법·전제 오류: `WIZARD-NO-TTY`, `WIZARD-UNKNOWN-PROFILE`, `WIZARD-TRUST-KEY-UNREADABLE` |
+| `3` | 사용자가 확인 거부. 실제 설치·sudo는 실행하지 않았지만 config·계획 로그는 남는다 |
+
+흐름·종료코드 근거: `automation/install/wizard.py:163–218`.
 
 끝났다는 판정은 세 줄이다 — `[PASS] healthcheck: … ALL_HEALTHY`,
 `[PASS] trust-key.fingerprint: …`, `--- INSTALLED: N건 중 실패 0`. 자세한 읽는 법은
@@ -75,14 +109,17 @@ install.md와 똑같은 인자로 조립해 실행할 뿐이고, 하는 일은 �
 [install.md §6.1·§6.2](install.md#6-실제-설치).
 
 > 팁: `sudo`는 환경변수를 지운다. 실제 설치 전에 `set -a; . ~/.env.secrets; set +a`로
-> `DISCORD_BOT_TOKEN`을 올려두면 스크립트가 그 변수 하나만 sudo 너머로 전달한다.
-> 없으면 경고하고, sudoers가 전달을 거부하면 그것도 알려준다(조용히 넘어가지 않는다).
+> `DISCORD_BOT_TOKEN`을 올려두면 마법사는 **yes 뒤에만**
+> `sudo --preserve-env=DISCORD_BOT_TOKEN` 허용 여부를 확인하고 보존을 시도한다.
+> sudoers가 거부하면 경고한다. 토큰 부재는 설치기의 `discord-readiness`가 판정한다.
 
 ## 6. 막히면
 
 - 설치기가 지목한 이름을 그대로 [install.md §8 자주 막히는 곳](install.md#8-자주-막히는-곳)에서 찾는다.
 - 전제(Discord·모델·Hermes·신뢰키) 문제면 [third-party-runtime-prereqs.md](third-party-runtime-prereqs.md).
-- 로그 전문 경로는 스크립트가 마지막 줄에 출력한다.
+- 마법사가 각 설치기 실행 뒤 출력하는 `전문:` 경로에서 로그를 본다.
+  계획만 보고 끝내거나 취소해도 임시 `autophagy-wizard-*` 디렉터리의 로그는 남는다
+  (`automation/install/wizard.py:55, 221–226`).
 
 ## 7. 설치 다음
 
@@ -90,22 +127,26 @@ install.md와 똑같은 인자로 조립해 실행할 뿐이고, 하는 일은 �
 소유한다 — 그룹 가입 3단계 핸드셰이크(§3), 일상 승인 게이트 읽는 법(§4), 관리형 스킬이
 자동으로 마운트되지 **않는** 이유(§5)가 거기 있다.
 
-## 8. 이 스크립트가 검증된 범위
+## 8. 검증된 범위
 
-정직하게 적는다. 증적은 [`docs/qa/W-F2.5-E/`](../qa/W-F2.5-E/quickstart-wrapper.md)에 있다.
+마법사·프로필 증적은 [`docs/qa/INSTALL-TUI/`](../qa/INSTALL-TUI/), 기존 셸 래퍼
+증적은 [`docs/qa/W-F2.5-E/`](../qa/W-F2.5-E/quickstart-wrapper.md)에 있다.
 
-- **검증됨** — 깨끗한 `python:3.12-slim` 컨테이너에서 계획 확인 경로 전 구간 rc 0
-  (액션 62개, `--with-component managed-sync`면 65개). 인자 누락·읽을 수 없는 키·지문
-  불일치·터미널 없음·`sudo` 없음이 전부 **이름을 지목하고** 종료하며, 확인 전에는
-  아무것도 쓰지 않는다.
-- **아직 검증되지 않음** — 실제 Linux+systemd 호스트에서의 apply → 타이머 활성 →
-  `healthcheck.sh` 전부 PASS. 컨테이너에는 systemd가 없고 Hermes는 설치기가 설치하지
-  않는 외부 전제라 구조적으로 도달할 수 없다([P0-5도 같은 경계를 남겼다](../qa/P0-5/summary.md)).
-  이 구간은 실제 호스트를 가진 첫 운영자가 완주할 때 닫힌다.
+- **마법사·프로필** — 질문으로 config 생성, 실제 dry-run 출력 집계, `n` 입력 시 rc 3·
+  sudo 0회, 터미널 없음·모르는 `--profile`·읽을 수 없는 키의 명시적 거부를 확인했다.
+  프로필의 선언 파일·환경 우선순위는 `tests/unit/test_install_profiles.py:59–154`가 다룬다.
+- **systemd 실제 apply** — [특권 컨테이너 하네스](../../tests/e2e/install/systemd_container/README.md)로
+  계정·linger·디렉터리·peer attestation 키의 생성·수렴을 확인했다. 실제 실행은
+  `[FAIL] hermes-gateway`에서 **설계대로** 멈춘다. 외부 전제를 가짜 PASS로 바꾸지 않았다.
+  계정·linger·키 상태의 독립 검사는 `tests/e2e/install/systemd_container/run.sh:193–220`에 있다.
+- **아직 실호스트에서 검증되지 않음** — Hermes·Discord 전제 뒤의 clone → 타이머 활성 →
+  최종 `healthcheck.sh` 전부 PASS는 실호스트에서만 닫을 경계다. 하네스가 앞단을 통과했다고
+  설치 완주를 주장하지 않는다. 첫 실호스트 완주 증적을 같은 QA 디렉터리에 추가한다.
 
 ## 관련
 
 - 설치 절차 단일 진실: [install.md](install.md)
 - 전제: [third-party-runtime-prereqs.md](third-party-runtime-prereqs.md)
 - 설치 이후 전부: [manual-member.md](manual-member.md)
-- 스크립트: [`automation/install/quickstart.sh`](../../automation/install/quickstart.sh)
+- 마법사: [기능 소개](../기능소개/설치-마법사.md) · [`automation/install/wizard.py`](../../automation/install/wizard.py)
+- 스크립트 대안: [`automation/install/quickstart.sh`](../../automation/install/quickstart.sh)

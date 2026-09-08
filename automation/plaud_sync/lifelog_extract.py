@@ -22,6 +22,8 @@ _FENCE_RE: Final = re.compile(r"(?m)^\s*```[^\n]*$")
 _AT_RE: Final = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?$")
 _MAX_ITEMS: Final = 20
 _MAX_TEXT: Final = 200
+#: 이미 불릿인 줄은 다시 표시하지 않는다.
+_BULLETS: Final = ("-", "*", "+", "•")
 _DECODER: Final = json.JSONDecoder()
 
 
@@ -39,6 +41,8 @@ def parse_extraction(raw: str) -> LifelogExtraction:
         places=_strings(payload.get("places")),
         decisions=_decisions(payload.get("decisions")),
         todos=_todos(payload.get("todos")),
+        summary=_summary(payload.get("summary")),
+        title=_text(payload.get("title")),
     )
 
 
@@ -57,6 +61,34 @@ def extract(
         # 어떤 예외든 다음 폴에서 재시도할 일시 실패로 접는다 (노트를 열화 동결하지 않는다).
         raise LifelogExtractError(f"LLM 호출 실패: {type(error).__name__}") from None
     return parse_extraction(raw)
+
+
+def summarize(
+    recording: LifelogRecording, *, template: str, complete: Callable[[str], str]
+) -> str:
+    """요약만 다시 묻는 두 번째 호출 — 첫 추출이 요약을 못 줬을 때만 쓰인다.
+
+    첫 호출은 다섯 가지를 한 번에 시킨다. 전사가 거칠면 모델이 구조화 필드는 채우면서
+    요약만 빈 채로 답하는 일이 실제로 일어났다(2026-09-04 노트). 요약 하나만 묻는
+    좁은 요청은 그 실패 모양을 다시 만들지 않는다.
+    """
+    prompt = build_prompt(
+        template, summary=recording.summary_markdown, transcript=recording.transcript_text
+    )
+    try:
+        raw = complete(prompt)
+    except LifelogExtractError:
+        raise
+    except Exception as error:
+        raise LifelogExtractError(f"요약 재시도 실패: {type(error).__name__}") from None
+    try:
+        payload = _json_object(raw)
+    except LifelogExtractError:
+        # JSON 을 못 냈어도 불릿 목록이면 요약이 맞다. 그 외의 산문은 받지 않는다 —
+        # 이 호출에 도달했다는 것은 요약이 하나도 없다는 뜻이고, 거기서 "요약할 수
+        # 없습니다" 를 요약으로 실으면 빈 요약보다 나쁘다(노트가 내용이 있는 척한다).
+        return _bullets(raw)
+    return _summary(payload.get("summary"))
 
 
 def _json_object(raw: str) -> dict[str, object]:
@@ -96,6 +128,37 @@ def _text(value: object) -> str:
     if len(normalized) <= _MAX_TEXT:
         return normalized
     return normalized[: _MAX_TEXT - 1] + "…"
+
+
+def _summary(value: object) -> str:
+    """요약은 줄바꿈이 뜻을 갖는 마크다운이라 _text 의 공백 정규화를 쓸 수 없다.
+
+    프롬프트가 '불릿 3–6개'를 요구하므로 모델은 문자열 대신 **배열**로 답하기도 한다.
+    문자열만 받아들이면 그 응답이 통째로 사라지고 노트의 '## 요약'이 빈다 — 실측
+    2026-09-04 노트가 정확히 그 모양이었다(사람·장소·결정·할 일은 채워졌다).
+    """
+    if isinstance(value, str):
+        return value.strip()
+    lines: list[str] = []
+    for entry in _items(value):
+        # 다른 목록 필드와 같은 자(_items·_fields·_text)로 읽고 재고 자른다 — 배열 요약만
+        # 상한이 없으면 모델 한 번의 폭주가 노트 본문으로 그대로 들어간다.
+        fields: dict[str, object] = _fields(entry)
+        text = _text(fields.get("text"))
+        if not text:
+            continue
+        lines.append(text if text.startswith(_BULLETS) else f"- {text}")
+        if len(lines) == _MAX_ITEMS:
+            break
+    return "\n".join(lines)
+
+
+def _bullets(raw: str) -> str:
+    """첫 줄이 불릿일 때만 마크다운 목록을 요약으로 받는다 — 산문은 요약이 아니다."""
+    lines = [line.strip() for line in raw.strip().splitlines() if line.strip()]
+    if not lines or not lines[0].startswith(_BULLETS):
+        return ""
+    return "\n".join(lines[:_MAX_ITEMS])
 
 
 def _at(value: object) -> str:

@@ -1,7 +1,7 @@
 ---
 name: mail
 description: "기관메일(mailon.kr) 스킬. 메일 작성·발송 지시에서 수신자가 이메일 주소가 아니라 사람 이름이면(예: '홍길동 박사님께 메일') 반드시 먼저 resolve로 이름→이메일 해석(기관 웹메일 자동완성 기반, READ-ONLY) — 메일함 검색만으로 포기하거나 주소를 추측·유추하는 것은 금지. 읽기: list/get/classify/status/resolve 래퍼(W4-1, READ-ONLY). 파이프라인(W4-2): 수신메일 민감도 게이트→분류(Codex OAuth 단일 티어)→다이제스트(08:00 KST)→소유자 지시 기반 회신 초안(Codex OAuth)→현재 승인 표면의 소유자 게이트→mailon 발송→approvals.jsonl. 새 메일 작성(compose)도 동일 watch·해시 바인딩 게이트를 경유한다. 발송은 반드시 승인 게이트 경유 — 직접 send 금지. 민감 회신은 승인 메시지 한 건에 전문과 sha256을 함께 표시한다. 승인 표면은 `approval_surface.py` 정책과 draft의 저장된 바인딩으로 결정되며, 폐지 표면의 미결정 초안은 승인 없이 만료된다. 회신·후속메일은 메일 클라이언트의 회신처럼 원문(헤더+본문)을 발송 본문 하단에 인용한다(draft 기본, --reply-all 로 전체회신, compose --in-reply-to <uid> 로 후속메일)."
-version: 1.7.8
+version: 1.7.9
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -247,6 +247,12 @@ MailOn 첨부파일은 Google Drive `autophagy/메일 첨부파일/<연도>/<월
    래퍼 공개 서브커맨드는 list/get/classify/status/resolve다.
 5. 인증 실패(exit 2) 시 자동 무한 재시도 금지 — 재인증 안내를 따르고 반복
    실패는 cha에게 보고. 연속 발송 실패 2회는 mail-mode 재판정(no-go)이다.
+6. **브라우저 세션은 요청마다 새로 만든다 (2026-09-07)**: mailon 을 부르는 프로세스는
+   저마다 자기 agent-browser 세션(`<이름>-run-<pid>-<난수>`)을 열어 매번 새로 로그인한다.
+   세션은 프로세스를 넘어 남지 않으므로 "세션 만료" 라는 실패 원인은 존재하지 않는다 —
+   같은 이름을 공유하던 두 발송이 한 탭을 두고 다투다 서로의 로그인 폼을 깨뜨린 것이
+   2026-09-07 `auth_error` 사고의 실제 원인이었다. 실제 발송(dry-run 아님)은 런타임
+   `data/send.lock` 으로 단일 비행이라 같은 초안이 두 번 나가지 않는다.
 
 ## Gmail 발송 운영 (RTS-3)
 

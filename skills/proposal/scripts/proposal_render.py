@@ -1,4 +1,4 @@
-"""Render the current proposal version through the pinned kimm-docbot checkout."""
+"""Render the current proposal version through the in-tree HWPX engine."""
 
 from __future__ import annotations
 
@@ -7,29 +7,36 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
-from .proposal_config import ConfigError, ProposalConfig, load_config, preflight
+from .proposal_config import ConfigError, ProposalConfig, load_config
 from .proposal_ir import FigureSpec, figures_from_json
 from .proposal_route_guard import RouteRefused, assert_route_allowed
 from .proposal_version import VersionError, VersionStore
 
-_RENDER_TIMEOUT_SECONDS = 600
 _DRAFT_SIDECAR_SUFFIXES = (".planspec.json", ".pms.json")
-_CHILD_ENV_NAMES = (
-    "ANTHROPIC_API_KEY",
-    "HOME",
-    "KIMM_DOCBOT_LLM_API_KEY",
-    "KIMM_DOCBOT_LLM_BACKEND",
-    "PATH",
-    "UV_CACHE_DIR",
-)
+
+
+class Renderer(Protocol):
+    """The render seam: the in-tree engine in production, a fake under test."""
+
+    def __call__(
+        self,
+        *,
+        drafts_path: Path,
+        corpus_dir: Path,
+        out_path: Path,
+        profile: str | None,
+        images_dir: Path | None,
+        figures_path: Path | None,
+        tables_path: Path | None,
+        cover_overrides: Mapping[str, str] | None,
+    ) -> object: ...
 
 
 class RenderError(RuntimeError):
@@ -52,41 +59,6 @@ class RenderResult:
     profile: str
     refined: bool
     draft_preview: bool
-
-
-class Runner(Protocol):
-    def __call__(
-        self,
-        argv: list[str],
-        *,
-        cwd: Path,
-        env: dict[str, str],
-        capture_output: bool,
-        text: bool,
-        timeout: int,
-        check: bool,
-    ) -> subprocess.CompletedProcess[str]: ...
-
-
-def _run_subprocess(
-    argv: list[str],
-    *,
-    cwd: Path,
-    env: dict[str, str],
-    capture_output: bool,
-    text: bool,
-    timeout: int,
-    check: bool,
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv,
-        cwd=cwd,
-        env=env,
-        capture_output=capture_output,
-        text=text,
-        timeout=timeout,
-        check=check,
-    )
 
 
 def _read_figures(path: Path) -> tuple[FigureSpec, ...]:
@@ -195,11 +167,6 @@ def _body_payload(path: Path) -> str:
     return "\n\n".join(bodies)
 
 
-def _child_environment(values: Mapping[str, str] | None = None) -> dict[str, str]:
-    source = os.environ if values is None else values
-    return {name: source[name] for name in _CHILD_ENV_NAMES if name in source}
-
-
 def _force_private_output_modes(out: Path) -> None:
     try:
         for path in out.rglob("*"):
@@ -207,23 +174,6 @@ def _force_private_output_modes(out: Path) -> None:
                 path.chmod(0o600)
     except OSError as error:
         raise RenderProcessError("could not secure kimm-docbot outputs") from error
-
-
-def _read_engine_head(docbot_root: Path) -> str:
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(docbot_root), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError as error:
-        raise RenderProcessError(f"could not re-read engine HEAD: {error}") from error
-    head = completed.stdout.strip()
-    if completed.returncode != 0 or not head:
-        detail = (completed.stderr or "git rev-parse failed").strip()[:500]
-        raise RenderProcessError(f"could not re-read engine HEAD: {detail}")
-    return head
 
 
 def _update_manifest(
@@ -277,9 +227,8 @@ def run_render(
     mode: str = "replay",
     profile: str | None = None,
     allow_missing_figures: bool = False,
-    runner: Runner = _run_subprocess,
     config: ProposalConfig | None = None,
-    head_reader: Callable[[Path], str] | None = None,
+    renderer: Renderer | None = None,
 ) -> RenderResult:
     """Render the current version after all fail-closed boundary checks pass."""
     if mode not in {"live", "replay"}:
@@ -293,10 +242,6 @@ def run_render(
     if selected_profile not in {"30-page", "10-page"}:
         raise RenderInputError("profile must be 30-page or 10-page")
 
-    report = preflight(cfg)
-    if not report.ok or report.head_sha is None:
-        print(f"ENGINE-PIN-BLOCK: {', '.join(report.reasons)}", file=sys.stderr)
-        raise SystemExit(4)
 
     store = VersionStore.from_environment()
     head = store.head(slug)
@@ -316,65 +261,38 @@ def run_render(
     _provision_refined_sidecars(drafts_path, refined)
 
     output_path = version_path / "out" / "proposal.hwpx"
-    argv = [
-        "uv",
-        "run",
-        "kimm-docbot",
-        "render",
-        "--drafts",
-        str(drafts_path),
-        "--corpus",
-        str(version_path / "corpus"),
-        "--profile",
-        selected_profile,
-        "--images",
-        str(version_path / "images"),
-        "--figures",
-        str(figures_path),
-        "--tables",
-        str(version_path / "tables.json"),
-        "--out",
-        str(output_path),
-        "--mode",
-        mode,
-    ]
     cover_path = version_path / "cover.json"
+    cover_overrides: Mapping[str, str] | None = None
     if not cover_path.is_symlink() and cover_path.is_file():
-        argv += ["--cover", str(cover_path)]
+        cover_overrides = {
+            key: str(value)
+            for key, value in _read_json_object(cover_path, "cover overrides").items()
+        }
+    if renderer is None:
+        from ..engine.render import render_hwpx
+
+        renderer = render_hwpx
     try:
-        completed = runner(
-            argv,
-            cwd=cfg.docbot_root,
-            env=_child_environment(),
-            capture_output=True,
-            text=True,
-            timeout=_RENDER_TIMEOUT_SECONDS,
-            check=False,
+        _ = renderer(
+            drafts_path=drafts_path,
+            corpus_dir=version_path / "corpus",
+            out_path=output_path,
+            profile=selected_profile,
+            images_dir=version_path / "images",
+            figures_path=figures_path,
+            tables_path=version_path / "tables.json",
+            cover_overrides=cover_overrides,
         )
-    except subprocess.TimeoutExpired as error:
-        raise RenderProcessError(
-            f"kimm-docbot render timed out after {_RENDER_TIMEOUT_SECONDS}s"
-        ) from error
-    except OSError as error:
-        raise RenderProcessError(f"kimm-docbot render could not start: {error}") from error
+    except (OSError, ValueError, RuntimeError) as error:
+        raise RenderProcessError(f"HWPX render failed: {error}") from error
     _force_private_output_modes(version_path / "out")
-    if completed.returncode != 0:
-        stderr = (completed.stderr or "").strip()
-        stdout = (completed.stdout or "").strip()
-        detail = (stderr or stdout or "no process output")[:500]
-        raise RenderProcessError(
-            f"kimm-docbot render failed rc={completed.returncode}: {detail}"
-        )
     if output_path.is_symlink() or not output_path.is_file():
-        raise RenderProcessError("kimm-docbot reported success without an HWPX output")
+        raise RenderProcessError("the engine reported success without an HWPX output")
+
+    from ..engine.render import engine_digest
 
     hwpx_sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
-    read_head = _read_engine_head if head_reader is None else head_reader
-    engine_sha = read_head(cfg.docbot_root)
-    if engine_sha != cfg.docbot_pin:
-        raise RenderProcessError(
-            f"engine HEAD changed during render: expected {cfg.docbot_pin}, found {engine_sha}"
-        )
+    engine_sha = engine_digest()
     draft_preview = allow_missing_figures
     _update_manifest(
         version_path,
@@ -394,7 +312,7 @@ def run_render(
     )
 
 
-def command(args: argparse.Namespace, *, runner: Runner = _run_subprocess) -> int:
+def command(args: argparse.Namespace, *, renderer: Renderer | None = None) -> int:
     """Execute the proposal CLI render subcommand."""
     try:
         result = run_render(
@@ -402,7 +320,7 @@ def command(args: argparse.Namespace, *, runner: Runner = _run_subprocess) -> in
             mode=cast(str, args.mode),
             profile=cast(str | None, args.profile),
             allow_missing_figures=cast(bool, args.allow_missing_figures),
-            runner=runner,
+            renderer=renderer,
         )
     except (RenderError, RouteRefused, VersionError) as error:
         print(f"PROPOSAL-RENDER-ERROR: {error}", file=sys.stderr)
@@ -422,6 +340,7 @@ def command(args: argparse.Namespace, *, runner: Runner = _run_subprocess) -> in
 
 __all__ = [
     "RenderError",
+    "Renderer",
     "RenderInputError",
     "RenderProcessError",
     "RenderResult",

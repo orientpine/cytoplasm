@@ -1,0 +1,35 @@
+{
+  "exclude": [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.venv",
+    "**/build",
+    "**/dist",
+    "**/node_modules",
+    "configs/rag",
+    "configs/stt-engines",
+    "skills/mail/vendor"
+  ],
+  "executionEnvironments": [
+    { "root": "skills/budget/scripts", "extraPaths": ["."] },
+    { "root": "skills/calendar/scripts", "extraPaths": ["."] },
+    { "root": "skills/coordination/scripts", "extraPaths": ["."] },
+    { "root": "skills/doctype/scripts", "extraPaths": ["."] },
+    { "root": "skills/hello-autophagy/scripts", "extraPaths": ["."] },
+    { "root": "skills/mail/scripts", "extraPaths": ["."] },
+    { "root": "skills/meeting/scripts", "extraPaths": ["."] },
+    { "root": "skills/patent-prep/scripts", "extraPaths": ["."] },
+    { "root": "skills/plaud/scripts", "extraPaths": ["."] },
+    { "root": "skills/procurement/scripts", "extraPaths": ["."] },
+    { "root": "skills/prompt/scripts", "extraPaths": ["."] },
+    { "root": "skills/proposal/scripts", "extraPaths": ["."] },
+    { "root": "skills/recall/scripts", "extraPaths": ["."] },
+    { "root": "skills/repair/scripts", "extraPaths": ["."] },
+    { "root": "skills/report/scripts", "extraPaths": ["."] },
+    { "root": "skills/speechtotext/scripts", "extraPaths": ["."] },
+    { "root": "skills/todo/scripts", "extraPaths": ["."] },
+    { "root": "skills/topics/scripts", "extraPaths": ["."] },
+    { "root": "skills/wiki/scripts", "extraPaths": ["."] },
+    { "root": "." }
+  ]
+}

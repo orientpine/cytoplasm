@@ -1,0 +1,92 @@
+[
+  {
+    "label": "turbo-q5_0",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin"
+    }
+  },
+  {
+    "label": "turbo-q5_0-dtw",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
+      "SPEECHTOTEXT_WHISPER_DTW": "large-v3-turbo"
+    }
+  },
+  {
+    "label": "turbo-q5_0-nth-0_5-sns",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
+      "SPEECHTOTEXT_WHISPER_NO_SPEECH": "0.5",
+      "SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH": "1"
+    }
+  },
+  {
+    "label": "turbo-q5_0-dtw-nth-0_5-sns",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin",
+      "SPEECHTOTEXT_WHISPER_DTW": "large-v3-turbo",
+      "SPEECHTOTEXT_WHISPER_NO_SPEECH": "0.5",
+      "SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH": "1"
+    }
+  },
+  {
+    "label": "large-v3-q8_0",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3-q8_0.bin"
+    }
+  },
+  {
+    "label": "large-v3-q8_0-dtw",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3-q8_0.bin",
+      "SPEECHTOTEXT_WHISPER_DTW": "large-v3"
+    }
+  },
+  {
+    "label": "large-v3-q8_0-nth-0_5-sns",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3-q8_0.bin",
+      "SPEECHTOTEXT_WHISPER_NO_SPEECH": "0.5",
+      "SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH": "1"
+    }
+  },
+  {
+    "label": "large-v3-q8_0-dtw-nth-0_5-sns",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3-q8_0.bin",
+      "SPEECHTOTEXT_WHISPER_DTW": "large-v3",
+      "SPEECHTOTEXT_WHISPER_NO_SPEECH": "0.5",
+      "SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH": "1"
+    }
+  },
+  {
+    "label": "large-v3-f16",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3.bin"
+    }
+  },
+  {
+    "label": "large-v3-f16-dtw",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3.bin",
+      "SPEECHTOTEXT_WHISPER_DTW": "large-v3"
+    }
+  },
+  {
+    "label": "large-v3-f16-nth-0_5-sns",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3.bin",
+      "SPEECHTOTEXT_WHISPER_NO_SPEECH": "0.5",
+      "SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH": "1"
+    }
+  },
+  {
+    "label": "large-v3-f16-dtw-nth-0_5-sns",
+    "env_overrides": {
+      "SPEECHTOTEXT_WHISPER_MODEL": "~/whisper.cpp/models/ggml-large-v3.bin",
+      "SPEECHTOTEXT_WHISPER_DTW": "large-v3",
+      "SPEECHTOTEXT_WHISPER_NO_SPEECH": "0.5",
+      "SPEECHTOTEXT_WHISPER_SUPPRESS_NONSPEECH": "1"
+    }
+  }
+]

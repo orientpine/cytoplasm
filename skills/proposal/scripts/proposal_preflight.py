@@ -31,6 +31,7 @@ REQUIRED_BINARIES: Final = (
 )
 _REFINE_PIN: Final = "177e64539cd8b4faf41a2d8c6d187c33d57f79f4"
 _SEED_RELPATH: Final = "resource/(주제1) R&D 연구계획서 양식.hwpx"
+ENGINE_ROOT: Final = Path(__file__).resolve().parents[1] / "engine"
 
 
 def _git_head(root: Path) -> str | None:
@@ -70,7 +71,7 @@ def _picture_carrier(root: Path, configured: str | None) -> Path | None:
     if configured:
         candidate = root / configured
         return candidate if candidate.is_file() else None
-    fixtures = root / "tests" / "fixtures"
+    fixtures = root / "resource"
     if not fixtures.is_dir():
         return None
     return next(
@@ -88,7 +89,6 @@ def _picture_carrier(root: Path, configured: str | None) -> Path | None:
 def collect_report(env: Mapping[str, str] | None = None) -> dict[str, object]:
     """Inspect resources without creating, cloning, or modifying any runtime state."""
     values = os.environ if env is None else env
-    docbot = _expand_home(values.get("PROPOSAL_DOCBOT_ROOT", "~/kimm-docbot"), values)
     refine = _expand_home(values.get("PROPOSAL_REFINE_ROOT", "~/.hermes/im-not-ai"), values)
     refine_pin = values.get("PROPOSAL_REFINE_PIN", _REFINE_PIN)
     key_name = values.get("PROPOSAL_IMAGE_API_KEY_ENV", "OPENAI_API_KEY")
@@ -96,10 +96,11 @@ def collect_report(env: Mapping[str, str] | None = None) -> dict[str, object]:
     checks: dict[str, CheckStatus] = {}
     for binary in (*REQUIRED_BINARIES, "hermes", "codex"):
         checks[binary] = "present" if _which(binary, values) is not None else "absent"
-    checks["docbot-root"] = "present" if docbot.is_dir() else "absent"
-    seed = docbot / values.get("PROPOSAL_SEED_HWPX_RELPATH", _SEED_RELPATH)
+    engine = ENGINE_ROOT
+    checks["engine"] = "present" if engine.is_dir() else "absent"
+    seed = engine / values.get("PROPOSAL_SEED_HWPX_RELPATH", _SEED_RELPATH)
     checks["seed-hwpx"] = "present" if seed.is_file() else "absent"
-    carrier = _picture_carrier(docbot, values.get("PROPOSAL_PICTURE_CARRIER"))
+    carrier = _picture_carrier(engine, values.get("PROPOSAL_PICTURE_CARRIER"))
     checks["picture-carrier"] = "present" if carrier is not None else "absent"
 
     head = _git_head(refine) if refine.is_dir() else None

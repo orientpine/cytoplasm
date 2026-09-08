@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Final, Protocol, TypeAlias
 
 SPEAKERS_PREFIX: Final = "- 화자:"
-_LABEL: Final = re.compile(r"^화자\d+$")
+_LABEL: Final = re.compile(r"^화자(?!0$)\d+$")
 _INTRODUCTION: Final = re.compile(
     r"(?:저는|제가|저희는|저는요)\s*(?:[가-힣]{2,12}(?:의|에서(?:\s*온)?|소속)?\s+)?"
     + r"([가-힣]{2,4})\s*(?:이라고\s*합니다|라고\s*합니다|입니다요|이고요|입니다)\.?"
@@ -72,7 +72,7 @@ def infer(
     known = set(known_names)
     for sentence in sentences:
         label = sentence.speaker
-        if not label:
+        if not label or label == "화자0":
             continue
         if label not in evidence:
             labels.append(label)
@@ -144,7 +144,8 @@ def merge(*maps: SpeakerMap) -> SpeakerMap:
     grouped: dict[str, list[SpeakerName]] = {}
     for speaker_map in maps:
         for speaker in speaker_map:
-            grouped.setdefault(speaker.label, []).append(speaker)
+            if speaker.label != "화자0":
+                grouped.setdefault(speaker.label, []).append(speaker)
     merged: list[SpeakerName] = []
     for entries in grouped.values():
         named = [entry for entry in entries if entry.name]
@@ -162,10 +163,11 @@ def merge(*maps: SpeakerMap) -> SpeakerMap:
 
 
 def names(speakers: SpeakerMap) -> dict[str, str]:
-    return {speaker.label: speaker.name for speaker in speakers if speaker.name}
+    return {speaker.label: speaker.name for speaker in speakers if speaker.name and speaker.label != "화자0"}
 
 
 def render_legend(speakers: SpeakerMap) -> str:
+    speakers = tuple(speaker for speaker in speakers if speaker.label != "화자0")
     if not speakers:
         return ""
     entries = [
@@ -184,6 +186,7 @@ def parse_legend(header: str) -> SpeakerMap:
         entries: list[SpeakerName] = []
         for match in _LEGEND_ENTRY.finditer(line[len(SPEAKERS_PREFIX) :].strip()):
             label, name, source = (part.strip() if part else "" for part in match.groups())
-            entries.append(SpeakerName(label, "" if name == "미상" else name, source))
+            if label != "화자0":
+                entries.append(SpeakerName(label, "" if name == "미상" else name, source))
         return tuple(entries)
     return ()

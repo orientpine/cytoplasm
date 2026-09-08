@@ -1,0 +1,2 @@
+# 소유자 편집 수집 no-agent cron — 중앙표는 watcher_manifest emit으로 생성한다.
+agent|automation/stt_eval/cron/stt_eval_capture_watch.py|.hermes/scripts/stt_eval_capture_watch.py|required

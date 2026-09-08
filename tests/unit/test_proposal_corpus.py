@@ -37,7 +37,7 @@ class FakeRunner:
         self.lint_rc = lint_rc
         self.calls: list[tuple[str, ...]] = []
 
-    def __call__(self, argv: tuple[str, ...], cwd: Path) -> proposal_corpus.InvocationResult:
+    def __call__(self, argv: tuple[str, ...]) -> proposal_corpus.InvocationResult:
         self.calls.append(argv)
         if "research-convert" in argv:
             synthesis = Path(argv[argv.index("research-convert") + 1])
@@ -87,7 +87,7 @@ def test_three_confirmed_claims_become_public_corpus_files(tmp_path: Path) -> No
     corpus = tmp_path / "corpus"
 
     proposal_corpus.build_corpus(
-        synthesis, corpus, _pack(), tmp_path / "docbot", runner=FakeRunner()
+        synthesis, corpus, _pack(), runner=FakeRunner()
     )
 
     web = sorted(corpus.glob("research-*.md"))
@@ -114,7 +114,6 @@ def test_lint_failure_exits_three_and_removes_corpus(
     (inputs / "RESEARCH_BRIEF.md").write_text("# Deep Research Brief\n", encoding="utf-8")
     (corpus / "stale.md").write_text("stale", encoding="utf-8")
     monkeypatch.setenv("PROPOSAL_ROOT", str(tmp_path))
-    monkeypatch.setenv("PROPOSAL_DOCBOT_ROOT", str(tmp_path / "docbot"))
     monkeypatch.setattr(proposal_corpus.proposal_research, "validate_synthesis", lambda path: None)
 
     rc = proposal_corpus.command(
@@ -166,7 +165,7 @@ def test_owner_files_keep_source_keys_tags_and_only_summaries(tmp_path: Path) ->
     pack = _pack()
 
     proposal_corpus.build_corpus(
-        synthesis, corpus, pack, tmp_path / "docbot", runner=FakeRunner()
+        synthesis, corpus, pack, runner=FakeRunner()
     )
 
     owner_text = "\n".join(path.read_text(encoding="utf-8") for path in corpus.glob("owner-*.md"))
@@ -184,7 +183,7 @@ def test_lint_never_uses_warn_only_and_rerun_is_idempotent(tmp_path: Path) -> No
 
     for _ in range(2):
         proposal_corpus.build_corpus(
-            synthesis, corpus, _pack(), tmp_path / "docbot", runner=runner
+            synthesis, corpus, _pack(), runner=runner
         )
 
     lint_calls = [call for call in runner.calls if "corpus-lint" in call]
@@ -227,7 +226,6 @@ def test_command_rejects_non_public_urls_with_claim_line(
         if "C01:" in line
     )
     monkeypatch.setenv("PROPOSAL_ROOT", str(tmp_path))
-    monkeypatch.setenv("PROPOSAL_DOCBOT_ROOT", str(tmp_path / "docbot"))
     monkeypatch.setattr(proposal_corpus.proposal_research, "validate_synthesis", lambda path: None)
 
     rc = proposal_corpus.command(
@@ -266,7 +264,6 @@ def test_command_malformed_synthesis_exits_three_without_partial_corpus(
     (inputs / "SYNTHESIS.md").write_text(_synthesis(broken_url=True), encoding="utf-8")
     (inputs / "RESEARCH_BRIEF.md").write_text("# Deep Research Brief\n", encoding="utf-8")
     monkeypatch.setenv("PROPOSAL_ROOT", str(tmp_path))
-    monkeypatch.setenv("PROPOSAL_DOCBOT_ROOT", str(tmp_path / "docbot"))
 
     rc = proposal_corpus.command(argparse.Namespace(slug="excavator", json=True))
 

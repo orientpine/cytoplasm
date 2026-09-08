@@ -1,0 +1,11 @@
+{
+  "schema": "stt-eval-adoption/v1",
+  "min_references": 3,
+  "metric": "cpcer_strict",
+  "confidence": 0.95,
+  "guards": {
+    "cer": "lower",
+    "entity_f1": "higher",
+    "der": "lower"
+  }
+}

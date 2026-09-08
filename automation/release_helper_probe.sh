@@ -67,6 +67,16 @@ probe_release_helper_drift() {
     "$libexec/autophagy-converge.d/origin_snapshot.sh|automation/origin_snapshot.sh|provision-deploy-converge.sh"
     "$libexec/autophagy-converge.d/release_store.py|automation/release_store.py|provision-deploy-converge.sh"
     "$libexec/autophagy-converge.d/release_provenance.py|automation/release_provenance.py|provision-deploy-converge.sh"
+    #: 그리고 그 사본들이 **import 하는** 패키지다. 2026-09-07 까지 설치기는 이 여섯을 아예
+    #: 놓지 않아 신규 노드의 첫 수렴이 SYNC-BLOCK 으로 섰다. 이제 두 설치 경로가 같은 집합을
+    #: 놓으므로(tests/unit/test_install_converge_parity.py), 감시도 같은 집합이어야 한다 —
+    #: 놓기만 하고 아무도 보지 않으면 낡아도 조용한 것은 위 세 개와 똑같다.
+    "$libexec/autophagy-converge.d/automation/__init__.py|automation/__init__.py|provision-deploy-converge.sh"
+    "$libexec/autophagy-converge.d/automation/git_tag_signature.py|automation/git_tag_signature.py|provision-deploy-converge.sh"
+    "$libexec/autophagy-converge.d/automation/update_trust.py|automation/update_trust.py|provision-deploy-converge.sh"
+    "$libexec/autophagy-converge.d/automation/update_trust_state.py|automation/update_trust_state.py|provision-deploy-converge.sh"
+    "$libexec/autophagy-converge.d/automation/node_config.py|automation/node_config.py|provision-deploy-converge.sh"
+    "$libexec/autophagy-converge.d/automation/node.example.toml|configs/node.example.toml|provision-deploy-converge.sh"
   )
 
   for entry in "${copied[@]}" "${rendered[@]}"; do

@@ -75,6 +75,95 @@ esac
     assert '{"head":"abc"}' in sent
 
 
+def test_module_env_selects_the_producer_that_runs_at_the_agent(tmp_path: Path) -> None:
+    """Given: 같은 전송로로 다른 생산자를 돌려야 하는 호출자(릴리스 적용 완료 통지).
+
+    When: `RELEASE_APPROVAL_MODULE` 을 주고 호출하면
+    Then: agent 계정의 `python3 -m <module>` 이 그 모듈로 실행된다 — 시크릿·스테이징
+    규칙은 그대로다. 전송로 사본을 하나 더 만들지 않기 위한 유일한 이음매다.
+    """
+    calls = tmp_path / "calls"
+    fake_ssh = tmp_path / "ssh"
+    fake_ssh.write_text(
+        """#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$CALLS"
+case "$*" in
+  *"test -f"*) exit 1 ;;
+  *) cat >/dev/null ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_ssh.chmod(0o755)
+
+    result = subprocess.run(
+        ("bash", str(_CLIENT), "send", "--version", "v1.2.4", "--head", "abc123"),
+        cwd=_REPO,
+        env={
+            **os.environ,
+            "RELEASE_APPROVAL_SSH": str(fake_ssh),
+            "RELEASE_APPROVAL_HOST": "primary",
+            "RELEASE_APPROVAL_ACCOUNT": "agent",
+            "RELEASE_APPROVAL_HOME": "/home/agent",
+            "RELEASE_APPROVAL_MODULE": "automation.release_applied_notice",
+            "CALLS": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    normalized = calls.read_text(encoding="utf-8").replace("\\", "").replace("'", "")
+    assert (
+        "python3 -m automation.release_applied_notice send --version v1.2.4 --head abc123"
+        in normalized
+    )
+    assert "python3 -m automation.release_approval send" not in normalized
+    assert ". /home/agent/.env.secrets" in normalized
+
+
+def test_module_defaults_to_the_release_approval_producer(tmp_path: Path) -> None:
+    """Given: 아무 env 도 주지 않은 기존 호출자. Then: 오늘과 같은 모듈이다."""
+    calls = tmp_path / "calls"
+    fake_ssh = tmp_path / "ssh"
+    fake_ssh.write_text(
+        """#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$CALLS"
+case "$*" in
+  *"test -f"*) exit 1 ;;
+  *) cat >/dev/null ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_ssh.chmod(0o755)
+    environment = {
+        **os.environ,
+        "RELEASE_APPROVAL_SSH": str(fake_ssh),
+        "RELEASE_APPROVAL_HOST": "primary",
+        "RELEASE_APPROVAL_ACCOUNT": "agent",
+        "RELEASE_APPROVAL_HOME": "/home/agent",
+        "CALLS": str(calls),
+    }
+    environment.pop("RELEASE_APPROVAL_MODULE", None)
+
+    result = subprocess.run(
+        ("bash", str(_CLIENT), "decision", "--head", "abc123"),
+        cwd=_REPO,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    normalized = calls.read_text(encoding="utf-8").replace("\\", "").replace("'", "")
+    assert "python3 -m automation.release_approval decision --head abc123" in normalized
+
+
 def test_release_defaults_to_the_remote_agent_client() -> None:
     source = (_REPO / "automation" / "release.sh").read_text(encoding="utf-8")
     assert 'approval=("$SCRIPT_DIR/release_approval_remote.sh")' in source

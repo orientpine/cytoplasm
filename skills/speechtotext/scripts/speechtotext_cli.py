@@ -22,6 +22,7 @@ import stt_local
 import stt_media
 import stt_polish
 import stt_runtime
+import stt_speaker_ask
 import stt_speaker_flow
 import stt_speakers
 import stt_transcript
@@ -68,6 +69,9 @@ def _transcribe(
             prompt=_prompt(args, pairs),
             diarizer=diarizer,
             num_speakers=args.speaker_count,
+            count_speakers=stt_speaker_ask.resolve(
+                os.environ, repo_root=stt_runtime.runtime_root()
+            ),
         )
     if backend == "local":
         raise stt_audio.TranscriptionRefused(

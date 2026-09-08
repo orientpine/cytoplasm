@@ -55,6 +55,9 @@ agent|automation/skill_generation/plugin/plugin.yaml|.hermes/plugins/05-skill-ge
 # --- automation/state_backup/deploy-manifest.txt ---
 agent|automation/state_backup/cron/state_backup_watch.py|.hermes/scripts/state_backup_watch.py|required
 
+# --- automation/stt_eval/deploy-manifest.txt ---
+agent|automation/stt_eval/cron/stt_eval_capture_watch.py|.hermes/scripts/stt_eval_capture_watch.py|required
+
 # --- skills/budget/deploy-manifest.txt ---
 agent|skills/budget/scripts/budget_watch.py|.hermes/scripts/budget_watch.py|required
 

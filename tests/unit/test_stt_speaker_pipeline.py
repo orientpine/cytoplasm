@@ -297,6 +297,263 @@ def test_a_meeting_that_prints_no_json_propagates_its_exit_and_changes_nothing(
     assert "이영희" not in document
 
 
+def _local_transcription(tmp_path, monkeypatch, toolchain, *, diarize=True):
+    """실제 창 실행·병합까지 거치고 문서화 직전 결과를 돌려준다."""
+    from dataclasses import replace
+
+    import stt_audio
+    import stt_diarize
+    import stt_local
+
+    _env(monkeypatch, tmp_path, toolchain)
+    monkeypatch.setenv("SPEECHTOTEXT_WINDOW_CACHE", str(tmp_path / "window-cache"))
+    monkeypatch.setenv("SPEECHTOTEXT_MAX_REPEAT", "1")
+    monkeypatch.delenv("SPEECHTOTEXT_WHISPER_DTW", raising=False)
+    local = stt_local.resolve_toolchain(dict(os.environ))
+    assert local is not None
+    diarizer = stt_diarize.resolve_toolchain(dict(os.environ)) if diarize else None
+    return stt_local.transcribe(
+        stt_audio.check_audio(_audio(tmp_path)), replace(local, ffprobe=None),
+        diarizer=diarizer,
+    )
+
+
+def test_todo12_characterization_local_timing_and_fail_soft(tmp_path, monkeypatch, toolchain):
+    result = _local_transcription(tmp_path, monkeypatch, toolchain, diarize=False)
+    assert result.sentences[0].start_ms == 0
+    assert result.sentences[0].words[0].word.start_ms == 0
+    assert result.sentences[0].words[0].word.timing_source == "token"
+    assert all(s.speaker == "" and s.attribution is None for s in result.sentences)
+
+
+def test_todo12_characterization_toolchain_and_fingerprint(tmp_path, monkeypatch, toolchain):
+    from dataclasses import replace
+
+    import stt_local
+
+    _env(monkeypatch, tmp_path, toolchain)
+    local = stt_local.resolve_toolchain(dict(os.environ))
+    assert isinstance(local, stt_local.LocalToolchain)
+    assert local.binary == toolchain["whisper"]
+    assert local.model == toolchain["model"]
+    fingerprint = stt_local.asr_fingerprint(local, prompt="", env={})
+    assert fingerprint == stt_local.asr_fingerprint(replace(local, threads=2), prompt="", env={})
+    assert fingerprint != stt_local.asr_fingerprint(local, prompt="용어", env={})
+    assert fingerprint != stt_local.asr_fingerprint(local, prompt="", env={"SPEECHTOTEXT_WHISPER_DTW": "large.v3"})
+
+
+def _write_whisper(toolchain, segments):
+    """대역 실행 파일이 고정 JSON만 출력하도록 한다."""
+    payload = json.dumps({"transcription": segments}, ensure_ascii=False)
+    toolchain["whisper"].write_text(
+        "#!/bin/sh\nof=''\n"
+        'while [ $# -gt 0 ]; do case "$1" in -of) of="$2"; shift 2;; *) shift;; esac; done\n'
+        "cat > \"$of.json\" <<'EOF'\n" + payload + "\nEOF\n", encoding="utf-8",
+    )
+
+
+def _backchannel_fixture(toolchain):
+    """실녹음이 아닌 합성 발화: 200ms 응답과 10초 뒤 무근거 문장."""
+    _write_whisper(toolchain, [{
+        "text": "시작 네 계속. 근거 없음.", "offsets": {"from": 0, "to": 12000},
+        "tokens": [
+            {"text": text, "offsets": {"from": start, "to": end}}
+            for text, start, end in (
+                ("시작", 0, 2000), (" 네", 2000, 2200), (" 계속.", 2200, 4000),
+                (" 근거", 10000, 11000), (" 없음.", 11000, 12000),
+            )
+        ],
+    }])
+    toolchain["diarize"].write_text(
+        '#!/bin/sh\nprintf "0.000 -- 2.000 speaker_00\\n'
+        '2.000 -- 2.200 speaker_01\\n2.200 -- 4.000 speaker_00\\n"\n',
+        encoding="utf-8",
+    )
+
+
+def test_todo12_short_backchannel_and_unsupported_sentence(tmp_path, monkeypatch, toolchain):
+    import stt_attribute
+    import stt_blocks
+
+    _backchannel_fixture(toolchain)
+    seen = []
+    attribute = stt_attribute.attribute_words
+
+    def record(words, turns, *, policy):
+        words = tuple(words)
+        seen.append(words)
+        return attribute(words, turns, policy=policy)
+
+    monkeypatch.setattr(stt_attribute, "attribute_words", record)
+    result = _local_transcription(tmp_path, monkeypatch, toolchain)
+    grouped = stt_blocks.group(result.sentences)
+    assert [b.speaker for b in grouped] == ["화자1", "화자2", "화자1", "화자0"]
+    assert grouped[1].sentences == ("네",)
+    assert grouped[-1].attribution == stt_attribute.SpeakerTag("UNKNOWN")
+    assert seen and [(w.start_ms, w.end_ms) for w in seen[0]][1] == (2000, 2200)
+    assert [(s.start_ms, s.end_ms) for s in result.sentences][1] == (2000, 2200)
+    refs = [w for s in result.sentences for w in s.words]
+    assert [w.source_index for w in refs] == list(range(5))
+    body = stt_blocks.render(grouped)
+    assert stt_blocks.render(stt_blocks.group(stt_blocks.parse(body))) == body
+
+
+@pytest.mark.parametrize("bounds", [(5000, 4000), (-2, -2), (3000, 3000)])
+def test_todo12_bad_word_timing_never_inherits(tmp_path, monkeypatch, toolchain, bounds):
+    import stt_attribute
+
+    _backchannel_fixture(toolchain)
+    _write_whisper(toolchain, [{
+        "text": "시작. 미상.", "offsets": {"from": 0, "to": 5000},
+        "tokens": [
+            {"text": "시작.", "offsets": {"from": 0, "to": 1000}},
+            {"text": " 미상.", "offsets": {"from": bounds[0], "to": bounds[1]}},
+        ],
+    }])
+    result = _local_transcription(tmp_path, monkeypatch, toolchain)
+    assert result.sentences[-1].speaker == "화자0"
+    assert result.sentences[-1].attribution == stt_attribute.SpeakerTag("UNKNOWN")
+
+
+def test_todo12_legacy_unsupported_sentence_never_inherits(tmp_path, monkeypatch, toolchain):
+    import stt_attribute
+
+    _backchannel_fixture(toolchain)
+    _write_whisper(toolchain, [
+        {"text": "시작.", "offsets": {"from": 0, "to": 1000}},
+        {"text": "상대.", "offsets": {"from": 2000, "to": 2200}},
+        {"text": "미상."},
+    ])
+    result = _local_transcription(tmp_path, monkeypatch, toolchain)
+    assert [s.speaker for s in result.sentences] == ["화자1", "화자2", "화자0"]
+    assert result.sentences[-1].attribution == stt_attribute.SpeakerTag("UNKNOWN")
+
+
+def test_todo12_cached_words_are_attributed_again_with_current_turns(
+    tmp_path, monkeypatch, toolchain, capsys,
+):
+    import stt_window
+    import stt_window_run
+    import stt_window_store
+
+    _backchannel_fixture(toolchain)
+    saved = []
+    clear = stt_window_store.WindowStore.clear
+    window = stt_window.Window(0, 0, 0)
+
+    def record_clear(store):
+        saved.append((store, store.load(window)))
+        clear(store)
+
+    monkeypatch.setattr(stt_window_store.WindowStore, "clear", record_clear)
+    first = _local_transcription(tmp_path, monkeypatch, toolchain)
+    assert first.sentences[1].speaker == "화자2"
+    store, raw = saved[0]
+    assert raw is not None and not store.windows.exists()
+    store.save(window, raw)
+    toolchain["diarize"].write_text(
+        '#!/bin/sh\nprintf "0.000 -- 12.000 speaker_00\\n"\n', encoding="utf-8",
+    )
+
+    def unexpected_decode(*args, **kwargs):
+        raise AssertionError("캐시 적중 때 whisper를 다시 실행함")
+
+    monkeypatch.setattr(stt_window_run, "_run_window", unexpected_decode)
+    second = _local_transcription(tmp_path, monkeypatch, toolchain)
+    assert all(s.speaker == "화자1" for s in second.sentences)
+    assert saved[1][0].key == store.key
+    assert not store.windows.exists()
+    assert "WHISPER-WINDOW-CACHED" in capsys.readouterr().err
+
+
+def test_todo12_attribution_error_is_not_reported_as_inherited_success(
+    tmp_path, monkeypatch, toolchain,
+):
+    import stt_attribute
+
+    _backchannel_fixture(toolchain)
+
+    def broken_assignment(*args, **kwargs):
+        raise RuntimeError("attribution-fixture-failure")
+
+    monkeypatch.setattr(stt_attribute, "attribute_words", broken_assignment)
+    with pytest.raises(RuntimeError, match="attribution-fixture-failure"):
+        _local_transcription(tmp_path, monkeypatch, toolchain)
+
+
+def test_todo12_gap_marker_is_not_word_attribution_evidence() -> None:
+    import stt_blocks
+    import stt_diarize
+    import stt_local_attribution
+    import stt_window
+
+    marker = stt_window.gap_marker(stt_window.Window(1, 1000, 59000), until=60000)
+    words = (
+        stt_blocks.TimedWord("시작", 0, 1000),
+        stt_blocks.TimedWord(marker, 1000, 60000, "<details>합성 증거</details>", "segment"),
+        stt_blocks.TimedWord(" 다음.", 60000, 61000),
+    )
+    turns = (stt_diarize.Turn(0, 1000, 0), stt_diarize.Turn(1000, 61000, 1))
+    result = stt_local_attribution.sentences(words, turns)
+    assert [s.speaker for s in result] == ["화자1", "", "화자2"]
+    assert result[1].attribution is None
+    assert result[1].folded == words[1].folded
+    assert result[2].words[0].source_index == 2
+
+
+def _document_roundtrip(document: str) -> str:
+    """메타데이터는 그대로 두고 단일 본문 파서·렌더러로 왕복한다."""
+    import stt_blocks
+
+    header, body = stt_polish.split_document(document)
+    rendered = stt_blocks.render(stt_blocks.group(stt_blocks.parse(body)))
+    return header + "---\n\n" + rendered + "\n"
+
+
+@pytest.mark.parametrize("mode", ["word", "legacy"])
+def test_todo12_assignment_header_roundtrips_with_old_documents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, toolchain: dict[str, Path], mode: str,
+) -> None:
+    from datetime import datetime
+
+    import stt_transcript
+
+    _backchannel_fixture(toolchain)
+    if mode == "legacy":
+        _write_whisper(toolchain, [{"text": "합성 무시각 발화."}])
+    result = _local_transcription(tmp_path, monkeypatch, toolchain)
+    assert getattr(result, "attribution_mode", None) == mode
+    document = stt_transcript.render(
+        label="합성검증", source_name="synthetic.wav", transcription=result,
+        now=datetime(2026, 1, 1), polish=stt_polish.polish_sentences(result.sentences),
+    )
+    header, _ = stt_polish.split_document(document)
+    assignment = [line for line in header.splitlines() if line.startswith("- 화자 배정:")]
+    assert assignment == [f"- 화자 배정: {mode}"]
+    assert _document_roundtrip(document).encode() == document.encode()
+    old = document.replace(assignment[0] + "\n", "")
+    assert _document_roundtrip(old).encode() == old.encode()
+    if mode == "legacy":
+        assert all(s.speaker == "화자0" and s.attribution.kind == "UNKNOWN"
+                   for s in result.sentences)
+
+
+def test_todo12_api_transcription_defaults_to_legacy_header() -> None:
+    from datetime import datetime
+
+    import stt_client
+    import stt_transcript
+
+    result = stt_client.Transcription("합성 API 발화.", "synthetic", "api")
+    document = stt_transcript.render(
+        label="합성검증", source_name="synthetic.wav", transcription=result,
+        now=datetime(2026, 1, 1),
+    )
+    header, _ = stt_polish.split_document(document)
+    assert "- 화자 배정: legacy" in header.splitlines()
+    assert _document_roundtrip(document) == document
+
+
 def test_legend_lines_are_omitted_when_nobody_is_attributed() -> None:
     import stt_speaker_flow
 

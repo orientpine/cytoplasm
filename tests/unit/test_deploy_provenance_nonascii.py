@@ -89,3 +89,37 @@ def test_non_ascii_filename_still_blocks_when_it_is_uncommitted(tmp_path: Path) 
     assert result.returncode == 1, result.stderr
     assert "DEPLOY-BLOCK" in result.stderr
     assert "용어집.example.csv" in result.stderr
+
+
+def test_personal_check_names_non_ascii_dirty_and_untracked_files(tmp_path: Path) -> None:
+    """Personal provenance output must preserve UTF-8 paths for owner review."""
+    repo = _origin_backed_repo(tmp_path)
+    tracked = repo / "추적된 파일.txt"
+    tracked.write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", tracked.name)
+    _git(repo, "commit", "-m", "add Korean filename")
+    tracked.write_text("dirty\n", encoding="utf-8")
+    untracked = repo / "새 파일.txt"
+    untracked.write_text("untracked\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ("bash", "-c", f'source "{_HELPER}"; personal_provenance_check "{repo}"'),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert "추적된 파일.txt" in result.stderr
+    assert "\\\\" not in result.stderr
+
+    tracked.write_text("clean\n", encoding="utf-8")
+    untracked_result = subprocess.run(
+        ("bash", "-c", f'source "{_HELPER}"; personal_provenance_check "{repo}"'),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert untracked_result.returncode == 1, untracked_result.stderr
+    assert "새 파일.txt" in untracked_result.stderr
+    assert "\\\\" not in untracked_result.stderr

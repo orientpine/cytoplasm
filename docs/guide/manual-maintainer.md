@@ -151,7 +151,8 @@ python3 -m pytest tests/unit/test_public_export_manifest_coverage.py -q
 여기서 실패하면 export도 실패한다 — 스크립트가 **내보낸 트리 안에서**
 `python3 -m pytest tests/unit`을 다시 돌리기 때문이다(`public_export.sh:272`). 즉
 원장을 잊으면 공개되는 것이 아니라 릴리스가 멈춘다. 원장은 **디렉터리 단위 공개
-승인을 금지**한다 — 그것은 방금 닫은 구멍을 다시 여는 일이다.
+승인을 금지**한다 — 그것은 방금 닫은 구멍을 다시 여는 일이다. 공개 결정 원장
+`configs/public-export-review.txt`와 정당화 원장 `configs/public-export-baseline-additions.txt`는 경로 바이트순으로 유지하고 새 행을 끝에 덧붙이지 않으며, `tests/unit/test_public_export_ledger_order.py`가 이를 강제한다.
 
 ### 1.4 실행 형태 예시 — 기본은 source commit의 태그를 재사용한다
 
@@ -243,7 +244,21 @@ gitleaks 0건. 첫 실행은 export 트리 내부 `pytest` 3건이 이 머신의
 ```bash
 gh release create v1.0.1 --repo orientpine/cytoplasm \
     --title 'v1.0.1' --notes-file <노트 파일>
+
+# 신뢰키 공개키를 asset 으로 붙인다. 붙이지 않으면 install.md §1·manual-member.md §1 의
+# "릴리스에 동봉" 이 거짓이 되고, `--update-trust-key` 가 필수 인자라 신규 설치가 시작조차
+# 하지 못한다(2026-09-07 제3자 설치 실측). 공개키이므로 공개 저장소에 올려도 무해하다.
+# 올리는 것은 반드시 `.pub` 이다. `UPDATE_TRUST_SIGNING_KEY` 는 위 §1.4 의 export 에서
+# 개인키 경로다(`public_export.sh` 가 `ssh-keygen -y` 로 공개키를 유도한다) — 그 변수를 여기에
+# 그대로 넣으면 개인키가 공개 asset 이 된다. 업로드 전에 첫 낱말이 `ssh-ed25519` 인지 본다.
+head -c 11 ~/.ssh/autophagy_update_trust.pub; echo   # → ssh-ed25519
+gh release upload v1.0.1 --repo orientpine/cytoplasm \
+    ~/.ssh/autophagy_update_trust.pub#update-trust.pub
 ```
+
+`gh release view v1.0.1 --repo orientpine/cytoplasm --json assets` 로 `update-trust.pub`
+가 실제로 붙었는지 확인한다. 지문 대조는 그대로 대역외로 한다 — asset 은 키를 **전달**할
+뿐 그 키가 옳다고 증명하지 않는다.
 
 노트에 **반드시** 들어가야 하는 것:
 

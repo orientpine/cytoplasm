@@ -20,6 +20,7 @@ from dataclasses import Field, dataclass, replace
 from typing import ClassVar, Final, Protocol, TypeVar
 
 import stt_gap
+from stt_sentence import SentenceWord, slice_words, word_bounds
 
 #: 사람이 한 덩어리로 읽을 수 있는 상한. 넘어가면 구두점이 없는 한 끊는다.
 DEFAULT_MAX_SPAN_MS: Final = 15_000
@@ -31,6 +32,8 @@ _TERMINAL: Final = ".!?\u2026\u3002\uff01\uff1f"
 # 닫는 따옴표·괄호는 종결 부호 **뒤에** 남으므로 벗겨내고 마지막 글자를 본다.
 _TRAILING: Final = "\"')]}\u201d\u2019\u300d\u300f\uff09"
 _WORD: Final = re.compile(r"\S+")
+#: 띄어쓰기가 없는 표기에서는 글자 경계가 유일한 자를 자리다.
+_CHARACTER: Final = re.compile(r"\S")
 _WHITESPACE: Final = re.compile(r"\s+")
 
 
@@ -53,6 +56,9 @@ class _Turn(Protocol):
 
     @property
     def end_ms(self) -> int: ...
+
+    @property
+    def speaker(self) -> int: ...
 
 
 SentenceT = TypeVar("SentenceT", bound=_Timed)
@@ -94,7 +100,8 @@ def split_on_turns(
     한 문장을 **둘 이상의 턴이 각각 `min_share_ms` 이상** 나눠 가졌을 때만 화자 경계로
     자른다. 비율(20%) 대신 절대 시간을 쓰는 이유: 짧은 문장일수록 경계의 떨림이 비율로는
     커 보여 멀쩡한 문장이 잘게 부서진다. "1초 넘게 말했으면 그 사람 몫"이 읽기 쉽고
-    분리기의 시간 해상도와도 맞는다.
+    분리기의 시간 해상도와도 맞는다. 단, 단어 시각 눈금이 있으면 짧은 응답도
+    독립 근거이므로 이 최소 지분 게이트를 적용하지 않는다.
     """
     available = tuple(turns)
     pieces: list[SentenceT] = []
@@ -121,9 +128,16 @@ def _split(
         return (sentence,)
     words = tuple((match.group(), match.start(), match.end()) for match in _WORD.finditer(text))
     if len(words) < 2:
+        # 중국어·일본어처럼 띄어쓰기가 없으면 낱말이 하나로 잡혀 자를 자리가 사라진다.
+        # 그러면 화자가 넷이어도 문장이 하나라 전부 첫 화자에게 간다(실측: 57초 4인
+        # 중국어 샘플이 158자 한 문장). 글자 경계는 그 표기에서 안전한 자를 자리다.
+        words = tuple(
+            (match.group(), match.start(), match.end()) for match in _CHARACTER.finditer(text)
+        )
+    if len(words) < 2:
         return (sentence,)
     clock = _Clock(len(text), start, end, _marks(sentence, text))
-    wanted = _cut_times(text, start, end, turns, max_span_ms, min_share_ms)
+    wanted = _cut_times(text, start, end, turns, max_span_ms, 1 if clock.marks else min_share_ms)
     cuts = _word_cuts(words, wanted, clock)
     if not cuts:
         return (sentence,)
@@ -141,11 +155,16 @@ def _cut_times(
     """자르고 싶은 **시각**들. 화자 경계가 먼저, 그다음 남은 긴 구간을 15초로 채운다."""
     sharing = [turn for turn in turns if _overlap(start, end, turn) >= min_share_ms]
     edges: list[int] = []
-    if len(sharing) >= 2:
-        for turn in sharing:
-            for edge in (turn.start_ms, turn.end_ms):
-                if start < edge < end and edge not in edges:
-                    edges.append(edge)
+    # **화자가 실제로 바뀌는 자리에서만** 자른다. 예전에는 걸치는 turn 의 모든 경계를 자를
+    # 자리로 삼았는데, 같은 사람이 문장 도중에 숨을 쉬면 turn 이 둘로 갈리므로 화자가 바뀌지
+    # 않았는데도 문장이 잘렸다. 2026-09-06 에 --min-duration-off 를 0.0 으로 내려 같은 화자의
+    # 짧은 간격을 더 이상 이어 붙이지 않게 한 것이 그 상황을 흔하게 만들었다(턴 구조를 되찾은
+    # 대가). 잘린 조각 중 침묵에 걸친 것은 근거가 없어 화자0 이 되고, 그래서 노드 실측에서
+    # 낱말의 비-SPEAKER 12.0%·20.5% 가 블록의 화자0 47.6%·49.7% 로 두 녹음 모두 2.4배 증폭됐다.
+    for turn in sharing:
+        for edge in (turn.start_ms, turn.end_ms):
+            if start < edge < end and edge not in edges and _changes_speaker(sharing, edge):
+                edges.append(edge)
     edges.sort()
     if _terminated(text):
         return tuple(edges)
@@ -161,6 +180,31 @@ def _cut_times(
             filled.append(edge)
         cursor = edge
     return tuple(filled)
+
+
+def _changes_speaker(turns: tuple[_Turn, ...], when: int) -> bool:
+    """그 순간을 사이에 두고 화자가 실제로 바뀌는가 — 침묵은 바뀜이 아니다."""
+    before = _speaker_before(turns, when)
+    after = _speaker_after(turns, when)
+    return before is not None and after is not None and before != after
+
+
+def _speaker_before(turns: tuple[_Turn, ...], when: int) -> int | None:
+    """직전 순간의 화자. 덮는 turn 이 여럿이면 가장 짧은 것(안쪽 맞장구)이 이긴다."""
+    inside = [turn for turn in turns if turn.start_ms < when <= turn.end_ms]
+    if inside:
+        return min(inside, key=lambda turn: turn.end_ms - turn.start_ms).speaker
+    earlier = [turn for turn in turns if turn.end_ms <= when]
+    return max(earlier, key=lambda turn: turn.end_ms).speaker if earlier else None
+
+
+def _speaker_after(turns: tuple[_Turn, ...], when: int) -> int | None:
+    """직후 순간의 화자. 덮는 turn 이 없으면 다음 turn 을 본다 — 침묵은 화자를 바꾸지 않는다."""
+    inside = [turn for turn in turns if turn.start_ms <= when < turn.end_ms]
+    if inside:
+        return min(inside, key=lambda turn: turn.end_ms - turn.start_ms).speaker
+    later = [turn for turn in turns if turn.start_ms >= when]
+    return min(later, key=lambda turn: turn.start_ms).speaker if later else None
 
 
 def _word_cuts(
@@ -190,11 +234,21 @@ def _pieces(
     cuts: tuple[int, ...],
     clock: _Clock,
 ) -> tuple[SentenceT, ...]:
-    """조각들. 바깥 끝은 원래 문장의 시각을 그대로 물려받고 안쪽은 자른 자리에서 얻는다."""
+    """단어가 있으면 포함 단어의 시각과 재기준 좌표, 없으면 기존 보간을 사용한다."""
     made: list[SentenceT] = []
     edges = (0, *cuts, len(words))
     for begin, finish in zip(edges[:-1], edges[1:]):
-        body = " ".join(word for word, _start, _end in words[begin:finish])
+        # 조각은 원문에서 잘라 낸다 — 낱말을 다시 이어 붙이면 원래 없던 띄어쓰기가
+        # 생기고, 글자 단위로 자른 경우에는 글자마다 공백이 박힌다.
+        left, right = words[begin][1], words[finish - 1][2]
+        body = sentence.text[left:right].strip()
+        carried: Sequence[object] = getattr(sentence, "words", ())
+        located = tuple(ref for ref in carried if isinstance(ref, SentenceWord))
+        if located:
+            refs = slice_words(located, sentence.text, left, right)
+            start_ms, end_ms = word_bounds(refs)
+            made.append(replace(sentence, text=body, start_ms=start_ms, end_ms=end_ms, words=refs))
+            continue
         first = begin == 0
         last = finish == len(words)
         starts = clock.start_ms if first else round(clock.at(words[begin][1]))
@@ -207,24 +261,29 @@ def _pieces(
 def _marks(sentence: _Timed, text: str) -> tuple[tuple[int, int], ...]:
     """문장이 낱말 시각을 들고 있으면 (글자 위치, 시각) 눈금으로 되돌린다.
 
-    문장 텍스트는 토큰 문자열을 순서대로 이어 붙여 만들어졌으므로, 같은 순서로 다시
-    찾아가면 각 토큰이 몇 번째 글자에서 시작하는지 복원된다. 한 번이라도 어긋나면 눈금을
-    통째로 버리고 선형 보간으로 돌아간다 — 틀린 눈금은 없는 눈금보다 나쁘다."""
+    정규화된 문자 좌표가 있으면 직접 읽고 세그먼트 상속·절단·미상 시각은 제외한다.
+    좌표 없는 옛 낱말은 순서대로 찾는다. 시각이 없어도 커서는 전진해야 반복 낱말을
+    앞의 낱말에 잘못 붙이지 않는다. 문자열이 어긋나면 기존처럼 눈금 전체를 버린다."""
     carried = getattr(sentence, "words", None)
     if not isinstance(carried, Sequence) or isinstance(carried, str) or not carried:
         return ()
     found: list[tuple[int, int]] = []
     cursor = 0
     for word in carried:
+        if isinstance(word, SentenceWord):
+            if not word.clipped and word.word.timing_source != "segment" and word.word.start_ms >= 0:
+                found.append((word.start_char, word.word.start_ms))
+            continue
         piece = _WHITESPACE.sub(" ", str(getattr(word, "text", ""))).strip()
-        when = getattr(word, "start_ms", None)
-        if not piece or not isinstance(when, int) or when < 0:
+        if not piece:
             continue
         where = text.find(piece, cursor)
         if where < 0:
             return ()
-        found.append((where, when))
         cursor = where + len(piece)
+        when = getattr(word, "start_ms", None)
+        if isinstance(when, int) and when >= 0:
+            found.append((where, when))
     return tuple(found)
 
 

@@ -16,11 +16,13 @@ import json
 import secrets
 import sys
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
 from automation import (
     release_abandon,
+    release_notes,
     release_plan,
     skill_gate,
     skill_gate_request,
@@ -33,12 +35,8 @@ from automation.interop.approval_lifecycle import (
     Probe,
 )
 from automation.interop.approval_surface import ApprovalKind
-from automation.release_spec import (
-    ReleaseSpec,
-    ReleaseSpecError,
-    fit_patch_notes,
-    spec_from_record,
-)
+from automation.interop.discord_transport import DiscordTransport
+from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_record
 from automation.release_retire import retire_released_record
 from automation.skill_gate_approval import GateSurface, SkillApprovalGate
 
@@ -61,6 +59,7 @@ def spec_from_plan(payload: Mapping[str, object], release_nonce: str) -> Release
         release_nonce=release_nonce,
         surface_digests=tuple((str(row[0]), str(row[1])) for row in surfaces),
         patch_notes=str(payload.get("patch_notes", "")),
+        major_note=str(payload.get("major_note", "")),
     )
 
 
@@ -105,16 +104,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
     except release_plan.ReleasePlanError as error:
         print(f"RELEASE-PLAN-BLOCK: {error}", file=sys.stderr)
         return 4
-    patch_notes = fit_patch_notes(
-        version=plan.version,
-        head_sha=plan.head,
-        surface_digests=plan.surface_digests,
-        patch_notes=release_plan.render_patch_notes(plan),
-    )
     payload = {
         "base": plan.base,
         "head": plan.head,
-        "patch_notes": patch_notes,
+        "major_note": release_notes.major_note(plan),
+        "patch_notes": release_notes.detail_body(plan),
         "surface_digests": [list(row) for row in plan.surface_digests],
         "version": plan.version,
     }
@@ -206,6 +200,33 @@ def _stale_pending_line() -> str | None:
     )
 
 
+def detail_transport(channel_id: str) -> DiscordTransport:
+    """변경 상세를 보내는 유일한 이음매 — 자격증명은 게이트가 읽는 그 토큰 하나다."""
+    return DiscordTransport(
+        token=skill_gate._token(),  # noqa: SLF001 - the gate owns the credential
+        channel_id=channel_id,
+    )
+
+
+def _deliver_details(
+    gate: SkillApprovalGate, spec: ReleaseSpec, record: dict[str, str]
+) -> dict[str, str]:
+    """카드 뒤에 변경 상세를 올리고 그 id 를 레코드에 남긴다 — 승인 바인딩 밖의 감사 흔적."""
+    delivery = release_notes.post_details(
+        detail_transport(gate.channel_id()).send, spec.detail_messages()
+    )
+    if delivery.failure:
+        print(delivery.failure, file=sys.stderr)
+    updated = {
+        **record,
+        "detail_message_ids": json.dumps(delivery.message_ids, separators=(",", ":")),
+    }
+    path = gate.path()
+    _ = path.write_text(spec.serialize(updated), encoding="utf-8")
+    path.chmod(0o600)
+    return updated
+
+
 def _emit_request(requested: skill_gate_request.Requested) -> int:
     """The legacy stdout/exit contract byte-for-byte, plus ONE stale hint on stderr."""
     exit_code = skill_gate_request.emit(requested, json_output=True)
@@ -227,7 +248,10 @@ def cmd_request(args: argparse.Namespace) -> int:
     if reused is not None:
         return _emit_request(reused)
     print(skill_gate_surface.where_to_look(ApprovalKind.RELEASE), file=sys.stderr)
-    return _emit_request(skill_gate_request.post_request(gate, fresh=False))
+    requested = skill_gate_request.post_request(gate, fresh=False)
+    if requested.posted and requested.record is not None:
+        requested = replace(requested, record=_deliver_details(gate, spec, requested.record))
+    return _emit_request(requested)
 
 
 def cmd_abandon(args: argparse.Namespace) -> int:
@@ -280,7 +304,7 @@ def cmd_decision(args: argparse.Namespace) -> int:
         # Uncertainty is neither an approval nor a denial — the next poll looks again.
         print(f"RELEASE-DECISION: unverifiable ({type(error).__name__})", file=sys.stderr)
         return DECISION_PENDING
-    print(f"RELEASE-DECISION: {probe.name.lower()}", file=sys.stderr)
+    print(f"RELEASE-DECISION: {probe.name.lower()} version={record['version']}", file=sys.stderr)
     return decision_exit(probe)
 
 

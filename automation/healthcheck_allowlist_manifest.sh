@@ -18,12 +18,20 @@ source "$SCRIPT_DIR/healthcheck_probe_wrapper.sh"
 readonly SYNTHETIC_CHECK="synthetic nonexistent ops unit|user_unit_active|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|autophagy-healthcheck-synthetic-does-not-exist.service"
 
 print_manifest() {
-  local definition check_name
-  for definition in "${LIVE_CHECKS[@]}" "$SYNTHETIC_CHECK"; do
+  local entry definition check_name
+  # The sweep may be narrowed, but --suggest always examines the full catalog. Its
+  # wrapper must therefore allow every discovery command; otherwise an excluded command
+  # returns 126 and looks exactly like an absent service. Catalog order is LIVE_CHECKS
+  # order, so the default/full manifest remains byte-identical.
+  for entry in "${HEALTHCHECK_CHECK_CATALOG[@]}"; do
+    definition="${entry#*|}"
     IFS='|' read -r check_name _ <<< "$definition"
     healthcheck_repair_command "$check_name"
     printf '\n'
   done
+  IFS='|' read -r check_name _ <<< "$SYNTHETIC_CHECK"
+  healthcheck_repair_command "$check_name"
+  printf '\n'
 }
 
 case "$MODE" in

@@ -14,6 +14,7 @@ from automation.plaud_sync.lifelog_model import (
     LifelogExtraction,
     LifelogTodo,
 )
+from automation.plaud_sync.lifelog_fields import GLANCE_HEADING, SUMMARY_HEADING
 from automation.plaud_sync.note import (
     LifelogRecording,
     PlaudNoteError,
@@ -325,10 +326,6 @@ _V2_GOLDEN = (
     "## 한눈에\n"
     "\n"
     "- 녹음:: 2026-09-02 (수) 09:02 · 30분 30초 · 화자 2명\n"
-    "- 주제:: #lifelog/일상-잡담 #lifelog/업무\n"
-    "- 사람:: [[김철수]], [[박영희]]\n"
-    "- 장소:: 구내식당\n"
-    "- 한 줄:: 직장 동료들이 점심을 함께하며 업무와 진로를 이야기한다.\n"
     "\n"
     "## 요약\n"
     "\n"
@@ -394,7 +391,9 @@ def test_render_lifelog_body_marks_a_skipped_extraction_without_people_or_places
     assert "사람::" not in body
     assert "장소::" not in body
     assert "## 결정 · 할 일" not in body
-    assert body.index("- 추출::") < body.index("- 한 줄::")
+    # 진단은 여전히 한눈에 안에 있고 요약보다 앞선다 — 순서가 뒤집히면 소유자가 사유를
+    # 요약 뒤에서 찾게 된다.
+    assert body.index(GLANCE_HEADING) < body.index("- 추출::") < body.index(SUMMARY_HEADING)
 
 
 def test_render_lifelog_body_omits_empty_extraction_lines_and_the_decisions_section() -> None:
@@ -485,8 +484,10 @@ def test_corrected_lifelog_note_fixes_the_extracted_fields_and_reports_every_wor
         glossary=(("한전기술", "한전기술"), ("열기환기", "열교환기")),
     )
 
-    assert "- 사람:: [[김철수]]" in note.plan.body
-    assert "- 장소:: 한전기술 회의실" in note.plan.body
+    # 사람·장소는 더 이상 렌더되지 않는다(2026-09-07). 렌더되는 필드의 교정만 본문에서 세고,
+    # 교정 자체가 보고되는지는 아래 corrections 로 확인한다.
+    assert "사람::" not in note.plan.body
+    assert "장소::" not in note.plan.body
     assert "- 결정: 한전기술 방문 [12:40]" in note.plan.body
     assert "- [ ] 열교환기 점검 — 담당 한전기술 담당 · 기한 다음 주" in note.plan.body
     assert "> [00:00 · 화자1] 항정기술 이야기." in note.plan.body, "전문은 그대로다"
@@ -557,3 +558,72 @@ def test_yaml_scalar_mirrors_the_linters_title_escaping(value: str, expected: st
     from automation.plaud_sync.lifelog_fields import yaml_scalar
 
     assert yaml_scalar(value) == expected
+
+
+def test_a_timestamp_only_plaud_name_takes_the_generated_title() -> None:
+    """실측(2026-09-07): 노트가 `2026-09-07-113911--d1042100eaa0.md` 로 앉고 frontmatter 의
+
+    title 도 `2026-09-07 11:39:11` 이었다. Plaud 의 AI 제목은 Plaud 요약과 같은 때 생기는데,
+    로컬 전사 경로는 클라우드 요약도 전사도 **빈** 녹음을 골라 동결한다 — 즉 로컬 전사가
+    필요한 녹음은 언제나 제목이 없고, 이름 자리에는 시각만 남는다.
+
+    글자가 하나도 없는 이름은 이름이 아니다. 그럴 때만 추출이 만든 제목이 그 자리를 대신한다
+    (Plaud 가 제목을 붙여 준 녹음은 그대로 둔다 — 그쪽이 사람이 고른 이름이다).
+    """
+    recording = LifelogRecording(
+        id="c5394daf5420fad7b68272dad3e547ce",
+        name="2026-09-07 11:39:11",
+        created_at="2026-09-07T02:39:11+00:00",
+        start_at="2026-09-07T02:39:11+00:00",
+        duration_ms=549_000,
+        summary_markdown="",
+        transcript_text="",
+    )
+
+    plan = plan_lifelog_note(
+        recording, extraction=LifelogExtraction(title="직장 동료들의 일상 대화")
+    )
+
+    assert plan.relpath.name.startswith("2026-09-07-직장-동료들의-일상-대화--")
+    assert "113911" not in plan.relpath.name
+    assert plan.title == "직장 동료들의 일상 대화 (2026-09-07)"
+    # 지문은 녹음 id 에서만 나온다 — 제목이 달라져도 같은 녹음은 같은 파일이다.
+    assert (plan.relpath.name.split("--")[-1]
+            == plan_lifelog_note(recording, extraction=_SKIPPED).relpath.name.split("--")[-1])
+
+
+def test_a_plaud_name_with_letters_ignores_the_generated_title() -> None:
+    """Plaud 가 붙인 이름은 사람이 읽으라고 고른 이름이다 — 생성 제목이 그것을 덮지 않는다."""
+    recording = LifelogRecording(
+        id="titled",
+        name="09-02 직장 동료들의 일상 대화: 업무, 진로, 취미",
+        created_at="2026-09-02T10:00:00+09:00",
+        start_at="2026-09-02T09:00:00+09:00",
+        duration_ms=0,
+        summary_markdown="",
+        transcript_text="",
+    )
+
+    plan = plan_lifelog_note(recording, extraction=LifelogExtraction(title="다른 제목"))
+
+    assert plan.relpath.name.startswith("2026-09-02-09-02-직장-동료들의-일상-대화-업무-진로-취미--")
+    assert "다른-제목" not in plan.relpath.name
+
+
+def test_glance_carries_only_the_recording_line_and_diagnostics() -> None:
+    """소유자 지시(2026-09-07): 한눈에의 군더더기를 없앤다.
+
+    `사람::` 은 ASR 오인식을 `[[위키링크]]` 로 굳혀 vault 에 없는 문서를 만든다(실측:
+    `[[신영구원님]]` — \"신영구 연구원님\"의 오인식). `한 줄::` 은 바로 아래 요약 첫 줄의
+    복사본이고, `주제::` 는 frontmatter 의 `tags:` 와 같은 값을 두 번 적는다.
+
+    남는 것은 `녹음::`(날짜·요일·시각·길이·화자 수)과 진단 줄이다 — 진단은 무엇이
+    잘못됐는지 알려주는 유일한 신호라 지우면 침묵이 된다.
+    """
+    body = render_lifelog_body(_real_shape_recording(), extraction=_EXTRACTION, tz=_SEOUL)
+
+    glance = body.split(GLANCE_HEADING)[1].split("\n## ")[0]
+
+    assert "- 녹음::" in glance
+    for gone in ("사람::", "장소::", "한 줄::", "주제::"):
+        assert gone not in glance, f"{gone} 이 아직 한눈에에 있다"

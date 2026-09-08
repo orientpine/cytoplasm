@@ -44,7 +44,11 @@ case "$cmd" in
     # shellcheck disable=SC2086
     set -- $DECISIONS
     (( n > $# )) && n=$#
-    exit "${!n}"
+    decision="${!n}"
+    if [[ -n "$RECORD_VERSION" && "$decision" != 2 ]]; then
+      printf 'RELEASE-DECISION: live version=%s\n' "$RECORD_VERSION" >&2
+    fi
+    exit "$decision"
     ;;
   *) exit 97 ;;
 esac
@@ -115,6 +119,7 @@ def _run(
     stale_probe: str = "bound_pending",
     abandon_unblocks: str = "1",
     abandon_rc: str = "0",
+    record_version: str = "",
 ) -> subprocess.CompletedProcess[str]:
     # 낡은 pending 요청이 있는 세계는 stale_head 를 준 테스트에서만 존재한다 —
     # marker 가 없으면 stub 의 request 는 예전 그대로 성공한다.
@@ -155,6 +160,7 @@ def _run(
         "STALE_PROBE": stale_probe,
         "ABANDON_UNBLOCKS": abandon_unblocks,
         "ABANDON_RC": abandon_rc,
+        "RECORD_VERSION": record_version,
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
     }
@@ -191,6 +197,25 @@ def test_an_approved_release_cuts_the_signed_tag(tmp_path: Path) -> None:
     # The tag cut no longer ends with a hint to run deploy_all by hand — release.sh
     # runs it itself and reports that completion.
     assert "receipt written by deploy_all" in result.stderr
+
+
+def test_an_approved_record_uses_its_version_instead_of_the_requested_bump(
+    tmp_path: Path,
+) -> None:
+    """A live approval owns the tag name, so the completer cannot cut a patch sibling."""
+    _origin, work = _origin_with_commits(tmp_path)
+    head = _git(work, "rev-parse", "HEAD")
+
+    result = _run(
+        tmp_path,
+        work,
+        decisions="0",
+        arguments=("--no-deploy", "--bump", "patch"),
+        record_version="v9.9.0",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"{head}\trefs/tags/v9.9.0^{{}}" in _origin_tags(work)
 
 
 def test_default_release_runs_the_full_deployment_once(tmp_path: Path) -> None:

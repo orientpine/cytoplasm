@@ -71,6 +71,11 @@ def test_registry_pins_folders_periodicity_and_flags() -> None:
             periodicity="oneshot",
             skill_owned="skills/speechtotext/scripts/speechtotext_cli.py",
         ),
+        "audio": Category(
+            folder="녹음원본",
+            periodicity="oneshot",
+            skill_owned="plaud_sync",
+        ),
         "procurement": Category(folder="구매", periodicity="oneshot"),
         "doctype": Category(folder="문서", periodicity="oneshot"),
         "patent": Category(folder="특허", periodicity="oneshot", gate_only=True),
@@ -218,6 +223,12 @@ def test_transcript_category_is_registered_for_audio_transcripts() -> None:
     assert selected.folder == "전사본"
     assert selected.periodicity == "oneshot"
     assert selected.gate_only is False
+
+
+def test_audio_folder_parts_use_recording_source_folder() -> None:
+    assert folder_parts("audio", 2026, project="lifelog") == (
+        "autophagy", "녹음원본", "lifelog", "2026",
+    )
 
 
 def test_folder_parts_inserts_the_project_between_category_and_year() -> None:

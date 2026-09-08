@@ -94,6 +94,7 @@ kind만 넘긴다. 새 카테고리는 레지스트리에 한 줄 추가로 끝�
 | `budget` | 예산 | monthly | - | - |
 | `meeting` | 회의록 | oneshot | - | - |
 | `transcript` | 전사본 | oneshot | - | - |
+| `audio` | 녹음원본 | oneshot | - | - |
 | `procurement` | 구매 | oneshot | - | - |
 | `doctype` | 문서 | oneshot | - | - |
 | `patent` | 특허 | oneshot | ✔ | - |

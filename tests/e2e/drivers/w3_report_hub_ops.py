@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -28,7 +29,15 @@ from pathlib import Path
 
 DB = Path("/srv/autophagy-private/report-hub/reports.db")
 CREDENTIALS = Path.home() / "report-hub" / "dashboard-cha-credentials.txt"
-DASHBOARD = "http://100.116.248.95:8800/"
+def dashboard_url() -> str:
+    """The dashboard binds to this installation's tailnet interface, which is not
+    repository data. Fail closed rather than carry one installation's address."""
+    url = os.environ.get("REPORT_HUB_DASHBOARD_URL", "").strip()
+    if not url:
+        raise SystemExit(
+            "REPORT_HUB_DASHBOARD_URL is required: set it to this node's report-hub URL"
+        )
+    return url
 TASK_PREFIX = "W3-6-bank-"
 
 
@@ -86,8 +95,9 @@ def case_collect(message_id: str, task_id: str) -> dict:
 
 
 def case_dashboard(task_id: str) -> dict:
-    unauth_status, _ = http_status(DASHBOARD)
-    auth_status, body = http_status(DASHBOARD, basic_auth_header())
+    dashboard = dashboard_url()
+    unauth_status, _ = http_status(dashboard)
+    auth_status, body = http_status(dashboard, basic_auth_header())
     return {
         "unauth_401": unauth_status == 401,
         "authed_200": auth_status == 200,

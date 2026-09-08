@@ -75,8 +75,8 @@ WRAPPER_EXIT = {
 REAUTH_GUIDANCE = (
     "기관메일 인증 실패(mailon exit 2 = auth_or_browser_error). 재인증 절차: "
     "① ~agent/.env.secrets의 MAILON_ID/MAILON_PW/MAILON_TOTP_SECRET 존재·길이 확인 "
-    "② 잔여 브라우저 세션 정리(pkill -u agent -f chrome) 후 재시도 — 중단된 sync 뒤 "
-    "'ipt-id' 로그인 실패는 이 잔여 세션이 원인 "
+    "② 잔여 브라우저를 원인으로 보지 말 것 — 2026-09-07 부터 실행마다 세션이 달라 "
+    "다음 실행이 남은 브라우저를 물려받지 않는다(실제 원인은 동시 실행의 세션 공유였다) "
     "③ 수동 검증: cd ~/.hermes/mailon-runtime/current && set -a; . ~/.env.secrets; set +a; "
     ".venv/bin/python -m mailon.main login "
     "④ 반복 실패 시 자동 재시도 금지 — cha 에스컬레이션 및 mail-mode 재판정(W4-2 규칙)."

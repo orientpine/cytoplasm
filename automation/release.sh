@@ -68,16 +68,26 @@ main="$(git -C "$REPO_ROOT" rev-parse origin/main)" || die "cannot resolve origi
 # 전제 ③: 로컬 CI 영수증 — 기존 push 게이트의 판정을 그대로 재사용한다.
 bash "$local_ci" verify "$head" || die "no valid local CI receipt for ${head:0:12}" 4
 
-version="$(release_version_for "$REPO_ROOT" "$head" "$bump")" || die "could not derive the next version" 4
-base="$(latest_release_base "$REPO_ROOT")"
-if [[ -z "$base" ]]; then
-  base="$(git -C "$REPO_ROOT" rev-list --max-parents=0 HEAD | tail -n 1)" \
-    || die "cannot resolve the first release base" 4
-fi
+workdir="$(mktemp -d)" || die "mktemp failed" 1
+trap 'rm -rf -- "$workdir"' EXIT
 
-poll_decision() { # poll_decision → 전역 rc 로 소유자 결정을 돌려준다
-  "${approval[@]}" decision --head "$head"
+poll_decision() { # poll_decision → 전역 rc·레코드 버전으로 소유자 결정을 돌려준다
+  "${approval[@]}" decision --head "$head" \
+    > "$workdir/decision.stdout" 2> "$workdir/decision.stderr"
   decision_rc=$?
+  cat "$workdir/decision.stdout"
+  cat "$workdir/decision.stderr" >&2
+  decision_version=""
+  while IFS= read -r decision_line; do
+    case "$decision_line" in
+      RELEASE-DECISION:\ *\ version=*)
+        candidate_version="${decision_line##* version=}"
+        if [[ "$candidate_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          decision_version="$candidate_version"
+        fi
+        ;;
+    esac
+  done < "$workdir/decision.stderr"
 }
 
 post_request() { # post_request → 요청을 게시한다. stderr 는 붙잡되 언제나 그대로 되울린다.
@@ -88,11 +98,22 @@ post_request() { # post_request → 요청을 게시한다. stderr 는 붙잡되
   return "$rc"
 }
 
-# 세션이 죽은 뒤의 재실행: 이미 ✅ 된 요청이 살아 있으면 다시 게시하지 않고 태그로 간다.
+# 세션이 죽은 뒤의 재실행: 살아 있는 요청의 버전은 새 bump 계산보다 먼저 재사용한다.
 poll_decision
+if (( decision_rc == 0 || decision_rc == 7 )) && [[ -n "$decision_version" ]]; then
+  version="$decision_version"
+  log "reusing live approval version $version at ${head:0:12}"
+else
+  version="$(release_version_for "$REPO_ROOT" "$head" "$bump")" \
+    || die "could not derive the next version" 4
+fi
+base="$(latest_release_base "$REPO_ROOT")"
+if [[ -z "$base" ]]; then
+  base="$(git -C "$REPO_ROOT" rev-list --max-parents=0 HEAD | tail -n 1)" \
+    || die "cannot resolve the first release base" 4
+fi
+
 if (( decision_rc != 0 )); then
-  workdir="$(mktemp -d)" || die "mktemp failed" 1
-  trap 'rm -rf -- "$workdir"' EXIT
   "${approval[@]}" retire --head "$base" \
     || die "previous release record cannot be archived safely" 4
   "${plan_approval[@]}" plan --repo "$REPO_ROOT" --base "$base" --head "$head" \

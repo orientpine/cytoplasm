@@ -12,34 +12,36 @@ window still reaches the document, and what succeeded is cached so a re-run resu
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
+import stt_align
 import stt_audio
 import stt_blocks
 import stt_client
 import stt_coverage
 import stt_diarize
+import stt_eval_build
+import stt_local_attribution
 import stt_media
+import stt_speaker_count
 import stt_window
 import stt_window_run
 import stt_window_store
+from stt_local_config import DEFAULT_LANGUAGE as DEFAULT_LANGUAGE
+from stt_local_config import DEFAULT_MAX_CONTEXT as DEFAULT_MAX_CONTEXT
+from stt_local_config import DEFAULT_TIMEOUT as DEFAULT_TIMEOUT
+from stt_local_config import MIN_CONFIGURED_WINDOW_MS as MIN_CONFIGURED_WINDOW_MS
+from stt_local_config import LocalToolchain as LocalToolchain
+from stt_local_config import resolve_toolchain as resolve_toolchain
 
-DEFAULT_LANGUAGE: Final = "ko"
-DEFAULT_TIMEOUT: Final = 14400.0
 _CONVERT_TIMEOUT: Final = 900.0
-_MAX_THREADS: Final = 16
-# Context carry-over is what lets a decode feed itself its own output until a window
-# is consumed by one repeated sentence. Measured on a 94-minute Korean recording:
-# carry-over on collapsed 28% of the transcript (one phrase, 910 times); the same
-# span with `-mc 0` came back at 1.2% repetition — a clean sample's level.
-DEFAULT_MAX_CONTEXT: Final = "0"
 
 REPETITION_NOTICE: Final = (
     "전사 반복 붕괴: 같은 문장이 되풀이되며 전사본의 {ratio:.0%}를 차지합니다 «{phrase}…». "
@@ -65,81 +67,6 @@ ALL_QUARANTINED_NOTICE: Final = (
     "{path} 에 있습니다. 표지만 남은 전사본을 회의록으로 넘기지 않고 중단합니다."
 )
 
-#: A window smaller than this is a typo, not a plan — the default is used instead.
-MIN_CONFIGURED_WINDOW_MS: Final = 30_000
-
-
-@dataclass(frozen=True, slots=True)
-class LocalToolchain:
-    """Everything needed to transcribe without touching the network."""
-
-    binary: Path
-    model: Path
-    ffmpeg: Path
-    ffprobe: Path | None
-    threads: int
-    language: str
-    timeout: float
-    allow_incomplete: bool
-    prompt: str
-    repeat_limit: float
-    max_context: str
-    window_ms: int
-    overlap_ms: int
-
-
-def _threads(env: Mapping[str, str]) -> int:
-    raw = env.get("SPEECHTOTEXT_WHISPER_THREADS", "")
-    if raw.isdigit() and int(raw) > 0:
-        return int(raw)
-    return min(os.cpu_count() or 4, _MAX_THREADS)
-
-
-def resolve_toolchain(env: Mapping[str, str]) -> LocalToolchain | None:
-    """Return the local toolchain, or ``None`` when any piece is missing (fail closed)."""
-    binary = stt_media.resolve_tool(env.get("SPEECHTOTEXT_WHISPER_BIN", ""), "whisper-cli")
-    ffmpeg = stt_media.resolve_ffmpeg(env)
-    raw_model = env.get("SPEECHTOTEXT_WHISPER_MODEL", "")
-    if binary is None or ffmpeg is None or not raw_model:
-        return None
-    model = Path(raw_model).expanduser()
-    if not model.is_file():
-        return None
-    raw_timeout = env.get("SPEECHTOTEXT_LOCAL_TIMEOUT", "")
-    ffprobe = stt_media.resolve_ffprobe(env, ffmpeg=ffmpeg)
-    return LocalToolchain(
-        binary=binary,
-        model=model,
-        ffmpeg=ffmpeg,
-        ffprobe=ffprobe,
-        allow_incomplete=env.get("SPEECHTOTEXT_ALLOW_INCOMPLETE") == "1",
-        threads=_threads(env),
-        language=env.get("SPEECHTOTEXT_LANGUAGE") or DEFAULT_LANGUAGE,
-        prompt=env.get("SPEECHTOTEXT_PROMPT", ""),
-        repeat_limit=_ratio(env.get("SPEECHTOTEXT_MAX_REPEAT", "")),
-        max_context=env.get("SPEECHTOTEXT_WHISPER_CONTEXT") or DEFAULT_MAX_CONTEXT,
-        window_ms=_whole(
-            env, "SPEECHTOTEXT_WINDOW_MS", stt_window.DEFAULT_WINDOW_MS,
-            floor=MIN_CONFIGURED_WINDOW_MS,
-        ),
-        overlap_ms=_whole(env, "SPEECHTOTEXT_WINDOW_OVERLAP_MS", stt_window.DEFAULT_OVERLAP_MS),
-        timeout=float(raw_timeout) if raw_timeout.replace(".", "", 1).isdigit() else DEFAULT_TIMEOUT,
-    )
-
-
-def _whole(env: Mapping[str, str], name: str, fallback: int, *, floor: int = 0) -> int:
-    raw = env.get(name, "").strip()
-    return int(raw) if raw.isdigit() and int(raw) >= floor else fallback
-
-
-def _ratio(raw: str) -> float:
-    try:
-        value = float(raw)
-    except ValueError:
-        return stt_coverage.DEFAULT_REPEAT_LIMIT
-    return value if 0.0 < value <= 1.0 else stt_coverage.DEFAULT_REPEAT_LIMIT
-
-
 def _run(argv: list[str], stage: str, timeout: float) -> None:
     try:
         completed = subprocess.run(  # noqa: S603 - argv is built from resolved executables
@@ -152,6 +79,11 @@ def _run(argv: list[str], stage: str, timeout: float) -> None:
         raise stt_client.SttError(f"{stage} 실패 rc={completed.returncode}: {detail}")
 
 
+def asr_fingerprint(toolchain: LocalToolchain, *, prompt: str, env: Mapping[str, str]) -> str:
+    material = {"language": toolchain.language, "prompt": prompt, "max_context": toolchain.max_context, "decode_flags": toolchain.decode_flags, "dtw": env.get("SPEECHTOTEXT_WHISPER_DTW", ""), "allow_incomplete": env.get("SPEECHTOTEXT_ALLOW_INCOMPLETE") == "1"}
+    return hashlib.sha256(repr(sorted(material.items())).encode()).hexdigest()[:32]
+
+
 def transcribe(
     audio: stt_audio.CheckedAudio,
     toolchain: LocalToolchain,
@@ -159,6 +91,7 @@ def transcribe(
     prompt: str = "",
     diarizer: stt_diarize.DiarizeToolchain | None = None,
     num_speakers: int | None = None,
+    count_speakers: Callable[[str], str] | None = None,
 ) -> stt_client.Transcription:
     """Transcribe ``audio`` on this machine; the bytes never leave it.
 
@@ -184,20 +117,33 @@ def transcribe(
             model=toolchain.model,
             windows=windows,
             tool=toolchain.binary,
+            asr_fingerprint=asr_fingerprint(toolchain, prompt=prompt or toolchain.prompt, env=os.environ),
         )
         report = stt_window_run.run_windows(
             wav, windows, toolchain,
             workdir=base, prompt=prompt or toolchain.prompt, store=store,
         )
         segments = list(stt_window.merge(report.results))
-        sentences = stt_blocks.sentences_from_words(stt_blocks.words_from_whisper(segments))
+        words = stt_blocks.words_from_whisper(segments)
+        if os.environ.get("SPEECHTOTEXT_ALIGN_BACKEND", "none") != "none":
+            words = stt_align.align_words(wav, words, env=os.environ)
+        turns = None
         if diarizer is not None:
             try:
                 turns = stt_diarize.diarize(wav, diarizer, num_speakers=num_speakers)
             except stt_diarize.DiarizeError as failure:
                 print(f"DIARIZE-FAIL {failure}", file=sys.stderr)
-            else:
-                sentences = stt_diarize.assign(sentences, turns)
+        if turns and diarizer is not None and count_speakers is not None and num_speakers is None:
+            turns = _recount(wav, words, turns, diarizer, count_speakers)
+        attribution_mode: stt_client.AttributionMode | None = None
+        if turns is None:
+            sentences = stt_blocks.sentences_from_words(words)
+        elif any(word.timing_source in {"token", "aligned"} for word in words):
+            attribution_mode = "word"
+            sentences = stt_local_attribution.sentences(words, turns)
+        else:
+            attribution_mode = "legacy"
+            sentences = stt_diarize.assign(stt_blocks.sentences_from_words(words), turns)
     text = stt_window.text_of(segments)
     if not text:
         raise stt_audio.TranscriptionRefused(stt_audio.EMPTY_TRANSCRIPT_NOTICE, exit_code=5)
@@ -213,13 +159,58 @@ def transcribe(
     # Only a run that lost nothing may forget its windows; anything else stays resumable.
     if not report.quarantined:
         store.clear()
-    return stt_client.Transcription(
+    snapshot = stt_eval_build.snapshot_for(
+        audio.path, toolchain, words=words, turns=turns or (), report=report,
+        duration_ms=coverage.duration_ms if coverage is not None else windows[-1].end_ms,
+        env=os.environ, prompt=prompt or toolchain.prompt,
+        diarizer=diarizer, num_speakers=num_speakers,
+    )
+    return stt_eval_build.SnapshotTranscription(
         text=text,
         model=f"local:{toolchain.model.stem}",
         endpoint="local",
         coverage=coverage,
         sentences=sentences,
+        attribution_mode=attribution_mode,
+        eval_record=snapshot,
     )
+
+
+# 임계값은 화자 수를 정하지 못한다 — 노드 실측(2026-09-07)의 사다리는 0.8→18 · 1.0→6 ·
+# 1.2→2 · 1.35→1 군집으로 절벽이라 어떤 고정값도 두 녹음을 동시에 맞히지 못했다. 그런데
+# 화자 수를 **주면** 분리기는 그 수를 상한으로 다시 묶는다: 같은 4.5분 녹음에서 pyannote 는
+# --num-speakers 3 으로 45.6/42.9/11.4% 세 사람을 냈고(자동 추정은 2명), 그 세 번째 목소리는
+# 발화 시간 11.4% 라 잔여 군집이 아니다. 그러니 모자란 것은 분리기가 아니라 k 를 아는 일이고,
+# 그 근거(자기소개·호칭·질문응답 짝)는 오디오가 아니라 전사본에 있다.
+def _recount(
+    wav: Path,
+    words: Sequence[stt_blocks.TimedWord],
+    turns: tuple[stt_diarize.Turn, ...],
+    diarizer: stt_diarize.DiarizeToolchain,
+    ask: Callable[[str], str],
+) -> tuple[stt_diarize.Turn, ...]:
+    """초안을 소유자가 볼 모양 그대로 보여 주고 화자 수를 물어 **한 번만** 재분리한다.
+
+    질의 실패도 재분리 실패도 1차 결과를 그대로 남긴다 — 화자 수를 고치려다 전사본을
+    잃는 일은 없다. 낱말은 어느 경로에서도 바뀌지 않고 바뀌는 것은 화자 라벨뿐이다.
+    """
+    observed = len({turn.speaker for turn in turns})
+    draft = stt_blocks.render(stt_blocks.group(stt_local_attribution.sentences(words, turns)))
+    try:
+        answer = ask(stt_speaker_count.unlabelled(draft))
+    except Exception as failure:  # noqa: BLE001 - 질의 실패가 전사를 멈추면 안 된다
+        print(f"RECOUNT-FAIL {type(failure).__name__}", file=sys.stderr)
+        return turns
+    estimated = stt_speaker_count.parse_count(answer, limit=diarizer.max_speakers)
+    wanted = stt_speaker_count.should_redo(estimated, observed)
+    print(f"DIARIZE-RECOUNT observed={observed} asked={estimated} redo={wanted}", file=sys.stderr)
+    if wanted is None:
+        return turns
+    try:
+        return stt_diarize.diarize(wav, diarizer, num_speakers=wanted)
+    except stt_diarize.DiarizeError as failure:
+        print(f"RECOUNT-FAIL {failure}", file=sys.stderr)
+        return turns
 
 
 def _plan(wav: Path, toolchain: LocalToolchain) -> tuple[stt_window.Window, ...]:
@@ -260,7 +251,7 @@ def _assert_not_collapsed(
 
 def _coverage(
     audio: stt_audio.CheckedAudio,
-    segments: object,
+    segments: Sequence[stt_window.Segment],
     toolchain: LocalToolchain,
     store: stt_window_store.WindowStore,
     text: str,

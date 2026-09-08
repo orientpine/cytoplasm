@@ -111,6 +111,24 @@ case "$mode" in
     # 아니면 "릴리스로 수렴"이 아니라 "체크아웃으로 오염"이 된다 — provenance 가드와
     # 같은 결의 fail-closed 다.
     local_head="$(git -C "$repo_root" rev-parse HEAD)" || exit 4
+    apply_lock_dir="${DEPLOY_ALL_LOCK_DIR:-$HOME/.hermes/deploy-all}"
+    if ! mkdir -p -m 700 "$apply_lock_dir" || ! chmod 700 "$apply_lock_dir"; then
+      log "APPLY-LOCK-BLOCK: cannot secure $apply_lock_dir"
+      exit 4
+    fi
+    if ! exec 8>"$apply_lock_dir/apply.lock"; then
+      log "APPLY-LOCK-BLOCK: cannot open $apply_lock_dir/apply.lock"
+      exit 4
+    fi
+    apply_lock_waited=0
+    if ! flock -n 8; then
+      apply_lock_waited=1
+      log "APPLY-LOCK-WAIT: another deploy_all --apply is running — waiting"
+      if ! flock -w "${DEPLOY_ALL_LOCK_WAIT_SECONDS:-1800}" 8; then
+        log "APPLY-LOCK-TIMEOUT: could not acquire $apply_lock_dir/apply.lock"
+        exit 1
+      fi
+    fi
     wait_timed_out=0
     if (( wait_converge )); then
       converge_deadline=$(( SECONDS + ${DEPLOY_ALL_CONVERGE_SECONDS:-600} ))
@@ -140,7 +158,11 @@ case "$mode" in
       exit 4
     fi
     if (( rc == 0 )); then
-      log "already fully deployed"
+      if (( apply_lock_waited )); then
+        log "APPLY-LOCK-RECHECK: already fully deployed after waiting for the apply lock"
+      else
+        log "already fully deployed"
+      fi
       write_receipt
       exit $?
     fi

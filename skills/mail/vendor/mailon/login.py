@@ -181,7 +181,20 @@ def login(browser: AgentBrowser, cfg: Config) -> None:
     # Submit by calling the page's own login() JS function - this bypasses
     # any visual overlay (popups) that might be blocking the click.
     log.info("submitting login form")
-    browser.eval_js("typeof login === 'function' ? (login(), 'ok') : 'no-login-fn'")
+    # agent-browser prints eval results JSON-quoted ('"ok"'), so unwrap before comparing.
+    submitted = browser.eval_js(
+        "typeof login === 'function' ? (login(), 'ok') : 'no-login-fn'"
+    ).strip().strip('"')
+    if submitted == "no-login-fn":
+        raise LoginError(
+            "login form was never submitted: the page exposes no login() function "
+            "(eval returned 'no-login-fn'); refusing to spend the 25s navigation "
+            "budget on a navigation that cannot happen"
+        )
+    if submitted != "ok":
+        # An unrecognised shape is not evidence of failure: fall through to the URL
+        # poll below rather than block a login that may well have gone through.
+        log.warning("login submit returned %r; falling back to the URL wait", submitted)
 
     # Wait for navigation away from the login page (up to 25s).
     #

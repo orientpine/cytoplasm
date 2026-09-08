@@ -25,7 +25,8 @@ if sys.platform == "win32":
             except Exception:
                 pass
 
-from .browser import AgentBrowser, BrowserError
+from . import send_lock
+from .browser import AgentBrowser, BrowserError, unique_session_name
 from .config import PROJECT_ROOT, load_config, load_totp_secret
 from .login import LoginError, login
 from .folders import resolve_folder_uid
@@ -67,8 +68,9 @@ def _setup_logging(logs_dir: Path, level: str = "INFO", stream=None) -> None:
 
 def _make_browser(cfg) -> AgentBrowser:
     return AgentBrowser(
-        session_name=cfg.session_name,
+        session_name=unique_session_name(cfg.session_name),
         headless=cfg.headless,
+        ephemeral=True,
     )
 
 
@@ -86,10 +88,22 @@ def _split_addresses(values: list[str]) -> tuple[str, ...]:
 
 def _make_send_browser(cfg) -> AgentBrowser:
     """Sends get their OWN browser session: sharing the sync session let a
-    concurrent send kill a running sent-folder sync (2026-07-20)."""
+    concurrent send kill a running sent-folder sync (2026-07-20), and sharing one
+    fixed send session let two concurrent sends overwrite each other's login form
+    (2026-09-07)."""
     return AgentBrowser(
-        session_name=f"{cfg.session_name}-send",
+        session_name=unique_session_name(f"{cfg.session_name}-send"),
         headless=cfg.headless,
+        ephemeral=True,
+    )
+
+
+def _make_resolve_browser(cfg) -> AgentBrowser:
+    """Recipient resolution opens compose too, so it needs its own session as well."""
+    return AgentBrowser(
+        session_name=unique_session_name(f"{cfg.session_name}-resolve"),
+        headless=cfg.headless,
+        ephemeral=True,
     )
 
 
@@ -325,6 +339,22 @@ def cmd_send(args) -> int:
 
     cfg = load_config()
     _setup_logging(cfg.logs_dir, stream=sys.stderr if args.json else sys.stdout)
+    try:
+        if args.dry_run:
+            return _perform_send(args, cfg)
+        # Only the irreversible step is serialized. The loser of a race re-runs its own
+        # duplicate check and finds the winner's mail already in the mailbox.
+        with send_lock.hold(send_lock.lock_path(cfg.data_dir)):
+            return _perform_send(args, cfg)
+    except (LoginError, BrowserError, SendSafetyError, SendValidationError) as error:
+        # 2026-09-07: an auth_error that blocked an approved mail left no line in the log
+        # file, because this branch only ever wrote to stdout/stderr.
+        log.error("send failed [%s]: %s", type(error).__name__, error)
+        _print_send_error(args.json, error)
+        return 2
+
+
+def _perform_send(args, cfg) -> int:
     browser = _make_send_browser(cfg)
     try:
         request = SendRequest(
@@ -343,9 +373,6 @@ def cmd_send(args) -> int:
         else:
             print(f"OK: {result.status}; POST={result.network_post_count}")
         return 0
-    except (LoginError, BrowserError, SendSafetyError, SendValidationError) as error:
-        _print_send_error(args.json, error)
-        return 2
     finally:
         browser.close()
 
@@ -409,11 +436,7 @@ def cmd_resolve(args) -> int:
     """
     cfg = load_config()
     _setup_logging(cfg.logs_dir, stream=sys.stderr if args.json else sys.stdout)
-    # Own session like send: never share (nor disturb) the sync session.
-    browser = AgentBrowser(
-        session_name=f"{cfg.session_name}-resolve",
-        headless=cfg.headless,
-    )
+    browser = _make_resolve_browser(cfg)
     try:
         login(browser, cfg)
         cells, post_count = resolve_name(browser, args.name)

@@ -41,7 +41,7 @@ wrapper_inputs_digest() { # wrapper_inputs_digest <node>
 #: 실행하지 않고 기록만 한다. 성공을 돌려주는 것이 중요하다 — 실패를 돌려주면 프로브가
 #: 조기 반환해 그 뒤에 낼 명령을 영영 못 본다(실측에서 이 차이로 목록이 잘렸다).
 wrapper_record_commands() { # wrapper_record_commands <node> <outfile>
-  local node="$1" out="$2" definition name
+  local node="$1" out="$2" entry definition name
   : > "$out" || return 1
   capture_on_node() { printf '%s\0' "$2" >> "$out"; printf '%s' "active"; return 0; }
 
@@ -52,14 +52,20 @@ wrapper_record_commands() { # wrapper_record_commands <node> <outfile>
   # 프로브가 명령만 남기고 생성기를 부르지 않는다 — 판정은 평시 틱이 한다.
   export HEALTHCHECK_WRAPPER_RECORDING=1
 
-  for definition in "${LIVE_CHECKS[@]}"; do
+  # --suggest always examines the full catalog, including groups the current sweep has
+  # excluded. The wrapper must allow those discovery commands or exit 126 becomes a false
+  # "service absent" signal. Strip only the catalog's leading group field; the remaining
+  # five-field record is the unchanged run_check contract.
+  for entry in "${HEALTHCHECK_CHECK_CATALOG[@]}"; do
+    definition="${entry#*|}"
     IFS='|' read -r _name _type check_node _rest <<< "$definition"
     [[ "$check_node" == "$node" ]] || continue
     run_check "$definition" >/dev/null 2>&1 || true
   done
   # 실패한 체크가 수리 티켓을 내는 경로도 같은 키로 나간다. 이것이 빠지면 체크는 실패를
   # 보고하지 못한 채 실패한다 — 2026-08-20 `release store usage` 가 정확히 그 상태였다.
-  for definition in "${LIVE_CHECKS[@]}"; do
+  for entry in "${HEALTHCHECK_CHECK_CATALOG[@]}"; do
+    definition="${entry#*|}"
     IFS='|' read -r name _type check_node _rest <<< "$definition"
     [[ "$check_node" == "$node" ]] || continue
     printf '%s\0' "$(healthcheck_repair_command "$name")" >> "$out"

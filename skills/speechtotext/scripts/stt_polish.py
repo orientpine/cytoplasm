@@ -107,7 +107,7 @@ def polish_sentences(
     kept: list[stt_blocks.TimedSentence] = []
     collapsed = 0
     for sentence in sentences:
-        if kept and sentence.text == kept[-1].text:
+        if not sentence.folded and kept and sentence.text == kept[-1].text:
             collapsed += 1
             continue
         kept.append(sentence)

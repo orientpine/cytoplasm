@@ -5,12 +5,23 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Final, Protocol, final
 
 from automation.skill_generation.core import Observation, PipelineExit, ProposalStatus, RepetitionDetector
+from automation.skill_generation.precheck import (
+    Review,
+    Verdict,
+    VerdictKind,
+    build_catalog,
+    compare,
+    comparison_section,
+    default_roots,
+    latest_review,
+)
 
 _OBSERVATION_ROW: Final = re.compile(r'^\{"pattern_hash": "([0-9a-f]{16})", "timestamp": "([^"]+)", "week": "(\d{4}-W\d{2})"\}$')
 _PROPOSAL_ROW: Final = re.compile(r'^\{"draft_dir": "([^"]+)", "name": "(auto-[0-9a-f]{16})", "pattern_hash": "([0-9a-f]{16})", "status": "([A-Z-]+)", "week": "([^"]+)"\}$')
@@ -24,6 +35,13 @@ class SkillGenerationPaths:
     drafts: Path
     mounted: Path
     registry: Path
+    #: 제작 전 대조가 열거할 스킬 루트(주입 전용). 비어 있으면 governed 기본값을 쓴다.
+    catalog_roots: tuple[Path, ...] = ()
+
+    @property
+    def reviews(self) -> Path:
+        """제작 판단 증적 원장 — 판정 한 건에 한 줄(t_0a7959e9)."""
+        return self.root / "reviews.jsonl"
 
     @classmethod
     def from_root(cls, root: Path) -> SkillGenerationPaths:
@@ -95,12 +113,22 @@ class AutoSkillService:
         existing = self._latest(name)
         if existing is not None:
             return None
-        draft_dir = self._write_draft(name, candidate)
-        proposal = Proposal(name, candidate.week, candidate.pattern_hash, draft_dir, ProposalStatus.SUGGESTED)
+        verdict, section = self._precheck(text, name, candidate)
+        match verdict.kind:
+            case VerdictKind.REUSE_EXISTING:
+                draft_dir = self.paths.drafts / name
+                status = ProposalStatus.REUSE_EXISTING
+            case VerdictKind.NEW:
+                draft_dir = self._write_draft(name, candidate, section)
+                status = ProposalStatus.SUGGESTED
+        proposal = Proposal(name, candidate.week, candidate.pattern_hash, draft_dir, status)
         self._record(proposal)
-        if self.router is None:
+        if self.router is None or status is ProposalStatus.REUSE_EXISTING:
             return proposal
         return self.route(name)
+
+    def latest_review(self, name: str) -> dict[str, object] | None:
+        return latest_review(self.paths.reviews, name)
 
     def route(self, name: str) -> Proposal:
         proposal = self._latest(name)
@@ -173,11 +201,18 @@ class AutoSkillService:
             _ = handle.write(f"| {proposal.week} | `{proposal.name}` | `sha256:{proposal.pattern_hash}` | {proposal.status.value} |\n")
         _ = self.paths.registry.chmod(0o600)
 
-    def _write_draft(self, name: str, observation: Observation) -> Path:
+    def _precheck(self, text: str, name: str, observation: Observation) -> tuple[Verdict, str]:
+        """제작 **전** 대조 — 전체 목록 열거·SKILL.md 열람 증적을 남기고 재사용 여부를 판정한다."""
+        catalog = build_catalog(self.paths.catalog_roots or default_roots(self.paths.mounted))
+        verdict = compare(text, name, catalog.cards)
+        self._append_json(self.paths.reviews, Review(observation, name, verdict, catalog.skipped).row())
+        return verdict, comparison_section(verdict, catalog.cards)
+
+    def _write_draft(self, name: str, observation: Observation, section: str) -> Path:
         draft_dir = self.paths.drafts / name
         scripts = draft_dir / "scripts"
         scripts.mkdir(mode=0o700, parents=True, exist_ok=True)
-        _ = (draft_dir / "SKILL.md").write_text(self._skill_markdown(name, observation), encoding="utf-8")
+        _ = (draft_dir / "SKILL.md").write_text(self._skill_markdown(name, observation) + "\n" + section, encoding="utf-8")
         scenario = scripts / "scenario.sh"
         _ = scenario.write_text(self._scenario(), encoding="utf-8")
         _ = scenario.chmod(0o700)
@@ -204,7 +239,7 @@ class AutoSkillService:
         except OSError:
             return ()
 
-    def _append_json(self, path: Path, row: dict[str, str]) -> None:
+    def _append_json(self, path: Path, row: Mapping[str, object]) -> None:
         with path.open("a", encoding="utf-8") as handle:
             _ = handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         _ = path.chmod(0o600)

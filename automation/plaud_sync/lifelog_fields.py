@@ -33,10 +33,11 @@ TRANSCRIPT_HEADING: Final = "## 전문"
 SOURCE_RULE: Final = "---"
 OWN_HEADINGS: Final = (GLANCE_HEADING, SUMMARY_HEADING, DECISIONS_HEADING, TRANSCRIPT_HEADING)
 NO_SUMMARY: Final = "- (요약 없음)"
+#: 요약이 왜 없는지까지 말한다 — 게이트 생략과 모델 실패는 소유자에게 다른 사실이다.
+NO_SUMMARY_REASON: Final = "없음 (모델이 전사본에서 요약을 만들지 못함)"
 NO_TRANSCRIPT: Final = "- (전사 없음)"
 TAG_ROOT: Final = "lifelog"
 MAX_TOPIC_TAGS: Final = 8
-ONE_LINE_CHARS: Final = 160
 TIMESTAMP_FORMAT: Final = "%Y-%m-%dT%H:%M:%S"
 TRANSCRIPT_CALLOUT: Final = "> [!quote]- 전문 펼치기 ({count} 발화)"
 
@@ -52,13 +53,10 @@ _GENERIC_HEADINGS: Final = frozenset(
     )
 )
 _HEADING_RE: Final = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.MULTILINE)
-_HEADING_LINE_RE: Final = re.compile(r"^#{1,6}\s")
 _RULE_RE: Final = re.compile(r"^(-{3,}|_{3,}|\*{3,})$")
-_LIST_MARKER_RE: Final = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 _IMAGE_RE: Final = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _UNRESOLVABLE_IMAGE_RE: Final = re.compile(r"!\[[^\]]*\]\((?!https?://)[^)]*\)")
 _BLANK_RUN_RE: Final = re.compile(r"\n{3,}")
-_SENTENCE_BREAK_RE: Final = re.compile(r"(?<=[.!?。])\s+")
 _SPEAKER_RE: Final = re.compile(r"^\[[^\]]*? · ([^\]]+)\]", re.MULTILINE)
 _YAML_LEAD_CHARS: Final = "#-?:,[]{}&*!|>'\"%@\x60"
 _YAML_RESERVED: Final = frozenset({"true", "false", "null", "yes", "no", "on", "off", "~"})
@@ -161,7 +159,10 @@ def render_duration(duration_ms: int) -> str:
 
 
 def speaker_count(transcript: str) -> int:
-    return len({match.group(1).strip() for match in _SPEAKER_RE.finditer(transcript)})
+    labels = {match.group(1).strip() for match in _SPEAKER_RE.finditer(transcript)}
+    labels.update(re.findall(r"^\[(?:\d{2}|--):(?:\d{2}|--):(?:\d{2}|--)\]\s+(화자\d+)(?:\s+·\s+.+)?\s*$",
+                             transcript, re.MULTILINE))
+    return len(labels - {"화자0"})
 
 
 def _tag_for(heading: str) -> str:
@@ -183,46 +184,31 @@ def topic_tags(summary: str) -> tuple[str, ...]:
         if len(tags) >= MAX_TOPIC_TAGS:
             break
     return tuple(tags)
-
-
-def one_line(summary: str) -> str:
-    """The first sentence of the summary's first text line (headings, rules, images skipped)."""
-    for raw in summary.splitlines():
-        line = raw.strip()
-        if not line or line == NO_SUMMARY or _HEADING_LINE_RE.match(line) or _RULE_RE.match(line):
-            continue
-        line = _IMAGE_RE.sub("", _LIST_MARKER_RE.sub("", line)).strip()
-        if not line:
-            continue
-        first = _SENTENCE_BREAK_RE.split(line)[0].strip()
-        return first if len(first) <= ONE_LINE_CHARS else first[: ONE_LINE_CHARS - 1] + "…"
-    return ""
-
-
+# 2026-09-07 소유자 지시로 네 줄을 걷어냈다. 지운 이유는 저마다 다르다:
+#   사람:: — ASR 오인식을 `[[위키링크]]` 로 굳혀 vault 에 없는 문서를 만든다(실측
+#            `[[신영구원님]]` = "신영구 연구원님"의 오인식). 사람 이름은 요약 본문이 말한다.
+#   장소:: — 같은 이유이고 소비자도 없었다.
+#   한 줄:: — 바로 아래 `## 요약` 첫 줄의 글자 그대로의 복사본이다.
+#   주제:: — frontmatter 의 `tags:` 와 같은 값을 두 번 적는다. 태그는 frontmatter 가 소유한다.
+# 남는 것은 녹음 한 줄과 **진단**이다 — 진단은 무엇이 잘못됐는지 알려주는 유일한 신호라
+# 지우면 실패가 침묵이 된다.
 def glance_lines(
     recording: LifelogRecording,
     extraction: ExtractionOutcome,
     *,
     stamp: datetime,
-    topics: tuple[str, ...],
     summary: str,
 ) -> tuple[str, ...]:
-    """Dataview inline fields (녹음 · 주제 · 사람 · 장소 · 한 줄) — absent fields are omitted, not blank."""
+    """녹음 한 줄과 진단만 — 나머지는 요약이 말한다."""
     recorded = f"{stamp:%Y-%m-%d} ({_WEEKDAYS[stamp.weekday()]}) {stamp:%H:%M} · {render_duration(recording.duration_ms)}"
     speakers = speaker_count(recording.transcript_text)
     lines = [f"- 녹음:: {recorded}" + (f" · 화자 {speakers}명" if speakers else "")]
-    if topics:
-        lines.append("- 주제:: " + " ".join(f"#{tag}" for tag in topics))
     if isinstance(extraction, ExtractionSkipped):
         lines.append(f"- 추출:: 생략 ({extraction.reason})")
-    else:
-        if extraction.people:
-            lines.append("- 사람:: " + ", ".join(f"[[{person}]]" for person in extraction.people))
-        if extraction.places:
-            lines.append("- 장소:: " + ", ".join(extraction.places))
-    headline = one_line(summary)
-    if headline:
-        lines.append(f"- 한 줄:: {headline}")
+    elif not summary.strip():
+        # 추출이 **돌았는데도** 요약이 없는 경우 — 생략(위)과 다른 사실이고, 그 구별이
+        # 소유자가 무엇을 고쳐야 하는지를 정한다.
+        lines.append(f"- 요약:: {NO_SUMMARY_REASON}")
     return tuple(lines)
 
 

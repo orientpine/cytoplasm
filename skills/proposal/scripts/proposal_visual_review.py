@@ -7,19 +7,13 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
-from .proposal_config import ConfigError, ProposalConfig, load_config, preflight
+from .proposal_config import ConfigError, ProposalConfig, load_config
 from .proposal_version import VersionStore
-
-_PREVIEW_TIMEOUT_SECONDS = 300
-_CHILD_ENV_NAMES = ("HOME", "KIMM_DOCBOT_CHROME", "PATH", "PROPOSAL_PREVIEW_CHROME", "UV_CACHE_DIR")
-
 
 class VisualReviewError(RuntimeError):
     """The page-image review artifact could not be produced."""
@@ -38,43 +32,15 @@ class VisualReviewResult:
 
 
 class Runner(Protocol):
-    def __call__(
-        self,
-        argv: list[str],
-        *,
-        cwd: Path,
-        env: dict[str, str],
-        capture_output: bool,
-        text: bool,
-        timeout: int,
-        check: bool,
-    ) -> subprocess.CompletedProcess[str]: ...
+    """The preview seam: the in-tree engine in production, a fake under test."""
+
+    def __call__(self, argv: list[str]) -> int: ...
 
 
-def _run(
-    argv: list[str],
-    *,
-    cwd: Path,
-    env: dict[str, str],
-    capture_output: bool,
-    text: bool,
-    timeout: int,
-    check: bool,
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv,
-        cwd=cwd,
-        env=env,
-        capture_output=capture_output,
-        text=text,
-        timeout=timeout,
-        check=check,
-    )
+def _run(argv: list[str]) -> int:
+    from ..engine.pipeline.cli import main as engine_main
 
-
-def _child_environment(values: Mapping[str, str] | None = None) -> dict[str, str]:
-    source = os.environ if values is None else values
-    return {name: source[name] for name in _CHILD_ENV_NAMES if name in source}
+    return engine_main(argv)
 
 
 def _complete_preview(output_dir: Path) -> tuple[Path, Path, tuple[Path, ...]] | None:
@@ -105,11 +71,6 @@ def run_visual_review(
     except ConfigError as error:
         print(f"CONFIG-ERROR: {error}", file=sys.stderr)
         raise SystemExit(4) from error
-    report = preflight(cfg)
-    if not report.ok:
-        print(f"ENGINE-PIN-BLOCK: {', '.join(report.reasons)}", file=sys.stderr)
-        raise SystemExit(4)
-
     store = VersionStore.from_environment()
     version = store.head(slug)
     if version is None:
@@ -131,35 +92,16 @@ def run_visual_review(
             raise VisualReviewError("visual review output directory must not be a symlink")
         shutil.rmtree(output_dir)
 
-    argv = [
-        "uv",
-        "run",
-        "kimm-docbot",
-        "preview",
-        str(hwpx_path),
-        "--out-dir",
-        str(output_dir),
-    ]
+    argv = ["preview", str(hwpx_path), "--out-dir", str(output_dir)]
     preview_chrome = os.environ.get("PROPOSAL_PREVIEW_CHROME", "").strip()
     if preview_chrome:
         argv += ["--chrome", preview_chrome]
     try:
-        completed = runner(
-            argv,
-            cwd=cfg.docbot_root,
-            env=_child_environment(),
-            capture_output=True,
-            text=True,
-            timeout=_PREVIEW_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
+        returncode = runner(argv)
+    except (OSError, ValueError, RuntimeError) as error:
         raise VisualReviewError(f"visual preview could not run: {error}") from error
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "no process output").strip()[:500]
-        raise VisualReviewError(
-            f"kimm-docbot preview failed rc={completed.returncode}: {detail}"
-        )
+    if returncode != 0:
+        raise VisualReviewError(f"visual preview failed rc={returncode}")
     complete = _complete_preview(output_dir)
     if complete is None:
         raise VisualReviewError("preview reported success without complete page artifacts")

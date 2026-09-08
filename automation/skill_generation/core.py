@@ -23,6 +23,8 @@ class PipelineExit(IntEnum):
 
 class ProposalStatus(StrEnum):
     SUGGESTED = "SUGGESTED"
+    #: 제작 전 대조에서 기존 스킬이 같은 일을 한다고 판정된 것 — 초안을 만들지 않는다(t_0a7959e9).
+    REUSE_EXISTING = "REUSE-EXISTING"
     AWAITING_OWNER = "AWAITING-OWNER"
     SANDBOX_BLOCKED = "SANDBOX-BLOCKED"
     AUTO_HELD = "AUTO-HELD"

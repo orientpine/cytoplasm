@@ -54,6 +54,11 @@ class FileSpec:
     mode: int
     owner: str
     group: str
+    #: Place it once, then leave it alone. The owner-notice credential lives at such a
+    #: path: the operator types secrets into it, so converging it back to the shipped
+    #: template would destroy them on the next run. Ownership and mode drift is accepted
+    #: as the cheaper failure — never touching a credential beats correcting its bits.
+    create_only: bool = False
 
     def state(self) -> FileState:
         digest = hashlib.sha256(self.content.encode()).hexdigest()
@@ -298,6 +303,8 @@ def build_plan(inputs: InstallInputs, state: SystemState) -> InstallPlan:
         if state.repositories.get(path) != config.origin_url:
             actions.append(EnsureRepository(path, config.origin_url, private_key))
     for spec in inputs.files:
+        if spec.create_only and spec.path in state.files:
+            continue
         if state.files.get(spec.path) != spec.state():
             actions.append(EnsureFile(spec))
     for timer in inputs.timers:

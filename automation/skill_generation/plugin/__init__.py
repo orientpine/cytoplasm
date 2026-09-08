@@ -77,10 +77,21 @@ def pre_gateway_dispatch(event: InboundEvent, gateway: None, session_store: None
         rejected = service.audit_mounts()
         proposal = service.observe(text, datetime.now(UTC))
         if proposal is not None:
-            LOGGER.warning("skill suggestion name=%s status=%s", proposal.name, proposal.status.value)
+            review = service.latest_review(proposal.name) or {}
+            LOGGER.warning(
+                "skill suggestion name=%s status=%s precheck=%s matches=%s",
+                proposal.name,
+                proposal.status.value,
+                review.get("verdict"),
+                review.get("matches"),
+            )
         if rejected:
             LOGGER.warning("generated skill bypass rejected count=%d", len(rejected))
-    except (OSError, ValueError, AttributeError):
+    # ImportError 도 여기서 멈춘다: 제작 전 대조는 `selfskill_audit.overlap` 의 점수 정의를
+    # import 하는데, 런타임 사본 트리(`~/.hermes/skill-generation/runtime`)에 그 모듈이 없으면
+    # 관측이 아니라 게이트웨이 훅 전체가 죽는다. 대조 없이 초안을 만드는 길은 없으므로(fail-closed)
+    # 여기서는 관측만 건너뛴다.
+    except (OSError, ValueError, AttributeError, ImportError):
         LOGGER.exception("skill-generation observation failed")
     return None
 

@@ -1,0 +1,92 @@
+[
+  {
+    "label": "sherpa-eres2net_base-align-none",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "sherpa",
+      "SPEECHTOTEXT_DIARIZE_EMBEDDING": "~/sherpa-onnx/models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "SPEECHTOTEXT_DIARIZE_THRESHOLD": "1.0",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "none"
+    }
+  },
+  {
+    "label": "sherpa-eres2net_base-align-whisperx",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "sherpa",
+      "SPEECHTOTEXT_DIARIZE_EMBEDDING": "~/sherpa-onnx/models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "SPEECHTOTEXT_DIARIZE_THRESHOLD": "1.0",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "whisperx"
+    }
+  },
+  {
+    "label": "sherpa-campplus-align-none",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "sherpa",
+      "SPEECHTOTEXT_DIARIZE_EMBEDDING": "~/sherpa-onnx/models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+      "SPEECHTOTEXT_DIARIZE_THRESHOLD": "1.0",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "none"
+    }
+  },
+  {
+    "label": "sherpa-campplus-align-whisperx",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "sherpa",
+      "SPEECHTOTEXT_DIARIZE_EMBEDDING": "~/sherpa-onnx/models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+      "SPEECHTOTEXT_DIARIZE_THRESHOLD": "1.0",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "whisperx"
+    }
+  },
+  {
+    "label": "sherpa-eres2net_200k-align-none",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "sherpa",
+      "SPEECHTOTEXT_DIARIZE_EMBEDDING": "~/sherpa-onnx/models/3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx",
+      "SPEECHTOTEXT_DIARIZE_THRESHOLD": "1.0",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "none"
+    }
+  },
+  {
+    "label": "sherpa-eres2net_200k-align-whisperx",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "sherpa",
+      "SPEECHTOTEXT_DIARIZE_EMBEDDING": "~/sherpa-onnx/models/3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx",
+      "SPEECHTOTEXT_DIARIZE_THRESHOLD": "1.0",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "whisperx"
+    }
+  },
+  {
+    "label": "pyannote-exclusive-align-none",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "pyannote",
+      "SPEECHTOTEXT_DIARIZE_BIN": "~/.venvs/stt-engines/bin/stt-engines",
+      "SPEECHTOTEXT_DIARIZE_MODE": "exclusive",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "none"
+    }
+  },
+  {
+    "label": "pyannote-exclusive-align-whisperx",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "pyannote",
+      "SPEECHTOTEXT_DIARIZE_BIN": "~/.venvs/stt-engines/bin/stt-engines",
+      "SPEECHTOTEXT_DIARIZE_MODE": "exclusive",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "whisperx"
+    }
+  },
+  {
+    "label": "pyannote-regular-align-none",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "pyannote",
+      "SPEECHTOTEXT_DIARIZE_BIN": "~/.venvs/stt-engines/bin/stt-engines",
+      "SPEECHTOTEXT_DIARIZE_MODE": "regular",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "none"
+    }
+  },
+  {
+    "label": "pyannote-regular-align-whisperx",
+    "env_overrides": {
+      "SPEECHTOTEXT_DIARIZE_BACKEND": "pyannote",
+      "SPEECHTOTEXT_DIARIZE_BIN": "~/.venvs/stt-engines/bin/stt-engines",
+      "SPEECHTOTEXT_DIARIZE_MODE": "regular",
+      "SPEECHTOTEXT_ALIGN_BACKEND": "whisperx"
+    }
+  }
+]

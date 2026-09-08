@@ -70,8 +70,8 @@ def test_parse_source_when_prose_follows_the_json_then_url_suffix_and_metadata_a
     assert source == AudioSource(
         recording_id="rec-001",
         name="09-02 직장 동료들의 일상 대화",
-        created_at="2026-09-02T05:26:44",
-        start_at="2026-09-02T02:19:04",
+        created_at="2026-09-02T05:26:44+00:00",
+        start_at="2026-09-02T02:19:04+00:00",
         duration_ms=7037000,
         url=_URL,
         suffix=".mp3",
@@ -125,6 +125,16 @@ def test_download_when_stream_exceeds_cap_then_refuses_and_leaves_nothing(tmp_pa
     dest = tmp_path / "rec-001.mp3"
     with pytest.raises(AudioError, match="상한"):
         download(_source(), dest, max_bytes=64, opener=_opener(b"x" * 65))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_when_stream_ends_before_declared_length_then_refuses_and_leaves_nothing(
+    tmp_path: Path,
+) -> None:
+    """http.client returns b"" on an early close instead of raising IncompleteRead."""
+    dest = tmp_path / "rec-001.mp3"
+    with pytest.raises(AudioError, match="짧"):
+        download(_source(), dest, max_bytes=64, opener=_opener(b"x" * 30, length="40"))
     assert list(tmp_path.iterdir()) == []
 
 

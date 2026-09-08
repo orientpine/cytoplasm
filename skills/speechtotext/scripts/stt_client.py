@@ -17,7 +17,7 @@ import json
 import secrets
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 from urllib import error, request
 
 import stt_audio
@@ -31,6 +31,7 @@ DEFAULT_TIMEOUT: Final = 600.0
 _RESPONSE_FORMAT: Final = "json"
 
 Opener: TypeAlias = Callable[[request.Request, float], tuple[int, bytes, str]]
+AttributionMode: TypeAlias = Literal["word", "legacy"]
 
 
 class SttError(RuntimeError):
@@ -52,6 +53,8 @@ class Transcription:
     # Empty whenever the backend cannot say when a sentence was spoken (the API
     # returns text only). The document then renders exactly as it does today.
     sentences: tuple[stt_blocks.TimedSentence, ...] = ()
+    # API·옛 입력은 legacy, 로컬 화자 도구 부재·실패는 배정 자체가 없어 None이다.
+    attribution_mode: AttributionMode | None = "legacy"
 
 
 def build_multipart(

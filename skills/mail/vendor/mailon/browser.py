@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,23 @@ from pathlib import Path
 
 
 log = logging.getLogger(__name__)
+
+#: Names minted by :func:`unique_session_name` carry this so cleanup only ever removes
+#: sessions this module created, never a human's own ``--session``.
+_EPHEMERAL_MARKER = "-run-"
+
+
+def unique_session_name(base: str) -> str:
+    """Return a ``--session`` name no other process can be using.
+
+    agent-browser keys the live browser by ``--session``: two processes passing the same
+    name drive the SAME tab, and each one's ``close`` tears down the other's browser.
+    Measured 2026-09-07 on the node: two concurrent sends overwrote each other's login
+    form and both ended as ``auth_error``. A per-process name makes "one process ↔ one
+    browser" structural. It costs nothing — the profile is destroyed on close anyway
+    (measured cold start 0.9s), so no session was ever inherited between runs.
+    """
+    return f"{base}{_EPHEMERAL_MARKER}{os.getpid()}-{secrets.token_hex(3)}"
 
 
 def _resolve_agent_browser() -> str:
@@ -55,10 +73,12 @@ class BrowserError(RuntimeError):
 
 
 class AgentBrowser:
-    """Wraps the `agent-browser` CLI with a persistent session.
+    """Wraps the `agent-browser` CLI.
 
-    The browser daemon stays alive across calls (agent-browser design),
-    and `--session` isolates this project from other agent-browser usage.
+    The browser daemon stays alive between calls of one run (agent-browser design) and
+    `--session` isolates it: a session gets its own Chrome profile, and `close` destroys
+    both. `ephemeral` marks a session this process minted for itself, whose leftover
+    config file is ours to clean up.
     """
 
     def __init__(
@@ -67,8 +87,10 @@ class AgentBrowser:
         headless: bool = True,
         executable: str | None = None,
         timeout: int = 90,
+        ephemeral: bool = False,
     ) -> None:
         self.session_name = session_name
+        self.ephemeral = ephemeral
         self.headless = headless
         self.executable = executable or _resolve_agent_browser()
         self.timeout = timeout
@@ -217,6 +239,23 @@ class AgentBrowser:
             self._run(["close"])
         except BrowserError as e:
             log.warning("close failed (non-fatal): %s", e)
+        finally:
+            self._discard_session_config()
+
+    def _discard_session_config(self) -> None:
+        """Remove the per-session file agent-browser leaves in ``~/.agent-browser``.
+
+        Stable session names reuse theirs; a per-process name would otherwise pile up one
+        file per run, so only names this module minted are removed. Best-effort: cleanup
+        must never turn into a failure of the work that just finished.
+        """
+        if not self.ephemeral or _EPHEMERAL_MARKER not in self.session_name:
+            return
+        try:
+            config = Path.home() / ".agent-browser" / f"{self.session_name}.config"
+            config.unlink(missing_ok=True)
+        except OSError as e:
+            log.debug("session config cleanup skipped: %s", e)
 
     def current_url(self) -> str:
         return self._run(["get", "url"]).strip()

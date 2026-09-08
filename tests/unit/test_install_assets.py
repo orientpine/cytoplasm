@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from automation.install.assets import build_inputs, render_node_toml
+from automation.install.plan import EnsureFile, SystemState, build_plan
 from automation.node_config import load_node_config
 
 
@@ -119,6 +120,69 @@ def test_build_inputs_installs_command_sync_dropins_for_both_gateways() -> None:
         assert dropin.mode == 0o600
         assert dropin.owner == account
         assert dropin.group == account
+
+
+def test_build_inputs_renders_healthcheck_peer_read_sudoers_dropin_exactly() -> None:
+    # Given
+    config = load_node_config(_REPO / "configs" / "node.example.toml")
+
+    # When
+    inputs = build_inputs(_REPO, config, _public_key())
+    files = {spec.path: spec for spec in inputs.files}
+
+    # Then
+    peer_read = files[Path("/etc/sudoers.d/autophagy-healthcheck-peer-read")]
+    assert peer_read.content == (
+        "ops ALL=(peer) NOPASSWD: /usr/bin/cat -- /home/peer/.hermes/config.yaml\n"
+        "ops ALL=(peer) NOPASSWD: /usr/bin/cat -- /home/peer/.hermes/channel_directory.json\n"
+    )
+    assert (peer_read.mode, peer_read.owner, peer_read.group) == (0o440, "root", "root")
+
+
+def test_build_inputs_renders_healthcheck_peer_read_sudoers_from_custom_node_config() -> None:
+    # Given
+    config = replace(
+        load_node_config(_REPO / "configs" / "node.example.toml"),
+        ops_account="alternate-ops",
+        peer_account="alternate-peer",
+        peer_home=Path("/srv/alternate-peer"),
+    )
+
+    # When
+    inputs = build_inputs(_REPO, config, _public_key())
+    files = {spec.path: spec for spec in inputs.files}
+
+    # Then
+    peer_read = files[Path("/etc/sudoers.d/autophagy-healthcheck-peer-read")]
+    assert peer_read.content == (
+        "alternate-ops ALL=(alternate-peer) NOPASSWD: /usr/bin/cat -- "
+        "/srv/alternate-peer/.hermes/config.yaml\n"
+        "alternate-ops ALL=(alternate-peer) NOPASSWD: /usr/bin/cat -- "
+        "/srv/alternate-peer/.hermes/channel_directory.json\n"
+    )
+
+
+def test_healthcheck_peer_read_sudoers_dropin_is_idempotent_after_first_plan() -> None:
+    # Given
+    config = load_node_config(_REPO / "configs" / "node.example.toml")
+    inputs = build_inputs(_REPO, config, _public_key())
+    initial = build_plan(inputs, SystemState.empty())
+
+    # When
+    repeated = build_plan(inputs, SystemState.from_actions(initial.actions))
+
+    # Then
+    target = Path("/etc/sudoers.d/autophagy-healthcheck-peer-read")
+    assert any(
+        action.spec.path == target
+        for action in initial.actions
+        if isinstance(action, EnsureFile)
+    )
+    assert all(
+        action.spec.path != target
+        for action in repeated.actions
+        if isinstance(action, EnsureFile)
+    )
 
 
 def test_update_trust_file_comes_from_existing_bootstrap_contract() -> None:

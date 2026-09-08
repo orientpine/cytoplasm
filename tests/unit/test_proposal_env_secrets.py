@@ -77,13 +77,11 @@ def test_proposal_cli_preflight_loads_secrets_before_argument_parsing(
 ) -> None:
     chrome = _executable(tmp_path / "preview-chrome")
     (tmp_path / ".env.secrets").write_text(
-        f"PROPOSAL_PREVIEW_CHROME={chrome}\n"
-        "PROPOSAL_DOCBOT_PIN=0123456789abcdef0123456789abcdef01234567\n",
+        f"PROPOSAL_PREVIEW_CHROME={chrome}\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("PROPOSAL_PREVIEW_CHROME", raising=False)
-    monkeypatch.delenv("PROPOSAL_DOCBOT_PIN", raising=False)
     # A clean runner has none of REQUIRED_BINARIES; the seam under test is the env
     # file, so PATH lookups are stubbed exactly as test_proposal_preflight does.
     # The chrome check stays real: it is the configured file path, not a PATH hit.

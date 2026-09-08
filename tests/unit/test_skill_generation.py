@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import final
@@ -20,7 +21,9 @@ class FakePipeline:
 
 
 def _service(tmp_path: Path, pipeline: FakePipeline) -> AutoSkillService:
-    paths = SkillGenerationPaths.from_root(tmp_path)
+    # 대조 카탈로그는 빈 tmp 루트로 고정한다 — 실제 repo `skills/` 를 읽으면 이 회귀가
+    # 리포의 스킬 목록 변화에 따라 흔들린다(제작 전 대조 게이트, t_0a7959e9).
+    paths = replace(SkillGenerationPaths.from_root(tmp_path), catalog_roots=(tmp_path / "catalog",))
     return AutoSkillService(paths, RepetitionDetector(), PipelineRouter(Path("/repo"), pipeline))
 
 
@@ -185,3 +188,32 @@ def test_record_pipeline_result_when_review_blocks_then_records_review_blocked(t
 
     # Then: the supervisory registry distinguishes review rejection from a generic error.
     assert result.status is ProposalStatus.REVIEW_BLOCKED
+
+
+def test_observe_when_an_existing_skill_already_covers_the_pattern_then_nothing_is_routed(tmp_path: Path) -> None:
+    # Given: 배포된 스킬 카탈로그에 같은 기능의 스킬이 이미 있다.
+    catalog = tmp_path / "catalog"
+    existing = catalog / "recall"
+    _ = existing.mkdir(parents=True)
+    _ = (existing / "SKILL.md").write_text(
+        '---\nname: recall\ndescription: "개인 RAG 검색 스킬. 기억 질문에 출처 인용"\n'
+        "metadata:\n  hermes:\n    tags: [Recall, RAG]\n---\n",
+        encoding="utf-8",
+    )
+    pipeline = FakePipeline(PipelineExit.AWAITING_OWNER)
+    paths = replace(SkillGenerationPaths.from_root(tmp_path), catalog_roots=(catalog,))
+    service = AutoSkillService(paths, RepetitionDetector(), PipelineRouter(Path("/repo"), pipeline))
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
+    text = "개인 RAG 검색 스킬로 기억 질문에 출처 인용"
+    for day in (2, 1):
+        _ = service.observe(text, now - timedelta(days=day))
+
+    # When: 반복 임계값에 도달한다.
+    proposal = service.observe(text, now)
+
+    # Then: 초안도 W1-8 요청도 만들지 않고, 원장에는 재사용 판정만 남는다.
+    assert proposal is not None
+    assert proposal.status is ProposalStatus.REUSE_EXISTING
+    assert pipeline.calls == []
+    assert not (service.paths.drafts / proposal.name).exists()
+    assert "REUSE-EXISTING" in service.paths.registry.read_text(encoding="utf-8")

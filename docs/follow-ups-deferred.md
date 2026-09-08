@@ -15,6 +15,26 @@
 
 # OWNER — 소유자·노드에서만 닫힌다
 
+## 2026-09-07 기관메일 동시 발송 수리 잔여
+
+- **[OWNER] 노드 `/tmp` 에 비정상 종료가 남긴 agent-browser 크롬 프로필 5개(약 38 MB, 2026-08-27~09-04)가 있다 → 노드에서 소유자·ops 가 지운다.**
+  정상 종료는 `close` 가 프로필을 지운다(2026-09-07 실측: 세션을 열고 닫으면 개수가 제자리로 돌아왔다) — 남은 것은 timeout-kill 된
+  실행의 흔적이다. 요청별 세션으로 바뀌어도 실행당 프로필 1개라 누적 속도는 예전과 같고, 자격증명·쿠키는 세션 종료와 함께 사라지므로
+  영향은 디스크 38 MB 뿐이다. 코드가 남의 프로필을 지우면 **돌고 있는 실행을 깨뜨리므로** 자동 청소는 넣지 않았다. 심각도 낮음.
+
+## 2026-09-04 plaud 구간 전사 수리 (t_4e3d6630) 잔여
+
+- **사고로 게시된 빈 노트는 아직 vault 에 그대로다** — `000_PARA/Area/Lifelog/2026/2026-09-04-180427--7df8fc0f016b.md`
+  는 요약·전문이 없는 649 B 노트다(정상 노트는 62 KB). 코드 결함은 이 수리로 닫혔지만 **이미 쓰인 노트는 스스로 고쳐지지
+  않는다** → 수정본이 릴리스·마운트된 뒤 그 레코드를 `transcribing` 으로 되돌리면 파이프라인이 다시 전사해 승인 카드를
+  새로 올린다. 상태 되돌림은 프로덕션 상태 쓰기라 소유자/노드 작업이며 이 브랜치에서는 하지 않았다. 영향: 라이프로그 1건,
+  심각도 낮음.
+  ↳ 처리(2026-09-05): 실동작 검증 세션에서 그 레코드를 노드 `state.json` 에서 `transcribing` 으로 되돌렸다(watch.lock 아래, 원본은 `~/.hermes/plaud-sync/backup-20260905-121833/`). 틱 1회로 로컬 전사(46 KB · 블록 529 · 격리 0)가 끝나 노트가 649 B → 52 KB 로 재조립되고 같은 경로(`…7df8fc0f016b.md`)의 승인 카드가 `posted` 됐다 — 소유자 ✅ 가 upsert 로 빈 노트를 덮는다(OWNER 잔여). 재발견이 막혀 있던 원인(클라우드-빈 녹음 skip)은 `9292d680c` 로 닫았다.
+
+## 2026-09-05 수리 스윕-4 후 소유자 항목
+
+- **[OWNER] 노드 agent 계정의 `~/.hermes/config.yaml` 에 `fallback_providers` 의 `custom:litellm/glm-main` 잔여 줄이 남아 있다 → 소유자가 그 계정에서 해당 줄을 지운다.** 자동화 경로는 `automation/codex_llm.py` 가 `--ignore-user-config` 로 돌아 무영향이고, 잔액·라우팅이 어긋난 별칭으로 품질이 떨어질 수 있는 것은 대화형 세션뿐이다(심각도 낮음). [해소 2026-09-06: 소유자 지시("follow-up 후속 처리")로 세션이 대신 처리 — agent 계정 `config.yaml` 을 `config.yaml.bak-20260906-052524` 로 백업한 뒤 `fallback_providers: []` 로 바꾸고(YAML 파싱 확인, 기본 모델 `openai-codex/gpt-5.6-sol` 불변, `providers.litellm` 정의는 유지, peer 는 해당 키 없음) agent+peer 게이트웨이를 함께 재시동했다(05:25:26Z 둘 다 active, 저널 오류 0). 이제 대화형 세션도 OAuth 실패 시 GLM 으로 조용히 강등되지 않고 fail-closed 다.]
+
 ## Plaud lifelog 노트 v2 양식 착지 후 소유자만 닫을 수 있는 것 (2026-09-04)
 
 - **[OWNER] vault Linter 의 `yaml-timestamp` 가 `date-modified-source-of-truth: file system` 이라 소유자가 Obsidian 에서 lifelog 노트를 처음 저장(lintOnSave)하면 `modified` 가 그 시각으로 바뀐다(`created` 는 유지 — 실제 플러그인 빌드 헤드리스 실측, `docs/qa/PLV2/linter-idempotence.txt`) → 녹음 시각을 두 값 모두에 보존하려면 vault Linter 설정에서 modified 의 source of truth 를 `frontmatter` 로 바꾼다(소유자 결정; 노트 생성 코드는 어느 쪽이든 바뀔 것이 없다).** 본문은 그대로이고 메타데이터 한 줄만 움직이는 표시 문제(심각도 낮음).
@@ -562,6 +582,13 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 # OBSERVE — 조건이 성립하기 전에는 조치하지 않는다
 
+## 용어 교정 문서 단계 이동 착지 후 남긴 것 (2026-09-05)
+
+> [이관 2026-09-05 · OBSERVE] 후속 과제 스윕 5 — 새 본문을 쓰는 조건이 성립하기 전에는 조치하지 않는다.
+
+- **문서 종류 넷(report·proposal·doctype·procurement)은 아직 문서 단계 교정을 붙이지 않았다 → `tests/unit/test_term_correction_conformance.py` 의 `_EXEMPT` 에 사유와 함께 등록돼 있다.** 지금은 넷 다 소유자가 준 원문을 옮기거나 인용만 하므로 고칠 "새로 쓴 문장"이 없다 — 주간동향이 수집한 기사를 요약해 **새 본문을 쓰게 되거나** 제안서 자동 생성 본문이 과제 용어를 스스로 쓰게 되면 그때 `term_glossary.glossary_for("<kind>", project)` + `term_correction.apply` 를 렌더 직전에 붙이고 `_EXEMPT` 에서 `_ADOPTED` 로 옮긴다. 영향 범위는 그 두 스킬의 산출물뿐이고 **심각도 낮음** — 채택 전에도 회의록·라이프로그 교정은 정상 동작하며, 등록부가 비어 있는 채로 새 문서 종류가 규칙을 지나치는 일은 conformance 가 RED 로 막는다.
+  ↳ 처리(2026-09-05): OBSERVE — "새 본문을 쓰게 되면" 조건이 아직 성립하지 않아 코드 변경·해소 PR 없음. 조건 성립 시 원 헤딩으로 열린 원장에 되돌려 문서 단계 교정을 채택한다. 별도 「용어 교정 문서 단계 이동 (2026-09-05) — 소유자·관측」과 합치지 않는다.
+
 ## Plaud lifelog 노트 v2 양식 착지 후 관측할 것 (2026-09-04)
 
 - **[OBSERVE] `transcribe.finalize` 에서 추출(glm-main)이 실패하면 그 녹음은 `추출: …` 사유로 `transcribing` 에 남고, 전사본은 추출 뒤에 저장되므로 다음 틱이 오디오 다운로드·로컬 전사를 통째로 다시 한다 → 노드 stderr 에 같은 녹음의 `추출:` 대기가 2회 이상 반복되면 전사본을 추출 **전에** 저장하고 finalize 가 저장된 전사본을 재사용하도록 순서를 바꾼다.** 지금 바꾸면 stale 판정·저장 경로가 복잡해지는데 실제로 반복되는지 모른다(117분 녹음 = 약 45분 재전사; 정확성 무영향, 비용만 — 심각도 낮음).
@@ -810,7 +837,112 @@ healthcheck까지 구현했다.
 - **`automation/memory_relocate/effects_live.py` 가 transport 승격 뒤에도 261 pure LOC 라 `automation/final/f2_loc_exceptions.txt` 예외가 남는다 → `RelocationStore` 를 별도 모듈로 분리해 등록부에서 내린다.** 코드 크기 규약만, 동작 무관(심각도: 낮음).
   ↳ 처리(2026-09-03): `refactor(memory-relocate): RelocationStore 를 relocation_store.py 로 분리해 effects_live.py 를 F2 예외 등록부에서 내린다` — effects_live 219 pure LOC, `automation/final/f2_loc_exceptions.txt` 에서 제거, 재수출로 호출부 무변경
 
+# 후속 과제 스윕 5 — 소유자·관측 인계
+
+## 후속 과제 스윕 5 착지 후 남긴 것 (2026-09-05) — 소유자·관측
+
+- **[OWNER] 노드 ops는 peer의 config·채널 디렉터리를 읽을 권한과 peer로 cat할 sudo 권한이 없다 → 소유자가 `visudo`로 아래 파일별 읽기 권한 두 줄을 설치한다.** 스윕 실측은 ops rc=1(`PEER-IGNORED-CHANNELS-UNREADABLE`), peer rc=0 PASS였다(PR #409). 영향: 설치 전 매 틱 healthcheck FAIL·수리 티켓 잡음, 승인 게이트 판정 무영향 · **심각도 중**.
+
+  ```sudoers
+  <ops> ALL=(<peer>) NOPASSWD: /usr/bin/cat -- <peer-home>/.hermes/config.yaml
+  <ops> ALL=(<peer>) NOPASSWD: /usr/bin/cat -- <peer-home>/.hermes/channel_directory.json
+  ```
+
+  자리표시는 설치의 계정·홈 값으로 바꾼다. 셸·Python sudo는 허용하지 않는다. 설치 후 ops로 같은 읽기 전용 프로브를 실행해 PASS를 확인한다.
+  ↳ 처리(2026-09-06): 저장소 쪽은 PR #425로 닫혔고 노드 쪽은 **아직 OWNER 다**. 설치기가 node config 로 렌더하는 두 줄짜리 `automation/sudoers.d/autophagy-healthcheck-peer-read` 자산을 기존 설치 자산 목록에 등록해 새 노드 온보딩은 자동으로 이 권한을 받는다(계정·홈이 다른 설정에서도 렌더되는 회귀 포함). 기존 노드는 소유자가 [`peer_ignored_channels` 권한 복구](guide/operations.md#peer_ignored_channels-권한-복구)의 sudo 명령 한 번으로 그 파일만 `visudo -cf`·0440 root:root·원자 교체·digest 대조로 놓는다. 이 명령은 아직 실행되지 않았으므로 권한이 설치됐다거나 ops 프로브가 PASS 라고 말하지 않는다.
+- **[OBSERVE] `DEFAULT_THRESHOLD=1.3`은 64분 녹음에서 3개 군집이지만 라이프로그에는 사람 18명이 적혀 있다 → 다음 다화자 회의 녹음에서 재검증하고 실제 화자 수를 알면 `--speaker-count`를 우선한다.** 이는 상한 8 안에서 쓰기 위한 운영값이지 화자 신원·인원수 확정이 아니다(PR #405·#412). 영향: 발화 귀속·가독성, 전사 내용 손실 없음 · **심각도 낮음**.
+  앞선 원장의 "0.9 → 화자 41"과 재실행의 122개는 같은 오디오의 서로 다른 sherpa 실행 결과다. 이번 판단의 정본은 체크인된 [재실행 증적](qa/FU5/diarize-threshold-tuning.md)이며 1.20=11, 1.25/1.30/1.35=5/3/2개다.
+  ↳ 처리(2026-09-06): 해소 — 소유자가 그 64분 녹음의 화자가 **둘**이라고 확인했다(사람 18명 목록은 언급된 이름이지 화자 수 추정이 아니었고, 이전의 "미확인" 분류는 본문의 UTC 표시 오류 탓이었다). PR #422가 발화 시간 점유율로 재검증해 1.30은 54.5%/26.0%/19.5%로 세 번째 군집이 무시할 수준이 아니고, 1.35는 71.5%/28.5% 두 군집, 1.40은 하나로 합쳐졌다 — 합의한 규칙("5% 이상 두 군집을 내는 가장 작은 값")대로 `DEFAULT_THRESHOLD=1.35`, stderr 에 `DIARIZE-CLUSTERS speakers=<n> threshold=<t> turns=<n>` 진단 한 줄, speechtotext 1.2.3. 정답이 없는 117분 녹음은 1.30=5개, 1.35=2개(52.8%/47.2%)로 참고만 한다. 화자 신원 정확도를 일반화하지 않으며 화자 수를 아는 큰 회의는 `--speaker-count` 를 쓴다. [증적](qa/FU6/diarize-threshold-validation.md).
+
+# 후속 과제 스윕 6 — 소유자·관측 인계
+
+## 후속 과제 스윕 6 착지 후 남긴 것 (2026-09-06) — 소유자·관측
+
+- **[OWNER] PR #424 이전에 로컬 전사로 vault 에 이미 쓰인 라이프로그 노트 3건은 frontmatter `created`·`modified`·`녹음::`·출처 줄이 UTC 를 현지 시각처럼 담고 있다(제목·경로는 맞다) → 소유자가 별도 승인한 작업으로 그 노트만 고친다.** `plaud_sync_watch.py --repost-posted` 는 승인 카드를 다시 올릴 뿐 동결 본문을 재생성하거나 이미 쓰인 vault 노트를 갱신하지 않으므로 보정 수단이 아니다. 영향: 노트 3건의 본문 시각 표기, 새 노트는 정상 · **심각도 낮음**.
+- **[OBSERVE] v1.3.0 롤아웃에서 `deploy_all --apply` 가 `incomplete: automation/skill_generation/deploy.sh` 를 찍었다 — Hermes 의 `--allow-tool-override` 프롬프트 뒤 deploy.sh 가 0 이 아닌 코드로 끝났는데, deploy_all 의 독립된 최종 프로브는 깨끗해 영수증을 썼다 → 배포기 종료 코드와 최종 상태를 어느 쪽이 맞는지 소유자가 정한다: deploy.sh 에 `--allow-tool-override` 를 넘길지(별도 권한 결정이라 조용히 넣지 않는다), 아니면 계획이 프롬프트 종료를 비치명으로 분류할지.** 영향: 롤아웃 로그의 오독뿐, 프로덕션 무영향 · **심각도 낮음**.
+- **[OWNER] 같은 롤아웃의 deploy_all 미선언 홈 경고가 손으로 설치한 `hermes-achievements` 플러그인, `interop-protocol` 플러그인(agent·peer), 그리고 스크립트 몇 개를 이름 붙여 냈다 → 소유자가 선언(해당 배포기 옆 `deploy-manifest.txt`)할지 제거할지 재고 정한다.** 자동 삭제 근거가 아니라 인벤토리 작업이다. 영향: 드리프트 탐지의 사각지대 목록만, 실행 무영향 · **심각도 낮음**.
+
 # 해소 기록 — 닫혔지만 회계 가드가 원문을 요구한다
+
+## 후속 과제 스윕 5 착지 후 남긴 것 (2026-09-05)
+
+> [이관 2026-09-06 · 해소] 후속 과제 스윕 6 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **공개 반출 추가 원장이 append-only라 병렬 PR이 같은 끝줄에서 충돌한다 → `configs/public-export-baseline-additions.txt` 에 경로순 삽입 규칙을 두거나 lane별 파일을 게이트에서 합산하는 방식을 설계한다.** 이번 4개 lane은 직렬 재병합·local_ci 재실행(각 약 8분)이 필요했다. 영향: 병렬 착지 비용, 배포 동작 무관 · **심각도 낮음**.
+  ↳ 처리(2026-09-06): 해소 — PR #417이 `public-export-baseline-additions.txt`·`public-export-review.txt` 두 원장을 경로순으로 한 번 정렬하고 머리말에 `sorted by path` 규칙을 적었다. `tests/unit/test_public_export_ledger_order.py` 가 정렬·중복을 고정하므로 lane 마다 자기 경로 자리에 끼워 넣으면 같은 끝줄 충돌이 사라진다.
+- **정책 분리 뒤에도 `automation/plaud_sync/{transcribe.py,transcribe_live.py,note.py}`·`automation/plaud_sync/cron/plaud_sync_watch.py` 는 200–250 pure LOC 구간이고 `automation/healthcheck.sh` 는 203이다 → 다음 확장 때 mcp_client와 같은 규칙으로 책임을 나누어 250 상한 전에 분할한다.** 영향: 다음 변경의 유지보수 비용, 현재 동작 무관 · **심각도 낮음**.
+  ↳ 처리(2026-09-06): 해소 — PR #418이 `transcribe.py`(130)·`transcribe_live.py`(68)에서 `transcribe_promote.py`(115)·`transcribe_live_effects.py`(199)를 떼어냈고, PR #419가 `note.py` 에서 `note_paths.py`(64)를, cron 래퍼(194)에서 `watch_runtime.py`(80)를 떼어냈다(부트스트랩·deploy-manifest·emit 된 워처 매니페스트 불변). PR #421은 `healthcheck.sh`(161)의 프로브 레지스트리를 `healthcheck_registry.sh`(61)로 source 분리했고 allowlist 출력은 바이트 동일하다. 공개 import 경로와 기존 테스트는 그대로다. `note.py` 는 PR #424의 몇 줄이 더해진 뒤에도 200 아래다.
+- **basedpyright가 `skills/*/scripts` 의 형제 import(stt_gap·stt_split 등)에 기존 `reportImplicitRelativeImport` 를 보고한다 → 편의 개선 시 pyright 설정 또는 스킬별 import shim을 둔다.** 영향: LSP 설정·편집기 진단뿐, 런타임 무영향 · **심각도 낮음**.
+  ↳ 처리(2026-09-06): 해소 — PR #420이 루트 `pyrightconfig.json` 에 `skills/*/scripts` 19개와 루트를 `executionEnvironments` 로 선언했다(편집기 전용, 런타임 무관). 표적 진단은 STT 2→0, mail 14→0이고 기존 automation 진단 1건은 그대로 1건이다. `tests/unit/test_pyright_config.py` 가 설정을 고정한다.
+
+## 2026-09-05 수리 스윕-4 후 남긴 것
+
+> [이관 2026-09-06 · 해소] 수리 스윕-4 후속 처리 세션 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **완결 타이머의 `systemd --user` 유닛이 메인 체크아웃의 `automation/release_complete.sh` 를 실행해, 매 틱 origin/main 으로 맞춰지는 것은 완결기 전용 워크트리뿐이다 — 그래서 그 스크립트 **자체**의 변경(스윕 호출 추가 등)은 메인 체크아웃을 ff-pull 하거나 유닛을 재설치하기 전까지 반영되지 않는다(실측: 도입 뒤 두 틱이 `RELEASE-APPLIED` 줄 없이 지나갔다) → `release_complete.sh` 가 워크트리 동기화 직후 그 워크트리의 자기 사본으로 exec 하게 하거나, 설치기가 `ExecStart` 를 워크트리 사본으로 가리키게 한다.** 영향 범위는 완결 타이머 스크립트 자체의 변경뿐이고 수렴·태그·마운트는 그 워크트리에서 돌아 무영향, **심각도 낮음**.
+  ↳ 처리(2026-09-06): `fix(release-complete): 워크트리 동기화 직후 origin/main 의 자기 사본으로 exec 한다 — 유닛이 메인 체크아웃을 가리켜도 스크립트 변경이 다음 틱부터 반영된다(잠금 fd 상속·재진입 가드)` — `release_complete.sh` 가 워크트리를 origin/main 에 맞춘 직후 자기 사본과 `<worktree>/automation/release_complete.sh` 를 `cmp` 로 대조해 다르면 `SELF-UPDATE` 한 줄을 남기고 그 사본으로 `exec` 한다(잠금 fd 9 는 exec 너머로 상속, `RELEASE_COMPLETE_REEXEC=1` 재진입 가드, 동일 사본은 제자리 실행). tests/unit/test_release_complete.py 에 exec·가드·동일 사본 회귀 3건(RED: `SELF-UPDATE` 부재·decision 호출 → GREEN). 실표면: 진짜 origin/main(`24457d1f`) 워크트리에서 `SELF-UPDATE` 뒤 옛 사본이 `pending` 까지 진행, decision 호출 1건. 유닛의 `ExecStart` 는 그대로 메인 체크아웃이며 손 ff-pull 은 설치 때만 필요하다.
+
+## plaud 파이프라인 실동작 검증 착지 후 남긴 것 (2026-09-05)
+
+> [이관 2026-09-05 · 해소] 후속 과제 스윕 5 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **상한(기본 2회)에 닿았는데 클라우드도 비어 `클라우드 폴백 보류` 된 녹음은 `transcribing` 에 남아 매 틱(10분) 오디오 전사를 통째로 다시 돈다** → 보류 상태에는 백오프(예: 클라우드 재확인만 하고 로컬 전사는 N틱마다)나 소유자 결정 카드를 둔다. 후보가 시도 횟수 순이라 새 녹음을 굶기지는 않지만(`182117055`), 1초 녹음 2건(0e188780·7ed7b257)이 릴리스 뒤 이 상태로 들어가 틱마다 whisper 를 잠깐씩 돈다. 영향: 노드 GPU 몇 초/틱, 외부효과 없음 — 심각도 낮음.
+  ↳ 처리(2026-09-05): 해소 — PR #414의 선택 레코드 필드 `next_transcribe_at`이 로컬 재전사를 1h→2h→4h→8h→16h→24h(상한) 백오프로 예약한다. 클라우드는 로컬 전사 슬롯 밖에서 매 틱 재확인하고, `PLAUD_SYNC_TRANSCRIBE_GIVE_UP`(기본 5회)에도 비면 `abandoned`와 저널 줄로 종결한다. 기본 5회에서는 장기 백오프 단계 전에 종결될 수 있다.
+- **우발 버튼으로 생긴 1~2초 녹음도 이제 로컬 전사 경로를 탄다** — 예전에는 클라우드가 비어 조용히 skip 됐지만 수리(`9292d680c`) 뒤에는 동결·전사되고, whisper 가 한 토큰이라도 내면 승인 카드가 올라온다 → 최소 길이 게이트(값은 정책: 예 5초 미만은 `abandoned`)를 둘지 소유자 판단. 소유자는 2초·5초 녹음 카드를 ⛔ 한 전례가 있다(1be8067b·772daac7). 심각도 낮음(카드 1장/건).
+  ↳ 처리(2026-09-05): 해소 — PR #414의 `PLAUD_SYNC_MIN_DURATION_MS`(기본 5000) 미만은 발견 시 skip(저널만, 레코드·카드 없음)한다. 이미 `transcribing`인 짧은 녹음은 다음 처리에서 `abandoned`로 종결한다.
+- **화자 분리가 64분 녹음에서 화자1~41 을 만들고 전부 `미상`이다(과분할)** — 전사 본문은 온전하지만 범례 한 줄이 40개 항목이고 블록 헤더의 화자 번호가 사실상 무의미하다 → sherpa-onnx 클러스터링 임계값·최대 화자 수(`SPEECHTOTEXT_DIARIZE_*`)를 실측 녹음으로 조정하거나 화자 수 상한을 넘으면 범례를 접는다. 심각도 낮음(내용 손실 없음, 가독성).
+  ↳ 처리(2026-09-05): 해소 — PR #405의 `SPEECHTOTEXT_DIARIZE_MAX_SPEAKERS`(기본 8) 초과는 `DIARIZE-OVERSEGMENTED`로 화자 배정만 fail-soft한다. PR #412는 노드 실측으로 `DEFAULT_THRESHOLD`를 0.9→1.3으로 조정했다(재실행 0.9=122, 1.20=11, 1.25/1.30/1.35=5/3/2개). [증적](qa/FU5/diarize-threshold-tuning.md); 실제 화자 수 검증과 옛 41개 관측의 차이는 위 새 OBSERVE에 남겼다.
+- **Plaud 요약이 없는 녹음의 노트 `## 요약` 이 `- (요약 없음)` 이다** — v2 양식은 Plaud 요약을 그대로 싣는 설계라 로컬 전사만 있는 녹음은 요약 절이 빈다(9/5 실측 279b84). 한눈에·결정 · 할 일은 로컬 전사에서 추출되므로 노트는 쓸 만하다 → 로컬 전사에서 요약도 같은 추출기로 만들지(LLM 호출 1회 추가, 민감도 게이트 동일)는 정책 판단. 심각도 낮음.
+  ↳ 처리(2026-09-05): 해소 — PR #414의 `prompts/lifelog-extraction-v2.md`가 기존 구조화 추출과 **같은 LLM 호출**에서 `summary`를 받는다(추가 호출 0). Plaud 요약이 있으면 그것을 우선하며 기존 민감도 게이트를 유지한다.
+
+## provenance 가드의 남은 이스케이프 경로 (2026-09-05)
+
+> [이관 2026-09-05 · 해소] 후속 과제 스윕 5.
+
+- **`deploy_provenance.sh` 의 저장소 전체 검사(144·149행)는 아직 `git status --porcelain` / `git ls-files` 의 기본 따옴표 이스케이프를 그대로 출력한다 → 비ASCII 파일이 dirty·untracked 로 걸리면 차단 메시지가 `"\354\232\251…"` 로 나와 어느 파일인지 사람이 알 수 없다.** 디렉터리 인자 경로(193·202·213)는 `-c core.quotepath=false` 로 고쳤고 그것이 실제 배포를 막던 지점이었다. 남은 두 곳은 **판정에 영향이 없다** — 존재 여부(빈 문자열인가)만 보고 경로 문자열을 파일로 열지 않기 때문이다. 즉 오작동이 아니라 가독성 결손이며, `status --porcelain -z` 로 옮기려면 읽기 루프 구조를 함께 바꿔야 해서 이번 수정 범위 밖에 두었다(심각도: 낮음).
+  ↳ 처리(2026-09-05): 해소 — PR #404가 개인 저장소 `personal_provenance_check`의 status·ls-files 두 호출에 `-c core.quotepath=false`를 더했다. 차단 판정은 그대로이고 한글 파일명이 읽히며 `tests/unit/test_deploy_provenance_nonascii.py`가 회귀를 고정한다.
+
+## peer 자가 스킬이 승인 심사 절차를 저작했다 (2026-09-05)
+
+> [이관 2026-09-05 · 해소] 후속 과제 스윕 5 — 탐지는 코드로 닫혔고 노드 판독 권한은 위 OWNER가 소유한다.
+
+- **`selfskill_audit` 는 자가 스킬의 이름 그림자(`SHADOWS-GOVERNED`)와 기능 겹침(`OVERLAPS-GOVERNED`)만 보고, SKILL.md 가 **승인 절차를 주장**하는지는 보지 않는다 → 본문이 승인 kind 접두어(`[release]`·`[skill-deploy]`·`[skill-publish]`)·`#approvals`·게이트 판정 어휘(`DO-NOT-APPROVE`·`승인 보류`)를 참조하면 `CLAIMS-APPROVAL-ROLE:<skill>` advisory 로 아침 보고에 싣는다.** peer 의 `autophagy-interop` 이 2026-09-01 에 `[release]` 심사 절차(라우팅 행·Quick Reference 50줄·참고 문서·교훈 12건)를 스스로 저작했고 v1.1.2~v1.2.2 의 모든 릴리스 카드에 거짓 ⛔ 를 붙였는데, 감사 원장에는 `edited` 델타 한 줄뿐이라 **무엇을** 저작했는지 아무도 보지 못했다(`docs/patch/2026-09-05-peer-gateway-ignores-approvals.md`). 토큰 매칭 규칙이라 오탐 상한은 governed 18개 상호 대조 0건으로 회귀 고정한다. 심각도 중 — 게이트·노드 동작은 무영향이지만 소유자 판단을 매 릴리스 오염시켰다.
+  ↳ 처리(2026-09-05): 해소 — PR #408의 `automation/selfskill_audit/claims.py`가 본문 토큰을 검사해 아침 보고에 `CLAIMS-APPROVAL-ROLE:<skill>` advisory를 싣는다. 채널 토큰은 `ApprovalSurface`에서 지연 유도하고 governed corpus 0-hit는 `tests/unit/test_selfskill_claims.py`가 고정한다. 승인·차단 권한은 만들지 않는다.
+- **peer 게이트웨이의 `discord.ignored_channels`(`#approvals`) 는 노드 config 에만 있고 저장소·프로브는 그 존재를 모른다 → healthcheck 의 read-only 프로브가 peer `config.yaml` 의 `discord.ignored_channels` 에 `#approvals` 채널 id(`channel_directory.json` 대조)가 들어 있는지 읽어 없으면 FAIL 로 낸다.** 다음 config 재생성·온보딩 재실행이 조용히 되돌릴 수 있고(2026-08-15 pin 부수 효과가 E7 을 되돌린 것과 같은 모양), 되돌아온 증상은 "카드에 peer 논평이 다시 붙는다" 뿐이라 발견이 다음 릴리스까지 늦다. 심각도 낮음(되돌아가도 게이트 판정은 불변).
+  ↳ 처리(2026-09-05): 해소 — PR #409의 `automation/peer_gateway_probe.sh`를 healthcheck LOCAL `peer_ignored_channels`로 배선했다. peer 디렉터리에서 해석한 approvals id가 최상위 `discord.ignored_channels`에 있으면 PASS, 없으면 FAIL+`PEER-IGNORED-CHANNELS-RECOVERY`, 판독 불가면 `PEER-IGNORED-CHANNELS-UNREADABLE`로 FAIL-closed한다. allowlist 예시 매니페스트도 재생성됐다. [소개](기능소개/peer-게이트웨이-승인채널-차단-프로브.md).
+
+## 완결 타이머와 세션 release.sh 의 태그 경합 (2026-09-05)
+
+> [이관 2026-09-05 · 해소] 후속 과제 스윕 5 — 기존 태그는 지우지 않고 재발 경로를 닫았다.
+
+- **두 실행이 같은 ✅ 를 보고 동시에 태그를 자르면 한 커밋에 서명 태그가 둘 생긴다 → 완결기가 승인 레코드에 적힌 요청 버전을 재사용하게 한다.** 실측: 세션이 `--bump minor` 로 `v1.2.0` 을 13:11:22 에, 완결 타이머(`~/.hermes/release-completer/`)가 **기본 patch bump** 로 `v1.1.5` 를 13:11:23 에 잘랐다 — 둘 다 같은 커밋을 peel 하고 둘 다 update-trust 서명이 유효하다. `release_version_for` 의 "HEAD 에 이미 붙은 태그를 재사용" 은 태그가 **먼저 존재해야** 작동하므로 1초 차 경합을 막지 못한다.
+  ↳ 처리(2026-09-05): 해소 — PR #406의 `release.sh`가 HEAD의 살아 있는 승인 레코드 버전을 next 계산보다 먼저 재사용한다. 세션·완결기가 태그 생성 전에도 같은 요청 버전으로 수렴한다.
+- **갈라지는 조건은 좁다** — 세션이 `--bump patch`(완결기 기본값과 같음)로 돌면 양쪽이 같은 이름을 계산하고 `ensure_signed_tag` 가 동일 이름 기존 태그를 찾아 멱등 성공한다(v1.2.1·v1.2.2 실측: 중복 없음). 즉 문제는 **세션이 minor·major 를 쓸 때만** 나타난다.
+  ↳ 처리(2026-09-05): 해소 — PR #406은 bump 종류가 아니라 승인 레코드의 version을 공통 입력으로 삼으므로 minor·major도 patch와 같은 태그 이름으로 수렴한다.
+- 프로덕션 영향은 없다(같은 커밋·같은 키라 어느 쪽으로 수렴해도 같은 코드). 다만 `public_export.sh` 는 `--version` 생략 시 source 커밋의 vX.Y.Z 태그가 **정확히 하나**여야 해서 `source commit has multiple semantic release tags` 로 막히므로, 그 릴리스만 `--version` 을 명시해야 한다. 서명 태그는 지우지 않는다(롤백 방지 floor 는 앞으로만 간다) — 심각도 낮음.
+  ↳ 처리(2026-09-05): 해소 — PR #406이 동일 승인에서 이중 태그를 새로 만드는 원인을 닫아 이후 릴리스는 이 경합 때문에 `public_export.sh --version`을 따로 지정할 필요가 없다. 과거 이중 태그는 그대로 보존하므로 그 과거 릴리스를 반출할 때의 명시 요건은 유지한다(반출기 코드 변경 없음).
+- **태그뿐 아니라 배포 실행도 경합한다 — 세션 `release.sh` 의 `deploy_all --apply` 와 완결 타이머의 `deploy_all --apply` 가 같은 ✅ 를 보고 동시에 스킬을 배포해, 스킬별 실행 lock 에서 진 쪽이 `EXECUTION-LOCK-BLOCK` 으로 실패한다 → 완결기가 같은 head 의 살아 있는 세션 실행을 감지하면 그 틱을 양보하거나, `deploy_all` 이 lock-blocked 스킬을 실패가 아니라 '다른 실행이 수렴 중' 으로 분류해 종료 전 재판정한다.** v1.2.3 실측(2026-09-05): 세션 17:32:36 시작, 완결기 17:33:42 시작 → 세션은 `meeting` 을, 완결기는 `speechtotext` 를 각각 양보했고 완결기 1차 실행은 `Failed with result 'exit-code'`(17:35:32), 2차 틱이 `already fully deployed`(17:36:26) 로 닫았다. 최종 상태는 양쪽 모두 `fully deployed` 로 수렴했고 `deploy_all --verify` rc 0 — 프로덕션 영향 없음. 다만 완결기의 sha 별 3회 상한을 한 번 소모하고 실패 저널이 남으므로, 세션이 `--no-deploy` 없이 돌 때마다 반복된다(심각도 낮음).
+  ↳ 처리(2026-09-05): 해소 — PR #407의 `deploy_all.sh --apply`가 워크스테이션 `${DEPLOY_ALL_LOCK_DIR:-$HOME/.hermes/deploy-all}/apply.lock`을 flock으로 잡는다. 후행 실행은 `APPLY-LOCK-WAIT`→lock 획득 후 재판정→이미 전량 반영됐으면 `APPLY-LOCK-RECHECK`(`already fully deployed`)·rc 0으로 끝나며 `--plan`·`--verify`는 lock-free다. PR #413은 이 동시 실행 회귀의 release FIFO를 O_RDWR로 유지해 #409 첫 CI를 막았던 테스트 경합도 닫았다.
+
+## v1.1.0 편의 릴리스 착지 후 남긴 것 (2026-09-03)
+
+> [이관 2026-09-05 · 해소] 후속 과제 스윕 5.
+
+- **`release.sh` 를 손으로 돌린 세션과 워크스테이션 완결 타이머(`autophagy-release-complete.timer`)가 같은 ✅ 를 보고 `deploy_all --apply` 를 동시에 돌렸다 — 스킬별 실행 lock 이 서로를 `EXECUTION-LOCK-BLOCK` 으로 막아 두 실행 모두 `incomplete` 로 끝났고, 합집합이 우연히 전부 마운트돼 영수증은 다음 `--verify` 에서야 나왔다(v1.1.2 실측) → 릴리스 단위 lock(`/srv/autophagy-private/deploy-all/`)을 deploy_all 이 잡거나, 완결 타이머가 활성이면 `release.sh` 가 deploy 를 완결기에 위임하고 폴링만 하도록 한다.** 영향 범위: 이중 실행 자체는 멱등(마운트 digest 대조)이라 손상 없음, 다만 한쪽이 `SKILL-STALE`·rc=10 으로 끝나 사람이 오독한다 — 심각도 낮음.
+  ↳ 처리(2026-09-05): 해소 — PR #407이 위 태그 경합 묶음의 배포 경합과 같은 원인을 워크스테이션 apply flock으로 닫았다(노드 lock 신설 아님). 후행 실행은 대기 후 재판정해 이미 전량 반영이면 배포기 재호출 없이 영수증·rc 0으로 끝난다.
+
+## 2026-09-04 plaud 구간 전사 수리 (t_4e3d6630) 잔여
+
+> [이관 2026-09-05 · 해소] 후속 과제 스윕 5 — 같은 헤딩의 기존 OWNER 불릿(빈 노트 upsert 승인)은 별도 보존한다.
+
+- **반복 붕괴 구간은 회의록 경로에서 본문째 빠진다** — 임계 0.08 을 넘긴 구간은 표식만 남는다(라이프로그는
+  `SPEECHTOTEXT_ALLOW_INCOMPLETE=1` 이라 보존). 실측: 사고 원본 61분의 구간 1 이 0.18 이라 회의록 정책에서는 15분이
+  빠졌다. 전량 소실이던 예전보다는 순개선이라 이번 범위에서는 그대로 두고, 반복 구간을 **버리는 대신 접어서** 남기는
+  방안은 별도 판단으로 남긴다. 심각도 낮음(표식으로 보이며 조용히 사라지지 않는다).
+  ↳ 처리(2026-09-05): 해소 — PR #411(speechtotext 1.2.2 / meeting 1.7.1)이 반복 의심 창을 기존 표식 아래 HTML `<details>`에 FOLDED로 보존한다. `stt_blocks` render/parse 왕복이 접힌 원문을 유지하고 `meeting_extract.strip_folded()`는 `{{MEETING_TEXT}}`가 프롬프트 입력이 되는 경계에서만 제거한다. 민감도 검사·부록 원문은 그대로다. [소개](기능소개/plaud-긴-녹음-구간-전사.md).
+- **`automation/plaud_sync/mcp_client.py` 가 정확히 250 pure LOC** — 이번 변경 밖이지만 한 줄만 더해도 F2 파일 크기
+  등록부에 예외를 쌓는다. 조치: 그 파일을 다음에 만질 때 분할한다. **심각도 낮음**.
+  ↳ 처리(2026-09-05): 해소 — PR #410이 stdio 프로세스·프레이밍을 `automation/plaud_sync/mcp_transport.py`로 분리했다. client·transport 각각 155 pure LOC이며 `mcp_client`의 공개 import 경로는 그대로다.
 
 ## 릴리스 승인 카드가 peer 시야에 있다 (2026-09-05)
 
@@ -1589,3 +1721,101 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 - **OWNER — Drive 에 교정 참고 문서가 아직 없다 → 소유자가 `autophagy/용어집.csv`(모든 산출물)와 필요하면 `autophagy/회의록/용어집.csv`·`autophagy/라이프로그/용어집.csv` 를 만들어야 실제 교정이 걸린다.** 2026-09-04 실측에서 공통 파일이 부재했고, 2026-09-04 QA 사고로 노드의 옛 `~/.hermes/speechtotext/glossary.txt` 도 지워졌다. 코드는 없는 참고 문서를 빈 것으로 읽으므로(fail-soft) 실패가 아니라 **교정 0건**으로 나타난다 — 형식과 자리는 [용어-교정-규약](guide/용어-교정-규약.md). 심각도 중(문서 품질), 저장소에서 닫을 수 없음.
 - **OBSERVE — 라이프로그 노트의 파일 이름 슬러그는 교정하지 않는다 → 파일 탐색기에는 오인식 표기가 남을 수 있다.** 의도된 절충이다: 경로가 참고 문서를 따라 움직이면 용어집을 한 줄 고친 날 같은 녹음이 노트 둘로 갈라진다(제목·본문은 교정된다). 소유자가 파일 이름까지 맞추고 싶다고 말하면 그때 이관 규칙(옛 경로 → 새 경로 이동)을 함께 설계한다. 심각도 낮음.
+
+## 라이프로그 전사·화자 품질 교정 중 소유자 몫으로 남은 것 (2026-09-06)
+
+> [OWNER] 둘 다 노드 설정(`~/.env.secrets`)과 라우팅 정책 결정이라 이 저장소가 닫을 수 없다.
+
+- **화자 임베딩 모델 상향** — 임베딩 경로는 `SPEECHTOTEXT_DIARIZE_EMBEDDING` 이 가리키는 노드 설정이라
+  저장소가 바꾸지 않는다. 133초 2인 샘플에서 정답이 나오는 임계값 구간의 너비는 현재
+  `eres2net_base` 가 한 칸(1.1), `eres2net_200k` 가 세 칸(0.6~1.0)이었다 — 임계값이 조금 어긋나도 답이
+  흔들리지 않는다는 뜻이다. 조치: 소유자가 노드에서 모델을 받아 `~/.env.secrets` 의 경로를 바꾸고
+  `SPEECHTOTEXT_DIARIZE_THRESHOLD` 를 그 모델에 맞춰 다시 잰다(임계값은 임베딩 모델에 붙은 값이다).
+  표본이 녹음 하나이므로 확정이 아니라 권고다. 비교에 쓴 후보 3종(`campplus`·`eres2net_200k`·`titanet_large`)은 측정을 위해 **이미 노드 `/home/agent/sherpa-onnx/models/` 에 내려와 있다** — 경로만 바꾸면 되고, 쓰지 않기로 하면 그 파일들을 지우면 된다. **정확도 · 심각도 중** (증적 `docs/qa/PLQ1/summary.md`).
+- **whisper 전사 모델 상향 여부** — `SPEECHTOTEXT_WHISPER_MODEL` 이 가리키는 노드 설정이라 저장소가
+  바꾸지 않는다. 순서는 (1) **고친 조립기로 한 건 다시 전사해 읽어 보기** — 소유자가 본 조각난 문장은
+  모델이 아니라 조립기가 만든 것이었으므로(노드 실측 36/36 대 0/36) 그 원인이 사라진 전사본을 먼저
+  읽어야 귀속이 가능하다, (2) 그래도 부족하면 `q5_0`→`q8_0`(같은 모델, 교체 한 번), (3) 그다음
+  `large-v3-turbo`→`large-v3`(디코더 32층 증류본에서 원본으로, VRAM·시간 수 배). **두 후보 모두
+  공표된 한국어 WER 차이는 없다** — 같은 오디오를 `--reprocess` 로 돌려 직접 비교해야 한다.
+  **정확도 · 심각도 낮음** (근거: 공식 모델 카드·whisper.cpp 문서, `docs/qa/PLQ1/summary.md`).
+- **Hermes 의 Claude(Anthropic) OAuth 채택 여부** — 소유자 질의(2026-09-06)에 대한 실측 답은 "쓸 수 있다"
+  이다: 노드 hermes v0.20.3 의 `hermes_cli/auth_commands.py` 가
+  `_OAUTH_CAPABLE_PROVIDERS = {"anthropic", "nous", "openai-codex", "xai-oauth", "qwen-oauth", "minimax-oauth"}`
+  를 갖고 `provider == "anthropic"` 분기에서 `agent.anthropic_adapter.run_hermes_oauth_login_pure()` 로 PKCE
+  로그인을 연다. 자격증명 소스도 둘이다 — hermes 자체 PKCE(`~/.hermes/.anthropic_oauth.json`)와 Claude Code
+  재사용(`~/.claude/.credentials.json`). 현재 등록된 것은 `copilot`·`openai-codex` 뿐이고, 활성화는 노드에서
+  `sudo -u agent hermes auth add anthropic --type oauth` 한 줄이다. 다만 **이번에 관측된 결함 셋 중 어느
+  것도 모델 교체로 고쳐지지 않는다** — 요약 누락은 JSON 파싱과 빈 요약 처리, 전사 낱말 조각은 우리
+  조립기, 화자 폭발은 임베딩 클러스터링이었다. 그리고 채택은 `configs/routing-policy.md` 의 **단일 티어
+  불변식**(Codex OAuth 외 대체 경로 없음)을 바꾸는 정책 결정이라 코드보다 소유자 승인이 먼저다.
+  조치: 요약·추출 품질을 더 올리고 싶다면 먼저 같은 티어 안에서 `AUTOPHAGY_CODEX_MODEL` 로 모델만 바꿔
+  A/B 하고, 그래도 부족하면 그때 2차 티어를 정책과 함께 연다. **정책 결정 · 심각도 낮음**.
+
+## cytoplasm 신규 노드 설치 보고에서 드러난 공백 (2026-09-07)
+
+> 원 묶음은 [follow-ups.md](follow-ups.md) 에 남아 있다(열린 것 1건: `LIVE_CHECKS` 선택화).
+> 아래 6건은 2026-09-07 에 해소해 이리로 옮겼다 — 삭제가 아니라 이동이다.
+
+- **공개 스냅샷에 특정 설치의 tailnet IP·프로덕션 호스트명이 남는다** → 값을 node config
+  필드·자리표시자로 외부화하고, `automation/public_export_redaction.py:28` 의 규칙표에
+  tailnet 대역(RFC 6598 CGNAT)·프로덕션 호스트명 패턴을 보는 **export fail-closed 검사**를
+  신설한다. 대상은 `automation/healthcheck_registry.sh:12` ·
+  `automation/credential_rotation/registry.py:121,135` ·
+  `tests/e2e/drivers/w3_report_hub_ops.py:31` · `tests/unit/test_runtime_package_probe.py:210`
+  이고, 같은 값을 가진 `docs/guide/*` 는 `configs/public-export-manifest.txt` 제외 목록에
+  있어 공개되지 않는다. tailnet 전용 + Basic 인증이라 도달 가능한 서비스 노출은 아니지만
+  `configs/inventory.md:4` 와 「개인화 코드 금지 규칙」(SC-2) 위반이다. 값만 지우면 같은
+  방식으로 다시 들어오므로 검사가 본체다.
+  **영향: 공개 배포본의 토폴로지 노출·규칙 위반, 런타임 무영향 · 심각도 중**.
+  ↳ 처리(2026-09-07): 해소 — `public_export_redaction.assert_no_private_topology` 가 redaction 뒤 스냅샷 전체를 훑어 주소·호스트명이 남으면 export 를 세운다. 네 파일의 값은 노드 config 유도·env override·자리표시자로 바뀌었다. 범위는 실측(공개 1974파일에서 오탐 0)으로 정했다.
+
+- **설치기가 `converge.d/automation/` 6파일을 설치하지 않아 첫 수렴이 SYNC-BLOCK 된다** →
+  `automation/install/assets.py:219`~`233` 에 `__init__.py`·`git_tag_signature.py`·
+  `update_trust.py`·`update_trust_state.py`·`node_config.py`·`node.example.toml` 을 더해
+  `automation/provision-deploy-converge.sh:67`~`77` 과 같은 집합으로 맞춘다. 두 설치 경로가
+  갈라져 있었고 기존 노드는 프로비저너 경로로 깔려 이 공백이 드러나지 않았다.
+  **영향: 신규 설치 완주 불가(우회 없이는 릴리스 0건) · 심각도 높음**.
+  ↳ 처리(2026-09-07): 해소 — `assets.py` 의 `CONVERGE_HELPERS` 가 프로비저너와 같은 9개를 놓고, `test_install_converge_parity.py` 가 두 설치 경로를 서로 대조한다.
+
+- **설치기가 `/etc/autophagy/repair-approval.env` 를 만들지 않는데 유닛은 필수로 요구한다**
+  → 설치기 자산에 빈 `root:ops 0640` 파일을 추가한다. 유닛을 `-` 선택으로 낮추지 않는다 —
+  통지 자격증명 부재가 조용해지면 이 파일이 존재하는 이유와 정면으로 충돌한다
+  (`automation/systemd/autophagy-deploy-reconcile.service:25`).
+  **영향: 신규 설치의 EnableTimer 실패 · 심각도 높음**.
+  ↳ 처리(2026-09-07): 해소 — 설치기가 키 이름을 적은 `root:ops 0640` 템플릿을 놓고, `FileSpec.create_only` 가 운영자 입력분을 다시 쓰지 않는다.
+
+- **첫 설치에서 `_timer` 의 사전 `start` 가 아직 없는 릴리스 트리를 요구해 반드시 실패한다**
+  → `automation/install/apply.py:263` 의 사전 `start` 를 제거하고 타이머 자기 틱에 맡긴다.
+  유닛의 `WorkingDirectory`(`automation/systemd/autophagy-deploy-reconcile.service:12`)는 첫
+  수렴이 만드는 디렉터리라 순환이다.
+  **영향: 신규 설치의 EnableTimer 실패(위와 같은 지점) · 심각도 높음**.
+  ↳ 처리(2026-09-07): 해소 — 사전 `start` 를 제거했다. 타이머 자기 틱이 첫 수렴을 수행한다.
+
+- **재실행 시 이미 있는 저장소를 다시 clone 해 실패한다** →
+  `automation/install/state.py:179` 의 `_repository_origin` 이 설치기 uid(root)로 git 을 돌려
+  dubious-ownership 에 걸리고, 그 `None` 을 `automation/install/plan.py:298` 이 "저장소 없음"
+  으로 오판해 `automation/install/apply.py:241`~`258` 의 맨 `clone` 에 도달한다. 조치는 둘 다 —
+  판정은 `git -c safe.directory=<path>` 로 그 경로 하나에만 명시하고(선례
+  `automation/release_provenance.py:63`), 적용은 존재 시 `remote set-url` 로 멱등하게 바꾼다.
+  root 전역 `--system` 은 신뢰 범위를 그 경로 밖으로 넓히므로 택하지 않는다.
+  **영향: 설치기 재실행 불가(첫 실행에는 드러나지 않음) · 심각도 중**.
+  ↳ 처리(2026-09-07): 해소 — `_repository_origin` 이 그 경로 하나에만 `safe.directory` 를 명시하고(전역 아님), `_repository` 는 이미 있는 체크아웃을 `remote set-url` 로 수렴한다.
+
+- **`update-trust.pub` 배포 경로가 문서에만 있고 절차에 없다** →
+  `docs/guide/manual-maintainer.md:245` 의 릴리스 컷에 asset 업로드 단계를 넣어
+  `docs/guide/install.md:46`·`docs/guide/manual-member.md:25` 의 "릴리스에 동봉" 문구와 실제를
+  맞춘다. 지문 대역외 대조 설계 자체는 의도대로 동작했고 키 파일 전달 경로만 비어 있었다.
+  **영향: 신규 설치 진입 불가(`--update-trust-key` 는 필수 인자) · 심각도 중**.
+
+근거: 각 불릿의 file:line (2026-09-07 현재 main `ee276a746` 기준 실측).
+  ↳ 처리(2026-09-07): 해소 — `manual-maintainer.md` §1.7 에 `gh release upload` 단계와 asset 확인 명령을 넣어 문서와 실제를 맞췄다.
+
+- **`LIVE_CHECKS` 가 설치별로 조정 불가라 미설치 서비스가 상시 FAIL 한다** → 레지스트리가
+  22개 행을 `core`·`report-hub`·`rag` 묶음으로 들고, 설치가 `HEALTHCHECK_SERVICES` 로 선언한
+  묶음만 `LIVE_CHECKS` 로 내보낸다.
+  ↳ 처리(2026-09-07): 해소 — 선언이 없으면 전부 유지(기존 설치 출력 바이트 동일, 22행),
+  `HEALTHCHECK_SERVICES="core"` 는 22→14행, 모르는 이름은 exit 2 로 거부한다. 행 순서를
+  보존해 허용목록 매니페스트·래퍼 입력 지문이 불변이다. 회귀는
+  `tests/unit/test_healthcheck_registry.py`.
+

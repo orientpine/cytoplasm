@@ -96,6 +96,7 @@ def resolve_store(
     model: Path,
     windows: Sequence[stt_window.Window],
     tool: Path,
+    asr_fingerprint: str,
 ) -> WindowStore:
     """The store for this recording under this plan, refusing a path inside a checkout."""
     root = Path(env.get(CACHE_ENV, "").strip() or DEFAULT_CACHE_DIR).expanduser()
@@ -107,6 +108,7 @@ def resolve_store(
         model=model.stem,
         tool=digest(tool),
         windows=windows,
+        asr_fingerprint=asr_fingerprint,
     )
     return WindowStore(root=root, key=key)
 

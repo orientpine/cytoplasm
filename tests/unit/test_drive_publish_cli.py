@@ -95,7 +95,11 @@ def test_forwards_every_parsed_argument_to_the_facade(artifact, recorder, monkey
 
 @pytest.mark.parametrize(
     ("kind", "command"),
-    [("meeting", "meeting_cli.py ingest"), ("transcript", "speechtotext_cli.py")],
+    [
+        ("meeting", "meeting_cli.py ingest"),
+        ("transcript", "speechtotext_cli.py"),
+        ("audio", "plaud_sync"),
+    ],
 )
 def test_refuses_a_kind_that_a_skill_owns(kind, command, artifact, recorder, monkeypatch, capsys):
     """손으로 쓴 문서를 회의록으로 발행하면 원장을 거치지 않아 관리번호가 존재할 수 없다.

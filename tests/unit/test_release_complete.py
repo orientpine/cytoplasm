@@ -23,6 +23,12 @@ printf '%s|%s\\n' "$PWD" "$RELEASE_REPO_ROOT" >> "$RELEASE_CALLS"
 exit "${RELEASE_RC:-0}"
 """
 
+#: 적용 완료 통지 스윕의 노드 프로브 — 테스트는 ssh 로 나가지 않는다.
+_PROBE_STUB: Final = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$PROBE_CALLS"
+printf '%s' "${PROBE_OUT:-}"
+"""
+
 
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
@@ -77,9 +83,11 @@ def _run(
     decision_rc: int,
     release_rc: int = 0,
     arguments: tuple[str, ...] = (),
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     approval = _stub(tmp_path / "approval-stub", _APPROVAL_STUB)
     release = _stub(tmp_path / "release-stub", _RELEASE_STUB)
+    probe = _stub(tmp_path / "probe-stub", _PROBE_STUB)
     return subprocess.run(
         ("bash", str(_COMMAND), *arguments),
         capture_output=True,
@@ -91,10 +99,13 @@ def _run(
             "RELEASE_COMPLETE_SOURCE_REPO": str(source),
             "RELEASE_APPROVAL_CMD": f"bash {approval}",
             "RELEASE_COMPLETE_RELEASE_CMD": f"bash {release}",
+            "RELEASE_APPLIED_PROBE_CMD": f"bash {probe}",
             "DECISION_RC": str(decision_rc),
             "RELEASE_RC": str(release_rc),
             "CALLS": str(tmp_path / "calls.log"),
             "RELEASE_CALLS": str(tmp_path / "release-calls.log"),
+            "PROBE_CALLS": str(tmp_path / "probe-calls.log"),
+            **(extra_env or {}),
         },
     )
 
@@ -229,11 +240,13 @@ def test_repeated_failures_stop_at_the_per_sha_attempt_cap(tmp_path: Path) -> No
             "RELEASE_COMPLETE_SOURCE_REPO": str(source),
             "RELEASE_APPROVAL_CMD": f"bash {tmp_path / 'approval-stub'}",
             "RELEASE_COMPLETE_RELEASE_CMD": f"bash {tmp_path / 'release-stub'}",
+            "RELEASE_APPLIED_PROBE_CMD": f"bash {tmp_path / 'probe-stub'}",
             "RELEASE_COMPLETE_MAX_ATTEMPTS": "4",
             "DECISION_RC": "0",
             "RELEASE_RC": "0",
             "CALLS": str(tmp_path / "calls.log"),
             "RELEASE_CALLS": str(tmp_path / "release-calls.log"),
+            "PROBE_CALLS": str(tmp_path / "probe-calls.log"),
         },
     )
 
@@ -289,6 +302,59 @@ def test_cancelled_and_transient_decisions_do_not_release(tmp_path: Path) -> Non
         _assert_decision_only(case)
 
 
+def test_applied_notice_sweep_runs_before_the_completed_short_circuit(
+    tmp_path: Path,
+) -> None:
+    """완결 마커가 있는 sha 야말로 통지 대상이다 — 단축회로 뒤에 두면 영영 못 본다.
+
+    Given: 한 틱이 릴리스를 완결해 `completed/<head>` 를 남긴 상태
+    When: 다음 틱이 돈다(같은 head, 이미 완결)
+    Then: 스윕은 돌고 판정 로그를 남기되, 결정·릴리스 호출은 오늘과 똑같이 생략된다.
+    """
+    _origin, source = _origin_and_source(tmp_path)
+    state = tmp_path / "state"
+    head = _git(source, "rev-parse", "HEAD")
+
+    first = _run(tmp_path, source, state, decision_rc=0)
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert _lines(tmp_path / "probe-calls.log") == []  # 완결 전에는 통지 대상이 없다
+    decision_calls = _lines(tmp_path / "calls.log")
+    release_calls = _lines(tmp_path / "release-calls.log")
+
+    second = _run(tmp_path, source, state, decision_rc=0)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert len(_lines(tmp_path / "probe-calls.log")) == 1
+    assert f"RELEASE-APPLIED-RETRY NO-TAG {head[:12]}" in second.stdout
+    assert _lines(tmp_path / "calls.log") == decision_calls
+    assert _lines(tmp_path / "release-calls.log") == release_calls
+    _assert_decision_only(tmp_path)
+
+
+def test_applied_notice_sweep_runs_on_a_pending_tick_without_releasing(
+    tmp_path: Path,
+) -> None:
+    """Given: 승인 대기 틱, 그러나 옛 릴리스의 완결 마커가 남아 있다.
+
+    When: 틱이 돈다
+    Then: 통지 스윕은 승인 상태와 무관하게 돌고, 릴리스는 여전히 실행되지 않는다.
+    """
+    _origin, source = _origin_and_source(tmp_path)
+    state = tmp_path / "state"
+    older = "0123456789abcdef0123456789abcdef01234567"
+    (state / "completed").mkdir(parents=True)
+    _ = (state / "completed" / older).write_text("2026-09-05T00:00:00Z\n", encoding="utf-8")
+
+    result = _run(tmp_path, source, state, decision_rc=7)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pending" in result.stdout
+    assert f"RELEASE-APPLIED-RETRY NO-TAG {older[:12]}" in result.stdout
+    assert len(_lines(tmp_path / "probe-calls.log")) == 1
+    assert _lines(tmp_path / "release-calls.log") == []
+    _assert_decision_only(tmp_path)
+
+
 def test_unknown_argument_is_usage_error(tmp_path: Path) -> None:
     result = subprocess.run(
         ("bash", str(_COMMAND), "--bogus"),
@@ -304,3 +370,83 @@ def test_unknown_argument_is_usage_error(tmp_path: Path) -> None:
 
 def test_command_ships_executable() -> None:
     assert os.access(_COMMAND, os.X_OK)
+
+
+
+#: origin/main 에 착지한 "새" release_complete.sh — exec 됐음과 상속받은 잠금을 보고한다.
+_FRESH_SCRIPT_STUB: Final = """#!/usr/bin/env bash
+set -o pipefail
+printf 'FRESH-RAN reexec=%s\\n' "$RELEASE_COMPLETE_REEXEC"
+if ( exec 8>"$RELEASE_COMPLETE_STATE/lock"; flock -n 8 ); then
+  printf 'LOCK free\\n'
+else
+  printf 'LOCK held\\n'
+fi
+exit 0
+"""
+
+
+def _commit_script(source: Path, content: str) -> None:
+    """Land automation/release_complete.sh on the test origin's main."""
+    script = source / "automation" / "release_complete.sh"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    _ = script.write_text(content, encoding="utf-8")
+    script.chmod(0o755)
+    _ = _git(source, "add", "automation/release_complete.sh")
+    _ = _git(source, "commit", "-m", "release_complete.sh on origin/main")
+    _ = _git(source, "push", "origin", "main")
+
+
+def test_self_update_when_origin_main_changed_the_script_then_execs_the_worktree_copy(
+    tmp_path: Path,
+) -> None:
+    """Given: origin/main carries a newer release_complete.sh than the installed copy.
+
+    When: a tick runs from the installed copy.
+    Then: right after the worktree sync it execs the worktree copy once, still holding
+    the lock, and the stale copy never reaches the decision.
+    """
+    _origin, source = _origin_and_source(tmp_path)
+    _commit_script(source, _FRESH_SCRIPT_STUB)
+    state = tmp_path / "state"
+
+    result = _run(tmp_path, source, state, decision_rc=7)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SELF-UPDATE" in result.stdout
+    assert "FRESH-RAN reexec=1" in result.stdout
+    assert "LOCK held" in result.stdout
+    assert _lines(tmp_path / "calls.log") == []
+
+
+def test_self_update_when_reexec_guard_is_set_then_runs_in_place(tmp_path: Path) -> None:
+    """The loop guard: an already re-exec'd tick never execs again, even if copies differ."""
+    _origin, source = _origin_and_source(tmp_path)
+    _commit_script(source, _FRESH_SCRIPT_STUB)
+    state = tmp_path / "state"
+
+    result = _run(
+        tmp_path, source, state, decision_rc=7, extra_env={"RELEASE_COMPLETE_REEXEC": "1"}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SELF-UPDATE" not in result.stdout
+    assert "FRESH-RAN" not in result.stdout
+    assert "pending" in result.stdout
+    _assert_decision_only(tmp_path)
+    assert len(_lines(tmp_path / "calls.log")) == 1
+
+
+def test_self_update_when_copies_are_identical_then_runs_in_place(tmp_path: Path) -> None:
+    """Byte-identical copies mean the installed script IS origin/main — no exec, no noise."""
+    _origin, source = _origin_and_source(tmp_path)
+    _commit_script(source, _COMMAND.read_text(encoding="utf-8"))
+    state = tmp_path / "state"
+
+    result = _run(tmp_path, source, state, decision_rc=7)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SELF-UPDATE" not in result.stdout
+    assert "pending" in result.stdout
+    _assert_decision_only(tmp_path)
+    assert len(_lines(tmp_path / "calls.log")) == 1
