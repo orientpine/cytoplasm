@@ -16,7 +16,7 @@ from typing import Final
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from automation.repair.repair_command import parse_repair_command
+from automation.repair.repair_command import manual_location, parse_repair_command
 from automation.repair.repair_capability import publish
 from automation.repair.repair_core import KanbanPort, PrivateLogPort, RepairEvent, RepairRegistry, RepairService
 from automation.repair.repair_redaction import redact
@@ -176,7 +176,7 @@ def main() -> int:
     parsed = parse_repair_command(args.message)
     if parsed is None:
         raise RepairCliError("manual repair phrase required")
-    return _detect("manual-repair", "gateway-command", parsed.message)
+    return _detect("manual-repair", manual_location(parsed.message), parsed.message)
 
 
 if __name__ == "__main__":

@@ -17,34 +17,36 @@ _SECTION_THEMES = {
     "3": "센서 융합, 토질 추정, 충돌 회피, 버킷 궤적 생성, 작업 진도 재계획을 단계별 시험과 통합 실증으로 검증한다.",
     "4": "검증된 자율 토공 기술은 건설 현장 생산성, 작업자 안전, 장비 운영 데이터의 재사용성을 함께 높인다.",
 }
-_FIGURE_CLAIMS = {
-    "0": (
-        "현장 지형 관측값과 목표 지형 명세를 안전 정지 조건이 포함된 작업 계약으로 연결한다.",
-    ),
+# 그림 캡션이 곧 그 절의 claim 문구다 — 엔진의 그림 계약은 명사구 캡션을 요구하고
+# (`skills/proposal/engine/contracts/models.py` 의 figure 계약), 근거 추적성 점수는
+# claim 문구와 근거 단위를 대조한다(`engine/agents/reviser.py:169`). 사전을 둘로 나누면
+# 두 표를 같은 자리에서 index 로 엮게 되어 길이가 어긋나는 순간 조용히 깨진다.
+_FIGURE_CAPTIONS = {
+    "0": ("안전 정지 조건 기반 작업 계약",),
     "1": (
-        "측량 갱신 결과를 토공 계획의 지형 입력으로 순환시킨다.",
-        "토공 계획의 절토량과 성토량을 장비 작업 순서로 변환한다.",
-        "버킷 궤적과 장비 자세를 기계 제어 명령으로 동기화한다.",
-        "굴착 결과 검증값을 다음 작업 계획에 폐루프로 반영한다.",
+        "측량 갱신 기반 토공 계획 입력",
+        "절토·성토량 기반 장비 작업 순서",
+        "버킷 궤적 및 장비 자세 제어 명령",
+        "굴착 결과 기반 폐루프 작업 계획",
     ),
     "2": (
-        "지형 오차와 작업 시간을 동일한 반복 시험 절차에서 측정한다.",
-        "안전 개입 횟수와 에너지 사용량을 운용 성과와 함께 판정한다.",
+        "지형 오차 및 작업 시간 반복 시험",
+        "안전 개입 및 에너지 사용량 성과 판정",
     ),
     "3": (
-        "다중 센서 관측을 융합해 작업면의 최신 지형 모델을 갱신한다.",
-        "버킷 반력을 이용해 토질 상태와 굴착 저항을 추정한다.",
-        "장비와 작업자 사이의 충돌 위험을 예측해 안전 궤적을 선택한다.",
-        "목표 지형과 장비 제약을 만족하는 버킷 궤적을 생성한다.",
-        "실제 작업 진도와 계획 편차를 비교해 남은 작업을 재계획한다.",
-        "단계별 시험 결과를 통합 현장 실증의 합격 판정으로 연결한다.",
+        "다중 센서 기반 작업면 지형 모델",
+        "버킷 반력 기반 토질 및 굴착 저항 추정",
+        "작업자 충돌 위험 기반 안전 궤적",
+        "목표 지형 및 장비 제약 기반 버킷 궤적",
+        "작업 진도 및 계획 편차 기반 재계획",
+        "단계별 시험 기반 통합 현장 실증 판정",
     ),
     "4": (
-        "검증된 자율 토공 기술로 현장 생산성과 작업자 안전을 함께 높인다.",
-        "장비 운용 기록을 후속 현장의 계획과 검증에 재사용한다.",
+        "자율 토공 기술 기반 현장 생산성 및 작업자 안전",
+        "장비 운용 기록 기반 후속 현장 계획 및 검증",
     ),
 }
-_SECTION_SLOTS = tuple(len(_FIGURE_CLAIMS[str(index)]) for index in range(5))
+_SECTION_SLOTS = tuple(len(_FIGURE_CAPTIONS[str(index)]) for index in range(5))
 _PROMPT_RULE = "no text, no labels, no numerals"
 
 
@@ -109,7 +111,7 @@ def augment(version_dir: Path) -> None:
     for section_id, slot_count in enumerate(_SECTION_SLOTS):
         section_key = str(section_id)
         ids: list[str] = []
-        for local_index, claim in enumerate(_FIGURE_CLAIMS[section_key], start=1):
+        for local_index, caption in enumerate(_FIGURE_CAPTIONS[section_key], start=1):
             figure_id = f"fig-s{section_id}-{local_index:02d}"
             ids.append(figure_id)
             figures.append(
@@ -120,9 +122,9 @@ def augment(version_dir: Path) -> None:
                     prompt=(
                         "technical editorial diagram on a clean neutral background. "
                         f"Section topic: {_SECTION_THEMES[section_key]} "
-                        f"Depicts: {claim}\n{_PROMPT_RULE}"
+                        f"Depicts: {caption}\n{_PROMPT_RULE}"
                     ),
-                    caption=claim,
+                    caption=caption,
                     png_sha256="",
                     band_index=band_index,
                 )
@@ -139,10 +141,10 @@ def augment(version_dir: Path) -> None:
         section["prose_char_budget"] = budgets[section_id]
         section["claims"] = [
             {
-                "text": claim,
+                "text": caption,
                 "source_ids": [public_ids[int(section_id)]],
             }
-            for claim in _FIGURE_CLAIMS[section_id]
+            for caption in _FIGURE_CAPTIONS[section_id]
         ]
         section["optional_paragraphs"] = [
             {

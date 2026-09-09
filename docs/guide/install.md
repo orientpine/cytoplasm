@@ -286,9 +286,11 @@ sudo python3 -m automation.install \
 ```
 
 **`sudo`는 환경변수를 지운다.** §5에서 `DISCORD_BOT_TOKEN`을 올려두었더라도 위 명령에는
-전달되지 않으므로, 설치기의 `discord-readiness` 체크가 `discord_check.py rc=2`로 실패한다
-— 토큰이 틀린 것이 아니라 아예 도달하지 않은 것이다. 토큰을 넘기려면 `--preserve-env`를
-쓴다(마법사·`quickstart.sh`도 보존을 시도한다):
+전달되지 않으므로, 설치기의 `discord-readiness` 체크는 판정할 재료가 없어
+`[WARN] discord-readiness: TOKEN-ABSENT`으로 남는다 — 토큰이 틀린 것이 아니라 아예 도달하지
+않은 것이고, **설치는 거기서 멈추지 않고 계획 끝까지 진행한다**(경고는 종료코드를 바꾸지
+않는다). 설치 중에 함께 판정받으려면 `--preserve-env`를 쓴다(마법사·`quickstart.sh`도 보존을
+시도한다):
 
 ```bash
 sudo --preserve-env=DISCORD_BOT_TOKEN python3 -m automation.install \
@@ -298,8 +300,9 @@ sudo --preserve-env=DISCORD_BOT_TOKEN python3 -m automation.install \
     --expect-update-trust-fingerprint 'SHA256:0imCAjLaEFCB8oNX05/7mHFQAZsL722KIEZsVD5yvrA'
 ```
 
-`sudo`가 `--preserve-env`를 거부하는 배포판이면 §5를 미리 통과시켜 두고 이 체크의
-실패를 감수해도 된다 — Discord 전제는 설치 자체의 전제가 아니다.
+`sudo`가 `--preserve-env`를 거부하는 배포판이면 그대로 진행해도 된다 — Discord 전제는 설치
+자체의 전제가 아니다. 설치가 끝나면 판정하지 못한 항목이 **「소유자 확인 절차」**로 출력되며,
+거기 적힌 명령(이 설치의 `--config` 경로가 박혀 있다)을 나중에 직접 돌려 닫으면 된다.
 
 root가 아니면 계획만 출력하고 거부한다:
 
@@ -309,7 +312,8 @@ root가 아니면 계획만 출력하고 거부한다:
 
 실행은 계획 순서대로 진행하며 **첫 FAIL에서 멈춘다.** 이건 의도된 동작이다 —
 전제가 깨진 채로 뒤 단계를 밀어붙이지 않는다. 고치고 같은 명령을 다시 실행하면
-이미 끝난 항목은 건너뛴다.
+이미 끝난 항목은 건너뛴다. **WARN은 멈추지 않는다** — 판정해서 나온 실패가 아니라
+판정 자체를 하지 못한 항목이라, 설치를 세우는 대신 끝에서 소유자에게 넘긴다.
 
 중간에 사람이 개입해야 하는 지점이 정확히 두 곳 있다.
 
@@ -447,6 +451,10 @@ best-effort로 호출한다. `pending`이 1 이상인데 둘째 명령이 실패
 | `[FAIL] EnsureAccount: … FileNotFoundError` | `loginctl`/`useradd` 부재 = systemd 없는 환경 | 실제 systemd 호스트에서 실행한다 |
 | `[FAIL] hermes-gateway: …` | 계정별 Hermes 미설치·미기동 | 전제 문서 §3대로 설치 후 재실행 |
 | `[FAIL] discord-readiness: discord_check.py rc=1` | 토큰·인텐트·권한·채널 중 하나 | §5를 단독 실행해 어느 항목인지 본다 |
+| `[WARN] discord-readiness: TOKEN-ABSENT` | 토큰이 설치기 환경에 없어 **판정하지 못했다**(§6의 `sudo` 문제) | 설치는 멈추지 않는다. 끝에 출력되는 「소유자 확인 절차」의 명령으로 나중에 확인한다 |
+| `[FAIL] discord-readiness: USAGE-REFUSED` | `discord_check.py`가 argv를 거부했다(`--config` 값이 `-`로 시작하는 등) | 넘긴 `--config` 경로를 고친다. 토큰 문제가 아니다 |
+| `FAIL … owner notice credentials` (healthcheck) | `/etc/autophagy/repair-approval.env`에 통지 자격증명도, 받지 않겠다는 선언도 없다 | 두 값을 채우거나 `OWNER_NOTICE_OPTIONAL=1` 한 줄을 적는다. 프로브 출력이 그 두 갈래를 그대로 안내한다 |
+| `FAIL … healthcheck probe allowlist matches the checks` | 프로브 목록이 바뀐 릴리스를 받았다(허용목록 지문 변경) | 노드에서 `automation/provision-healthcheck-probe.sh`를 1회 재실행한다(멱등 — 같은 바이트면 무동작) |
 | `repository` 액션에서 멈춤 | deploy key 미등록 또는 `known_hosts` 부재 | §6.2 |
 | `TRUST-KEY-FINGERPRINT-MISMATCH` | 번들 키 ≠ 공지 지문 | **진행하지 않는다.** 유지보수자에게 확인 |
 | `SYNC-BLOCK` · `UPDATE-TRUST-BLOCK` · `EnableTimer`/`EnsureRepository` 실패 | 신규 노드에서만 드러나는 설치기 공백 | [신규 노드 설치에서 막히는 6곳](../troubleshooting/신규-노드-설치-공백.md) |
@@ -461,9 +469,15 @@ best-effort로 호출한다. `pending`이 1 이상인데 둘째 명령이 실패
   이름을 지목해 보고된다. 비-root 실행 거부. 신뢰키 지문 대조·불일치 거부.
 - **systemd 실제 apply 앞단 검증됨**: 특권 컨테이너에서 계정·linger·디렉터리·peer
   attestation 키까지 수렴하고 `[FAIL] hermes-gateway`에서 설계대로 멈춘다.
-- **아직 실호스트에서 검증되지 않음**: Hermes·Discord 전제 뒤 clone → 타이머 활성 →
-  `healthcheck.sh` 전부 PASS → 서명 릴리스 push 후 `current` 전진. 하네스는 외부 전제를
-  대신 설치하거나 모의 통과시키지 않는다. 첫 실제 Linux+systemd 호스트 완주 때 닫힌다.
+- **Hermes 스텁 뒤 계획 전 구간 도달 검증됨(2026-09-09)**: 같은 특권 컨테이너에 게이트웨이
+  스텁을 놓고 다시 돌리면 `discord-readiness`가 토큰 없이 `[WARN]`으로 지나가고, 배포키
+  생성·등록 안내·gitleaks·체크아웃 2개·자산 파일·심링크·healthcheck 프로브·타이머·신뢰키
+  검증까지 계획 50/50 항목에 도달한 뒤, 서비스가 없는 컨테이너이므로 `[FAIL] healthcheck`로
+  끝난다. 증적 [docs/qa/INSTALL-TOKEN-WARN/](../qa/INSTALL-TOKEN-WARN/).
+- **아직 실호스트에서 검증되지 않음**: 실제 Hermes·Discord 전제 뒤 `healthcheck.sh` 전부
+  PASS → 서명 릴리스 push 후 `current` 전진. 하네스는 외부 전제를 대신 설치하거나 모의
+  통과시키지 않는다(스텁은 Hermes 런타임도 Discord 접근도 증명하지 않는다). 첫 실제
+  Linux+systemd 호스트 완주 때 닫힌다.
 
 ## 관련
 

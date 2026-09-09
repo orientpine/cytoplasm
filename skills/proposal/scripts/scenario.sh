@@ -25,6 +25,8 @@ export PROPOSAL_STATUS_ROOT="$work/status"
 export PROPOSAL_STATE_ROOT="$work/state"
 export PROPOSAL_KANBAN_DISABLED=1
 export PROPOSAL_DM_DISABLED=1
+export PROPOSAL_PROFILE=30-page
+export KIMM_DOCBOT_PROFILE=30-page
 export KNOWLEDGE_FAKE_PACK=1
 export PROPOSAL_RESEARCH_TRANSPORT=fake
 export PROPOSAL_IMAGE_TRANSPORT=fake
@@ -70,29 +72,73 @@ printf 'SUBCOMMAND-OK:corpus\n'
 version="$(cat "$PROPOSAL_ROOT/demo/HEAD")"
 version_dir="$PROPOSAL_ROOT/demo/versions/$version"
 
-# Seed the deterministic 15-slot figure IR expected from the offline drafting leg.
-python3 - "$version_dir" <<'PY'
-import json, os, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-figures = [
-    {
-        "figure_id": f"fig-s1-{index:02d}",
-        "section_id": "s1",
-        "source_claim_ids": [f"public:C{index:02d}"],
-        "prompt": f"public construction robotics concept slot-{index}",
-        "caption": f"Validated figure {index}",
-        "png_sha256": "",
-        "band_index": index - 1,
-    }
-    for index in range(1, 16)
-]
-path = root / "figures.json"
-path.write_text(json.dumps(figures, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-os.chmod(path, 0o600)
-PY
+# draft: retain the public CLI's offline text path, then serialize its machine-consumed
+# bundle with the production draft models and sidecar writers. The fake fixture remains
+# deterministic while its planspec/pms sidecars keep the real contract.
+"${cli[@]}" create --slug demo --title "Offline proposal" --section approach:Approach >/dev/null
+"${cli[@]}" draft --slug demo --section approach \
+  --text "검증된 근거 20건을 바탕으로 단계별 실증을 수행한다. 이를 통해 목표 성능을 확보한다." >/dev/null
+(
+  cd "$skill_pkg_root/.."
+  python3 - "$version_dir" <<'PY'
+import sys
+from pathlib import Path
 
-# images: generate all slots, then prove the second pass uses intact targets/cache
-# by requiring identical output and an unchanged spend ledger.
+from skills.proposal.engine.contracts import (
+    Claim,
+    KPI,
+    PlanSpec,
+    SectionDraft,
+    TraceLink,
+    TraceabilityMatrix,
+    WorkPackage,
+)
+from skills.proposal.engine.converter.ingest import ingest_dir
+from skills.proposal.engine.converter.materialize import materialize
+from skills.proposal.engine.converter.normalize import normalize
+from skills.proposal.engine.converter.pms import ProposalMaterialStore
+from skills.proposal.engine.pipeline.draft_bundle import save_draft_file, save_planspec
+from skills.proposal.engine.pipeline.orchestrator import _save_pms_snapshot
+from skills.proposal.scripts.proposal_excavator_e2e import augment
+
+version_dir = Path(sys.argv[1])
+out = version_dir / "out"
+raw_docs = ingest_dir(str(version_dir / "corpus"))
+units = materialize([normalize(raw) for raw in raw_docs])
+planspec = PlanSpec(
+    title="Offline proposal",
+    trl_start=3,
+    trl_end=6,
+    objectives=["공개 근거 기반 실증"],
+    keywords=["실증"],
+    kpis=[KPI("TRL 진전", "단계", "3", "6", 100, "반복 시험", "실증 환경", "공개 근거")],
+    work_packages=[WorkPackage("WP1", "단계별 실증", "scenario", 12, ["실증 결과"])],
+    page_budget={"0": 1350, "1": 6000, "2": 2800, "3": 9000, "4": 2800},
+    traceability=TraceabilityMatrix(
+        links=[TraceLink("methodology", [unit.unit_id for unit in units])]
+    ),
+)
+drafts = [
+    SectionDraft(
+        section_id=str(index),
+        title=f"Section {index}",
+        body="검증된 공개 근거를 바탕으로 단계별 실증을 수행한다. 이를 통해 목표 성능을 확보한다.",
+        claims=[Claim(units[0].fact, [units[0].unit_id])],
+    )
+    for index in range(5)
+]
+bundle_path = str(out / "drafts.json")
+_ = save_draft_file(bundle_path, drafts)
+_ = save_planspec(bundle_path, planspec)
+_ = _save_pms_snapshot(ProposalMaterialStore(units), f"{bundle_path}.pms.json")
+augment(version_dir)
+PY
+)
+printf 'SUBCOMMAND-OK:draft\n'
+
+# images: generate every deterministic slot from the production-shaped draft bundle,
+# then prove the second pass uses intact targets/cache by requiring identical output
+# and an unchanged spend ledger.
 images_first="$("${cli[@]}" images --slug demo --json)"
 ledger_before="$(python3 - "$PROPOSAL_STATE_ROOT/image_spend.json" <<'PY'
 import hashlib, pathlib, sys
@@ -115,28 +161,6 @@ assert all(pathlib.Path(item["path"]).is_file() for item in payload["images"])
 PY
 printf 'SUBCOMMAND-OK:images\n'
 
-# draft: exercise the public CLI's offline text path (no KD checkout), then write
-# the corresponding machine-consumed draft bundle for refine/render.
-"${cli[@]}" create --slug demo --title "Offline proposal" --section approach:Approach >/dev/null
-"${cli[@]}" draft --slug demo --section approach \
-  --text "검증된 근거 20건을 바탕으로 단계별 실증을 수행한다. 이를 통해 목표 성능을 확보한다." >/dev/null
-python3 - "$version_dir" <<'PY'
-import json, os, pathlib, sys
-out = pathlib.Path(sys.argv[1]) / "out"
-out.mkdir(mode=0o700, exist_ok=True)
-payload = {
-    "sections": [{
-        "section_id": "s1",
-        "title": "Approach",
-        "body": "검증된 근거 20건을 바탕으로 단계별 실증을 수행한다. 이를 통해 목표 성능을 확보한다. [[FIG:fig-s1-01]]",
-    }]
-}
-path = out / "drafts.json"
-path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-os.chmod(path, 0o600)
-PY
-printf 'SUBCOMMAND-OK:draft\n'
-
 # refine must precede render. A broken fake mode returns non-zero, and set -e
 # propagates that failure rather than printing any later success marker. PASS (not
 # NO_CHANGE) is the assertion because the draft above carries the phrase style-edit
@@ -152,22 +176,21 @@ assert pathlib.Path(payload["path"]).is_file()
 PY
 printf 'SUBCOMMAND-OK:refine\n'
 
-# render: in this sandbox the KD engine is intentionally unavailable. The exact
-# The engine ships in this repository, so render no longer stops at a pin naming another
-# checkout. It stops at the engine's OWN input contract instead: this sandbox's fake draft
-# never writes the planspec/pms sidecars a real draft emits, and before internalization the
-# pin check exited 4 first, so render was never actually reached here. Reaching the engine's
-# input gate - with no pin marker anywhere - is the proof that the external gate is gone.
-set +e
+# render: the refined bundle must receive the production-shaped sidecars before
+# the in-tree engine runs and emits a real HWPX artifact.
 render_output="$("${cli[@]}" render --slug demo --mode replay --json 2>&1)"
-render_rc=$?
-set -e
 printf '%s\n' "$render_output"
 if grep -Fq 'ENGINE-PIN-BLOCK' <<<"$render_output"; then
   fail "render still consults an external engine pin"
 fi
-grep -Fq 'refined drafts sidecar source is missing' <<<"$render_output" \
-  || fail "render did not reach the engine input contract (rc=$render_rc)"
+render_json="${render_output##*$'\n'}"
+python3 - "$render_json" <<'PY'
+import json, pathlib, sys
+payload = json.loads(sys.argv[1])
+assert payload["profile"] == "30-page"
+assert payload["refined"] is True
+assert pathlib.Path(payload["hwpx_path"]).is_file()
+PY
 printf 'SUBCOMMAND-OK:render\n'
 
 # publish: fake Drive still executes folder creation, upload, owner-only permission

@@ -13,6 +13,7 @@ from automation.install.assets import InstallAssetError, build_inputs, render_pl
 from automation.install.checks import CheckResult, Status, exit_code, render
 from automation.install.components import OPT_IN_COMPONENTS, UnknownComponentError
 from automation.install.executor import ExecutionContext, RealExecutor
+from automation.install.owner_actions import follow_up
 from automation.install.plan import FileSpec, build_plan
 from automation.install.profiles import PROFILES
 from automation.install.state import inspect_state
@@ -239,6 +240,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     results = apply_plan(plan, executor)
     print(render(results, verdict_label="INSTALLED"))
+    remaining = follow_up(results, discord_config=discord_config)
+    if remaining:
+        print(remaining)
     return exit_code(results)
 
 

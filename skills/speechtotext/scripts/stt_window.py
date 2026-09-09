@@ -241,7 +241,14 @@ def spans(segments: Sequence[Segment]) -> tuple[tuple[int, int], ...]:
 
 
 def text_of(segments: Sequence[Segment]) -> str:
-    """The spoken text of these segments, joined the way the transcript reads them."""
+    """Build repetition-check text with one boundary between ASR segments.
+
+    This intentionally differs from ``stt_blocks``: the document concatenates token
+    text verbatim, but ``dominant_repeat`` is a word/whitespace detector. Keeping one
+    boundary per segment lets it detect collapsed repetition in both Korean segments
+    (which may have no internal spaces) and ordinary English segments. This text never
+    reaches the document.
+    """
     joined = " ".join(
         str(segment.get("text", "")).strip()
         for segment in segments

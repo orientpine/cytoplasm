@@ -64,6 +64,42 @@ if [ "$deployed" = "$expected" ]; then
   exit 0
 fi
 
-printf 'DRIFT mailon-runtime-drift: runtime=%s repo=%s — run skills/mail/deploy.sh (owner-approved) to converge\n' \
+# The release directory name is a content digest, so resolve each fingerprint to
+# the commit that introduced that vendor tree before comparing ancestry.
+resolve_digest_commit() {
+  local digest="$1" commit temp tree
+  temp="$(mktemp -d)" || return 1
+  trap 'rm -rf "$temp"' RETURN
+  while IFS= read -r commit; do
+    rm -rf "$temp/tree"
+    mkdir -p "$temp/tree"
+    git -C "$release_root" archive "$commit" skills/mail/vendor/mailon 2>/dev/null \
+      | tar -x -C "$temp/tree" 2>/dev/null || continue
+    tree="$temp/tree/skills/mail/vendor/mailon"
+    [ -d "$tree" ] || continue
+    if [ "$(mailon_vendor_digest "$tree" 2>/dev/null || true)" = "$digest" ]; then
+      printf '%s\n' "$commit"
+      return 0
+    fi
+  done < <(git -C "$release_root" rev-list --all 2>/dev/null || true)
+  return 1
+}
+
+runtime_commit="$(resolve_digest_commit "$deployed" 2>/dev/null || true)"
+release_commit="$(resolve_digest_commit "$expected" 2>/dev/null || true)"
+if [ -n "$runtime_commit" ] && [ -n "$release_commit" ]; then
+  if git -C "$release_root" merge-base --is-ancestor "$runtime_commit" "$release_commit"; then
+    printf 'DRIFT mailon-runtime-drift: runtime=%s repo=%s — run skills/mail/deploy.sh (owner-approved) to converge\n' \
+      "$deployed" "$expected"
+    exit 1
+  fi
+  if git -C "$release_root" merge-base --is-ancestor "$release_commit" "$runtime_commit"; then
+    printf 'DRIFT mailon-runtime-drift: runtime=%s repo=%s direction=runtime-ahead — run automation/release.sh (owner-approved) to converge\n' \
+      "$deployed" "$expected"
+    exit 1
+  fi
+fi
+
+printf 'DRIFT mailon-runtime-drift: runtime=%s repo=%s direction=unknown — run skills/mail/deploy.sh or automation/release.sh (owner-approved) to converge\n' \
   "$deployed" "$expected"
 exit 1

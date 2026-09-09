@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Protocol, TypeAlias, assert_never
+from typing import TYPE_CHECKING, Protocol, TypeAlias
 from urllib.error import HTTPError, URLError
 
 import calendar_confirm
@@ -282,7 +282,7 @@ def _entry_from_verdict(verdict: Verdict, store: PendingConfirmStore) -> Pending
                 exit_code,
             )
         case unreachable:
-            assert_never(unreachable)
+            raise AssertionError(f"unreachable outcome: {unreachable}")
     if request is None:
         raise calendar_gate.GateError("승인 게시 결과가 비어 있습니다", 3)
     entry = CalendarApprovalGate(None, store, "")._entry(request)

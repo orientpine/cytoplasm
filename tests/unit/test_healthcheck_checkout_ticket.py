@@ -230,6 +230,7 @@ def _quiet_release_probes(tmp_path: Path, checkout: Path) -> tuple[Path, Path, P
     for relative, name in (
         ("automation/__init__.py", "__init__.py"),
         ("automation/git_tag_signature.py", "git_tag_signature.py"),
+        ("automation/typing_compat.py", "typing_compat.py"),
         ("automation/update_trust.py", "update_trust.py"),
         ("automation/update_trust_state.py", "update_trust_state.py"),
         ("automation/node_config.py", "node_config.py"),
@@ -257,6 +258,15 @@ def _sweep(
     peer_config, peer_directory = write_peer_files(tmp_path)
     env["HEALTHCHECK_PEER_GATEWAY_CONFIG"] = str(peer_config)
     env["HEALTHCHECK_PEER_CHANNEL_DIRECTORY"] = str(peer_directory)
+    # 이 하네스가 모델하는 것은 **완비된 노드**이고, 그런 노드는 소유자 통지를 받을지
+    # 이미 결정했다. 결정하지 않은 상태를 여기서 재현하면 모든 sweep 단언이 그 한 줄
+    # 때문에 흔들린다 — 그 상태의 판정은 자기 테스트가 따로 갖고 있다.
+    credential = tmp_path / "repair-approval.env"
+    _ = credential.write_text(
+        "DISCORD_BOT_TOKEN=fixture-not-a-real-credential\nAUTOPHAGY_OWNER_ID=1\n",
+        encoding="utf-8",
+    )
+    env["HEALTHCHECK_OWNER_NOTICE_CREDENTIAL"] = str(credential)
     env["FAKE_CHECKOUT"] = str(checkout)
     env["FAKE_WRAPPER_DIGEST"] = _FAKE_WRAPPER_DIGEST
     # Once the checkout probe runs locally (no ssh) the FAKE_CHECKOUT rewrite no

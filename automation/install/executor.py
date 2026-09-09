@@ -8,6 +8,7 @@ from typing import Protocol, cast
 
 from automation.install.checks import CheckResult, Status
 from automation.install.discord_check import main as discord_check_main
+from automation.install.owner_actions import discord_readiness, discord_usage_refused
 from automation.install.plan import (
     Check,
     CheckName,
@@ -116,9 +117,14 @@ class RealExecutor:
             case "hermes-gateway":
                 return (self._gateway_check(),)
             case "discord-readiness":
-                code = discord_check_main(("--config", str(self._context.discord_config)))
-                status = Status.PASS if code == 0 else Status.FAIL
-                return (CheckResult(name, status, f"discord_check.py rc={code}"),)
+                try:
+                    code = discord_check_main(("--config", str(self._context.discord_config)))
+                except SystemExit as refusal:
+                    # argparse refuses argv by raising SystemExit, which `execute`'s
+                    # except clause cannot catch (it is a BaseException), so the
+                    # installer died with a traceback instead of naming the step.
+                    return (discord_usage_refused(refusal.code),)
+                return (discord_readiness(code),)
             case "update-trust":
                 return verify_installed(
                     Path("/etc/autophagy/update-allowed-signers"),

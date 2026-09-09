@@ -73,6 +73,7 @@ probe_release_helper_drift() {
     #: 놓기만 하고 아무도 보지 않으면 낡아도 조용한 것은 위 세 개와 똑같다.
     "$libexec/autophagy-converge.d/automation/__init__.py|automation/__init__.py|provision-deploy-converge.sh"
     "$libexec/autophagy-converge.d/automation/git_tag_signature.py|automation/git_tag_signature.py|provision-deploy-converge.sh"
+    "$libexec/autophagy-converge.d/automation/typing_compat.py|automation/typing_compat.py|provision-deploy-converge.sh"
     "$libexec/autophagy-converge.d/automation/update_trust.py|automation/update_trust.py|provision-deploy-converge.sh"
     "$libexec/autophagy-converge.d/automation/update_trust_state.py|automation/update_trust_state.py|provision-deploy-converge.sh"
     "$libexec/autophagy-converge.d/automation/node_config.py|automation/node_config.py|provision-deploy-converge.sh"

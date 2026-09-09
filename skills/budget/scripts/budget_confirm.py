@@ -197,7 +197,7 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
         )
         return dm_owner(content)
     marker = _thread_outcome(origin_notice, outcome)
-    return origin_notice.deliver(
+    delivered = origin_notice.deliver(
         api=_api,
         transport_factory=_thread_transport,
         record=draft,
@@ -206,6 +206,7 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
         fallback=dm_owner,
         **({} if marker is None else {"outcome": marker}),
     )
+    return str(delivered)
 
 
 def _created_at(draft: dict) -> datetime:

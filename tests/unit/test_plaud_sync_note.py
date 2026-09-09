@@ -627,3 +627,42 @@ def test_glance_carries_only_the_recording_line_and_diagnostics() -> None:
     assert "- 녹음::" in glance
     for gone in ("사람::", "장소::", "한 줄::", "주제::"):
         assert gone not in glance, f"{gone} 이 아직 한눈에에 있다"
+
+
+@pytest.mark.parametrize("name", ["", "2026-09-02 09:02:00", "소유자가 고른 제목"])
+def test_parsed_ambiguous_references_never_freeze_into_the_note(name: str) -> None:
+    import json
+
+    from automation.plaud_sync.lifelog_extract import parse_extraction
+
+    transcript = "[00:00 · 화자1] 사람 형님. 김철수 박사는 판교 사무실에서 견적을 확인한다."
+    recording = replace(
+        _real_shape_recording(), name=name, summary_markdown="", transcript_text=transcript,
+    )
+    extraction = parse_extraction(json.dumps({
+        "title": "사람 형님과 나눈 이야기",
+        "people": ["사람 형님", "김철수 박사"],
+        "places": ["거기", "판교 사무실"],
+        "summary": "김철수 박사는 판교 사무실에서 견적을 확인한다.",
+        "todos": [{"text": "자료 정리", "owner": "사람 형님"},
+                  {"text": "견적 확인", "owner": "김철수 박사"}],
+    }, ensure_ascii=False))
+
+    plan = plan_lifelog_note(recording, extraction=extraction, tz=_SEOUL)
+    fallback = plan_lifelog_note(recording, extraction=LifelogExtraction(), tz=_SEOUL)
+    owner_body = plan.body.split("\n## 전문\n", 1)[0]
+
+    assert extraction.people == ("김철수 박사",)
+    assert extraction.places == ("판교 사무실",)
+    assert extraction.title == ""
+    assert tuple(todo.owner for todo in extraction.todos) == ("", "김철수 박사")
+    assert plan.relpath == fallback.relpath
+    assert plan.title == fallback.title
+    assert "사람" not in plan.relpath.name
+    assert "사람 형님" not in owner_body
+    assert "- [ ] 자료 정리\n" in owner_body
+    assert "- [ ] 견적 확인 — 담당 김철수 박사" in owner_body
+    assert "판교 사무실" in owner_body
+    assert split_lifelog_body(plan.body)[1] == transcript
+    for gone in ("사람::", "장소::", "한 줄::", "주제::"):
+        assert gone not in owner_body

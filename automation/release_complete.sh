@@ -80,8 +80,66 @@ head="$(git -C "$WORKTREE" rev-parse HEAD)" || {
 # 적용 완료 DM 통지 스윕 — **완결 단축회로보다 앞**이어야 한다. 통지 대상은 이미
 # `completed/<sha>` 가 있는 릴리스이므로 단축회로 뒤에 두면 영영 도달하지 못한다.
 # 판정·발신은 전부 파이썬에 있다(bash 에는 배선만). 실패해도 완결을 막지 않는다.
-PYTHONPATH="$REPO_ROOT" python3 -m automation.release_applied_notice \
-  sweep --state "$STATE" --repo "$WORKTREE" || true
+# cd 는 장식이 아니다 — `python3 -m` 은 sys.path[0] 에 cwd 를 넣으므로, 유닛의
+# WorkingDirectory(메인 체크아웃)에 있는 낡은 automation 패키지가 self-update 로 갈아탄
+# 워크트리 세대의 모듈을 가린다(2026-09-09 실측: 매 틱 No module named ...).
+(cd "$REPO_ROOT" && PYTHONPATH="$REPO_ROOT" python3 -m automation.release_applied_notice \
+  sweep --state "$STATE" --repo "$WORKTREE") || true
+
+# 이미 인가된 릴리스의 완결 리컨실 — 완결 단축회로보다 **앞**이어야 한다. origin/main 이
+# 태그를 앞지르면 아래 결정은 매 틱 HEAD 불일치로 서므로, 노드가 실제로 돌리는 릴리스의
+# 남은 완결(전량 반영 + 마커)이 여기서 재개되지 않으면 영영 재개되지 않는다. 이 경로는
+# release.sh 를 부르지 않아 태그를 자르지 않으므로 새 인가를 만들지 않는다.
+reconcile_authorized_release() {
+  local target sha version attempts_file attempts max deploy_command rc
+  local -a deploy_cmd
+  target="$(cd "$REPO_ROOT" && PYTHONPATH="$REPO_ROOT" python3 -m automation.release_completion_target \
+    --repo "$WORKTREE" --state "$STATE")" || return 0
+  sha="${target%% *}"
+  version="${target##* }"
+  attempts_file="$STATE/attempts/reconcile-$sha"
+  attempts="$(cat "$attempts_file" 2>/dev/null || printf 0)"
+  max="${RELEASE_COMPLETE_MAX_ATTEMPTS:-3}"
+  if (( attempts >= max )); then
+    log "RECONCILE-GIVEUP ${sha:0:12} after $attempts attempts — automation/deploy_all.sh --apply 를 손으로 재실행"
+    return 0
+  fi
+  if ! git -C "$WORKTREE" checkout --quiet --detach "$sha"; then
+    log "RECONCILE-CHECKOUT-FAIL ${sha:0:12}"
+    return 0
+  fi
+  log "reconciling approved $version (${sha:0:12}) — origin/main 이 그 뒤로 전진했다"
+  deploy_command="${RELEASE_COMPLETE_DEPLOY_CMD:-$WORKTREE/automation/deploy_all.sh}"
+  read -r -a deploy_cmd <<< "$deploy_command"
+  ( cd "$WORKTREE" && "${deploy_cmd[@]}" --apply )
+  rc=$?
+  git -C "$WORKTREE" checkout --quiet --detach origin/main \
+    || log "RECONCILE-RESTORE-FAIL: 워크트리를 origin/main 으로 되돌리지 못했다"
+  case "$rc" in
+    0)
+      rm -f -- "$attempts_file"
+      if mkdir -p -- "$STATE/completed" \
+        && printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE/completed/$sha"; then
+        log "reconciled $version (${sha:0:12})"
+      else
+        log "MARKER-FAIL: $STATE/completed/$sha"
+      fi
+      ;;
+    4)
+      # 노드가 아직 그 릴리스가 아니다(RELEASE-MISMATCH) — 스스로 낫는 전이 상태라 시도로
+      # 세지 않는다. 세면 2분 틱 × 3 = 6분 만에 영구 포기가 되는데, 2026-09-08 실측 수렴은
+      # 52분 걸렸다.
+      log "RECONCILE-DEFER ${sha:0:12} — 노드 릴리스가 아직 그 sha 가 아니다"
+      ;;
+    *)
+      mkdir -p -- "$STATE/attempts" \
+        && printf '%s\n' "$(( attempts + 1 ))" > "$attempts_file"
+      log "RECONCILE-FAIL rc=$rc ${sha:0:12} — 재실행이 재개다(다음 틱)"
+      ;;
+  esac
+}
+
+reconcile_authorized_release
 
 marker="$STATE/completed/$head"
 [[ -f "$marker" ]] && exit 0
@@ -97,7 +155,7 @@ export RELEASE_APPROVAL_CMD
 release_command="${RELEASE_COMPLETE_RELEASE_CMD:-$WORKTREE/automation/release.sh}"
 read -r -a release_cmd <<< "$release_command"
 
-"${approval[@]}" decision --head "$head"
+"${approval[@]}" decision --head "$head" --notify-stale
 decision_rc=$?
 case "$decision_rc" in
   0)

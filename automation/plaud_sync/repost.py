@@ -63,8 +63,8 @@ def reset_for_reprocess(record: PlaudSyncRecord) -> PlaudSyncRecord | None:
     and wrong for the one the owner hit (2026-09-06): a note whose transcript was split
     into syllables and whose summary came back empty was produced by code we have since
     fixed, and nothing could rebuild it. Sending the record back to ``transcribing``
-    re-runs download → transcription → extraction → card, and because the note path is
-    derived from the recording id the approved write **upserts the same file**.
+    re-runs download → transcription → extraction → card, and the record retains its
+    first ``note_relpath`` so the approved write **upserts the same file**.
 
     The attempt counters go back to zero because they counted the old code's failures.
     ``approval_thread_id`` stays so the new card lands in the thread the owner already

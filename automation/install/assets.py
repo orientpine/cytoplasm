@@ -62,11 +62,15 @@ SUDOERS_ASSETS: Final = (
 OWNER_NOTICE_CREDENTIAL: Final = Path("/etc/autophagy/repair-approval.env")
 OWNER_NOTICE_CREDENTIAL_TEMPLATE: Final = """\
 # Owner-notice credentials, read by automation/owner_notice.py.
-# Leaving this empty is valid: notices are skipped and convergence is unaffected.
 # Fill these in to receive reconcile-failure and deploy-drift notices.
 # DISCORD_BOT_TOKEN=
 # AUTOPHAGY_OWNER_ID=
 # OWNER_NOTICE_CHANNEL_ID=
+#
+# Running this node without owner notices is a valid choice - convergence is unaffected -
+# but SAY SO, or the healthcheck sweep reports it as undecided: a probe cannot tell a
+# choice from an oversight, and an oversight means nobody hears that convergence failed.
+# OWNER_NOTICE_OPTIONAL=1
 """
 
 

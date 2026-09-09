@@ -32,6 +32,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
     from automation.interop.approval_lifecycle import (
         ApprovalIntent,
         ApprovalRequest,
+        Outcome,
         PostedApproval,
         Probe,
         Verdict,
@@ -387,7 +388,7 @@ def _owns(request: ApprovalRequest, draft: dict) -> bool:
 
 def bound_message_id(verdict: Verdict, draft: dict) -> str:
     """Map one lifecycle verdict onto the legacy ``_post_draft_for_approval`` contract."""
-    outcome = lifecycle().Outcome
+    outcome: type[Outcome] = lifecycle().Outcome
     match verdict.outcome:
         case outcome.POSTED:
             posted = verdict.posted

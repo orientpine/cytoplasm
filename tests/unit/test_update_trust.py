@@ -132,23 +132,78 @@ def floor(tmp_path: Path) -> Path:
     return path
 
 
-def test_resolve_signed_update_when_main_advances_without_tag_then_blocks_unsigned_head(
+def test_resolve_signed_update_when_main_advances_past_the_tag_then_installs_the_release(
     update_repository: UpdateRepository,
     floor: Path,
 ) -> None:
-    # Given: the previous public commit was released under a trusted signed tag.
+    """Given: a signed release, then unsigned commits land on main after it.
+
+    When: the node resolves its update target.
+    Then: it converges to the RELEASE, and never to the mutable tip.
+
+    Requiring the tip to *be* the tag froze every release the moment anyone merged —
+    2026-09-09 실측: v1.6.5 was approved, tagged and pushed, a PR landed seven commits
+    later, and the node repeated UNSIGNED-HEAD forever. That requirement bought no
+    security: a tag has to be pushed to be seen at all, so an attacker who could plant
+    one already holds write access, and one who holds only the key cannot publish.
+    Freshness stays with the release floor; authorship stays with the signature.
+    """
     _sign_tag(update_repository, "v1.0.0", update_repository.old_key)
+    released = _run("git", "rev-parse", "v1.0.0^{commit}", cwd=update_repository.publisher)
     _ = _run("git", "push", "origin", "refs/tags/v1.0.0", cwd=update_repository.publisher)
+    tip = _commit(update_repository, "unsigned update")
+    _ = _run("git", "push", "origin", "main", cwd=update_repository.publisher)
+
+    release = resolve_signed_update(
+        update_repository.mirror,
+        update_repository.allowed_signers,
+        floor_path=floor,
+    )
+
+    assert release.tag == "v1.0.0"
+    assert release.commit_sha == released
+    assert release.commit_sha != tip
+
+
+def test_resolve_signed_update_when_no_release_tag_exists_then_blocks_unsigned_head(
+    update_repository: UpdateRepository,
+    floor: Path,
+) -> None:
+    """The block survives for the case it was written for: nothing signed to install."""
     _ = _commit(update_repository, "unsigned update")
     _ = _run("git", "push", "origin", "main", cwd=update_repository.publisher)
 
-    # When/Then: mutable main alone cannot become a convergence target.
     with pytest.raises(UpdateTrustError, match=r"^UNSIGNED-HEAD:"):
         _ = resolve_signed_update(
             update_repository.mirror,
             update_repository.allowed_signers,
             floor_path=floor,
         )
+
+
+def test_resolve_signed_update_orders_candidate_releases_by_version_not_by_name(
+    update_repository: UpdateRepository,
+    floor: Path,
+) -> None:
+    """v1.10.0 is newer than v1.9.0; lexicographic name order says the opposite."""
+    _sign_tag(update_repository, "v1.9.0", update_repository.old_key)
+    _ = _commit(update_repository, "tenth minor")
+    _sign_tag(update_repository, "v1.10.0", update_repository.old_key)
+    newest = _run("git", "rev-parse", "v1.10.0^{commit}", cwd=update_repository.publisher)
+    _ = _commit(update_repository, "unsigned update")
+    _ = _run(
+        "git", "push", "origin", "main", "refs/tags/v1.9.0", "refs/tags/v1.10.0",
+        cwd=update_repository.publisher,
+    )
+
+    release = resolve_signed_update(
+        update_repository.mirror,
+        update_repository.allowed_signers,
+        floor_path=floor,
+    )
+
+    assert release.tag == "v1.10.0"
+    assert release.commit_sha == newest
 
 
 def test_resolve_signed_update_when_current_head_has_trusted_tag_then_returns_tag_commit(
@@ -375,6 +430,14 @@ def _rewind_origin(repository: UpdateRepository, sha: str) -> None:
     )
 
 
+def _delete_remote_tag(repository: UpdateRepository, tag: str) -> None:
+    """The other half of a keyless origin compromise: unpublishing a release."""
+    _ = _run(
+        "git", "push", "--delete", str(repository.remote), f"refs/tags/{tag}",
+        cwd=repository.publisher,
+    )
+
+
 def test_resolve_signed_update_when_origin_rewinds_to_an_older_signed_tag_then_refuses(
     update_repository: UpdateRepository,
     floor: Path,
@@ -393,7 +456,18 @@ def test_resolve_signed_update_when_origin_rewinds_to_an_older_signed_tag_then_r
     # When: an attacker who cannot sign anything rewinds main onto the old release.
     _rewind_origin(update_repository, old_sha)
 
-    # Then: authenticity is not enough — the release must also advance.
+    # Then: the rewind moves nothing — main is not the install target, the newest
+    # verified release is. A rewind alone can no longer even nominate the old one.
+    unmoved = resolve_signed_update(
+        update_repository.mirror,
+        update_repository.allowed_signers,
+        floor_path=floor,
+    )
+    assert unmoved.tag == "v2.0.0"
+
+    # And when the same keyless attacker unpublishes the newer release so that only
+    # the older signed one remains: authenticity is not enough — it must also advance.
+    _delete_remote_tag(update_repository, "v2.0.0")
     with pytest.raises(UpdateTrustError, match=r"^RELEASE-ROLLBACK:"):
         _ = resolve_signed_update(
             update_repository.mirror,
@@ -512,8 +586,10 @@ def test_resolve_signed_update_when_the_release_tag_is_not_semver_then_refuses(
         cwd=update_repository.publisher,
     )
 
-    # When/Then: an unorderable name fails closed instead of crashing or passing.
-    with pytest.raises(UpdateTrustError, match=r"^RELEASE-VERSION:"):
+    # When/Then: an unorderable name is not a release, so it never becomes a candidate
+    # and the channel reports that nothing installable is published. It fails closed
+    # either way; what it must never do is install or move the floor.
+    with pytest.raises(UpdateTrustError, match=r"^UNSIGNED-HEAD:"):
         _ = resolve_signed_update(
             update_repository.mirror, update_repository.allowed_signers, floor_path=floor
         )
@@ -639,8 +715,14 @@ def test_update_trust_cli_reports_a_rollback_through_the_existing_block_channel(
     assert update_trust_main(argv) == 0
     assert capsys.readouterr().out.strip() == new_sha
 
-    # When: origin is rewound onto the old signed release and the CLI runs again.
+    # When: origin is rewound onto the old signed release, the newest release is still
+    # published, so the CLI keeps resolving it rather than following mutable main.
     _rewind_origin(update_repository, old_sha)
+    assert update_trust_main(argv) == 0
+    assert capsys.readouterr().out.strip() == new_sha
+
+    # And when that release is unpublished so only the older one remains, the CLI runs again.
+    _delete_remote_tag(update_repository, "v2.0.0")
     assert update_trust_main(argv) == 1
 
     # Then: the refusal reaches operators on the path main() already owned, so

@@ -25,7 +25,7 @@ else:
 
 
 def assign(
-    words: tuple[Word | Ref, ...], turns: tuple[Turn, ...], **overrides: object,
+    words: tuple[Word | Ref, ...], turns: tuple[Turn, ...], **overrides: int | Fraction,
 ) -> tuple[attribute.WordAttribution, ...]:
     return attribute.attribute_words(
         words, turns, policy=replace(attribute.AttributionPolicy(), **overrides),
@@ -214,3 +214,27 @@ def test_calls_do_not_retain_speaker_labels_or_mutate_inputs() -> None:
     assert assign(words, turns) == first
     assert words == (Word("단어", 100, 200),)
     assert turns == (Turn(100, 200, 99),)
+
+
+def test_speaker_reason_breakdown_keeps_weak_speakers_visible_without_changing_assignment() -> None:
+    # Given: two directly assigned speakers and two candidates that lose under existing rules.
+    words = (Word("강함1", 0, 100), Word(" 강함2", 1000, 1100),
+             Word(" 약함1", 2000, 2200), Word(" 약함2", 3301, 3501))
+    turns = (Turn(0, 100, 10), Turn(1000, 1100, 11),
+             Turn(2000, 2080, 12), Turn(3000, 3100, 13))
+
+    # When: the existing attribution is measured by candidate speaker and reason.
+    assigned = assign(words, turns)
+    breakdown = attribute.speaker_reason_breakdown(assigned)
+
+    # Then: weak candidates are counted at their losing rule and assignment is unchanged.
+    assert [(item.tag.label, item.reason) for item in assigned] == [
+        ("화자1", "direct"), ("화자2", "direct"),
+        ("화자0", "low_coverage"), ("화자0", "no_support"),
+    ]
+    assert breakdown == (
+        attribute.SpeakerReasonBreakdown("화자1", (attribute.SpeakerReasonCount("direct", 1),)),
+        attribute.SpeakerReasonBreakdown("화자2", (attribute.SpeakerReasonCount("direct", 1),)),
+        attribute.SpeakerReasonBreakdown("화자3", (attribute.SpeakerReasonCount("low_coverage", 1),)),
+        attribute.SpeakerReasonBreakdown("화자4", (attribute.SpeakerReasonCount("no_support", 1),)),
+    )

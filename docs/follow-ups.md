@@ -98,69 +98,38 @@ PR #413은 동시 `--apply` 회귀의 release FIFO를 O_RDWR로 유지해 CI 경
 기존 불릿 없이 발견한 결함 1건은 PR #424로 고쳤다 — 로컬 전사 노트 본문이 오프셋 없는 `get_file` UTC 를 현지 시각처럼 찍던 것. 이미 vault 에 쓰인 노트 3건의 보정은 OWNER 로 남겼다.
 배포 관측 2건(deploy.sh 종료 코드와 최종 프로브의 불일치, 미선언 홈 산출물)은 보류 문서의 스윕 6 헤딩 아래 OWNER·OBSERVE 로 기록했다. 저장소에서 지금 손댈 열린 건은 없다. 증적: [docs/qa/FU6/summary.md](qa/FU6/summary.md).
 
+## 2026-09-08 전수 처리 (후속 과제 스윕 7)
+
+시작 시 열린 13건(7묶음)을 mass-ulw DAG 11노드(병렬 lane 10 + 검증 1)로 처리했다 — 9건 해소, 1건 부분 해소(계측 완료·실측 대기),
+OWNER 2·OBSERVE 2 이관. 불릿은 지우지 않고 원 `##` 헤딩·본문 그대로 [follow-ups-deferred.md](follow-ups-deferred.md) 에 옮겨
+`↳ 처리(2026-09-08)` 근거 줄을 붙였다. 보류 문서의 OBSERVE·BLOCKED 69건도 전수 재판정해 66 STILL-DEFERRED · 1 NOW-ACTIONABLE ·
+2 ALREADY-RESOLVED 로 판정했고, 그 1건(승인 단일성 E2E 재평가, OBSERVE#5)은 이 스윕이 바로 그 「다음 승인 생명주기 작업」이라
+근거와 함께 재판정해 보류 문서에 기록했다. 착지 중 발견한 1건만 아래에 남긴다.
+
+## 후속 과제 스윕 7 착지 후 남긴 것 (2026-09-08)
+
+- **릴리스 승인 CLI 두 파일이 250 pure-LOC 경고 구간에 들어왔다** — 자가 회수 분기를 넣으며
+  `automation/release_approval.py` 245 · `automation/release_abandon.py` 227 이 됐고, 전자는 회수 조립을
+  후자로 옮겨 F2 등록부에서 내려온 참이다(등록부 항목 제거 완료). 조치: 다음 기능 추가 때 **먼저**
+  CLI 명령 조립(argparse 배선)과 종결 표시(abandon 회신·감사 문구) 책임을 분리한 뒤 기능을 얹는다 —
+  지금 나누면 이번 사이클의 검증된 이음새를 근거 없이 다시 흔든다. **영향: 다음 변경의 유지보수 비용,
+  현재 동작·인가 경계 무영향 · 심각도 낮음**.
+
 ## 라이프로그 전사·화자 품질 교정 착지 후 남긴 것 (2026-09-06)
 
-- **기본 임계값 1.35 는 회의에서 과병합 쪽으로 기운다** — PR #422 가 소유자 확인 64분 녹음(화자 2)으로
-  고른 값이고 lifelog 에는 맞지만, 15분 실회의를 1.35 에서 화자 1명으로 묶는다(1.30=2, 1.10=9). 파편
-  가드는 군집 수를 바꾸지 않으므로 그 보정 자체는 유효하다. 조치: 회의 경로에서는 `--speaker-count`
-  를 쓰고(그것이 PR #422 문서와 이 문서가 같이 도달한 결론), 소유자가 화자 수를 아는 다화자 녹음이
-  생기면 그 값으로 회의용 기본값을 별도로 잴지 판단한다. **정확도 · 심각도 중**
-  (증적 `docs/qa/PLQ1/summary.md` §4, `docs/qa/FU6/diarize-threshold-validation.md`).
-- **`stt_window.text_of` 만 아직 세그먼트를 `" ".join` 으로 잇는다** — 반복 붕괴 검사 전용이라 문서에
-  도달하지 않지만, 세그먼트가 이미 앞 공백을 갖고 오므로 이 경로만 조립 규칙이 다르다. 조치: 반복
-  검사 입력을 문서와 같은 조립으로 통일할지 별도 판단(임계값 0.08 의 의미가 함께 바뀐다).
-  **문서 영향 없음 · 심각도 낮음**.
-- **화자 상한 8 은 개인 라이프로그에 크다** — 2인 녹음이 상한 보수를 타면 최대 8명이 된다. 조치:
-  lifelog 경로에만 낮은 상한(`SPEECHTOTEXT_DIARIZE_MAX_SPEAKERS`)을 줄지 실측 후 판단한다.
-  **정확도 · 심각도 낮음**.
+> ↳ 2026-09-08 후속 과제 스윕 7에서 2건 해소(임계값 전제 재판정 · `text_of` 조립 판정) — 남은 1건(화자 상한 8)은 실측 선행이라 OBSERVE 로 이관했다. 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
 
 ## 전사 정확도 문서 공개 검사 잔여 (2026-09-07)
 
-- **기존 기능 소개 2곳에 계정 홈 절대 경로가 남아 전체 개인화 검사가 2건을 검출한다** →
-  `docs/기능소개/대시보드-비밀번호-교체.md`의 자격증명 조회 예시와
-  `docs/기능소개/제안서-노드-자율-구동.md`의 브라우저 예시를 설치별 자리표시자로 바꾼다.
-  이번 lane은 신규 기능 소개만 쓰기 허용이라 기존 문서는 보존했다. 실제 비밀 값 검출은 아니며
-  **영향: 기존 문서의 설치 종속 예시·전체 개인화 검사, 런타임 무영향 · 심각도 낮음**.
-
-증적: `.omo/evidence/transcript-accuracy/task-21.md` (변경 전·후 동일 2건).
+> ↳ 2026-09-08 후속 과제 스윕 7에서 해소 — 두 기능 소개 문서의 계정 홈 절대 경로를 설치별 자리표시자로 바꿨다. 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
 
 ## mailon 런타임 드리프트 프로브의 수렴 안내 (2026-09-07)
 
-- **`mailon_runtime_drift.sh` 가 런타임이 릴리스 트리보다 *앞선* 창에서도 같은 DRIFT 문구로 "deploy.sh 를 돌려 수렴하라"고 안내한다 — 그 방향에서는 deploy 를 몇 번 돌려도 수렴하지 않는다(릴리스 트리는 서명 태그로만 전진한다)** →
-  판정에 방향을 넣어, 런타임이 앞선 창이면 `automation/release.sh` 를 안내한다. 그 창은 "머지 직후 자기 변경을 배포"라는 가장 흔한 순서에서 열린다(2026-09-07 실측: runtime=78ee65a2 vs 릴리스 트리=d575b6de).
-  **영향: 온디맨드 프로브의 안내 문구뿐 — healthcheck 레지스트리에 배선돼 있지 않아 반복 경보가 없고 런타임 동작과도 무관 · 심각도 낮음.**
+> ↳ 2026-09-08 후속 과제 스윕 7에서 해소 — 프로브가 드리프트 방향을 판정해 런타임이 앞선 창에서는 `automation/release.sh` 를 안내한다. 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
 
 ## 스킬 편집기 import 해석 복구로 드러난 타입 부채 (2026-09-07)
 
-- **`automation.*` import 설정 공백을 메우며 Unknown에 가려졌던 기존 타입 오류 9건이 드러났다** →
-  `pyrightconfig.json`의 19개 스킬 `extraPaths: ["."]` 확장은 유지하고, 아래 8개 파일은 스킬별 타입
-  좁히기·정확한 시그니처로 별도 사이클에서 처리한다. 전사 감사 수리와 무관한 제품 파일은 이번 PR에서
-  수정하지 않는다. `npx --yes basedpyright --outputjson skills`의 severity=error 총계는 **602→462**이며,
-  새로 보인 진단은 `reportArgumentType` 7건 + `reportReturnType` 2건이다(줄 번호는 task-31 실측 기준).
-  - `skills/budget/scripts/budget_approval.py:277` — `reportArgumentType` **1건**:
-    `assert_never`에 전달하는 `Outcome`을 `Never`로 좁히지 못함 → 기존 분기 사실을 타입으로 표현한다.
-  - `skills/budget/scripts/budget_confirm.py:200` — `reportReturnType` **1건**:
-    `str` 반환 자리에 `object` → 기존 문자열 보장 지점에서 반환 타입을 좁힌다.
-  - `skills/calendar/scripts/calendar_approval.py:285` — `reportArgumentType` **1건**:
-    `Outcome` → `Never` 불일치 → 기존 분기 사실을 타입으로 표현한다.
-  - `skills/calendar/scripts/calendar_preflight.py:214,216` — `reportArgumentType` **2건**:
-    `list[str]` → `JsonValue` 대입과 `dict[str, JsonValue]` → `Mapping[str, str | list[str]]` 인수 불일치 →
-    실제 payload의 필드 타입과 `draft_sha256` 호출부 시그니처를 맞춘다.
-  - `skills/coordination/scripts/coordination_approval.py:274` — `reportArgumentType` **1건**:
-    `Outcome` → `Never` 불일치 → 기존 분기 사실을 타입으로 표현한다.
-  - `skills/mail/scripts/triage_approval.py:407` — `reportArgumentType` **1건**:
-    `Outcome` → `Never` 불일치 → 기존 분기 사실을 타입으로 표현한다.
-  - `skills/mail/scripts/triage_confirm.py:171` — `reportReturnType` **1건**:
-    `str` 반환 자리에 `object` → 기존 문자열 보장 지점에서 반환 타입을 좁힌다.
-  - `skills/wiki/scripts/wiki_approval.py:293` — `reportArgumentType` **1건**:
-    `Outcome` → `Never` 불일치 → 기존 분기 사실을 타입으로 표현한다.
-  **영향 범위: 위 스킬의 편집기 정적 타입 진단뿐 · 심각도 낮음.** 보안·런타임 동작 문제가 아니라
-  가려진 타입 부채라는 판정이다. 근거: 루트 `AGENTS.md`의 `pyrightconfig` 항목이 이 설정을
-  편집기 전용이며 런타임·테스트·CI 동작과 무관하다고 선언하고, 이번 경로 확장은 위 8개 파일의
-  실행 코드를 바꾸지 않았다. 설정을 되돌리면 Unknown으로 다시 숨길 뿐이므로 오류 억제·경로 복원으로
-  처리하지 않는다. 후속 수리도 새 검증·예외 경로 없이 이미 참인 사실을 타입으로 표현한다.
-
-증적: `.omo/evidence/transcript-accuracy/task-31.md` (B 결정·파일별 원문 진단·전체 회귀 출력).
+> ↳ 2026-09-08 후속 과제 스윕 7에서 해소 — 지목된 9건이 진단에서 사라졌다(억제·설정 되돌림 없음). 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
 
 ## cytoplasm 신규 노드 설치 보고에서 드러난 공백 (2026-09-07)
 
@@ -171,34 +140,7 @@ PR #413은 동시 `--apply` 회귀의 release FIFO를 O_RDWR로 유지해 CI 경
 
 ## 라이프로그 화자 분리 정정 착지 후 남긴 것 (2026-09-07)
 
-- **재처리가 노트 이름을 바꿔 옛 노트를 고아로 남길 수 있다** — 노트 경로는 매 쓰기마다
-  제목에서 새로 계산된다(`note.corrected_lifelog_note` → `lifelog_relpath`). 제목이 없던
-  녹음을 `--reprocess` 하면 생성 제목이 붙어 파일 이름이 바뀌고, vault 의 옛 파일은 지워지지
-  않은 채 남는다. 조치: 레코드에 이미 있는 `note_relpath` 를 재처리 경로에서 재사용해 첫
-  경로에 못 박는다(`transcribe_promote`/`commit` 이음새). 영향: 데이터 손실은 없고 중복
-  노트 1건이 생길 뿐이지만, 같은 녹음이 노트 둘로 갈라지면 RAG 인제스트가 둘 다 먹는다.
-  심각도 중.
-- **화자 수 질의 패스가 sherpa 백엔드에서는 성과가 작다** — 실측에서 화자 수를 고정해도
-  sherpa(eres2net)·titanet 은 세 번째 목소리를 0.5~0.8% 조각으로만 내놓고, pyannote 만
-  발화 시간 11.4%·15.8% 로 찾아낸다(docs/qa/PLD1 §5). 즉 질의 패스의 값어치는 백엔드가
-  pyannote 일 때 나온다. **그리고 그때도 절반이다**: 라벨을 걷어낸 초안으로 두 녹음을 끝까지
-  돌리니 272.5초는 모델이 3(기준점 3)이라 답해 재분리가 일어났고, 549.4초는 8,624자 초안에서도
-  2(기준점 4)라 답해 재분리가 없었다. 반대로 549.4초는 질의 패스 없이 기본값만으로 실질 4명이라
-  기준점과 같다 — 두 경로가 서로 다른 녹음을 맞히므로 어느 하나를 자동 기본으로 삼을 근거가 없다. 조치: 라이프로그 경로만 `SPEECHTOTEXT_DIARIZE_BACKEND=pyannote`
-  로 돌릴지 판단하려면 CPU-only 비용(0.57x 실시간 — 64분 녹음 한 패스 약 37분)을 소유자가
-  받아들일지가 선행 조건이므로, 코드에서 기본값을 바꾸지 않고 남긴다. 영향: 현재 기본값
-  으로도 발화 구분은 회복됐고 화자 수만 근사다. 심각도 중.
-- **약한 화자는 낱말을 한 번도 이기지 못해 문서에 오르지 못한다** — 549.4초 녹음은 실질
-  4군집(22.5 / 21.9 / 20.7 / 16.4%)이 나오는데 전사본에는 `화자1`·`화자2` 둘만 오른다.
-  2026-09-07 오후에 **조각화 쪽은 해소했다**(문장 조립 순서와 화자 변경 경계 — 화자0 블록
-  47.6%→33.3%, 49.7%→39.3%, `docs/qa/PLD2`), 그러나 약한 두 화자가 문서에 오르지 못하는 것은
-  남았다: 그들은 낱말 단위에서 한 번도 이기지 못하므로 문장 단위 다수결로도 올라오지 않는다.
-  낱말 판정 분포는 direct 76.1% · low_coverage 7.1% · no_support 6.8% 이고, 이 둘은 그
-  low_coverage/no_support 쪽에 몰려 있을 것으로 보이나 **화자별로는 아직 세지 않았다**.
-  조치: reason 을 화자별로 쪼개 어느 화자가 어느 규칙에서 지는지 먼저 보고, 그 다음에 정책을
-  손댄다. 겹침→화자0 은 1ms 겹침 회귀가 고정한 fail-safe 이고 실측에서도 겹침 몫 중앙값이
-  0.457 이라 대부분 진짜 동시 발화이므로 그것은 계속 건드리지 않는다. 영향: 화자 수가 실제보다
-  적게 보인다. 낱말은 잃지 않는다(`화자0` 으로 남는다). 심각도 중.
+> ↳ 2026-09-08 후속 과제 스윕 7에서 1건 해소(재처리 노트 경로 고정), 2건은 OWNER·OBSERVE 로 이관했다. 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
 
 ## 설치 마법사·프로필 착지 후 남긴 것 (2026-09-08)
 
@@ -206,20 +148,34 @@ PR #413은 동시 `--apply` 회귀의 release FIFO를 O_RDWR로 유지해 CI 경
 
 ## 제안서 엔진 내제화 착지 후 남긴 것 (2026-09-08)
 
-- **샌드박스 scenario 의 render 가 엔진 입력 계약에서 선다.** `scenario.sh` 의 가짜 draft 는 실제
-  draft 가 쓰는 `drafts.json.planspec.json`·`.pms.json` 사이드카를 만들지 않아, render 가
-  `refined drafts sidecar source is missing` 로 멈춘다. **회귀가 아니다** — 내제화 전에는 핀 검사가
-  exit 4로 먼저 죽어 샌드박스가 render 를 한 번도 실행한 적이 없었고, 이제야 그 사실이 보인다.
-  조치: 샌드박스 draft 단계가 사이드카를 함께 내도록 하면 scenario 가 렌더까지 완주한다. 영향 범위는
-  샌드박스 스모크뿐이고 실제 렌더는 `.omo/evidence/docbot-internalization/` 의 실측으로 증명돼 있다.
-  **영향: 샌드박스 E2E 의 render 단계 커버리지, 프로덕션 렌더 무영향 · 심각도 낮음**.
-- **엔진 트리의 공개 여부는 소유자 판단으로 남았다.** 원본 `kimm-docbot` 이 비공개였으므로
-  `configs/public-export-manifest.txt` 에 디렉터리 한 줄로 제외해 현상을 유지했다. 공개로 승격하려면
-  FS3 사유 원장에 엔진 경로를 등록해야 한다(약 78행). 판단 전까지 공개 배포본의 proposal 스킬은
-  렌더 엔진 없이 나간다 — 내제화 이전과 같은 상태다.
-  **영향: 공개 배포본의 proposal 스킬 완결성, private 저장소·노드 런타임 무영향 · 심각도 중**.
+> ↳ 2026-09-08 후속 과제 스윕 7에서 1건 해소(샌드박스 사이드카), 엔진 공개 여부는 OWNER 로 이관했다. 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+
+## healthcheck 래퍼 설치 자산의 non-root 운영자 결함 (2026-09-08)
+
+- **컨테이너 하네스가 `operator_account='root'` 로만 돌아, 운영자가 root 가 아닌 노드에서만 나타나는 결함을 v1.6.1 로 내보냈다** →
+  `tests/e2e/install/systemd_container/run.sh` 에 non-root 운영자 경로(`--operator NAME`: 계정 생성·config 렌더·summary 필드)를 더한다.
+  이번 사이클에서는 그 컨테이너 안에 손으로 계정을 만들어 증명했고(증적 12), 회귀는 argv 계약으로 고정했다.
+  **영향: 같은 종류의 root 가정이 또 새어 나갈 수 있음 · 동작은 정상 · 심각도 중**.
+
+증적: [docs/qa/INSTALL-TUI/12-probe-asset-nonroot-operator.txt](qa/INSTALL-TUI/12-probe-asset-nonroot-operator.txt).
 
 ## v1.6.0 릴리스 착지 후 남긴 것 (2026-09-08)
 
-- **소유자 ✅ 를 받은 릴리스 요청이 태그 전에 origin/main 이 전진하면 영구히 실행 불가가 되는데, `release.sh` 의 자동 회수는 `bound_pending` 만 다루고 완결 타이머는 매 틱 `RELEASE-DECISION: live request is bound to a different HEAD` 로 조용히 끝난다(2026-09-07 17:46 KST v1.6.0@2a0a20267 실측 — 승인 뒤 main 이 75커밋 전진, 다음 날 `release.sh` 는 `RELEASE-RETIRE-BLOCK: pending release does not match the latest signed head` 로 exit 4, 사람이 `release_approval_remote.sh abandon --version --head --message-id --reason` 을 돌려야 풀렸고 그동안 완결기는 18시간 동안 2분마다 같은 줄만 남겼다) → ① `release.sh` 가 시작 시 approved 이면서 head ≠ origin/main tip 인 레코드를 같은 감사형 abandon 으로 자가 회수하고 새 요청을 정확히 한 번 게시한다(새 요청은 옛 승인 범위의 상위집합이므로 재승인이 fail-closed 로 맞다), ② 완결 타이머는 같은 조건을 만나면 침묵하지 말고 소유자 통지를 에피소드당 1건 남긴다(매 틱 반복 금지). 인가 경계는 넓히지 않는다 — 옛 승인으로 새 tip 을 태그하는 경로는 만들지 않는다.** **영향: 릴리스 파이프라인 가용성(승인이 tip 전진보다 늦게 오는 모든 릴리스), 프로덕션 코드·노드 무영향 · 심각도 중**.
-- **감사형 abandon 은 Discord 를 건드리지 않으므로(`release_abandon` A3) 죽은 승인 카드가 채널에 그대로 남고, 카드 제목은 버전뿐이라 살아 있는 카드와 구분되지 않는다 — v1.6.0 은 같은 제목의 카드가 4장(`e638ea5cd`·`2a0a20267`·`21f673f7b`·`efb8dba9d`) 쌓였고 소유자가 어느 것을 눌러야 하는지 본문의 `배포 기준: <sha>` 로만 판별할 수 있었다(2026-09-08 소유자 질문) → abandon 이 원 메시지에 상태 회신 한 줄(예: `⛔ 만료 — <새 head> 로 재요청됨`)을 남기거나 카드 제목/본문에 접두어를 붙이도록 한다. 소유자 결정을 파괴하지 않는다는 A3 의 취지는 리액션을 지우지 않는 것이므로, 읽기 전용 표시 추가는 그 불변식과 충돌하지 않는다.** **영향: 승인 표면의 오독 위험(엉뚱한 카드에 ✅ → 아무 일도 일어나지 않아 대기가 길어진다), 실행 경로 무영향 · 심각도 낮음**.
+> ↳ 2026-09-08 후속 과제 스윕 7에서 2건 모두 해소 — 승인 뒤 tip 이 전진한 릴리스를 감사형 abandon 으로 자가 회수하고, 죽은 카드에 상태 회신을 남긴다([소개](기능소개/릴리스-승인-자가-회수.md)). 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+
+## 수리 스윕 5 착지 후 남긴 것 (2026-09-08)
+
+> ↳ 2026-09-09 정산 — 3건 해소(PR #466 converge stderr · #468 원장 헤더 · #467 `_reference` 드롭 관측),
+> 프롬프트 v5 요약 산문 준수 1건은 관측 조건 미성립으로 OBSERVE 이관. 원문과 처리 근거는
+> [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+
+## 토큰 없이 설치 완주 착지 후 남긴 것 (2026-09-09)
+
+> **2건 전부 2026-09-09 에 해소했다** — 열린 항목 없음. 원문과 처리 근거는
+> [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+> 이 반영이 만든 소유자 몫 1건(래퍼 재프로비저닝)은 같은 문서의 OWNER 항목에 있다.
+
+## 수리 티켓 유실 사고 수정 중 발견한 인접 결함 (2026-09-09)
+
+> ↳ 2026-09-09 정책 결정으로 해소 — 결론은 **켜지 않는다**이고 대체된 선행 구현을 삭제했다. 원문과 판단 근거는
+> [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.

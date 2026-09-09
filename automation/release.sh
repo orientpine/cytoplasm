@@ -114,7 +114,8 @@ if [[ -z "$base" ]]; then
 fi
 
 if (( decision_rc != 0 )); then
-  "${approval[@]}" retire --head "$base" \
+  # 태그 전 main이 전진한 APPROVED도 여기서 감사 회수한다. 새 요청은 새 ✅가 필요하다.
+  "${approval[@]}" retire --head "$base" --tip "$head" \
     || die "previous release record cannot be archived safely" 4
   "${plan_approval[@]}" plan --repo "$REPO_ROOT" --base "$base" --head "$head" \
     --version "$version" --bump "$bump" > "$workdir/plan.json" || die "release plan failed" 4

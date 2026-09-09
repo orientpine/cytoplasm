@@ -63,7 +63,8 @@ def finalize(
     """
     note = corrected_lifelog_note(recording, extraction=extraction, tz=tz, glossary=glossary)
     plan = note.plan
-    relpath = plan.relpath.as_posix()
+    # Discovery fixed this vault destination before local transcription can supply a title.
+    relpath = record.note_relpath
     body_sha256 = hashlib.sha256(plan.body.encode("utf-8")).hexdigest()
     promoted = replace(
         record,

@@ -46,11 +46,13 @@ tests/e2e/install/systemd_container/run.sh --stub-hermes --evidence-dir /tmp/har
 그다음 **동일한 argv로 2차 apply**를 실행한다. 마법사 예시는 기본 계정·홈을 사용한다.
 사용자 지정 명령도 `/root/node.toml`과 같은 계정·홈·유닛 설정을 사용해야 한다.
 
-2차 실행은 실제 `check hermes-gateway`를 통과하고 `check discord-readiness`에서
-멈춘다. `DISCORD_BOT_TOKEN`을 주입하지 않으므로 `discord_check.py`는 rc=2를 반환한다.
-이 지점이 비밀정보 없는 컨테이너 검증의 상한이다. 스텁은 Hermes 런타임이나
-Discord 인증·인텐트·권한·채널 접근을 검증하지 않는다. 토큰을 넣어 경계를 넘기지 않는다.
-clone·배포 키 등록·타이머·최종 healthcheck·서명 업데이트 성공도 이 실행으로 증명하지 않는다.
+2차 실행은 실제 `check hermes-gateway`를 통과한다. `DISCORD_BOT_TOKEN`을 주입하지 않으므로
+`discord_check.py`는 rc=2를 반환하지만, **2026-09-09부터 그것은 판정 불가를 뜻하는 `[WARN]`
+이라 실행을 세우지 않는다** — 그 뒤로 배포 키 생성·등록 안내·gitleaks·체크아웃·자산 파일·
+심링크·healthcheck 프로브·타이머·신뢰키 검증까지 진행하고, 서비스가 없는 컨테이너이므로
+마지막 `check healthcheck`의 실패가 상한이 된다. 스텁은 Hermes 런타임이나 Discord 인증·
+인텐트·권한·채널 접근을 검증하지 않는다. 토큰을 넣어 경계를 넘기지 않는다. 실제 서비스가
+도는 호스트의 healthcheck 통과와 서명 업데이트 성공도 이 실행으로 증명하지 않는다.
 
 ## 증적과 정리
 

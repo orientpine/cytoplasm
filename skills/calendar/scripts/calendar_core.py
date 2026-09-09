@@ -10,6 +10,10 @@ import json
 import re
 import shlex
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from automation.entity_preflight.contracts import JsonValue
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -279,7 +283,7 @@ def external_effect_action_hash(argv: tuple[str, ...]) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
-def draft_sha256(record: Mapping[str, str | list[str]]) -> str:
+def draft_sha256(record: Mapping[str, JsonValue]) -> str:
     """Content hash binding a draft to the exact mutation it will execute."""
     bound = {key: record[key] for key in ("action", "argv", "calendar_id", "event_id", "summary", "start", "end")}
     canonical = json.dumps(bound, ensure_ascii=False, separators=(",", ":"), sort_keys=True)

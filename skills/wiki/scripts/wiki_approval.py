@@ -22,7 +22,7 @@ import wiki_gate
 import wiki_binding
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
-    from automation.interop.approval_lifecycle import ApprovalIntent, ApprovalRequest, PostedApproval, Probe, Verdict
+    from automation.interop.approval_lifecycle import ApprovalIntent, ApprovalRequest, Outcome, PostedApproval, Probe, Verdict
     from automation.interop.approval_lease import ApprovalLease, PostingJournal
 
 LEASE_DIRNAME = "approval-leases"
@@ -275,7 +275,7 @@ def _refusal(verdict: Verdict) -> wiki_gate.GateError:
 
 def apply_verdict(verdict: Verdict, draft: dict) -> dict:
     """Map one lifecycle verdict onto the legacy ``post_confirm_message`` return contract."""
-    outcome = lifecycle().Outcome
+    outcome: type[Outcome] = lifecycle().Outcome
     match verdict.outcome:
         case outcome.POSTED:
             posted = verdict.posted

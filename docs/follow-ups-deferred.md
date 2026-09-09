@@ -683,6 +683,7 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보드·증적을 정리하며 남은 것들. 기능은 [todo 소유자-DM 승인 경로](기능소개/todo-소유자-DM-승인-경로.md) · [승인 게시 복구와 강화 저널](기능소개/승인-게시-복구와-강화-저널.md) · [2-store 메모리 재배치](기능소개/2-store-메모리-재배치.md).
 
 - **승인 단일성 E2E 재평가 조건이 발동했다(OBSERVE#5)** — 원 OBSERVE 원장의 기준은 “게이트 스키마/파사드 변경 시 재검토”이고, TRACK-BC가 공유층 `automation/interop/approval_lifecycle.py`와 `approval_lease.py`에 enriched journal·probe 복구 분기를 추가해 그 조건을 충족했다. 기존 단위·인터리빙 검사는 green이지만 producer 간 E2E 교차 케이스는 부재한다 → 다음 승인 생명주기 작업에서 새 복구 분기를 포함한 교차 E2E를 복원할지 재판정하고 근거를 원장에 남긴다. **알려진 동작 결함은 없음 · 심각도: 중(공유 승인층 회귀 탐지 범위)**.
+  ↳ 재판정(2026-09-08 · 복원하지 않는다): 후속 과제 스윕 7 이 바로 그 「다음 승인 생명주기 작업」이었다(공유층에 릴리스 자가 회수 분기 추가). ① 단일성 불변식은 producer 를 추상화한 `tests/unit/test_approval_lifecycle_interleaving.py::test_two_producers_only_one_posts` 가 이미 고정하고, ② `automation/release_approval.py::cmd_request` 는 `tests/unit/approval_conformance_inventory.py:39` 의 `APPROVAL_PRODUCERS` 에 등재돼 파사드 경유가 기계로 강제되며, ③ 새 회수 분기는 **게시하지 않고 archive 만** 하므로 교차 E2E 가 더 잡을 회귀 표면이 없다(공유층 40 passed). 재발동 조건을 다시 적는다: **두 producer 가 같은 pending 레코드 파일을 공유하게 되면** 그때 교차 E2E 를 복원한다.
 
 ## 에이전트 자가 스킬 공존(SS-1) 작업 중 발견한 후속 과제 (2026-08-15)
 
@@ -861,6 +862,57 @@ healthcheck까지 구현했다.
 - **[OWNER] PR #424 이전에 로컬 전사로 vault 에 이미 쓰인 라이프로그 노트 3건은 frontmatter `created`·`modified`·`녹음::`·출처 줄이 UTC 를 현지 시각처럼 담고 있다(제목·경로는 맞다) → 소유자가 별도 승인한 작업으로 그 노트만 고친다.** `plaud_sync_watch.py --repost-posted` 는 승인 카드를 다시 올릴 뿐 동결 본문을 재생성하거나 이미 쓰인 vault 노트를 갱신하지 않으므로 보정 수단이 아니다. 영향: 노트 3건의 본문 시각 표기, 새 노트는 정상 · **심각도 낮음**.
 - **[OBSERVE] v1.3.0 롤아웃에서 `deploy_all --apply` 가 `incomplete: automation/skill_generation/deploy.sh` 를 찍었다 — Hermes 의 `--allow-tool-override` 프롬프트 뒤 deploy.sh 가 0 이 아닌 코드로 끝났는데, deploy_all 의 독립된 최종 프로브는 깨끗해 영수증을 썼다 → 배포기 종료 코드와 최종 상태를 어느 쪽이 맞는지 소유자가 정한다: deploy.sh 에 `--allow-tool-override` 를 넘길지(별도 권한 결정이라 조용히 넣지 않는다), 아니면 계획이 프롬프트 종료를 비치명으로 분류할지.** 영향: 롤아웃 로그의 오독뿐, 프로덕션 무영향 · **심각도 낮음**.
 - **[OWNER] 같은 롤아웃의 deploy_all 미선언 홈 경고가 손으로 설치한 `hermes-achievements` 플러그인, `interop-protocol` 플러그인(agent·peer), 그리고 스크립트 몇 개를 이름 붙여 냈다 → 소유자가 선언(해당 배포기 옆 `deploy-manifest.txt`)할지 제거할지 재고 정한다.** 자동 삭제 근거가 아니라 인벤토리 작업이다. 영향: 드리프트 탐지의 사각지대 목록만, 실행 무영향 · **심각도 낮음**.
+
+# 후속 과제 스윕 7 — 소유자·관측 인계
+
+## 라이프로그 전사·화자 품질 교정 착지 후 남긴 것 (2026-09-06) — 소유자·관측
+
+> [이관 2026-09-08] 후속 과제 스윕 7 — 저장소가 지금 닫을 수 없는 몫만 여기 남긴다. 같은 묶음의 해소분은 「해소 기록」에 있다.
+
+- **화자 상한 8 은 개인 라이프로그에 크다** — 2인 녹음이 상한 보수를 타면 최대 8명이 된다. 조치:
+  lifelog 경로에만 낮은 상한(`SPEECHTOTEXT_DIARIZE_MAX_SPEAKERS`)을 줄지 실측 후 판단한다.
+  **정확도 · 심각도 낮음**.
+  ↳ 이관(2026-09-08 · OBSERVE): 상한을 낮추려면 라이프로그 실녹음의 군집 분포가 먼저 필요하다 — 이번 스윕에는 그 측정이 없다. 상한을 넘겨도 라벨을 버리지 않고 `--clustering.num-clusters=<상한>` 으로 한 번 다시 묶으므로(`DIARIZE-RECLUSTERED`) 2인 녹음이 8명이 되는 경로는 이미 닫혀 있다. 조건: 소유자가 화자 수를 아는 라이프로그 녹음이 생기면 그 분포로 판단한다.
+
+## 라이프로그 화자 분리 정정 착지 후 남긴 것 (2026-09-07) — 소유자·관측
+
+> [이관 2026-09-08] 후속 과제 스윕 7 — 저장소가 지금 닫을 수 없는 몫만 여기 남긴다. 같은 묶음의 해소분은 「해소 기록」에 있다.
+
+- **화자 수 질의 패스가 sherpa 백엔드에서는 성과가 작다** — 실측에서 화자 수를 고정해도
+  sherpa(eres2net)·titanet 은 세 번째 목소리를 0.5~0.8% 조각으로만 내놓고, pyannote 만
+  발화 시간 11.4%·15.8% 로 찾아낸다(docs/qa/PLD1 §5). 즉 질의 패스의 값어치는 백엔드가
+  pyannote 일 때 나온다. **그리고 그때도 절반이다**: 라벨을 걷어낸 초안으로 두 녹음을 끝까지
+  돌리니 272.5초는 모델이 3(기준점 3)이라 답해 재분리가 일어났고, 549.4초는 8,624자 초안에서도
+  2(기준점 4)라 답해 재분리가 없었다. 반대로 549.4초는 질의 패스 없이 기본값만으로 실질 4명이라
+  기준점과 같다 — 두 경로가 서로 다른 녹음을 맞히므로 어느 하나를 자동 기본으로 삼을 근거가 없다. 조치: 라이프로그 경로만 `SPEECHTOTEXT_DIARIZE_BACKEND=pyannote`
+  로 돌릴지 판단하려면 CPU-only 비용(0.57x 실시간 — 64분 녹음 한 패스 약 37분)을 소유자가
+  받아들일지가 선행 조건이므로, 코드에서 기본값을 바꾸지 않고 남긴다. 영향: 현재 기본값
+  으로도 발화 구분은 회복됐고 화자 수만 근사다. 심각도 중.
+  ↳ 이관(2026-09-08 · OWNER): 기본 백엔드를 pyannote 로 바꿀지는 CPU-only 비용(0.57x 실시간 — 64분 녹음 한 패스 약 37분)을 소유자가 받아들일지가 선행 조건이다. 저장소가 임의로 기본값을 바꾸지 않는다.
+
+- **약한 화자는 낱말을 한 번도 이기지 못해 문서에 오르지 못한다** — 549.4초 녹음은 실질
+  4군집(22.5 / 21.9 / 20.7 / 16.4%)이 나오는데 전사본에는 `화자1`·`화자2` 둘만 오른다.
+  2026-09-07 오후에 **조각화 쪽은 해소했다**(문장 조립 순서와 화자 변경 경계 — 화자0 블록
+  47.6%→33.3%, 49.7%→39.3%, `docs/qa/PLD2`), 그러나 약한 두 화자가 문서에 오르지 못하는 것은
+  남았다: 그들은 낱말 단위에서 한 번도 이기지 못하므로 문장 단위 다수결로도 올라오지 않는다.
+  낱말 판정 분포는 direct 76.1% · low_coverage 7.1% · no_support 6.8% 이고, 이 둘은 그
+  low_coverage/no_support 쪽에 몰려 있을 것으로 보이나 **화자별로는 아직 세지 않았다**.
+  조치: reason 을 화자별로 쪼개 어느 화자가 어느 규칙에서 지는지 먼저 보고, 그 다음에 정책을
+  손댄다. 겹침→화자0 은 1ms 겹침 회귀가 고정한 fail-safe 이고 실측에서도 겹침 몫 중앙값이
+  0.457 이라 대부분 진짜 동시 발화이므로 그것은 계속 건드리지 않는다. 영향: 화자 수가 실제보다
+  적게 보인다. 낱말은 잃지 않는다(`화자0` 으로 남는다). 심각도 중.
+  ↳ 처리(2026-09-08 · 부분 해소 → OBSERVE): 원문이 요구한 「reason 을 화자별로 쪼개 본다」는 `stt_attribute.speaker_reason_breakdown` 으로 구현했다 — 후보 화자별 reason 건수를 돌려주며 배정 결과·전사본 바이트는 불변이다(합성 4화자 실측: 강한 둘 `direct`, 약한 둘 `low_coverage`·`no_support` — 원문의 가설과 같은 방향, 증적 `docs/qa/FU7/speaker-reason-breakdown.md`). **남은 것은 실녹음 측정이다**: 549.4초 녹음으로 어느 화자가 어느 규칙에서 지는지 세고 그 분포를 근거로 정책을 손댈지 판단한다. 소유자 오디오가 필요하므로 여기 남긴다.
+
+## 제안서 엔진 내제화 착지 후 남긴 것 (2026-09-08) — 소유자·관측
+
+> [이관 2026-09-08] 후속 과제 스윕 7 — 저장소가 지금 닫을 수 없는 몫만 여기 남긴다. 같은 묶음의 해소분은 「해소 기록」에 있다.
+
+- **엔진 트리의 공개 여부는 소유자 판단으로 남았다.** 원본 `kimm-docbot` 이 비공개였으므로
+  `configs/public-export-manifest.txt` 에 디렉터리 한 줄로 제외해 현상을 유지했다. 공개로 승격하려면
+  FS3 사유 원장에 엔진 경로를 등록해야 한다(약 78행). 판단 전까지 공개 배포본의 proposal 스킬은
+  렌더 엔진 없이 나간다 — 내제화 이전과 같은 상태다.
+  **영향: 공개 배포본의 proposal 스킬 완결성, private 저장소·노드 런타임 무영향 · 심각도 중**.
+  ↳ 이관(2026-09-08 · OWNER): 공개 승격은 FS3 사유 원장에 엔진 경로 약 78행을 등록하는 결정이라 소유자 판단 없이는 저장소가 바꾸지 않는다. 판단 전까지 공개 배포본의 proposal 스킬은 렌더 엔진 없이 나간다(내제화 이전과 같은 상태).
 
 # 해소 기록 — 닫혔지만 회계 가드가 원문을 요구한다
 
@@ -1690,6 +1742,7 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   (`created:false`) 보드의 열린 목록에는 아무것도 나타나지 않았다 → signature 티켓이 done/archived면
   새 티켓을 만들거나 reopen한다. **재발 가시성 영향 · 심각도 중**.
   ↳ 해소(2026-09-04): `automation/repair/repair_core.py` 의 `RepairRegistry.claim` 이 저장된 티켓이 닫혀 있으면 새 티켓을 발급하고, 티켓 상태를 읽을 수 없을 때는 기존 중복 제거 동작을 그대로 유지한다. 아래 「healthcheck 폭주 수리(PR #347)」 절의 중복 기록과 한 건이다.
+  ↳ 재판정(2026-09-09): 그 수정은 **실행되지 않고 있었다** — repair detect 를 부르는 세 진입점(`repair_reporter`·`skills/repair/SKILL.md`·`healthcheck_command_builder.sh`)이 모두 계정 홈 사본을 가리켰고 그 사본은 7월 세대라 09-04 의 로직이 프로덕션에 존재하지 않았다. 그래서 소유자가 09-09 08:09 에 올린 수동 수리 2건이 다시 종결 카드에 묻혔다. 실행 경로를 불변 릴리스 런타임으로 고정해 닫았다(회귀 `tests/unit/test_repair_exec_path.py`).
 
 ## healthcheck 폭주 수리(PR #347) 중 발견한 인접 결함
 
@@ -1697,6 +1750,7 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 - **수리 티켓 레지스트리(`~/.hermes/repair-tickets.json`)는 done 카드에도 같은 시그니처로 occurrence 만 계속 올린다 → `automation/repair/repair_core.py` 의 registry lookup 에서 카드 상태를 확인해 done 이면 새 티켓을 발급(또는 재오픈)하는 설계 판단을 별도 논의한다.** t_318263ba 2623회·t_c0718520 2233회·t_6f3f7e1e 2078회 등에서 done 카드가 재발해도 소유자가 볼 새 신호가 없다. 영향 범위: 수리 티켓 재발 감지, 운영 가시성 저하, **심각도 낮음**.
   ↳ 해소(2026-09-04): 위 불릿과 동일한 결함이며 이번 사이클에 `automation/repair/repair_core.py` 에서 닫혔다. `RepairRegistry.claim` 이 저장된 티켓이 closed 면 새 티켓을 발급하고, 상태를 읽지 못하면 기존 중복 제거 동작을 유지한다.
+  ↳ 재판정(2026-09-09): 그 수정은 **실행되지 않고 있었다** — repair detect 를 부르는 세 진입점(`repair_reporter`·`skills/repair/SKILL.md`·`healthcheck_command_builder.sh`)이 모두 계정 홈 사본을 가리켰고 그 사본은 7월 세대라 09-04 의 로직이 프로덕션에 존재하지 않았다. 그래서 소유자가 09-09 08:09 에 올린 수동 수리 2건이 다시 종결 카드에 묻혔다. 실행 경로를 불변 릴리스 런타임으로 고정해 닫았다(회귀 `tests/unit/test_repair_exec_path.py`).
 
 ## DM→#agent-chat 이관(승인 표면 v7) 중 발견한 후속 과제 (2026-08-24)
 
@@ -1838,3 +1892,193 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 증적: [docs/qa/INSTALL-TUI/](qa/INSTALL-TUI/) · [systemd 하네스](../tests/e2e/install/systemd_container/README.md).
 
+## 라이프로그 전사·화자 품질 교정 착지 후 남긴 것 (2026-09-06)
+
+> [이관 2026-09-08 · 해소] 후속 과제 스윕 7 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **기본 임계값 1.35 는 회의에서 과병합 쪽으로 기운다** — PR #422 가 소유자 확인 64분 녹음(화자 2)으로
+  고른 값이고 lifelog 에는 맞지만, 15분 실회의를 1.35 에서 화자 1명으로 묶는다(1.30=2, 1.10=9). 파편
+  가드는 군집 수를 바꾸지 않으므로 그 보정 자체는 유효하다. 조치: 회의 경로에서는 `--speaker-count`
+  를 쓰고(그것이 PR #422 문서와 이 문서가 같이 도달한 결론), 소유자가 화자 수를 아는 다화자 녹음이
+  생기면 그 값으로 회의용 기본값을 별도로 잴지 판단한다. **정확도 · 심각도 중**
+  (증적 `docs/qa/PLQ1/summary.md` §4, `docs/qa/FU6/diarize-threshold-validation.md`).
+  ↳ 처리(2026-09-08): 해소 — 이 불릿의 전제가 낡았다. `skills/speechtotext/scripts/stt_diarize.py:32` 의 `DEFAULT_THRESHOLD` 는 2026-09-07 에 **1.0** 이 됐다(과분할은 `--clustering.num-clusters` 재클러스터·잔여 프룬으로 되돌릴 수 있으나 과병합은 화자가 문서에서 사라져 복구할 수 없다). 「회의 경로에서는 `--speaker-count` 를 쓴다」는 결론은 그대로 유효하며 1.35 기준의 재측정 요구는 소멸했다.
+
+- **`stt_window.text_of` 만 아직 세그먼트를 `" ".join` 으로 잇는다** — 반복 붕괴 검사 전용이라 문서에
+  도달하지 않지만, 세그먼트가 이미 앞 공백을 갖고 오므로 이 경로만 조립 규칙이 다르다. 조치: 반복
+  검사 입력을 문서와 같은 조립으로 통일할지 별도 판단(임계값 0.08 의 의미가 함께 바뀐다).
+  **문서 영향 없음 · 심각도 낮음**.
+  ↳ 처리(2026-09-08): 해소 — **통일하지 않는다(B)** 로 판정하고 그 이유를 `text_of` 주석에 못박았다. `text_of` 는 문서로 가지 않고 `stt_coverage.collapsed` 의 공백 기반 단어/8-gram 반복 검사에만 들어가므로 세그먼트마다 경계 하나가 필요하다 — 합성 실측(같은 문자열 160세그먼트)에서 한국어 무공백 입력은 문서 조립 0.00 / `text_of` 1.00 이라 A 로 바꾸면 한국어 반복이 검사에서 사라진다. 영어(앞 공백) 입력은 둘 다 1.00 이라 측정값이 같다. 임계값 0.08 은 그대로다. 회귀는 `tests/unit/test_stt_window.py`.
+
+## 전사 정확도 문서 공개 검사 잔여 (2026-09-07)
+
+> [이관 2026-09-08 · 해소] 후속 과제 스윕 7 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **기존 기능 소개 2곳에 계정 홈 절대 경로가 남아 전체 개인화 검사가 2건을 검출한다** →
+  `docs/기능소개/대시보드-비밀번호-교체.md`의 자격증명 조회 예시와
+  `docs/기능소개/제안서-노드-자율-구동.md`의 브라우저 예시를 설치별 자리표시자로 바꾼다.
+  이번 lane은 신규 기능 소개만 쓰기 허용이라 기존 문서는 보존했다. 실제 비밀 값 검출은 아니며
+  **영향: 기존 문서의 설치 종속 예시·전체 개인화 검사, 런타임 무영향 · 심각도 낮음**.
+
+증적: `.omo/evidence/transcript-accuracy/task-21.md` (변경 전·후 동일 2건).
+  ↳ 처리(2026-09-08): 해소 — 두 문서의 계정 홈 절대 경로를 저장소의 기존 관례(`<agent-home>`·`<ops-home>`, 근거 `docs/qa/RTS-5/03-node-residue.txt:6`)로 바꿨다. 변경 전 검출 3줄(대시보드 2 · 제안서 1) → 변경 후 0줄.
+
+## mailon 런타임 드리프트 프로브의 수렴 안내 (2026-09-07)
+
+> [이관 2026-09-08 · 해소] 후속 과제 스윕 7 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **`mailon_runtime_drift.sh` 가 런타임이 릴리스 트리보다 *앞선* 창에서도 같은 DRIFT 문구로 "deploy.sh 를 돌려 수렴하라"고 안내한다 — 그 방향에서는 deploy 를 몇 번 돌려도 수렴하지 않는다(릴리스 트리는 서명 태그로만 전진한다)** →
+  판정에 방향을 넣어, 런타임이 앞선 창이면 `automation/release.sh` 를 안내한다. 그 창은 "머지 직후 자기 변경을 배포"라는 가장 흔한 순서에서 열린다(2026-09-07 실측: runtime=78ee65a2 vs 릴리스 트리=d575b6de).
+  **영향: 온디맨드 프로브의 안내 문구뿐 — healthcheck 레지스트리에 배선돼 있지 않아 반복 경보가 없고 런타임 동작과도 무관 · 심각도 낮음.**
+  ↳ 처리(2026-09-08): 해소 — 프로브가 `git merge-base --is-ancestor` 로 방향을 판정해 런타임이 뒤처지면 기존 `deploy.sh`, 앞서면 `automation/release.sh`, 조상 관계를 확인할 수 없으면 방향을 단정하지 않고 둘 다 안내한다(fail-closed). 세 방향 회귀를 `tests/unit/test_mailon_runtime_drift.py` 에 추가했다(13 passed).
+
+## 스킬 편집기 import 해석 복구로 드러난 타입 부채 (2026-09-07)
+
+> [이관 2026-09-08 · 해소] 후속 과제 스윕 7 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **`automation.*` import 설정 공백을 메우며 Unknown에 가려졌던 기존 타입 오류 9건이 드러났다** →
+  `pyrightconfig.json`의 19개 스킬 `extraPaths: ["."]` 확장은 유지하고, 아래 8개 파일은 스킬별 타입
+  좁히기·정확한 시그니처로 별도 사이클에서 처리한다. 전사 감사 수리와 무관한 제품 파일은 이번 PR에서
+  수정하지 않는다. `npx --yes basedpyright --outputjson skills`의 severity=error 총계는 **602→462**이며,
+  새로 보인 진단은 `reportArgumentType` 7건 + `reportReturnType` 2건이다(줄 번호는 task-31 실측 기준).
+  - `skills/budget/scripts/budget_approval.py:277` — `reportArgumentType` **1건**:
+    `assert_never`에 전달하는 `Outcome`을 `Never`로 좁히지 못함 → 기존 분기 사실을 타입으로 표현한다.
+  - `skills/budget/scripts/budget_confirm.py:200` — `reportReturnType` **1건**:
+    `str` 반환 자리에 `object` → 기존 문자열 보장 지점에서 반환 타입을 좁힌다.
+  - `skills/calendar/scripts/calendar_approval.py:285` — `reportArgumentType` **1건**:
+    `Outcome` → `Never` 불일치 → 기존 분기 사실을 타입으로 표현한다.
+  - `skills/calendar/scripts/calendar_preflight.py:214,216` — `reportArgumentType` **2건**:
+    `list[str]` → `JsonValue` 대입과 `dict[str, JsonValue]` → `Mapping[str, str | list[str]]` 인수 불일치 →
+    실제 payload의 필드 타입과 `draft_sha256` 호출부 시그니처를 맞춘다.
+  - `skills/coordination/scripts/coordination_approval.py:274` — `reportArgumentType` **1건**:
+    `Outcome` → `Never` 불일치 → 기존 분기 사실을 타입으로 표현한다.
+  - `skills/mail/scripts/triage_approval.py:407` — `reportArgumentType` **1건**:
+    `Outcome` → `Never` 불일치 → 기존 분기 사실을 타입으로 표현한다.
+  - `skills/mail/scripts/triage_confirm.py:171` — `reportReturnType` **1건**:
+    `str` 반환 자리에 `object` → 기존 문자열 보장 지점에서 반환 타입을 좁힌다.
+  - `skills/wiki/scripts/wiki_approval.py:293` — `reportArgumentType` **1건**:
+    `Outcome` → `Never` 불일치 → 기존 분기 사실을 타입으로 표현한다.
+  **영향 범위: 위 스킬의 편집기 정적 타입 진단뿐 · 심각도 낮음.** 보안·런타임 동작 문제가 아니라
+  가려진 타입 부채라는 판정이다. 근거: 루트 `AGENTS.md`의 `pyrightconfig` 항목이 이 설정을
+  편집기 전용이며 런타임·테스트·CI 동작과 무관하다고 선언하고, 이번 경로 확장은 위 8개 파일의
+  실행 코드를 바꾸지 않았다. 설정을 되돌리면 Unknown으로 다시 숨길 뿐이므로 오류 억제·경로 복원으로
+  처리하지 않는다. 후속 수리도 새 검증·예외 경로 없이 이미 참인 사실을 타입으로 표현한다.
+
+증적: `.omo/evidence/transcript-accuracy/task-31.md` (B 결정·파일별 원문 진단·전체 회귀 출력).
+  ↳ 처리(2026-09-08): 해소 — 지목된 9건이 진단에서 사라졌다. `Outcome`→`Never` 5건은 이미 참인 분기 사실을 타입으로 표현했고, `object`→`str` 2건은 기존 문자열 계약을 반환 경계에서 좁혔으며, calendar 2건은 실제 payload 의 JSON 값 타입(`JsonValue`)으로 시그니처를 맞췄다. `pyrightconfig.json` 되돌림·`# type: ignore`·`# noqa` 억제는 쓰지 않았고 런타임 동작은 불변이다(budget·calendar 347 passed, coordination·triage·wiki 375 passed).
+
+## 라이프로그 화자 분리 정정 착지 후 남긴 것 (2026-09-07)
+
+> [이관 2026-09-08 · 해소] 후속 과제 스윕 7 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **재처리가 노트 이름을 바꿔 옛 노트를 고아로 남길 수 있다** — 노트 경로는 매 쓰기마다
+  제목에서 새로 계산된다(`note.corrected_lifelog_note` → `lifelog_relpath`). 제목이 없던
+  녹음을 `--reprocess` 하면 생성 제목이 붙어 파일 이름이 바뀌고, vault 의 옛 파일은 지워지지
+  않은 채 남는다. 조치: 레코드에 이미 있는 `note_relpath` 를 재처리 경로에서 재사용해 첫
+  경로에 못 박는다(`transcribe_promote`/`commit` 이음새). 영향: 데이터 손실은 없고 중복
+  노트 1건이 생길 뿐이지만, 같은 녹음이 노트 둘로 갈라지면 RAG 인제스트가 둘 다 먹는다.
+  심각도 중.
+  ↳ 처리(2026-09-08): 해소 — `binding.finalize` 가 제목에서 경로를 다시 계산하지 않고 레코드의 `note_relpath` 를 재사용한다(발견 시 `sync.py` 가 고정한 첫 경로). 제목 없던 녹음을 `--reprocess` 해 생성 제목이 붙어도 노트 파일은 하나로 유지된다. 회귀 `tests/unit/test_plaud_sync_reprocess_note_path.py`(RED: 경로가 갈라짐 → GREEN), plaud 367 passed.
+
+## 제안서 엔진 내제화 착지 후 남긴 것 (2026-09-08)
+
+> [이관 2026-09-08 · 해소] 후속 과제 스윕 7 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **샌드박스 scenario 의 render 가 엔진 입력 계약에서 선다.** `scenario.sh` 의 가짜 draft 는 실제
+  draft 가 쓰는 `drafts.json.planspec.json`·`.pms.json` 사이드카를 만들지 않아, render 가
+  `refined drafts sidecar source is missing` 로 멈춘다. **회귀가 아니다** — 내제화 전에는 핀 검사가
+  exit 4로 먼저 죽어 샌드박스가 render 를 한 번도 실행한 적이 없었고, 이제야 그 사실이 보인다.
+  조치: 샌드박스 draft 단계가 사이드카를 함께 내도록 하면 scenario 가 렌더까지 완주한다. 영향 범위는
+  샌드박스 스모크뿐이고 실제 렌더는 `.omo/evidence/docbot-internalization/` 의 실측으로 증명돼 있다.
+  **영향: 샌드박스 E2E 의 render 단계 커버리지, 프로덕션 렌더 무영향 · 심각도 낮음**.
+  ↳ 처리(2026-09-08): 해소 — `scenario.sh` 의 draft 단계가 실제 draft 와 **같은 writer**(`save_planspec`·`save_draft_file`·`_save_pms_snapshot`)로 `planspec.json`·`pms.json` 사이드카를 함께 낸다. 엔진 검증은 한 줄도 완화하지 않았고(`skills/proposal/engine/**` 무변경) 시나리오가 실제 HWPX 를 렌더해 `SCENARIO-PASS` 로 끝난다(coverage_score 1.0, refined=true).
+
+## v1.6.0 릴리스 착지 후 남긴 것 (2026-09-08)
+
+> [이관 2026-09-08 · 해소] 후속 과제 스윕 7 — 원문은 당시 관측·제안이며 아래 처리 줄이 병합된 동작을 말한다.
+
+- **소유자 ✅ 를 받은 릴리스 요청이 태그 전에 origin/main 이 전진하면 영구히 실행 불가가 되는데, `release.sh` 의 자동 회수는 `bound_pending` 만 다루고 완결 타이머는 매 틱 `RELEASE-DECISION: live request is bound to a different HEAD` 로 조용히 끝난다(2026-09-07 17:46 KST v1.6.0@2a0a20267 실측 — 승인 뒤 main 이 75커밋 전진, 다음 날 `release.sh` 는 `RELEASE-RETIRE-BLOCK: pending release does not match the latest signed head` 로 exit 4, 사람이 `release_approval_remote.sh abandon --version --head --message-id --reason` 을 돌려야 풀렸고 그동안 완결기는 18시간 동안 2분마다 같은 줄만 남겼다) → ① `release.sh` 가 시작 시 approved 이면서 head ≠ origin/main tip 인 레코드를 같은 감사형 abandon 으로 자가 회수하고 새 요청을 정확히 한 번 게시한다(새 요청은 옛 승인 범위의 상위집합이므로 재승인이 fail-closed 로 맞다), ② 완결 타이머는 같은 조건을 만나면 침묵하지 말고 소유자 통지를 에피소드당 1건 남긴다(매 틱 반복 금지). 인가 경계는 넓히지 않는다 — 옛 승인으로 새 tip 을 태그하는 경로는 만들지 않는다.** **영향: 릴리스 파이프라인 가용성(승인이 tip 전진보다 늦게 오는 모든 릴리스), 프로덕션 코드·노드 무영향 · 심각도 중**.
+  ↳ 처리(2026-09-08): 해소 — `release.sh` 가 시작 시 `retire --head <base> --tip <tip>` 로 APPROVED 레코드를 검사해, 이미 태그된 base 는 기존 `release-history/` 로, base 도 현재 tip 도 아닌 미실행 승인은 **감사형 abandon** 으로 회수한 뒤 새 요청을 한 번 게시한다. 완결 타이머는 `decision --notify-stale` 로 같은 요청 신원당 소유자 통지 1건만 남긴다(마커 `release-stale-notified/<sha256(version,head,message_id)>`, 전송 실패는 마커 없이 다음 틱 재시도). 옛 ✅ 로 새 tip 을 태그하는 경로는 만들지 않았고 회귀가 미승인 tip 의 태그 호출 0 을 어서션한다.
+
+- **감사형 abandon 은 Discord 를 건드리지 않으므로(`release_abandon` A3) 죽은 승인 카드가 채널에 그대로 남고, 카드 제목은 버전뿐이라 살아 있는 카드와 구분되지 않는다 — v1.6.0 은 같은 제목의 카드가 4장(`e638ea5cd`·`2a0a20267`·`21f673f7b`·`efb8dba9d`) 쌓였고 소유자가 어느 것을 눌러야 하는지 본문의 `배포 기준: <sha>` 로만 판별할 수 있었다(2026-09-08 소유자 질문) → abandon 이 원 메시지에 상태 회신 한 줄(예: `⛔ 만료 — <새 head> 로 재요청됨`)을 남기거나 카드 제목/본문에 접두어를 붙이도록 한다. 소유자 결정을 파괴하지 않는다는 A3 의 취지는 리액션을 지우지 않는 것이므로, 읽기 전용 표시 추가는 그 불변식과 충돌하지 않는다.** **영향: 승인 표면의 오독 위험(엉뚱한 카드에 ✅ → 아무 일도 일어나지 않아 대기가 길어진다), 실행 경로 무영향 · 심각도 낮음**.
+  ↳ 처리(2026-09-08): 해소 — abandon 이 원 승인 메시지를 `message_reference` 로 가리키는 `⛔ 만료 — <사유>` 회신 한 줄을 best-effort 로 덧붙인다. 원 카드 본문·소유자 리액션은 건드리지 않아 A3 와 바이트 바인딩이 그대로 유지되고, 회신 실패는 `RELEASE-ABANDON-NOTICE-FAIL` 한 줄일 뿐 회수 종료코드·감사·archive 를 바꾸지 않는다. 이미 회수된 요청의 재실행은 회신을 중복 게시하지 않는다.
+
+## 수리 스윕 5 착지 후 남긴 것 (2026-09-08)
+
+> [이관 2026-09-09 · 해소 3 + OBSERVE 1] 세 건은 PR #466·#467·#468 로 닫혔고, 프롬프트 v5 의 요약 산문 준수만
+> 관측 조건이 아직 성립하지 않아 남는다. 회계 원문을 그대로 보존한다.
+
+- **리컨실러가 converge 의 stderr 를 삼켜 배포 정지가 무증상이었다** — 노드가 08:44~22:40 약 8시간 동안 어떤 릴리스도
+  설치하지 못했는데 저널에는 `mirror left-behind` 한 줄뿐이었고, 진짜 원인(`ModuleNotFoundError`)은 사람이 verifier 를
+  손으로 돌려야 보였다 → converge 비영 종료 시 그 stderr 마지막 줄을 저널·healthcheck 티켓에 싣는다. **심각도 높음**.
+  ↳ 처리(2026-09-09 · 해소): PR #466 — `run_converge` 가 실패한 helper 의 stderr 를 `[deploy-reconcile]` 마커로 400자까지 재발화한다. rc 0 과 lock-busy(5)는 2분 타이머 홍수를 막으려 침묵이고 반환 코드는 불변이다. 회귀 `tests/unit/test_deploy_reconcile_converge_stderr.py`(FS3 고정 파일을 피한 새 파일).
+- **공개 원장 3종의 역할 구분이 코드에만 있다** — baseline-additions(정당화)·manifest(제외)·review(공개)의 차이가
+  테스트에만 강제되어 이번 사이클에서 `local_ci` 를 두 번(약 15분) 헛돌렸다 → `configs/public-export-review.txt` 헤더에
+  "governed 새 파일 = 정확히 한 곳 + 경로 바이트순" 한 문단을 적는다. **심각도 중**.
+  ↳ 처리(2026-09-09 · 해소): PR #468 — `public-export-review.txt`·`public-export-manifest.txt` 헤더가 manifest=제외 / review=공개 / baseline-additions=정당화, governed 는 `configs/`·`docs/` 뿐, 새 파일은 앞 둘 중 **정확히 한 곳** + 경로 바이트순 삽입임을 말한다. 기계 소비 문구 `sorted by path` 는 보존.
+- **프롬프트 v5 의 요약 산문 준수는 미검증이다** — 결정론적 필터가 제목·파일명·사람·장소·담당자를 막지만 요약 본문은
+  모델이 쓰므로 실녹음 1건으로만 확인된다 → v1.6.3 배포 후 첫 라이프로그 노트의 `## 요약` 을 확인하고 여전히 새면
+  프롬프트를 조인다. **영향: 구조화 필드는 이미 안전 · 심각도 낮음**.
+  ↳ 처리(2026-09-09 · **OBSERVE**): 노드 최신 plaud 노트가 2026-09-08 11:17 UTC 이고 v1.6.3 수렴은 13:40 UTC 라 **v5 프롬프트가 만든 노트가 아직 없다**. 요약 산문은 모델이 쓰므로 합성 입력으로는 준수를 증명할 수 없다. 되돌아오는 조건: v1.6.3 이후 첫 라이프로그 노트가 생기면 그 `## 요약` 을 읽고 판단한다.
+- **`lifelog_extract._reference()` 의 과잉 거부 여지** — 어절 전체가 친족어·일반명사인 경우만 떨어뜨리지만 첫 어절이
+  친족어인 정당한 제목이 함께 떨어질 수 있다 → 노트 제목이 기본값(`녹음 (YYYY-MM-DD)`)으로 떨어지는 빈도를 관찰하고
+  유의미하면 규칙표에 예외를 더한다. **영향: 폴백은 정보 손실이 아니라 보수적 기본값 · 심각도 낮음**.
+  ↳ 처리(2026-09-09 · 해소): PR #467 — 규칙을 완화하지 않고(완화하면 규칙의 존재 이유인 `사람형님` 이 되살아난다) `reference_drops(raw)` 가 `ReferenceDrop(field, value)` 로 무엇이 떨어졌는지 데이터로 돌려주고, 효과 경계가 표본 5개·값 40자로 클립해 한 줄로 보고한다. `형님식당` 과잉 거부는 characterization 으로 **알려진 한계로 고정**했다 — 빈도가 쌓이면 그때 예외를 판단한다.
+증적: 노드 실측은 ops 전용(`journalctl -u autophagy-deploy-reconcile`), 수리는 PR #462.
+
+## 수리 티켓 유실 사고 수정 중 발견한 소유자 항목 (2026-09-09 · 소유자)
+
+- **계정 홈의 죽은 수리 사본 `~/.hermes/repair/` 가 남아 있다** — 이번 사이클로 어느 실행 경로도 그것을
+  부르지 않지만 디렉터리는 그대로다(7월 세대 코드 + `.pre-rro-*` 백업). 다음 사람이 현역으로 오인할 수
+  있다. 제거는 노드의 파괴적 작업이라 소유자 몫이며, 릴리스 반영 뒤
+  `automation/provision-healthcheck-probe.sh` 재실행과 함께 처리하면 된다. **영향 없음 · 혼동 위험 ·
+  심각도 낮음**.
+
+## 토큰 없이 설치 완주 착지 후 남긴 것 (2026-09-09)
+
+> [이관 2026-09-09 · 해소] 2건 모두 같은 날 닫혔다. 아래 원문은 그때의 관측·제안이고 `↳ 처리` 줄이 실제로 병합된 동작을 말한다.
+
+- **설치 시점에 판정하지 못한 Discord 전제를 이후에 다시 묻는 것이 없다** → 설치기는 이제
+  「소유자 확인 절차」로 사람에게 넘기지만, 그 절차를 돌렸는지 아무도 되묻지 않는다.
+  `automation/healthcheck_registry.sh` 의 `LIVE_CHECKS` 에는 Discord 전제 프로브가 없어
+  (`grep -rn 'discord' automation/healthcheck*.sh` → 0건), 토큰이 끝내 설정되지 않은 노드는
+  승인 카드가 도달하지 않는 채로 계속 `ALL_HEALTHY` 를 보고할 수 있다. 조치 후보는
+  `discord_check.py` 를 읽기 전용 프로브로 `core` 묶음에 넣는 것인데, 그러면 healthcheck 가
+  매 틱 Discord API 를 호출하므로 레이트리밋·주기를 먼저 정해야 한다.
+  **영향: 설치 완주 노드의 승인 표면 미도달이 조용할 수 있음 · 동작은 정상 · 심각도 중**.
+  ↳ 처리(2026-09-09): 해소 — **열린 질문에 답하는 대신 없앴다.** `automation/owner_notice_probe.sh` 의 `owner_notice_credentials` 는 네트워크를 부르지 않고 `/etc/autophagy/repair-approval.env` 하나만 읽는다. 매 틱 Discord API 를 부르면 Discord 장애가 수리 티켓이 되고(cry-wolf) 레이트리밋·주기라는 정책 질문이 새로 생기는데, 조용한 실패의 실제 모양은 "끝내 안 채웠다" 이고 그것은 그 파일로 판정된다. 선례 `peer_ignored_channels` 와 같은 성격(로컬·읽기 전용·설정 드리프트·fail-closed)이며 `core` 묶음·`LOCAL_PROBES`·`repair_guidance` 에 등록했다. **빈 파일은 여전히 정당한 구성**이므로(`신규-노드-설치-공백.md` §2-1) 프로브가 묻는 것은 「채웠는가」가 아니라 「결정했는가」다 — 채우거나 `OWNER_NOTICE_OPTIONAL=1` 로 선언하면 통과하고, 두 통과는 다른 문구를 낸다. 증명하지 못하는 것(토큰 유효성·인텐트·채널·DM 도달)은 소유자의 `discord_check.py` 가 닫는다. [소개](기능소개/소유자-통지-자격증명-프로브.md)
+- **`discord_check.main()` 의 argparse 실패는 `SystemExit` 로 탈출한다** → 설치기는 그것을
+  같은 프로세스에서 부르는데(`automation/install/executor.py`), `RealExecutor.execute` 의
+  `except` 는 `OSError`·`CalledProcessError`·`TrustKeyError` 만 잡는다. 지금은 argv 를 설치기가
+  직접 조립하므로 도달하지 않지만, 값이 `-` 로 시작하는 config 경로 같은 입력이 생기면
+  FAIL 결과 대신 트레이스백으로 죽는다. 조치는 그 호출을 `SystemExit` 까지 감싸는 것이다.
+  **영향: 현재 도달 불가 · 동작은 정상 · 심각도 하**.
+  ↳ 처리(2026-09-09): 해소 — `executor.py` 가 그 호출만 `except SystemExit` 로 감싸 `owner_actions.discord_usage_refused` 의 `USAGE-REFUSED` FAIL 을 낸다. **종료 상태를 판정표에 넣지 않은 것이 요점**이다: `SystemExit(2)` 와 토큰 부재의 rc=2 는 같은 숫자라, 그대로 매핑했으면 "설치기가 만든 명령이 틀렸다" 가 "소유자의 토큰이 없다"(WARN)로 둔갑해 설치가 거짓 이야기 위에서 계속 갔을 것이다. 회귀는 `tests/unit/test_install_token_absent.py -k usage` 가 그 오분류를 직접 금지한다.
+
+증적: [docs/qa/OWNER-NOTICE-PROBE/01-probe-surface.txt](qa/OWNER-NOTICE-PROBE/01-probe-surface.txt).
+
+## 소유자 통지 자격증명 프로브가 남긴 소유자 항목 (2026-09-09 · 소유자)
+
+- **[OWNER] 이 릴리스를 받은 노드는 healthcheck 래퍼를 한 번 다시 만들어야 한다** → 프로브 행이
+  하나 늘면 SSH 강제명령 허용목록 매니페스트가 한 줄 늘고(실측 `22a23`, 기존 22줄은 바이트 그대로)
+  래퍼의 입력 지문이 바뀐다. 그전까지 `healthcheck probe allowlist matches the checks` 프로브가
+  드리프트를 보고한다 — 이것은 결함이 아니라 **설계된 탐지**이고, 조치는 노드에서
+  `automation/provision-healthcheck-probe.sh` 를 1회 실행하는 것이다(멱등, 같은 바이트면 무동작).
+  같은 실행이 위 항목의 `~/.hermes/repair/` 정리와 함께 처리된다.
+  **영향: 재프로비저닝 전까지 프로브 1건 FAIL · 감시 손실 없음 · 심각도 중**.
+
+
+## 수리 티켓 유실 사고 수정 중 발견한 인접 결함 (2026-09-09)
+
+> [이관 2026-09-09 · 해소] 설계 판단을 요구한 1건이 같은 날 닫혔다. 아래는 그때의 원문이고 `↳ 처리` 줄이 실제 결정이다.
+
+- **게이트웨이 라이프사이클 다리가 배포는 됐으나 로드되지 않는다** — `automation/interop/hermes_hook.py` 는
+  `~/.hermes/interop_runtime/automation/interop/` 에 실려 있지만 게이트웨이 플러그인
+  (`~/.hermes/plugins/interop-protocol/__init__.py`)이 그것을 import 하지 않고, 그 런타임에는
+  `automation/repair/` 자체가 없어 import 하면 `ModuleNotFoundError` 가 난다. 실측 근거: 보드의 수리 카드
+  58장 중 `agent:<event_type>` 출처가 **0건**이다(전부 manual-repair·healthcheck·e2e). 조치에는 설계
+  판단이 선행한다 — 훅을 실제로 등록하려면 `deploy-skill.sh` 의 interop 스테이징 목록에
+  `automation/repair/*` 를 더해야 하고, 그러면 Hermes 라이프사이클 실패마다 카드가 열리므로 **어떤
+  event_type 을 티켓으로 볼 것인가**를 먼저 정해야 한다(무제한이면 healthcheck 폭주와 같은 모양이 된다).
+  **다른 두 detect 경로(수동·헬스체크)는 살아 있어 동작은 정상 · 관측 공백 · 심각도 중**.
+  ↳ 처리(2026-09-09 · 해소): **켜지 않기로 결정**했다. 조사해 보니 붙일 훅이 없다 — `hermes_plugin.register()` 가 등록하는 것은 Hermes 가 실제로 부르는 여섯(`pre_gateway_dispatch`·`pre_tool_call`·`transform_llm_output`·`kanban_task_{claimed,completed,blocked}`)뿐이고 "에러를 동반한 라이프사이클 실패" 훅은 벤더에 없다. `hermes_hook.handle` 은 `agent:start` 같은 옛 이벤트 어휘로 쓰였고 어디에도 등록되지 않으며, 그 보고 절반은 `kanban_task_*` → `_send_kanban_report` 가 이미 같은 `TaskReport` 로 `#agents-log` 에 보낸다(즉 **대체된 선행 구현**이다). 티켓 절반은 지금 형태로 켜면 해롭다 — `record_lifecycle_failure` 의 `subprocess.run(timeout=90)` 이 async 훅 안에서 턴을 최대 90초 세우고, dedup 서명의 location 이 `task_id` 라 실패한 task 마다 새 카드가 열리며, 수리 카드가 blocked 로 생성되므로 `kanban_task_blocked` 에 걸면 자기 피드백 루프가 된다. 그래서 고아 `automation/interop/hermes_hook.py` 를 삭제하고 결정을 `automation/interop/AGENTS.md` 에 남겼다. 그 기능은 인프라 실패=healthcheck detect, 소유자가 눈치챈 실패=`!repair` 가 덮으며 둘 다 같은 날 릴리스 런타임 사본으로 고정됐다.

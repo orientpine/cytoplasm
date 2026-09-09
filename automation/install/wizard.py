@@ -208,7 +208,7 @@ def main(argv: Sequence[str] | None = None, *, io: Console | None = None) -> int
         if probe == 0:
             apply_argv = tuple(["sudo", "--preserve-env=DISCORD_BOT_TOKEN", *apply_argv[1:]])
         else:
-            io.write("  sudoers 가 환경 보존을 거부해 DISCORD_BOT_TOKEN 이 설치기에 닿지 않는다 — discord-readiness 가 FAIL 할 수 있다.\n")
+            io.write("  sudoers 가 환경 보존을 거부해 DISCORD_BOT_TOKEN 이 설치기에 닿지 않는다 — discord-readiness 는 WARN 으로 남고 설치는 계속한다(끝나면 소유자 확인 절차가 출력된다).\n")
 
     _section(io, "⑤ 실제 설치 — 멱등: 막히면 원인을 고치고 같은 명령을 다시 실행한다")
     rc, output = io.run(apply_argv)

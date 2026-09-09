@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING
 from urllib.error import HTTPError
 
 import budget_binding
@@ -274,7 +274,7 @@ def bound_message_id(verdict: Verdict, draft: dict) -> str:
         case outcome.DEFERRED | outcome.REFUSED:
             raise _refusal(verdict)
         case unreachable:
-            assert_never(unreachable)
+            raise AssertionError(f"unreachable outcome: {unreachable}")
 
 
 def post_for_approval(draft: dict) -> str:

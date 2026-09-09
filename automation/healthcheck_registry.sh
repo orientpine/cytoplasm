@@ -128,6 +128,7 @@ readonly -a HEALTHCHECK_CHECK_CATALOG=(
   "rag|$RAG_NODE personal RAG source and MCP image match the release|rag_stack_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}"
   "core|$PRIMARY_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh"
   "rag|$RAG_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh"
+  "core|$PRIMARY_NODE owner notice credentials|owner_notice_credentials|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_OWNER_NOTICE_CREDENTIAL:-/etc/autophagy/repair-approval.env}"
 )
 
 #: Which group a check belongs to, answered from the catalog rather than from a second
@@ -160,7 +161,7 @@ readonly -a LIVE_CHECKS
 # guard from collapsing N tickets into one INFRA_FAILURE (regression d7ed0ad / γ).
 # One declaration on purpose — the same rule lived in two comparisons and the second
 # copy is always the one that gets forgotten.
-readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage release_fully_deployed peer_ignored_channels"
+readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage release_fully_deployed peer_ignored_channels owner_notice_credentials"
 
 # A repair ticket carries the check name, which is all an operator needs when the
 # remedy is obvious (restart, re-auth). Deploy-checkout drift is the case where
@@ -174,6 +175,7 @@ repair_guidance() {
       ;;
     skill_mounts_current) skill_mount_guidance ;;
     peer_ignored_channels) peer_ignored_channels_guidance ;;
+    owner_notice_credentials) owner_notice_credentials_guidance ;;
     agent_selfskill_root_topology) selfskill_root_guidance ;; release_store_usage) release_store_guidance ;;
     *) ;;
   esac
@@ -209,6 +211,7 @@ run_check() {
     release_helper_drift) probe_release_helper_drift "$node" "$account" "$target" ;;
     skill_mounts_current) probe_skill_mounts_current "$node" "$account" "$target" ;;
     peer_ignored_channels) probe_peer_ignored_channels ;;
+    owner_notice_credentials) probe_owner_notice_credentials "$node" "$account" "$target" ;;
     release_store_usage) probe_release_store_usage "$node" "$account" "$target" ;;
     release_fully_deployed) probe_release_fully_deployed "$node" "$account" "$target" ;;
     agent_selfskill_root_topology) probe_selfskill_root_topology "$node" "$account" "$target" ;;

@@ -19,9 +19,13 @@ def wrapper_path(action: ProvisionHealthcheckProbe) -> Path:
 
 
 def generator_command(action: ProvisionHealthcheckProbe, mode: Literal['--install', '--inputs-digest']) -> tuple[str, ...]:
-    # 설치 전에는 릴리스 링크가 없으므로 생성기와 설정을 배포 체크아웃에 고정한다.
+    # 설치 전에는 릴리스 링크가 없으므로 생성기와 설정을 배포 체크아웃에 고정한다. 그 체크아웃은
+    # ops 소유 2750 이라 운영자로 강등해 부르면 읽지 못하고(2026-09-08 실호스트 실측 rc=126),
+    # 판정도 같은 argv 를 쓰는데 runuser 는 root 전용이라 ops 로 도는 계획에서 언제나 실패했다.
+    # 권한은 그대로 두고 운영자의 것은 HOME 과 래퍼 경로로만 넘긴다 — 래퍼 내용은 프로브
+    # 카탈로그에서 나오지 실행 사용자에서 나오지 않는다.
     return (
-        'runuser', '-u', action.operator_account, '--', 'env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin',
+        'env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin',
         f'HOME={action.operator_home}', 'HEALTHCHECK_NODE_CONFIG_PATH=/etc/autophagy/node.toml',
         f'HEALTHCHECK_RELEASE_SOURCE_ROOT={action.source_dir}',
         f'HEALTHCHECK_WRAPPER_PATH={wrapper_path(action)}',
@@ -111,3 +115,11 @@ def provision_probe(action: ProvisionHealthcheckProbe, run: CommandRunner) -> No
     result = run(generator_command(action, '--install'), cwd=action.source_dir)
     if not any(line.startswith(('WRAPPER-INSTALLED ', 'WRAPPER-UNCHANGED ')) for line in result.stdout.splitlines()):
         raise OSError('HEALTHCHECK-WRAPPER-UNCONFIRMED: 생성기가 설치 완료 표식을 반환하지 않았다')
+    # 생성기가 root 로 돌았으므로 운영자 홈에 남은 것은 root 소유다. 판정은 운영자 소유
+    # 0755 를 요구하므로 여기서 넘기지 않으면 적용은 성공하고 다음 계획이 또 올린다.
+    wrapper = wrapper_path(action)
+    for path in (action.operator_home / '.local', wrapper.parent, wrapper):
+        if not path.exists():
+            continue
+        os.chmod(path, 0o755)
+        shutil.chown(path, user=action.operator_account, group=action.operator_account)

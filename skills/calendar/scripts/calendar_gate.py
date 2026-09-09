@@ -19,8 +19,12 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import calendar_core
+
+if TYPE_CHECKING:
+    from automation.entity_preflight.contracts import JsonValue
 
 GWS_TIMEOUT_S = 120
 
@@ -95,7 +99,10 @@ def create_draft(
     draft_id = secrets.token_hex(3)
     while _draft_path(draft_id).exists():
         draft_id = secrets.token_hex(3)
-    record = {
+    # 이 레코드는 그대로 JSON 으로 얼어붙는다 — 값 타입도 그 사실대로 적어야
+    # ``draft_sha256`` 의 JSON 계약과 맞는다(list 는 불변이라 list[str] 은 그 자체로
+    # JsonValue 가 아니다).
+    record: dict[str, JsonValue] = {
         "action": action,
         "argv": list(argv),
         "calendar_id": calendar_id,

@@ -10,11 +10,12 @@ import pytest
 import automation.deploy_reconcile_cli as reconcile_cli
 from automation.deploy_reconcile import (
     BACKLOG_NOTICE_SECONDS,
+    Backlog,
     FAILURE_NOTICE_THRESHOLD,
     ReconcileState,
     reconcile_unsigned_head,
 )
-from automation.deploy_reconcile_unsigned import raw_remote_main_sha
+from automation.deploy_reconcile_unsigned import observe_release_backlog, raw_remote_main_sha
 from automation.git_tag_signature import GitRunner
 from automation.update_trust import UpdateTrustError
 
@@ -165,50 +166,39 @@ def test_clean_and_unknown_mirror_states_leave_the_backlog_digest_unchanged() ->
     assert notices[0] == notices[1]
 
 
-def test_main_unsigned_head_records_backlog_without_paging(
+def test_main_records_the_release_backlog_on_the_success_path_without_paging(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    # Given: the public branch head has no trusted signed release tag — under VA-3
-    # (머지=축적) this is the NORMAL state between releases, not an incident.
+    """VA-3 백로그는 이제 수렴이 성공한 뒤에 관측된다.
+
+    수렴이 origin/main tip 동일성을 요구하던 동안에는 릴리스 사이 매 틱이 UNSIGNED-HEAD 였고
+    시계가 그 예외 위에서 돌았다. 이제 노드는 tip 과 무관하게 최신 릴리스로 수렴하므로, 그
+    릴리스 뒤에 쌓인 미배포 커밋이 같은 다이제스트 경로로 들어가야 한다.
+    """
     calls: list[str] = []
     notices: list[str] = []
-    observed_mirrors: list[str] = []
-
-    def blocked_target() -> str:
-        raise UpdateTrustError("UNSIGNED-HEAD", "origin/main lacks a signed release tag")
 
     def unexpected_release(_target: str, _prior: str) -> int:
         calls.append("release")
         return 0
 
-    def dirty_mirror_verdict() -> str:
-        observed_mirrors.append("observed")
-        return "mirror-dirty"
-
-    monkeypatch.setattr(reconcile_cli, "candidate_update_sha", blocked_target)
+    monkeypatch.setattr(reconcile_cli, "candidate_update_sha", lambda *_a: _A)
     monkeypatch.setattr(
-        reconcile_cli,
-        "raw_remote_main_sha",
-        lambda _mirror, _channel: _B,
+        reconcile_cli, "observe_release_backlog", lambda *_a, **_k: Backlog(_B, 4, "dirty")
     )
-    monkeypatch.setattr(
-        reconcile_cli, "unreleased_commit_count", lambda _mirror, _current, _head: 4
-    )
-    monkeypatch.setattr(reconcile_cli, "mirror_verdict", dirty_mirror_verdict)
     monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
     monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
     monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(reconcile_cli, "run_release_update", unexpected_release)
     monkeypatch.setattr(reconcile_cli, "current_release_sha", lambda: _A)
+    monkeypatch.setattr(reconcile_cli, "persist_update_channel_binding", lambda *_a: None)
+    monkeypatch.setattr(reconcile_cli, "sync_mirror", lambda *_a, **_k: "in-sync")
     monkeypatch.setattr(reconcile_cli, "notify_owner", lambda notice: not notices.append(notice))
 
-    # When: several ticks observe the same young backlog.
     results = [reconcile_cli.main() for _ in range(FAILURE_NOTICE_THRESHOLD)]
 
-    # Then: no notice and no root helper — the backlog is counted only; aging past the
-    # digest threshold is pinned by tests/unit/test_release_backlog_digest.py.
+    # 임계 전에는 침묵하고, 이미 그 릴리스에 있으므로 특권 헬퍼도 부르지 않는다.
     assert results == [0] * FAILURE_NOTICE_THRESHOLD
     assert calls == []
     assert notices == []
@@ -217,9 +207,36 @@ def test_main_unsigned_head_records_backlog_without_paging(
     assert state.notified_target is None
     assert state.consecutive_failures == FAILURE_NOTICE_THRESHOLD
     assert state.mirror_state == "dirty"
-    assert observed_mirrors == ["observed"] * FAILURE_NOTICE_THRESHOLD
-    assert "UPDATE-TRUST-BLOCK UNSIGNED-HEAD" in capsys.readouterr().err
 
+
+def test_observe_release_backlog_is_silent_when_the_tip_is_the_release() -> None:
+    """tip 이 곧 설치 대상이면 백로그가 없다 — 세지도, 미러를 묻지도 않는다."""
+    asked: list[str] = []
+
+    observed = observe_release_backlog(
+        Path("/mirror"),
+        _A,
+        update_channel=None,
+        mirror_state=lambda _channel: asked.append("asked") or "dirty",
+        runner=_runner(f'{_A}\trefs/heads/main\n'),
+    )
+
+    assert observed == Backlog()
+    assert asked == []
+
+
+def test_observe_release_backlog_measures_the_gap_when_the_tip_is_ahead() -> None:
+    """tip 이 앞서면 그 격차를 재고 미러 상태를 함께 싣는다."""
+    observed = observe_release_backlog(
+        Path("/mirror"),
+        _A,
+        update_channel=None,
+        mirror_state=lambda _channel: "dirty",
+        runner=_runner(f'{_B}\trefs/heads/main\n'),
+    )
+
+    assert observed.head == _B
+    assert observed.mirror_state == "dirty"
 
 def test_unsigned_head_with_unresolved_sha_keeps_threshold_path(
     monkeypatch: pytest.MonkeyPatch,
@@ -232,11 +249,6 @@ def test_unsigned_head_with_unresolved_sha_keeps_threshold_path(
         raise UpdateTrustError("UNSIGNED-HEAD", "origin/main lacks a signed release tag")
 
     monkeypatch.setattr(reconcile_cli, "candidate_update_sha", blocked_target)
-    monkeypatch.setattr(
-        reconcile_cli,
-        "raw_remote_main_sha",
-        lambda _mirror, _channel: "",
-    )
     monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
     monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
     monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
@@ -260,17 +272,11 @@ def test_non_unsigned_trust_error_keeps_threshold_path(
 ) -> None:
     # Given: the trust boundary failed for a reason other than a missing release tag.
     notices: list[str] = []
-    advisory_calls: list[tuple[Path, str | None]] = []
 
     def blocked_target() -> str:
         raise UpdateTrustError("TAG-FETCH", "remote unavailable")
 
     monkeypatch.setattr(reconcile_cli, "candidate_update_sha", blocked_target)
-    monkeypatch.setattr(
-        reconcile_cli,
-        "raw_remote_main_sha",
-        lambda mirror, channel: advisory_calls.append((mirror, channel)) or _B,
-    )
     monkeypatch.setattr(reconcile_cli, "roster_update_channel", lambda: None)
     monkeypatch.setattr(reconcile_cli, "unconfigured_reason", lambda _config: None)
     monkeypatch.setattr(reconcile_cli, "DEFAULT_STATE_PATH", tmp_path / "state.json")
@@ -279,9 +285,8 @@ def test_non_unsigned_trust_error_keeps_threshold_path(
     # When: three identical trust failures occur.
     results = [reconcile_cli.main() for _ in range(FAILURE_NOTICE_THRESHOLD)]
 
-    # Then: raw unsigned-head observation is not attempted and legacy threshold remains.
+    # Then: the legacy threshold path remains for a transport-level trust failure.
     assert results == [0] * FAILURE_NOTICE_THRESHOLD
-    assert advisory_calls == []
     assert len(notices) == 1
     assert reconcile_cli.load_state(tmp_path / "state.json").notified_target == (
         "skip:update-trust-block"

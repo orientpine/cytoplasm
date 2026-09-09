@@ -45,7 +45,7 @@
 #   -h, --help
 #
 # Env:
-#   DISCORD_BOT_TOKEN   설치기의 discord-readiness 체크가 환경변수에서만 읽는다.
+#   DISCORD_BOT_TOKEN   설치기의 discord-readiness 체크가 환경변수에서만 읽는다(없으면 WARN).
 #                       sudo는 기본적으로 환경을 지우므로 이 래퍼가 이 변수 하나만
 #                       보존을 시도하고, sudoers가 거부하면 조용히 넘어가지 않고 알린다.
 #   QUICKSTART_LOG_DIR  로그를 둘 디렉터리 (기본: mktemp -d, 0700)
@@ -179,8 +179,8 @@ fi
 
 # --------------------------------------------------- ③ 실제 설치 전 마지막 점검
 if [[ -z "${DISCORD_BOT_TOKEN:-}" ]]; then
-  warn "DISCORD_BOT_TOKEN이 환경에 없다. 실제 설치의 discord-readiness 체크가 FAIL한다."
-  warn "  중단하고 이렇게 올린 뒤 다시 실행하는 것을 권한다: set -a; . ~/.env.secrets; set +a"
+  warn "DISCORD_BOT_TOKEN이 환경에 없다. discord-readiness 체크는 WARN으로 남고 설치는 계속한다."
+  warn "  지금 올려 두면 설치 중에 판정된다: set -a; . ~/.env.secrets; set +a"
 fi
 
 sudo_prefix=()
@@ -194,7 +194,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
       sudo_prefix=(sudo --preserve-env=DISCORD_BOT_TOKEN)
     else
       warn "sudoers가 환경 보존을 거부했다. DISCORD_BOT_TOKEN이 설치기에 전달되지 않아"
-      warn "  discord-readiness 체크가 FAIL할 수 있다. root 셸에서 직접 실행하면 피할 수 있다."
+      warn "  discord-readiness 체크가 WARN으로 남는다. root 셸에서 직접 실행하면 판정까지 된다."
     fi
   fi
 fi

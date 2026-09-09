@@ -1,5 +1,12 @@
 # Public export exclusions. One tracked, repository-relative path per line.
 # Directories end with `/`; glob patterns and parent traversal are forbidden.
+#
+# Role: a path listed here is EXCLUDED from the public export. The sibling
+# public-export-review.txt records PUBLISH decisions; every tracked file under a
+# governed directory (configs/, docs/) must appear in exactly one of the two.
+# public-export-baseline-additions.txt is a third ledger with a different job
+# (justifying a new tracked file against the immutable public baseline) and is not
+# a substitute for a decision here or in review. Full rule: the review header.
 
 .omo/
 docs/qa/

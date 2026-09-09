@@ -49,14 +49,15 @@ readonly STORE_SRC="$REPO_ROOT/automation/release_store.py"
 readonly PROVENANCE_SRC="$REPO_ROOT/automation/release_provenance.py"
 readonly PACKAGE_INIT_SRC="$REPO_ROOT/automation/__init__.py"
 readonly SIGNATURE_SRC="$REPO_ROOT/automation/git_tag_signature.py"
+readonly TYPING_COMPAT_SRC="$REPO_ROOT/automation/typing_compat.py"
 readonly UPDATE_TRUST_SRC="$REPO_ROOT/automation/update_trust.py"
 readonly UPDATE_TRUST_STATE_SRC="$REPO_ROOT/automation/update_trust_state.py"
 readonly NODE_CONFIG_SRC="$REPO_ROOT/automation/node_config.py"
 readonly NODE_SEED_SRC="$REPO_ROOT/configs/node.example.toml"
 for src in \
   "$HELPER_SRC" "$SNAPSHOT_SRC" "$STORE_SRC" "$PROVENANCE_SRC" \
-  "$PACKAGE_INIT_SRC" "$SIGNATURE_SRC" "$UPDATE_TRUST_SRC" "$UPDATE_TRUST_STATE_SRC" \
-  "$NODE_CONFIG_SRC" "$NODE_SEED_SRC"; do
+  "$PACKAGE_INIT_SRC" "$SIGNATURE_SRC" "$TYPING_COMPAT_SRC" "$UPDATE_TRUST_SRC" \
+  "$UPDATE_TRUST_STATE_SRC" "$NODE_CONFIG_SRC" "$NODE_SEED_SRC"; do
   [[ -f "$src" ]] || die "tracked source missing: $src"
 done
 python3 "$REPO_ROOT/automation/node_asset_renderer.py" "$HELPER_SRC" "$RENDER_DIR/helper"
@@ -69,6 +70,7 @@ install -m 0755 -o root -g root "$STORE_SRC" "$HELPER_LIBDIR/release_store.py"
 install -m 0644 -o root -g root "$PROVENANCE_SRC" "$HELPER_LIBDIR/release_provenance.py"
 install -m 0644 -o root -g root "$PACKAGE_INIT_SRC" "$HELPER_LIBDIR/automation/__init__.py"
 install -m 0644 -o root -g root "$SIGNATURE_SRC" "$HELPER_LIBDIR/automation/git_tag_signature.py"
+install -m 0644 -o root -g root "$TYPING_COMPAT_SRC" "$HELPER_LIBDIR/automation/typing_compat.py"
 install -m 0755 -o root -g root "$UPDATE_TRUST_SRC" "$HELPER_LIBDIR/automation/update_trust.py"
 # C1 anti-rollback floor. The verifier imports it, so a libdir without it turns
 # every convergence into an ImportError under sudo rather than a refusal.

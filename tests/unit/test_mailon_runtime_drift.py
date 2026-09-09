@@ -44,6 +44,33 @@ def _runtime(root: Path, digest: str) -> Path:
     return root
 
 
+def _git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), *args], capture_output=True, text=True,
+        check=True, timeout=60,
+    )
+    return result.stdout.strip()
+
+
+def _commit(root: Path, message: str) -> str:
+    _git(root, "add", ".")
+    _git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _git_fixture(tmp_path: Path) -> tuple[Path, Path, str, str, str, str]:
+    release_root = tmp_path / "release"
+    vendor = _vendor(release_root, body="x = 1\n")
+    _git(release_root, "init", "-q")
+    old_commit = _commit(release_root, "old")
+    old_digest = _digest(vendor)
+    (vendor / "main.py").write_text("x = 2\n", encoding="utf-8")
+    new_commit = _commit(release_root, "new")
+    new_digest = _digest(vendor)
+    runtime = tmp_path / "home" / ".hermes" / "mailon-runtime"
+    return release_root, runtime, old_commit, new_commit, old_digest, new_digest
+
+
 def _run(release_root: Path, runtime_root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(_DRIFT)],
@@ -91,6 +118,35 @@ def test_a_pinned_old_runtime_is_reported_with_both_digests(tmp_path: Path) -> N
     assert "DRIFT" in result.stdout
     assert "0123456789abcdef" in result.stdout
     assert _digest(vendor) in result.stdout
+
+
+def test_runtime_behind_release_recommends_deploy(tmp_path: Path) -> None:
+    release_root, runtime, old_commit, _new_commit, old_digest, _new_digest = _git_fixture(tmp_path)
+    _runtime(runtime, old_digest)
+    result = _run(release_root, runtime)
+    assert result.returncode == 1
+    assert "skills/mail/deploy.sh" in result.stdout
+
+
+def test_runtime_ahead_of_release_recommends_release(tmp_path: Path) -> None:
+    release_root, runtime, old_commit, new_commit, old_digest, new_digest = _git_fixture(tmp_path)
+    (release_root / "skills/mail/vendor/mailon/main.py").write_text("x = 1\n", encoding="utf-8")
+    _runtime(runtime, new_digest)
+    result = _run(release_root, runtime)
+    assert result.returncode == 1
+    assert "automation/release.sh" in result.stdout
+    assert "skills/mail/deploy.sh" not in result.stdout
+
+
+def test_runtime_and_release_with_unknown_direction_show_both(tmp_path: Path) -> None:
+    release_root, runtime, _old_commit, _new_commit, _old_digest, _new_digest = _git_fixture(tmp_path)
+    (release_root / "skills/mail/vendor/mailon/main.py").write_text("x = 3\n", encoding="utf-8")
+    _runtime(runtime, "deadbeefdeadbeef")
+    result = _run(release_root, runtime)
+    assert result.returncode == 1
+    assert "direction=unknown" in result.stdout
+    assert "skills/mail/deploy.sh" in result.stdout
+    assert "automation/release.sh" in result.stdout
 
 
 def test_a_missing_runtime_is_unknown_not_a_pass(tmp_path: Path) -> None:

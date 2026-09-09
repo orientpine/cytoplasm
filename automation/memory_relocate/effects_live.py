@@ -119,8 +119,8 @@ def build_effects(*, memory_dir: Path, state_path: Path, rag_state_path: Path, t
             # leaving an empty one behind per tick. A request whose message went MISSING
             # has no live candidate at all, so the record's own thread is offered too —
             # otherwise the re-post resolves a fresh binding and opens a SECOND thread.
-            # The thread name carries the pending id ONLY — never the note path, title
-            # or the entry text being moved.
+            # On the owner's private surface the thread names the note under review,
+            # using only its filename — never directories or the entry text being moved.
             binding = reuse_request_thread(
                 ApprovalKind.OBSIDIAN_WRITE,
                 thread_candidates(
@@ -134,7 +134,7 @@ def build_effects(*, memory_dir: Path, state_path: Path, rag_state_path: Path, t
                 ApprovalKind.OBSIDIAN_WRITE,
                 directory,
                 owner_id,
-                request=RequestThread(title=key),
+                request=RequestThread(title=PurePosixPath(record.note_relpath).name),
             )
             bound = replace(record, approval_thread_id=binding.channel_id)
             store.update(bound)

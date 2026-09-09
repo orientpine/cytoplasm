@@ -199,14 +199,14 @@ def _draft_with_summary(draft: Mapping[str, JsonValue], summary: str) -> dict[st
     argv = updated.get("argv")
     if not isinstance(argv, list):
         raise CalendarPreflightError("드래프트 argv가 없습니다", 3)
-    updated_argv = [item for item in argv if isinstance(item, str)]
+    updated_argv: list[JsonValue] = [item for item in argv if isinstance(item, str)]
     if len(updated_argv) != len(argv):
         raise CalendarPreflightError("드래프트 argv 형식이 올바르지 않습니다", 3)
     if "--json" in updated_argv:
         json_index = updated_argv.index("--json") + 1
         if json_index >= len(updated_argv):
             raise CalendarPreflightError("드래프트 JSON 본문이 없습니다", 3)
-        body = json.loads(updated_argv[json_index])
+        body = json.loads(str(updated_argv[json_index]))
         if not isinstance(body, dict):
             raise CalendarPreflightError("드래프트 JSON 본문 형식이 올바르지 않습니다", 3)
         body["summary"] = summary

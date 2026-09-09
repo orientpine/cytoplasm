@@ -9,7 +9,7 @@
 | `external_effect_gate.py` | `evaluate_tool_call` — denylist(`configs/external-effect-tools.yaml`) 매칭. 미매칭=읽기 허용. 매칭(mutation)=owner 승인 레코드 필요. `action_hash=sha256(정규화 payload)`, method는 `manual_reaction` 또는 `signed_injection_e2e`만 |
 | `approval_types.py` · `approval_reminder.py` · `approval_lease.ReminderJournal` | 기존 승인 레코드의 key·원문 message id·실제 게시 시각에 고정된 리마인더 계산. 기존 key lease 안에서 lifecycle 관찰→영속 claim→최소정보 원문 링크 전송하며 catch-up은 최신 due 구간 1건만 시도한다. 별도 승인 상태머신이 아니다 |
 | `external_effect_gate_e2e.py` · `injection_adapter.py` | E2E 서명(HMAC) 승인 경로. `E2E_TEST_MODE=1`에서만 동작 |
-| `hermes_hook.py` · `hermes_plugin/` · `hook_boundary_e2e.py` | Hermes 플러그인 경계 — 게이트가 실제로 강제되는 지점. `coord-` 질의 응답은 config의 `interop_channel_id` 채널(#autophagy-agents)로 라우팅되며, 미설정 시 소스 채널로 폴백. 승인 표면은 `approval_surface.py`가 결정하고 `approval_directory.py`가 해석한다 — 설정 키(`personal_approvals_channel_id` / `deploy_approvals_channel_id`)는 그 디렉터리 내부에서만 읽힌다 |
+| `hermes_plugin/` · `hook_boundary_e2e.py` | Hermes 플러그인 경계 — 게이트가 실제로 강제되는 지점. **게이트웨이가 부르는 훅은 `register()` 가 등록하는 여섯뿐이다**(`pre_gateway_dispatch`·`pre_tool_call`·`transform_llm_output`·`kanban_task_{claimed,completed,blocked}`) — "에러를 동반한 라이프사이클 실패" 훅은 벤더에 없다. 그래서 **라이프사이클 실패 → 수리 티켓 경로는 만들지 않는다(2026-09-09 결정)**: 붙일 훅이 없고, `#agents-log` 보고는 이미 `kanban_task_*` → `_send_kanban_report` 가 하며, 티켓 쪽을 지금 형태로 켜면 `record_lifecycle_failure` 의 90초 subprocess 가 async 훅 안에서 턴을 세우고 dedup location 이 `task_id` 라 실패한 task 마다 새 카드가 열리며 수리 카드가 blocked 로 생성되므로 `kanban_task_blocked` 에 걸면 자기 루프가 된다. 그 자리를 메우던 대체된 선행 구현 `hermes_hook.py` 는 같은 날 삭제했다 — 인프라 실패는 healthcheck detect 가, 소유자가 눈치챈 실패는 `!repair` 가 덮는다. `coord-` 질의 응답은 config의 `interop_channel_id` 채널(#autophagy-agents)로 라우팅되며, 미설정 시 소스 채널로 폴백. 승인 표면은 `approval_surface.py`가 결정하고 `approval_directory.py`가 해석한다 — 설정 키(`personal_approvals_channel_id` / `deploy_approvals_channel_id`)는 그 디렉터리 내부에서만 읽힌다 |
 | `approval_reminder_config.py` | `config.yaml`의 `approval_reminders`를 검증된 enabled·initial/repeat 모델로 로드(기본 true·3h·1h, 간격 오류 fail-fast) |
 | `discord_transport.py` · `chunker.py` | `DiscordTransport` 순차 청킹 전송 + 429 `Retry-After` 백오프. `chunk_message`=2000자 분할 |
 | `coordination.py` | 에이전트간 일정 조율 **순수 상태머신**. 가용성 교집합→후보 ≤3→양측 승인→소유자 승인=캘린더 쓰기 게이트. `correlation_id`는 `coord-` 접두사 |
@@ -22,7 +22,7 @@
 ## 불변식 (변경 전 반드시 확인)
 - **mutation은 owner 승인 레코드 없이는 절대 실행 안 됨.** 승인 판정 로직(`_has_valid_approval`) 변경은 보안 회귀.
 - **`coordination.py`는 부수효과 없는 순수 상태머신** — 캘린더 쓰기/전송은 드라이버(coordination 스킬)가 소유. deadlock 10분·재협상 정확히 1회 규칙은 회귀 테스트로 고정.
-- `DiscordTransport`는 8곳에서 호출됨 — 시그니처 변경 시 hermes_hook / gate_driver / meeting_cli 등 동반 갱신.
+- `DiscordTransport` 호출부는 저장소 전반에 흩어져 있다(`grep -rl 'DiscordTransport(' --include=*.py`) — 시그니처를 바꾸면 그 목록 전체를 동반 갱신한다. 세어 둔 숫자는 금방 낡으므로 적지 않는다.
 - 게이트/커버리지 부족 파일이 많음 — 로직 수정 시 RED→GREEN 단위 테스트 선행(`tests/unit/`).
 - **`w1-5-*` 위임 트래픽은 반드시 소스 채널(#team) 응답을 유지해야 한다** — W1-5 게이트가 #team에서 response_availability를 폴링하므로 rerouting 금지. coord- 트래픽만 interop 채널로 분리한다.
 - **승인 표면 해석**: 표면은 `approval_surface.py`(정책, I/O 없음)가 정하고 `approval_directory.py`(유일한 해석기)가 실제 채널로 바꾼다. 승인 producer가 스스로 채널을 해석하면 `tests/unit/test_approval_lifecycle_conformance.py`가 빌드를 깨뜨린다 — 산문이 아니라 코드가 강제한다.

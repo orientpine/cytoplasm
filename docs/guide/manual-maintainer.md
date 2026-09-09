@@ -94,6 +94,16 @@ private 워킹트리 안이면 `target must be outside the private source workin
 
 **재실행은 재개다.** 태그가 잘린 뒤 전량 반영이 실패해(`release.sh` exit 10) 사람이 다시 돌리거나 완결 타이머가 이어받으면 `release_version_for`가 HEAD에 이미 붙은 태그를 그대로 쓴다 — 다음 버전을 새로 계산하지 않는다(2026-09-03 v1.1.1: next를 다시 계산해 v1.1.2를 요청하자 이름 불일치 검사가 자기 태그를 거부했다). 손 태그와 요청 버전이 다른 경우만 `tag at HEAD is … not requested …`로 거부된다. 세션의 `release.sh`와 완결 타이머가 같은 ✅를 보고 `deploy_all`을 동시에 돌리면 스킬별 실행 lock이 서로를 `EXECUTION-LOCK-BLOCK`으로 막아 둘 다 `incomplete`로 끝날 수 있다 — 마운트는 합집합으로 완료되고 `deploy_all.sh --verify`가 영수증을 쓰지만, 한 실행의 rc=10을 사고로 읽지 말 것(릴리스 단위 lock은 `docs/follow-ups.md`).
 
+### 승인 뒤 main이 전진한 경우
+
+태그 전에 `origin/main`이 전진하면 옛 ✅는 새 tip에 사용할 수 없다. 최신 clean tip과 로컬 CI 영수증을 갖춘 `automation/release.sh`는 시작 시 `retire --head <직전 릴리스 base> --tip <확인한 tip>`으로 APPROVED 레코드를 검사한다. 이전에 태그된 base의 승인은 기존 `release-history/`로, base도 현재 tip도 아닌 미실행 승인은 **감사형 abandon**으로 보관한 뒤 새 요청을 한 번 게시한다. 새 카드의 ✅를 기다리며, 옛 승인으로 새 tip을 태그하지 않는다. 취소·미확인 레코드는 이 승인 회수 분기의 대상이 아니다. 기존 bound_pending 자가 회수도 유지한다.
+
+완결 타이머는 요청을 회수하거나 새로 게시하지 않는다. `decision --head <tip> --notify-stale`이 APPROVED+HEAD 불일치를 발견하면 `owner_notice`를 통해 설정된 소유자 통지 채널(미설정 시 DM)에 `release.sh` 재실행 안내를 남긴다. 노드 agent의 `<skill-gate>/release-stale-notified/`에 version·옛 HEAD·message_id의 지문별 성공 마커(0600)를 남겨, **tip이 계속 전진해도 같은 요청은 한 번만 통지**한다. 전송 실패는 마커 없이 다음 틱 재시도하며, 동시 발신은 리스로 직렬화한다. 발신 성공과 로컬 마커 기록 사이의 프로세스 중단까지 원격 exactly-once를 보장하는 것은 아니다.
+
+수동 `release_approval_remote.sh abandon --version <v> --head <sha> --message-id <id> --reason <사유>`도 같은 감사 경계를 쓴다. A3는 **원 카드와 리액션 보존**이다: 결정 레코드를 바이트 그대로 보관하고, 원 승인 메시지를 참조하는 `⛔ 만료 — <사유>` 회신만 추가한다. 카드 본문은 승인 바인딩이므로 수정하지 않는다. 회신 실패는 `RELEASE-ABANDON-NOTICE-FAIL`로 기록할 뿐 abandon 종료코드나 감사 결과를 바꾸지 않고, 이미 회수된 요청을 다시 회수해도 회신을 중복 게시하지 않는다.
+
+[기능 소개](../기능소개/릴리스-승인-자가-회수.md)
+
 ### 1.1 최초 1회: 대상 저장소를 먼저 만든다 (스크립트가 하지 않는다)
 
 `public_export.sh`는 **존재하는 원격**을 전제로 한다. 시작하자마자 `git ls-remote`로

@@ -132,12 +132,22 @@ def parse_remote_release_refs(text: str) -> RemoteRelease:
                 tag_objects[tag_ref] = sha
     if not head_sha:
         raise RemoteRefError("REMOTE-UNRESOLVED", "origin/main is absent or unreachable")
+    # 후보는 **게시된 주석형 태그 전부**다. 예전에는 peel 결과가 origin/main 의 현재 tip 과
+    # 같은 태그만 후보였는데, 그러면 태그를 자른 뒤 누가 머지하는 순간 그 릴리스는 영영 설치되지
+    # 않는다(2026-09-09 실측: 승인·서명·push 를 마친 v1.6.5 위로 PR 하나가 착지하자 노드가 계속
+    # UNSIGNED-HEAD 를 반복했다). 그 요구는 방어도 되지 못했다 — 태그는 원격에 push 되어야
+    # 보이므로 그것을 심을 수 있는 자는 이미 쓰기 권한을 가졌고, 키만 가진 자는 게시할 수 없다.
+    #
+    # 무엇이 릴리스 이름이고 어느 것이 최신인지는 여기서 정하지 않는다. 이 모듈은 스킬 배포
+    # 스테이징과 peer 증명 단독 체크아웃이 **단독으로** 싣는 파일이라 automation 의존을 지면
+    # 그 두 경로가 ImportError 로 닫힌다(회귀가 그것을 강제한다). 릴리스 정책은 그 상태를 이미
+    # 아는 update_trust 가 갖는다.
     tags = tuple(
         sorted(
             (
                 RemoteReleaseTag(name, object_sha, peeled_commits[name])
                 for name, object_sha in tag_objects.items()
-                if peeled_commits.get(name) == head_sha
+                if name in peeled_commits
             ),
             key=lambda tag: tag.name,
             reverse=True,
@@ -146,7 +156,7 @@ def parse_remote_release_refs(text: str) -> RemoteRelease:
     if not tags:
         raise RemoteRefError(
             "UNSIGNED-HEAD",
-            "origin/main is not the commit of an annotated release tag",
+            "origin advertises no annotated release tag",
         )
     return RemoteRelease(tags=tags)
 

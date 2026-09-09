@@ -8,13 +8,14 @@ archive 하는 retire 경로를 고정한다. abandon 은 그 반대편(소유�
 계약(``automation/skill_gate_retire.abandon`` 과 같은 모양):
 A1  version·head_sha·message_id 세 필드가 저장된 레코드와 정확히 일치할 때만 움직인다.
 A2  감사 줄을 fsync 한 뒤에야 레코드가 pending 을 떠난다.
-A3  Discord 메시지는 건드리지 않는다 — 소유자의 ⛔ 는 계속 보인다.
+A3  원 메시지와 리액션은 보존한다 — 추가 상태 회신만 허용한다.
 A4  레코드는 삭제가 아니라 0600 archive 로 바이트 그대로 옮겨진다.
 """
 from __future__ import annotations
 
 import json
 import stat
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -161,19 +162,21 @@ def test_an_unwritable_audit_trail_leaves_the_record_in_place(tmp_path: Path) ->
     assert _archived(tmp_path) == []
 
 
-def test_the_cli_abandons_without_a_single_discord_call(
+def test_the_cli_abandons_without_modifying_the_original_discord_message(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # Given: a decided card whose message and reactions must survive.
     pending = _pending(tmp_path)
+    calls: list[tuple[str, str]] = []
 
-    def _forbidden(*arguments: object, **keywords: object) -> object:
-        raise AssertionError("abandon must never talk to Discord")
+    def api(method: str, path: str, payload: Mapping[str, str | Mapping[str, str | bool | list[str]]]) -> None:
+        calls.append((method, path))
 
     monkeypatch.setattr(skill_gate, "GATE_DIR", tmp_path)
     monkeypatch.setattr(skill_gate, "APPROVAL_LOG", tmp_path / "logs" / "approvals.jsonl")
-    monkeypatch.setattr(skill_gate, "_api", _forbidden)
+    monkeypatch.setattr(skill_gate, "_api", api)
     monkeypatch.setenv("SUDO_USER", _ACTOR)
 
     exit_code = release_abandon.main(
@@ -195,6 +198,7 @@ def test_the_cli_abandons_without_a_single_discord_call(
     assert _MESSAGE_ID not in captured.out  # 스노플레이크는 마스킹되어 로그로 새지 않는다
     assert not pending.exists()
     assert [line["actor"] for line in _audit_lines(tmp_path)] == [_ACTOR]
+    assert calls == [("POST", "/channels/999/messages")]
 
 
 def test_the_cli_refuses_a_mismatched_identity_on_stderr(

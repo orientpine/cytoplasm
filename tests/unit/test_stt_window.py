@@ -19,6 +19,7 @@ from typing import Protocol
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "skills" / "speechtotext" / "scripts"))
 
+import stt_coverage  # noqa: E402
 import stt_window  # noqa: E402
 
 
@@ -182,10 +183,36 @@ def test_a_quarantined_window_becomes_one_visible_segment_on_the_timeline() -> N
     assert result.segments[0]["text"] == stt_window.gap_marker(window)
 
 
-def test_text_of_joins_the_segments_the_way_the_document_reads_them() -> None:
-    assert stt_window.text_of(
-        ({"text": " 첫 문장."}, {"text": "  둘째   문장. "}, {"nottext": 1})
-    ) == "첫 문장. 둘째 문장."
+def test_text_of_keeps_one_word_boundary_for_korean_and_english_segments() -> None:
+    # Given: whisper may put no spaces inside Korean segments, but marks segment starts
+    # only inconsistently; the repetition checker needs a stable segment boundary.
+    segments = ({"text": "가나다"}, {"text": "가나다"}, {"text": " hello"}, {"text": " world"})
+
+    # When
+    text = stt_window.text_of(segments)
+
+    # Then: this is checker input, not the document's token concatenation.
+    assert text == "가나다 가나다 hello world"
+
+
+def test_text_of_boundary_changes_repeat_ratio_for_korean_and_not_english() -> None:
+    # Given: the same repeated content represented as ASR segments.
+    korean = tuple({"text": "반복"} for _ in range(160))
+    english = tuple({"text": " repeat"} for _ in range(160))
+    document_korean = "".join(str(segment["text"]) for segment in korean)
+    document_english = "".join(str(segment["text"]) for segment in english)
+
+    # When
+    korean_checker = stt_coverage.collapsed(stt_window.text_of(korean))[0]
+    korean_document = stt_coverage.collapsed(document_korean)[0]
+    english_checker = stt_coverage.collapsed(stt_window.text_of(english))[0]
+    english_document = stt_coverage.collapsed(document_english)[0]
+
+    # Then: B detects Korean collapse that document assembly cannot tokenize; English
+    # remains equivalent because its token text already carries leading spaces.
+    assert korean_checker > 0.08
+    assert korean_document == 0.0
+    assert english_checker == english_document
 
 
 # --- 캐시 키: 같은 오디오·모델·계획이면 같은 키, 하나만 달라도 다른 키 -----------

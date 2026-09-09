@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TypedDict, cast
 
 import pytest
 
@@ -44,7 +45,7 @@ def _recording(
 def _payload(**overrides: object) -> str:
     body: dict[str, object] = {
         "people": ["김철수"],
-        "places": ["카페"],
+        "places": ["판교 카페"],
         "decisions": [{"text": "출시일을 금요일로 정함", "at": "01:02"}],
         "todos": [{"text": "보고서 작성", "owner": "김철수", "due": "금요일", "at": "2:03"}],
     }
@@ -66,7 +67,7 @@ def _prepare_repo(
         source = (_REPO_ROOT / "configs" / "sensitivity-rules.yaml").read_text(encoding="utf-8")
         (root / "configs" / "sensitivity-rules.yaml").write_text(source, encoding="utf-8")
     if template:
-        (root / "prompts" / "lifelog-extraction-v4.md").write_text(_TEMPLATE, encoding="utf-8")
+        (root / "prompts" / "lifelog-extraction-v5.md").write_text(_TEMPLATE, encoding="utf-8")
     if summary_template:
         (root / "prompts" / "lifelog-summary-v1.md").write_text(_SUMMARY_TEMPLATE, encoding="utf-8")
     return root
@@ -89,7 +90,7 @@ def test_build_prompt_substitutes_both_placeholders() -> None:
 
 def test_shipped_prompt_asset_carries_the_placeholders_and_keys() -> None:
     # Given
-    asset = (_REPO_ROOT / "prompts" / "lifelog-extraction-v4.md").read_text(encoding="utf-8")
+    asset = (_REPO_ROOT / "prompts" / "lifelog-extraction-v5.md").read_text(encoding="utf-8")
 
     # Then
     assert "{{SUMMARY}}" in asset
@@ -118,7 +119,7 @@ def test_parse_extraction_reads_fenced_json() -> None:
     # Then
     assert extraction == LifelogExtraction(
         people=("김철수",),
-        places=("카페",),
+        places=("판교 카페",),
         decisions=(LifelogDecision(text="출시일을 금요일로 정함", at="01:02"),),
         todos=(LifelogTodo(text="보고서 작성", owner="김철수", due="금요일", at="2:03"),),
     )
@@ -150,7 +151,7 @@ def test_parse_extraction_treats_missing_keys_as_empty() -> None:
 def test_parse_extraction_drops_values_of_the_wrong_shape() -> None:
     # Given: people is not a list, places holds a number, todos holds a textless object
     raw = json.dumps(
-        {"people": "박영희", "places": [7, "회의실"], "decisions": {}, "todos": [{"owner": "나"}]},
+        {"people": "박영희", "places": [7, "3층 회의실"], "decisions": {}, "todos": [{"owner": "나"}]},
         ensure_ascii=False,
     )
 
@@ -159,7 +160,7 @@ def test_parse_extraction_drops_values_of_the_wrong_shape() -> None:
 
     # Then
     assert extraction.people == ()
-    assert extraction.places == ("회의실",)
+    assert extraction.places == ("3층 회의실",)
     assert extraction.decisions == ()
     assert extraction.todos == ()
 
@@ -189,8 +190,8 @@ def test_parse_extraction_caps_list_length_and_clips_long_text() -> None:
     # Given
     raw = json.dumps(
         {
-            "people": [f"사람{index}" for index in range(25)],
-            "places": [f"장소{index}" for index in range(25)],
+            "people": [f"김철수{index}" for index in range(25)],
+            "places": [f"{index + 1}층 회의실" for index in range(25)],
             "decisions": [{"text": "가" * 300}] + [{"text": f"결정{i}"} for i in range(25)],
             "todos": [{"text": f"할일{index}"} for index in range(25)],
         },
@@ -205,7 +206,7 @@ def test_parse_extraction_caps_list_length_and_clips_long_text() -> None:
     assert len(extraction.places) == 20
     assert len(extraction.decisions) == 20
     assert len(extraction.todos) == 20
-    assert extraction.people[0] == "사람0"
+    assert extraction.people[0] == "김철수0"
     assert len(extraction.decisions[0].text) == 200
     assert extraction.decisions[0].text.endswith("…")
 
@@ -213,7 +214,7 @@ def test_parse_extraction_caps_list_length_and_clips_long_text() -> None:
 def test_parse_extraction_dedupes_and_normalizes_whitespace() -> None:
     # Given
     raw = json.dumps(
-        {"people": ["김  철수", " 김 철수 ", "김\n철수", "박영희", "  "], "places": ["카페", "카페"]},
+        {"people": ["김  철수", " 김 철수 ", "김\n철수", "박영희", "  "], "places": ["판교 카페", "판교 카페"]},
         ensure_ascii=False,
     )
 
@@ -222,7 +223,7 @@ def test_parse_extraction_dedupes_and_normalizes_whitespace() -> None:
 
     # Then
     assert extraction.people == ("김 철수", "박영희")
-    assert extraction.places == ("카페",)
+    assert extraction.places == ("판교 카페",)
 
 
 @pytest.mark.parametrize(
@@ -249,7 +250,7 @@ def test_extract_sends_the_filled_prompt_and_returns_the_parsed_fields() -> None
     assert len(seen) == 1
     assert "주간 회의 요약" in seen[0]
     assert _TRANSCRIPT in seen[0]
-    assert extraction.places == ("카페",)
+    assert extraction.places == ("판교 카페",)
 
 
 def test_extract_wraps_a_transport_failure_in_lifelog_extract_error() -> None:
@@ -369,7 +370,7 @@ def test_build_extractor_returns_the_parsed_extraction_on_the_happy_path(tmp_pat
     # Then
     assert outcome == LifelogExtraction(
         people=("김철수",),
-        places=("카페",),
+        places=("판교 카페",),
         decisions=(LifelogDecision(text="출시일을 금요일로 정함", at="01:02"),),
         todos=(LifelogTodo(text="보고서 작성", owner="김철수", due="금요일", at="2:03"),),
     )
@@ -583,3 +584,258 @@ def test_parse_extraction_reads_the_generated_title() -> None:
     assert parse_extraction(raw).title == "직장 동료들의 일상 대화"
     assert parse_extraction('{"summary": ""}').title == ""
     assert parse_extraction('{"title": 7}').title == ""
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "사람 형님", "사람형님", "형님", "그분", "누군가", "아저씨", "교수님",
+        "형님식당", "형님식당 회식",  # KNOWN LIMITATION: 실제 상호여도 일반어 합성은 거부한다.
+        "여기", "거기", "저기", "사람", "카페", "회의실", "김", "A", "?", "...",
+        "미상", "알 수 없음", "N/A", "unknown", "TBD", "화자1", "Speaker 2",
+        "사람0", "장소1", "<이름>", "김�수", "김철수\x00", None, 7, [], {},
+    ],
+)
+def test_unanchored_values_are_excluded_at_every_reference_boundary(value: object) -> None:
+    raw = _payload(
+        people=[value, "김철수 박사"], places=[value, "판교 사무실"], title=value,
+        todos=[{"text": "자료 정리", "owner": value, "due": "금요일", "at": "01:02"}],
+    )
+
+    outcome = parse_extraction(raw)
+
+    assert outcome.people == ("김철수 박사",)
+    assert outcome.places == ("판교 사무실",)
+    assert outcome.title == ""
+    assert outcome.todos == (LifelogTodo("자료 정리", due="금요일", at="01:02"),)
+
+    from automation.plaud_sync.lifelog_extract import reference_drops
+
+    drops = reference_drops(raw)
+    assert [drop.field for drop in drops] == (
+        ["title", "people[0]", "places[0]", "todos[0].owner"] if isinstance(value, str) else []
+    )
+    assert all(drop.value == value for drop in drops)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["김철수", "김철수 박사", "김 교수님", "김철수 형님", "박영희", "한국대학교",
+     "Acme Labs", "Alice Smith", "판교 사무실", "3층 회의실", "역 앞 카페", "서울"],
+)
+def test_identifying_anchors_survive_reference_filtering(value: str) -> None:
+    outcome = parse_extraction(_payload(
+        people=[value], places=[value], title=value, todos=[{"text": "확인", "owner": value}],
+    ))
+
+    assert outcome.people == (value,)
+    assert outcome.places == (value,)
+    assert outcome.title == value
+    assert outcome.todos[0].owner == value
+
+    from automation.plaud_sync.lifelog_extract import reference_drops
+
+    assert reference_drops(_payload(
+        people=[value], places=[value], title=value, todos=[{"text": "확인", "owner": value}],
+    )) == ()
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["사람 형님과 나눈 이야기", "사람형님과 나눈 이야기", "그분과의 대화",
+     "아저씨의 이야기", "거기에서 나눈 이야기", "예산 검토: 사람 형님과 논의"],
+)
+def test_titles_cannot_hide_unattributable_references_in_longer_phrases(title: str) -> None:
+    assert parse_extraction(_payload(title=title)).title == ""
+
+
+def test_reference_normalization_precedes_deduplication_and_the_item_limit() -> None:
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFD", "김철수 박사")
+    outcome = parse_extraction(_payload(
+        people=["사람 형님"] * 25 + [decomposed, " 김철수  박사 "],
+        places=["거기"] * 25 + ["３층 회의실", "3층 회의실"],
+    ))
+
+    assert outcome.people == ("김철수 박사",)
+    assert outcome.places == ("3층 회의실",)
+
+
+def test_filter_does_not_rewrite_summary_or_action_content() -> None:
+    summary = "사람 형님이라는 인식 결과는 불명확하다."
+    outcome = parse_extraction(_payload(
+        summary=summary, decisions=[{"text": "사람 형님 표현 확인"}],
+        todos=[{"text": "사람 형님 표현 확인", "owner": "사람 형님"}],
+        title="김철수 박사와 예산 검토",
+    ))
+
+    assert outcome.summary == summary
+    assert outcome.decisions[0].text == "사람 형님 표현 확인"
+    assert outcome.todos[0].text == "사람 형님 표현 확인"
+    assert outcome.title == "김철수 박사와 예산 검토"
+
+
+def test_reference_drop_report_is_pure_and_preserves_surviving_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from automation.plaud_sync.lifelog_extract import ReferenceDrop, reference_drops
+
+    raw = f"```json\n{_payload(title='형님식당 회식', people=['사람 형님', '김철수 박사'], places=['거기', '판교 사무실'], todos=[{'text': '확인', 'owner': '그분'}])}\n```"
+    before = parse_extraction(raw)
+    drops = reference_drops(raw)
+
+    assert drops == (
+        ReferenceDrop("title", "형님식당 회식"),
+        ReferenceDrop("people[0]", "사람 형님"),
+        ReferenceDrop("places[0]", "거기"),
+        ReferenceDrop("todos[0].owner", "그분"),
+    )
+    assert reference_drops(raw) == drops
+    assert parse_extraction(raw) == before
+    assert before.title == ""
+    assert before.people == ("김철수 박사",)
+    assert before.places == ("판교 사무실",)
+    assert before.todos == (LifelogTodo("확인"),)
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
+
+
+def test_reference_drop_report_counts_occurrences_not_shape_or_capacity_losses() -> None:
+    from automation.plaud_sync.lifelog_extract import ReferenceDrop, reference_drops
+
+    people: list[object] = [None, 7, {}, [], "  "]
+    people.extend(["김철수"] * 25 + [" 사람\n 형님 "] * 25)
+    raw = _payload(
+        title=None,
+        people=people,
+        places="거기",
+        summary="그분",
+        decisions=[{"text": "그분"}],
+        todos=[{"owner": "그분"}, {"text": " ", "owner": "거기"}]
+        + [{"text": "그분", "owner": "김철수"}] * 25
+        + [{"text": "확인", "owner": "그분"}],
+    )
+    drops = reference_drops(raw)
+
+    assert drops == tuple(ReferenceDrop(f"people[{index}]", "사람 형님") for index in range(30, 55)) + (
+        ReferenceDrop("todos[27].owner", "그분"),
+    )
+    assert parse_extraction(raw).people == ("김철수",)
+    assert len(parse_extraction(raw).todos) == 20
+    assert reference_drops("{}") == ()
+
+
+def test_reference_drop_report_clips_text_but_judges_with_the_existing_limit() -> None:
+    from automation.plaud_sync.lifelog_extract import ReferenceDrop, reference_drops
+
+    rejected = "?" + "가" * 300
+    accepted = "김철수" + "가" * 300 + "?"
+    raw = _payload(title=rejected, people=[accepted], places=[], todos=[])
+
+    assert reference_drops(raw) == (ReferenceDrop("title", "?" + "가" * 198 + "…"),)
+    # 기존 순서: 200자로 자른 뒤 NFKC가 말줄임표를 세 점으로 펼친다(202자).
+    assert parse_extraction(raw).people == ("김철수" + "가" * 196 + "...",)
+
+
+@pytest.mark.parametrize("raw", ["", "not json", "[]"])
+def test_reference_drop_report_keeps_the_existing_json_failure_contract(raw: str) -> None:
+    from automation.plaud_sync.lifelog_extract import reference_drops
+
+    with pytest.raises(LifelogExtractError):
+        _ = reference_drops(raw)
+
+
+class _DropReport(TypedDict):
+    count: int
+    omitted: int
+    values: list[dict[str, str]]
+
+
+def test_live_reference_drop_report_is_once_per_extraction_not_summary_retry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    responses = iter([
+        _payload(title="형님식당 회식", people=["사람 형님", "김철수 박사"],
+                 places=["거기", "판교 사무실"], todos=[{"text": "확인", "owner": "그분"}]),
+        _payload(summary="- 복구 요약", title="그분"),
+        _payload(summary="- 정상 요약"),
+    ])
+    calls: list[str] = []
+
+    def complete(prompt: str) -> str:
+        calls.append(prompt)
+        return next(responses)
+
+    extractor = build_extractor({}, repo_root=_prepare_repo(tmp_path), complete=complete)
+    outcome = extractor(_recording(summary=""))
+    clean = extractor(_recording())
+
+    assert isinstance(outcome, LifelogExtraction)
+    assert outcome.people == ("김철수 박사",)
+    assert outcome.places == ("판교 사무실",)
+    assert outcome.title == ""
+    assert outcome.todos == (LifelogTodo("확인"),)
+    assert outcome.summary == "- 복구 요약"
+    assert clean == parse_extraction(_payload(summary="- 정상 요약"))
+    assert len(calls) == 3
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    lines = captured.err.splitlines()
+    assert len(lines) == 2
+    reports: list[_DropReport] = []
+    for line in lines:
+        marker, data = line.split(" ", 1)
+        assert marker == "LIFELOG-REFERENCE-DROP"
+        reports.append(cast(_DropReport, json.loads(data)))
+    assert reports == [
+        {"count": 4, "omitted": 0, "values": [
+            {"field": "title", "value": "형님식당 회식"},
+            {"field": "people[0]", "value": "사람 형님"},
+            {"field": "places[0]", "value": "거기"},
+            {"field": "todos[0].owner", "value": "그분"},
+        ]},
+        {"count": 0, "omitted": 0, "values": []},
+    ]
+
+
+def test_live_reference_drop_report_bounds_and_escapes_owner_content(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    unsafe = "김철수" + chr(0) + chr(0x202E) + chr(0xD800) + "\n?" + "가" * 300
+    raw = _payload(title=unsafe, people=["사람 형님"] * 25,
+                   summary="PRIVATE_PAYLOAD_NOT_FOR_LOG", places=[], todos=[])
+    extractor = build_extractor({}, repo_root=_prepare_repo(tmp_path), complete=lambda _: raw)
+
+    assert extractor(_recording()) == parse_extraction(raw)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    lines = captured.err.splitlines()
+    assert len(lines) == 1
+    marker, data = lines[0].split(" ", 1)
+    assert marker == "LIFELOG-REFERENCE-DROP"
+    report = cast(_DropReport, json.loads(data))
+    assert report["count"] == 26
+    assert report["omitted"] == 21
+    assert len(report["values"]) == 5
+    assert all(len(entry["value"]) <= 40 for entry in report["values"])
+    assert report["values"][0]["value"].endswith("…")
+    assert all(char.isprintable() for char in lines[0])
+    assert "PRIVATE_PAYLOAD_NOT_FOR_LOG" not in captured.err
+    assert len(lines[0]) < 1000
+
+
+@pytest.mark.parametrize("raw", [None, "not json"])
+def test_live_reference_drop_report_does_not_turn_failed_calls_into_extractions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], raw: str | None,
+) -> None:
+    def complete(_prompt: str) -> str:
+        if raw is None:
+            raise TimeoutError("transport failed")
+        return raw
+
+    extractor = build_extractor({}, repo_root=_prepare_repo(tmp_path), complete=complete)
+    with pytest.raises(LifelogExtractError):
+        _ = extractor(_recording())
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""

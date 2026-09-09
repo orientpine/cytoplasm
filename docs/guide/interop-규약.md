@@ -81,7 +81,7 @@ ID: 12345
 - ❌ `blocked: review-required: Code fix for remove_completed bug — 2 source files changed (calendar_cli.py, confirm_reaction_watch.py) + 1 new test file. All 44 tests pass.`
 - ✅ `blocked: calendar 스킬 버그 수정 — 소스 2건·테스트 1건 변경, 전체 통과, 사람 리뷰 대기`
 
-작성 측 에이전트는 보고 생성 시 이 가이드라인을 준수해야 하며(MUST), 이 중 결정론적 마스킹은 **코드로 강제된다**: 단일 write 초크포인트인 `automation/interop/report.py`의 `format_report()`가 직렬화 직전 `mask_summary()`를 강제 적용하므로, 모든 전송 경로(hermes_hook·hermes_plugin·gate_driver)가 자동 커버된다. 마스킹 대상: 파일 경로·소스 식별자(`[MASKED_PATH]`), secret/token(`[MASKED_KEY]`·`[MASKED_TOKEN]`·`[MASKED_AUTH]`), 이메일(`[MASKED_EMAIL]`), snowflake 모양 id(`[MASKED_ID]`). 활동 수준 문장은 그대로 통과한다. 콜렉터(`Autophagy-Hub`)는 여전히 형식만 검증하며 마스킹은 작성 측 초크포인트에서 끝난다 — 가드가 없는 경로로 작성된 과거 리포트만 원문이 남을 수 있다(재수집 시 upsert로 갱신 가능). 회귀 고정: `tests/unit/test_interop_protocol.py`.
+작성 측 에이전트는 보고 생성 시 이 가이드라인을 준수해야 하며(MUST), 이 중 결정론적 마스킹은 **코드로 강제된다**: 단일 write 초크포인트인 `automation/interop/report.py`의 `format_report()`가 직렬화 직전 `mask_summary()`를 강제 적용하므로, 모든 전송 경로(hermes_plugin·gate_driver)가 자동 커버된다. 마스킹 대상: 파일 경로·소스 식별자(`[MASKED_PATH]`), secret/token(`[MASKED_KEY]`·`[MASKED_TOKEN]`·`[MASKED_AUTH]`), 이메일(`[MASKED_EMAIL]`), snowflake 모양 id(`[MASKED_ID]`). 활동 수준 문장은 그대로 통과한다. 콜렉터(`Autophagy-Hub`)는 여전히 형식만 검증하며 마스킹은 작성 측 초크포인트에서 끝난다 — 가드가 없는 경로로 작성된 과거 리포트만 원문이 남을 수 있다(재수집 시 upsert로 갱신 가능). 회귀 고정: `tests/unit/test_interop_protocol.py`.
 
 ---
 

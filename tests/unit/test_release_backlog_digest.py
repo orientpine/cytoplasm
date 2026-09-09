@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 
 import automation.deploy_reconcile as reconcile
-from automation.deploy_reconcile import ReconcileState, reconcile_tick
+from automation.deploy_reconcile import Backlog, ReconcileState, reconcile_tick
 from automation.deploy_reconcile_unsigned import unreleased_commit_count
 from automation.git_tag_signature import GitRunner
 
@@ -187,3 +187,74 @@ def test_commit_count_degrades_to_none_instead_of_guessing(tmp_path: Path) -> No
     assert unreleased_commit_count(tmp_path, _A, _B, _runner("not-a-number\n")) is None
     assert unreleased_commit_count(tmp_path, "", _B, _runner("3\n")) is None
     assert unreleased_commit_count(tmp_path, _A, "junk", _runner("3\n")) is None
+
+
+def _converged_tick(
+    state: ReconcileState,
+    *,
+    now: float,
+    deliver: _Deliver,
+    head: str = _B,
+) -> ReconcileState:
+    """A tick on a node that already runs the newest release, with main ahead of it."""
+    return reconcile_tick(
+        state,
+        origin_sha=_A,
+        current_sha=_A,
+        now=now,
+        converge=lambda: 0,
+        deliver=deliver,
+        backlog=Backlog(head, 7),
+    )
+
+
+def test_a_converged_node_with_unreleased_commits_still_ages_one_backlog_episode() -> None:
+    """릴리스에 도달한 뒤에도 그 뒤에 쌓인 미배포 커밋은 계속 보여야 한다.
+
+    수렴 규칙이 "origin/main tip == 서명 태그" 이던 동안에는 릴리스 사이에 매 틱
+    UNSIGNED-HEAD 가 나서 백로그 시계가 거기서 돌았다. 이제 노드는 tip 과 무관하게 최신
+    릴리스로 수렴하므로, 그 tick 의 clean reset 이 백로그 시계를 매번 지우면 3일 임계에
+    영원히 닿지 못하고 다이제스트가 조용히 사라진다.
+    """
+    deliver = _Deliver()
+    state = ReconcileState()
+
+    for day in range(3):
+        state = _converged_tick(state, now=day * _DAY, deliver=deliver)
+    assert deliver.sent == []
+
+    state = _converged_tick(state, now=3 * _DAY, deliver=deliver)
+
+    assert len(deliver.sent) == 1
+    assert "7" in deliver.sent[0]
+
+
+def test_a_landed_release_restarts_the_backlog_clock() -> None:
+    """새 릴리스가 착지하면 그 시점부터 다시 센다 — 옛 에피소드가 넘어오지 않는다."""
+    deliver = _Deliver()
+    state = ReconcileState()
+    for day in range(3):
+        state = _converged_tick(state, now=day * _DAY, deliver=deliver)
+
+    # 릴리스 착지: 노드가 아직 그 릴리스가 아니어서 수렴이 일어난 tick.
+    state = reconcile_tick(
+        state,
+        origin_sha=_C,
+        current_sha=_A,
+        now=3 * _DAY,
+        converge=lambda: 0,
+        deliver=deliver,
+        backlog=Backlog(_B, 7),
+    )
+    for day in (3, 4, 5):
+        state = reconcile_tick(
+            state,
+            origin_sha=_C,
+            current_sha=_C,
+            now=day * _DAY,
+            converge=lambda: 0,
+            deliver=deliver,
+            backlog=Backlog(_B, 7),
+        )
+
+    assert deliver.sent == []

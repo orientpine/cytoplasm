@@ -138,7 +138,7 @@ def build_effects(
                 ApprovalKind.OBSIDIAN_WRITE,
                 directory,
                 owner_id,
-                request=RequestThread(title=record.recording_id),
+                request=RequestThread(title=PurePosixPath(record.note_relpath).name),
             )
             bound = replace(record, approval_thread_id=binding.channel_id)
             store.update(bound)

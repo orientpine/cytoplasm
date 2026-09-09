@@ -168,7 +168,7 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
             file=sys.stderr,
         )
         return dm_owner(content)
-    return origin_notice.deliver(
+    return str(origin_notice.deliver(
         api=_api,
         transport_factory=_dm_transport,
         record=draft,
@@ -176,7 +176,7 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
         content=content,
         fallback=dm_owner,
         outcome=origin_notice.ThreadOutcome[outcome] if outcome else None,
-    )
+    ))
 
 
 def _owner_reacted(users: list[dict], owner: str) -> bool:

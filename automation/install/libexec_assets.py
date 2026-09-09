@@ -41,6 +41,7 @@ CONVERGE_HELPERS: Final = (
     ("automation/release_provenance.py", "release_provenance.py", 0o644),
     ("automation/__init__.py", "automation/__init__.py", 0o644),
     ("automation/git_tag_signature.py", "automation/git_tag_signature.py", 0o644),
+    ("automation/typing_compat.py", "automation/typing_compat.py", 0o644),
     ("automation/update_trust.py", "automation/update_trust.py", 0o755),
     ("automation/update_trust_state.py", "automation/update_trust_state.py", 0o644),
     ("automation/node_config.py", "automation/node_config.py", 0o644),

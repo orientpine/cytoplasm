@@ -56,6 +56,7 @@ class WordAttribution:
 
     support_ms는 양의 직접 지지가 있는 라벨·길이, covered_ms는 전체 지지 합집합 길이,
     simultaneous_ms는 둘 이상 동시 지지 길이, nearest_ms는 선두 화자의 구간 거리다.
+    candidate_speakers는 이 판정의 직접 지지자 또는 가장 가까운 후보 라벨이다.
     """
 
     source_index: int
@@ -65,6 +66,40 @@ class WordAttribution:
     simultaneous_ms: int
     nearest_ms: int | None
     reason: Reason
+    candidate_speakers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SpeakerReasonCount:
+    """후보 화자의 한 낱말 판정 reason 건수."""
+
+    reason: Reason
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class SpeakerReasonBreakdown:
+    """후보 화자별 reason 건수. 입력에서 처음 나타난 화자·reason 순서를 보존한다."""
+
+    speaker: str
+    reasons: tuple[SpeakerReasonCount, ...]
+
+
+def speaker_reason_breakdown(
+    assignments: Iterable[WordAttribution],
+) -> tuple[SpeakerReasonBreakdown, ...]:
+    """낱말 배정 결과를 후보 화자별 reason 건수로 집계한다."""
+    counts: dict[str, dict[Reason, int]] = {}
+    for assignment in assignments:
+        for speaker in assignment.candidate_speakers:
+            reasons = counts.setdefault(speaker, {})
+            reasons[assignment.reason] = reasons.get(assignment.reason, 0) + 1
+    return tuple(
+        SpeakerReasonBreakdown(
+            speaker, tuple(SpeakerReasonCount(reason, count) for reason, count in reasons.items()),
+        )
+        for speaker, reasons in counts.items()
+    )
 
 
 def attribute_words(
@@ -106,7 +141,8 @@ def _attribute(
     covered, simultaneous = coverage(shared)
     if covered:
         result = replace(empty, support_ms=support, covered_ms=covered,
-                         simultaneous_ms=simultaneous, nearest_ms=0)
+                         simultaneous_ms=simultaneous, nearest_ms=0,
+                         candidate_speakers=tuple(label for label, _ in support))
         if simultaneous:
             return replace(result, tag=SpeakerTag("OVERLAP", tuple(label for label, _ in support)),
                            reason="overlap")
@@ -125,9 +161,12 @@ def _attribute(
         for label, spans in available
     )
     nearest, leader = distances[0]
-    result = replace(empty, nearest_ms=nearest, reason="no_support")
+    result = replace(empty, nearest_ms=nearest, reason="no_support",
+                     candidate_speakers=(leader,))
     if nearest > policy.tolerance_ms:
         return result
     if len(distances) > 1 and distances[1][0] - nearest <= policy.nearest_tie_ms:
-        return replace(result, reason="boundary_tie")
+        candidates = tuple(label for distance, label in distances
+                           if distance - nearest <= policy.nearest_tie_ms)
+        return replace(result, candidate_speakers=candidates, reason="boundary_tie")
     return replace(result, tag=SpeakerTag("SPEAKER", (leader,)), reason="tolerance")

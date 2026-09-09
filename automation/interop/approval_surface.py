@@ -61,9 +61,10 @@ class ApprovalSurface(StrEnum):
 class RequestThread:
     """One approval request's thread spec (S6).
 
-    ``title`` is already masked by the producer — calendar/wiki/patent/obsidian pass an
-    id, never a subject or body — and is truncated here, not by the caller. The origin
-    pair is the owner's instruction message; it only anchors the thread when that
+    ``title`` is already masked by the producer — calendar/wiki/patent pass an id;
+    obsidian passes the note filename, never its directories or body, on the owner's
+    private surface. It is truncated here, not by the caller. The origin pair is the
+    owner's instruction message; it only anchors the thread when that
     message lives in ``#agent-chat`` (owner-only surface), otherwise it is ignored.
     """
 
@@ -88,7 +89,7 @@ KIND_LABELS: Final[Mapping[ApprovalKind, str]] = MappingProxyType({
     ApprovalKind.SKILL_SUBMIT: "스킬 제출",
     ApprovalKind.MANAGED_ACTIVATE: "관리형 활성화",
     ApprovalKind.RELEASE: "릴리스",
-    ApprovalKind.OBSIDIAN_WRITE: "옵시디언",
+    ApprovalKind.OBSIDIAN_WRITE: "옵시디언 노트 승인 요청",
     ApprovalKind.TODO: "할 일",
 })
 

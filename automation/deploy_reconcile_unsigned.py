@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from automation.deploy_reconcile import Deliver, reconcile_skip, reconcile_unsigned_head
+from automation.deploy_reconcile import Backlog, Deliver, reconcile_skip, reconcile_unsigned_head
 from automation.deploy_reconcile_state import load_state, save_state
 from automation.git_tag_signature import GitRunner, HEAD_REF, OBJECT_ID
 
@@ -54,6 +54,30 @@ class IncidentRecorder:
             mirror_state=mirror_state,
         )
         save_state(self.state_path, updated)
+
+
+def observe_release_backlog(
+    mirror: Path,
+    target_sha: str,
+    *,
+    update_channel: str | None,
+    mirror_state: Callable[[str | None], str],
+    runner: GitRunner = subprocess.run,
+) -> Backlog:
+    """origin/main tip 이 설치 대상 릴리스를 앞서면 그 격차를 잰다.
+
+    수렴이 더 이상 tip 동일성을 요구하지 않으므로, 미배포 커밋은 수렴 실패가 아니라 순수한
+    관측이 되었다. 비용은 백로그가 있을 때만 든다 — tip 을 한 번 읽고, 다를 때만 세고 미러를
+    묻는다.
+    """
+    head = raw_remote_main_sha(mirror, update_channel, runner)
+    if not head or head == target_sha:
+        return Backlog()
+    return Backlog(
+        head,
+        unreleased_commit_count(mirror, target_sha, head, runner),
+        mirror_state(update_channel),
+    )
 
 
 def raw_remote_main_sha(

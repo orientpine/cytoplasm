@@ -20,14 +20,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
-from automation.deploy_reconcile import reconcile_tick
+from automation.deploy_reconcile import LOCK_CONTENTION_RC, reconcile_tick
 from automation.deploy_reconcile_mirror import (
     mirror_state_from_verdict,
     probe_mirror_verdict,
     sync_mirror as _sync_mirror,
 )
 from automation.deploy_reconcile_state import DEFAULT_STATE_PATH, load_state, save_state
-from automation.deploy_reconcile_unsigned import IncidentRecorder, raw_remote_main_sha, unreleased_commit_count
+from automation.deploy_reconcile_unsigned import IncidentRecorder, observe_release_backlog
 from automation.deploy_update_channel import (
     UpdateChannelSource,
     read_roster_update_channel,
@@ -124,13 +124,13 @@ def candidate_update_sha(update_channel: str | None = None) -> str:
 
 def run_converge(command: Sequence[str] | None = None) -> int:
     """Return the helper's exit code. 5 means another convergence holds the lock."""
-    try:
-        return subprocess.run(
-            tuple(command or converge_command()),
-            capture_output=True, text=True, check=False, timeout=_CONVERGE_TIMEOUT,
-        ).returncode
-    except (OSError, subprocess.SubprocessError):
-        return 1
+    # Match release-helper diagnostics without flooding the timer on success or contention.
+    completed = _run(command or converge_command(), _CONVERGE_TIMEOUT)
+    if completed is None or completed.returncode not in (0, LOCK_CONTENTION_RC):
+        why = "could not be run" if completed is None else " ".join(completed.stderr.split())
+        print(f"[deploy-reconcile] HELPER-FAILED converge: {why[:400]}", file=sys.stderr)
+    return 1 if completed is None else completed.returncode
+
 
 def _run(command: Sequence[str], timeout: float) -> subprocess.CompletedProcess[str] | None:
     """None means the command could not be run at all — never an outcome to act on."""
@@ -227,6 +227,13 @@ def sync_mirror(
     )
 
 
+def _mirror_state(update_channel: str | None) -> str:
+    """미러 판정을 통지 문구가 쓰는 한 낱말로 — 두 호출부가 같은 자를 쓴다."""
+    return mirror_state_from_verdict(
+        _observe_mirror_verdict(MIRROR, _MIRROR_PROBE, update_channel)
+    )
+
+
 def _incidents() -> IncidentRecorder:
     return IncidentRecorder(DEFAULT_STATE_PATH, notify_owner)
 
@@ -248,26 +255,10 @@ def main() -> int:
         )
     except UpdateTrustError as error:
         print(f"[deploy-reconcile] UPDATE-TRUST-BLOCK {error} — skipping tick", file=sys.stderr)
-        remote_head = (
-            raw_remote_main_sha(MIRROR, update_channel)
-            if error.prefix == "UNSIGNED-HEAD"
-            else ""
-        )
-        if remote_head:
-            current = current_release_sha()
-            verdict = (
-                mirror_verdict()
-                if update_channel is None
-                else mirror_verdict(update_channel=update_channel)
-            )
-            _incidents().unsigned(
-                remote_head,
-                current,
-                unreleased_commit_count(MIRROR, current, remote_head),
-                mirror_state_from_verdict(verdict),
-            )
-        else:
-            _incidents().skip("update-trust-block")
+        # UNSIGNED-HEAD 는 이제 "게시된 릴리스가 하나도 없다" 만 뜻한다 — 비교할 릴리스가 없으니
+        # 백로그가 아니라 블록이고, 반복되면 skip 누적이 드리프트로 승격한다. 릴리스 뒤에 쌓인
+        # 미배포 커밋의 다이제스트는 아래 성공 경로가 관측한다.
+        _incidents().skip("update-trust-block")
         return 0
     if not target_sha:
         # One transport miss is not drift. Repeated identical misses are structurally
@@ -286,6 +277,9 @@ def main() -> int:
         return 0
     state = load_state(DEFAULT_STATE_PATH)
     current_sha = current_release_sha()
+    backlog = observe_release_backlog(
+        MIRROR, target_sha, update_channel=update_channel, mirror_state=_mirror_state
+    )
     updated = reconcile_tick(
         state,
         origin_sha=target_sha,
@@ -293,6 +287,7 @@ def main() -> int:
         now=time.time(),
         converge=lambda: run_release_update(target_sha, current_sha),
         deliver=notify_owner,
+        backlog=backlog,
     )
     save_state(DEFAULT_STATE_PATH, updated)
     # After the state is durable, and never able to change this tick's outcome: the

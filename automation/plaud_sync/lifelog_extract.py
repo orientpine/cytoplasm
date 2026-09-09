@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Final
 
 from automation.plaud_sync.lifelog_model import (
@@ -26,6 +28,56 @@ _MAX_TEXT: Final = 200
 _BULLETS: Final = ("-", "*", "+", "•")
 _DECODER: Final = json.JSONDecoder()
 
+# 식별 근거 규칙표: 실명 사전이 아니라 근거 없는 표현의 어휘·형태만 판정한다.
+#: 친족·호칭만으로는 누구인지 알 수 없다. 앞에 이름이 있으면 그 이름은 보존한다.
+_KINSHIP: Final = frozenset("형 형님 누나 누님 언니 오빠 동생 아저씨 아주머니 아줌마 어머니 아버지 엄마 아빠".split())
+#: 직함은 이름의 접미사일 수 있지만 직함 자체는 식별자가 아니다.
+_ROLES: Final = frozenset("박사 박사님 교수 교수님 선생 선생님 연구원 연구원님 부장 부장님 팀장 팀장님 담당 담당자".split())
+#: 일반 명사만 붙인 복합어에도 식별 근거는 없다(사람형님·사람 형님).
+_COMMON: Final = frozenset("사람 분 남자 여자 친구 동료 직원 손님 회사 기관 조직 장소 사무실 회의실 카페 식당 집".split())
+#: 지시어는 녹취 밖에서 대상을 복원할 수 없으므로 이름 대신 쓰지 않는다.
+_DEICTIC: Final = frozenset("그분 이분 저분 누군가 누구 여기 거기 저기 이곳 그곳 저곳".split())
+#: 빈칸·미확정·전사 라벨은 이름이 아니다. 규칙별로 분리해 오탐 원인을 읽을 수 있게 한다.
+_REFERENCE_REJECTIONS: Final = (
+    re.compile(r"^(?:미상|미정|불명|불명확|없음|알 수 없음|이름|장소명|unknown|none|null|n/a|tbd)$", re.I),
+    re.compile(r"^(?:화자|speaker|사람|장소)\s*\d+$", re.I),  # 번호는 실명·장소의 근거가 아니다.
+    re.compile(r"[<>{}\[\]?]|�"),  # 템플릿 빈칸·불확실 표식·깨진 글자는 추측해서 복원하지 않는다.
+)
+_GENERIC: Final = _KINSHIP | _ROLES | _COMMON | _DEICTIC
+_GENERIC_RE: Final = re.compile("(?:" + "|".join(sorted(_GENERIC, key=len, reverse=True)) + ")+")
+#: 조사는 모호한 호칭에 붙어도 이름을 만들지 않는다(형님과·그분과의).
+_PARTICLES: Final = ("", "은", "는", "이", "가", "을", "를", "의", "과", "와", "과의", "와의", "에게", "께", "에서", "에", "하고", "이랑", "랑")
+
+
+def _reference(value: object) -> str:
+    """판정할 수 없는 개별 필드는 빈 값으로 접는다. 요약·전사 산문은 이 층에 넣지 않는다."""
+    text = unicodedata.normalize("NFKC", _text(value))
+    if any(unicodedata.category(char).startswith("C") for char in text):
+        return ""  # 제어 문자·미배정 문자는 식별 근거로 판단할 수 없다.
+    if any(rule.search(text) for rule in _REFERENCE_REJECTIONS):
+        return ""
+    words = [match.group() for match in re.finditer(r"[^\W_]+", text.casefold())]
+    if len("".join(words)) < 2 or not any(char.isalpha() for char in text):
+        return ""  # 한 글자·숫자·기호만으로는 식별할 수 없다.
+    generic = tuple(_generic_word(word) for word in words)
+    if all(generic):
+        return ""
+    for index, stem in enumerate(generic):
+        if stem in _DEICTIC:
+            return ""
+        if stem and any(kin in stem for kin in _KINSHIP):
+            if stem not in _KINSHIP or index == 0 or generic[index - 1]:
+                return ""  # 제목의 나머지 산문이 모호한 호칭을 실명으로 위장하지 못하게 한다.
+    return text
+
+
+def _generic_word(word: str) -> str:
+    for particle in _PARTICLES:
+        stem = word.removesuffix(particle) if particle else word
+        if _GENERIC_RE.fullmatch(stem):
+            return stem
+    return ""
+
 
 def build_prompt(template: str, *, summary: str, transcript: str) -> str:
     """템플릿의 {{SUMMARY}}·{{TRANSCRIPT}} 자리에 녹취 재료를 채운다."""
@@ -42,7 +94,41 @@ def parse_extraction(raw: str) -> LifelogExtraction:
         decisions=_decisions(payload.get("decisions")),
         todos=_todos(payload.get("todos")),
         summary=_summary(payload.get("summary")),
-        title=_text(payload.get("title")),
+        title=_reference(payload.get("title")),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceDrop:
+    """거부된 문자열 한 건: 원래 필드 위치와 공백 정리·200자 제한을 거친 값."""
+
+    field: str
+    value: str
+
+
+def reference_drops(raw: str) -> tuple[ReferenceDrop, ...]:
+    """같은 응답의 식별값 거부를 데이터로 돌려준다. 판정은 오직 _reference 가 한다.
+
+    제목 → 사람 → 장소 → 할 일 담당자 순, 중복·목록 상한 적용 전의 거부 횟수다.
+    빈칸·비문자열·잘못된 목록·본문 없는 할 일은 식별값 후보가 아니므로 세지 않는다.
+    JSON 실패는 parse_extraction 과 같은 LifelogExtractError 이며 개별 값은 던지지 않는다.
+    알려진 한계: 실제 상호 '형님식당'도 거부된다. 빈도 근거 없이 예외를 만들지 않는다.
+    """
+    payload = _json_object(raw)
+    candidates: list[tuple[str, object]] = [("title", payload.get("title"))]
+    for field in ("people", "places"):
+        candidates.extend(
+            (f"{field}[{index}]", value)
+            for index, value in enumerate(_items(payload.get(field)))
+        )
+    for index, item in enumerate(_items(payload.get("todos"))):
+        fields = _fields(item)
+        if _text(fields.get("text")):
+            candidates.append((f"todos[{index}].owner", fields.get("owner")))
+    return tuple(
+        ReferenceDrop(field, text)
+        for field, value in candidates
+        if (text := _text(value)) and not _reference(value)
     )
 
 
@@ -183,7 +269,7 @@ def _strings(value: object) -> tuple[str, ...]:
     """순서를 지키며 중복을 제거한 문자열 목록."""
     unique: list[str] = []
     for item in _items(value):
-        text = _text(item)
+        text = _reference(item)
         if text and text not in unique:
             unique.append(text)
     return tuple(unique[:_MAX_ITEMS])
@@ -208,7 +294,7 @@ def _todos(value: object) -> tuple[LifelogTodo, ...]:
             todos.append(
                 LifelogTodo(
                     text=text,
-                    owner=_text(fields.get("owner")),
+                    owner=_reference(fields.get("owner")),
                     due=_text(fields.get("due")),
                     at=_at(fields.get("at")),
                 )

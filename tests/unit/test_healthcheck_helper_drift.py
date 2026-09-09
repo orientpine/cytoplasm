@@ -106,6 +106,7 @@ def _matching_files(tmp_path: Path) -> tuple[Path, Path, Path]:
     for relative, name in (
         ("automation/__init__.py", "__init__.py"),
         ("automation/git_tag_signature.py", "git_tag_signature.py"),
+        ("automation/typing_compat.py", "typing_compat.py"),
         ("automation/update_trust.py", "update_trust.py"),
         ("automation/update_trust_state.py", "update_trust_state.py"),
         ("automation/node_config.py", "node_config.py"),

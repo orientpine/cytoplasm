@@ -26,6 +26,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/skill_mount_probe.sh"; source "$(dirname 
 source "$(dirname "${BASH_SOURCE[0]}")/release_store_probe.sh"
 # shellcheck source=automation/peer_gateway_probe.sh
 source "$(dirname "${BASH_SOURCE[0]}")/peer_gateway_probe.sh"
+# shellcheck source=automation/owner_notice_probe.sh
+source "$(dirname "${BASH_SOURCE[0]}")/owner_notice_probe.sh"
 # shellcheck source=automation/release_helper_probe.sh
 # shellcheck source=automation/watcher_drift_probe.sh
 # shellcheck source=automation/healthcheck_wrapper_probe.sh
@@ -58,8 +60,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/healthcheck_suggest.sh"
   "$PRIMARY_NODE runtime packages match the release|primary_runtime_packages_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}"
   "$RAG_NODE personal RAG source and MCP image match the release|rag_stack_current|${RAG_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_RUNTIME_PACKAGE_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/../configs/runtime-package-manifest.txt}"
   "$PRIMARY_NODE healthcheck probe allowlist matches the checks|healthcheck_wrapper_current|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|automation/healthcheck_probe_wrapper.sh"
-readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage release_fully_deployed peer_ignored_channels"
+  "$PRIMARY_NODE owner notice credentials|owner_notice_credentials|${PRIMARY_NODE}|$NODE_OPS_ACCOUNT|${HEALTHCHECK_OWNER_NOTICE_CREDENTIAL:-/etc/autophagy/repair-approval.env}"
+readonly LOCAL_PROBES="update_trust checkout_mirrors_origin release_matches_origin release_helper_drift skill_mounts_current agent_selfskill_root_topology release_store_usage release_fully_deployed peer_ignored_channels owner_notice_credentials"
 agent_selfskill_root_topology) selfskill_root_guidance ;;
+owner_notice_credentials) owner_notice_credentials_guidance ;;
+owner_notice_credentials) probe_owner_notice_credentials "$node" "$account" "$target" ;;
 agent_selfskill_root_topology) probe_selfskill_root_topology "$node" "$account" "$target" ;;
 release_store_usage) probe_release_store_usage "$node" "$account" "$target" ;;
 HEALTHCHECK_REGISTRY_STATIC_VIEW

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from automation.interop.approval_lifecycle import (
         ApprovalIntent,
         ApprovalRequest,
+        Outcome,
         PostedApproval,
         Probe,
         Verdict,
@@ -253,7 +254,7 @@ def request_confirmation(payload: CoordinationApprovalPayload, owner_id: str) ->
 
 
 def _entry_from_verdict(verdict: Verdict, store: PendingConfirmStore) -> PendingConfirm:
-    outcome = lifecycle().Outcome
+    outcome: type[Outcome] = lifecycle().Outcome
     match verdict.outcome:
         case outcome.POSTED:
             posted = verdict.posted

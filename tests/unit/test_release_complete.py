@@ -29,6 +29,13 @@ printf '%s\\n' "$*" >> "$PROBE_CALLS"
 printf '%s' "${PROBE_OUT:-}"
 """
 
+#: 완결 리컨실의 전량 반영 — 어느 세대에서 불렸는지(PWD·HEAD)까지 기록한다.
+_DEPLOY_STUB: Final = """#!/usr/bin/env bash
+set -uo pipefail
+printf '%s|%s|%s\\n' "$PWD" "$(git rev-parse HEAD)" "$*" >> "$DEPLOY_CALLS"
+exit "${DEPLOY_RC:-0}"
+"""
+
 
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
@@ -82,17 +89,21 @@ def _run(
     *,
     decision_rc: int,
     release_rc: int = 0,
+    deploy_rc: int = 0,
     arguments: tuple[str, ...] = (),
     extra_env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     approval = _stub(tmp_path / "approval-stub", _APPROVAL_STUB)
     release = _stub(tmp_path / "release-stub", _RELEASE_STUB)
     probe = _stub(tmp_path / "probe-stub", _PROBE_STUB)
+    deploy = _stub(tmp_path / "deploy-stub", _DEPLOY_STUB)
     return subprocess.run(
         ("bash", str(_COMMAND), *arguments),
         capture_output=True,
         text=True,
         check=False,
+        cwd=None if cwd is None else str(cwd),
         env={
             **os.environ,
             "RELEASE_COMPLETE_STATE": str(state),
@@ -100,11 +111,14 @@ def _run(
             "RELEASE_APPROVAL_CMD": f"bash {approval}",
             "RELEASE_COMPLETE_RELEASE_CMD": f"bash {release}",
             "RELEASE_APPLIED_PROBE_CMD": f"bash {probe}",
+            "RELEASE_COMPLETE_DEPLOY_CMD": f"bash {deploy}",
             "DECISION_RC": str(decision_rc),
             "RELEASE_RC": str(release_rc),
+            "DEPLOY_RC": str(deploy_rc),
             "CALLS": str(tmp_path / "calls.log"),
             "RELEASE_CALLS": str(tmp_path / "release-calls.log"),
             "PROBE_CALLS": str(tmp_path / "probe-calls.log"),
+            "DEPLOY_CALLS": str(tmp_path / "deploy-calls.log"),
             **(extra_env or {}),
         },
     )
@@ -450,3 +464,172 @@ def test_self_update_when_copies_are_identical_then_runs_in_place(tmp_path: Path
     assert "pending" in result.stdout
     _assert_decision_only(tmp_path)
     assert len(_lines(tmp_path / "calls.log")) == 1
+
+
+def _tag_and_advance(source: Path, tag: str, *, commits: int = 2) -> str:
+    """릴리스 태그를 자른 뒤 origin/main 을 그 앞으로 민다 — 2026-09-08 v1.6.3 사고의 모양.
+
+    Returns: 태그가 가리키는 커밋 sha.
+    """
+    tagged = _git(source, "rev-parse", "HEAD")
+    _ = _git(source, "tag", "-a", tag, "-m", tag)
+    _ = _git(source, "push", "origin", tag)
+    for index in range(commits):
+        _ = (source / f"after-{index}").write_text("later\n", encoding="utf-8")
+        _ = _git(source, "add", f"after-{index}")
+        _ = _git(source, "commit", "-m", f"after {index}")
+    _ = _git(source, "push", "origin", "main")
+    return tagged
+
+
+def test_reconcile_completes_the_tagged_release_after_origin_main_moved_on(
+    tmp_path: Path,
+) -> None:
+    """Given: ✅ 를 받아 서명 태그까지 잘린 릴리스 위로 origin/main 이 2커밋 전진했다.
+
+    When: 완결기가 돈다 — 살아 있는 승인 요청은 다른 HEAD 에 묶여 결정이 rc 2 다.
+    Then: 그 **태그된 sha 로 워크트리를 옮겨** 전량 반영을 돌리고 완결 마커를 남긴 뒤
+    워크트리를 origin/main 으로 되돌린다. 태그는 자르지 않는다(release.sh 미호출) —
+    옛 ✅ 가 새 tip 을 인가하는 문은 그대로 잠겨 있다.
+    """
+    _origin, source = _origin_and_source(tmp_path)
+    tagged = _tag_and_advance(source, "v9.9.9")
+    state = tmp_path / "state"
+
+    result = _run(tmp_path, source, state, decision_rc=2)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    worktree = state / "worktree"
+    assert _lines(tmp_path / "deploy-calls.log") == [f"{worktree}|{tagged}|--apply"]
+    assert (state / "completed" / tagged).is_file()
+    assert _git(worktree, "rev-parse", "HEAD") == _git(source, "rev-parse", "origin/main")
+    assert _lines(tmp_path / "release-calls.log") == []
+    assert "reconcil" in result.stdout
+
+
+def test_reconcile_defers_without_counting_when_the_node_has_not_converged(
+    tmp_path: Path,
+) -> None:
+    """노드가 아직 그 릴리스가 아니면(deploy_all rc 4) 전이 상태다 — 시도로 세지 않는다.
+
+    세면 2분 틱 × 3 = 6분 만에 영구 포기가 되어 2026-09-08 사고가 그대로 재현된다
+    (그날 노드 수렴은 52분 걸렸다).
+    """
+    _origin, source = _origin_and_source(tmp_path)
+    tagged = _tag_and_advance(source, "v9.9.9")
+    state = tmp_path / "state"
+
+    for _ in range(3):
+        deferred = _run(tmp_path, source, state, decision_rc=2, deploy_rc=4)
+        assert deferred.returncode == 0, deferred.stdout + deferred.stderr
+        assert "RECONCILE-DEFER" in deferred.stdout
+    assert not (state / "attempts" / f"reconcile-{tagged}").exists()
+    assert not (state / "completed" / tagged).exists()
+    assert len(_lines(tmp_path / "deploy-calls.log")) == 3
+
+    converged = _run(tmp_path, source, state, decision_rc=2)
+
+    assert converged.returncode == 0, converged.stdout + converged.stderr
+    assert len(_lines(tmp_path / "deploy-calls.log")) == 4
+    assert (state / "completed" / tagged).is_file()
+
+
+def test_reconcile_failures_stop_at_the_per_sha_attempt_cap(tmp_path: Path) -> None:
+    """전이가 아닌 실패는 상한을 쓴다 — 지속 결함을 매 틱 전량 재배포로 되풀이하지 않는다."""
+    _origin, source = _origin_and_source(tmp_path)
+    tagged = _tag_and_advance(source, "v9.9.9")
+    state = tmp_path / "state"
+
+    for _ in range(3):
+        failed = _run(tmp_path, source, state, decision_rc=2, deploy_rc=3)
+        assert failed.returncode == 0, failed.stdout + failed.stderr
+        assert "RECONCILE-FAIL rc=3" in failed.stdout
+    assert (state / "attempts" / f"reconcile-{tagged}").read_text(
+        encoding="utf-8"
+    ).strip() == "3"
+
+    gave_up = _run(tmp_path, source, state, decision_rc=2, deploy_rc=3)
+
+    assert gave_up.returncode == 0, gave_up.stdout + gave_up.stderr
+    assert "RECONCILE-GIVEUP" in gave_up.stdout
+    assert len(_lines(tmp_path / "deploy-calls.log")) == 3
+    assert not (state / "completed" / tagged).exists()
+
+
+def test_reconcile_stays_out_of_the_way_when_the_tip_is_the_release(
+    tmp_path: Path,
+) -> None:
+    """정상 경로: 팁이 곧 릴리스면 완결은 기존 승인 경로가 소유한다 — 리컨실은 무동작."""
+    _origin, source = _origin_and_source(tmp_path)
+    _ = _tag_and_advance(source, "v9.9.9", commits=0)
+    state = tmp_path / "state"
+    head = _git(source, "rev-parse", "HEAD")
+
+    result = _run(tmp_path, source, state, decision_rc=0)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _lines(tmp_path / "deploy-calls.log") == []
+    assert len(_lines(tmp_path / "release-calls.log")) == 1
+    assert (state / "completed" / head).is_file()
+
+
+def test_reconcile_stays_out_of_the_way_without_a_release_tag(tmp_path: Path) -> None:
+    """태그가 없으면 인가된 릴리스도 없다 — 리컨실 대상이 아니다(fail-closed)."""
+    _origin, source = _origin_and_source(tmp_path)
+    state = tmp_path / "state"
+    warm_up = _run(tmp_path, source, state, decision_rc=2)
+    assert warm_up.returncode == 0, warm_up.stdout + warm_up.stderr
+
+    result = _run(tmp_path, source, state, decision_rc=2)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert _lines(tmp_path / "deploy-calls.log") == []
+
+
+def test_reconcile_does_not_repeat_a_completed_release(tmp_path: Path) -> None:
+    """완결 마커가 곧 멱등 열쇠다 — 같은 릴리스를 매 틱 다시 반영하지 않는다."""
+    _origin, source = _origin_and_source(tmp_path)
+    tagged = _tag_and_advance(source, "v9.9.9")
+    state = tmp_path / "state"
+    first = _run(tmp_path, source, state, decision_rc=2)
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert (state / "completed" / tagged).is_file()
+
+    second = _run(tmp_path, source, state, decision_rc=2)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert len(_lines(tmp_path / "deploy-calls.log")) == 1
+
+
+def test_a_stale_checkout_as_cwd_does_not_shadow_the_completer_runtime(
+    tmp_path: Path,
+) -> None:
+    """Given: 유닛의 WorkingDirectory 는 메인 체크아웃인데 self-update 는 워크트리 사본을 exec 한다.
+
+    When: 그 낡은 체크아웃을 cwd 로 둔 채 틱이 돈다.
+    Then: 리컨실도 적용 완료 스윕도 워크트리 세대의 모듈을 쓴다.
+
+    `python3 -m` 은 sys.path[0] 에 cwd 를 넣으므로 낡은 체크아웃의 automation 패키지가
+    워크트리의 새 모듈을 가린다 — 2026-09-09 실측: 완결기가 매 틱
+    `No module named automation.release_completion_target` 만 남기고 리컨실이 조용히 죽었다.
+    """
+    _origin, source = _origin_and_source(tmp_path)
+    tagged = _tag_and_advance(source, "v9.9.9")
+    state = tmp_path / "state"
+    stale = tmp_path / "stale-checkout"
+    (stale / "automation").mkdir(parents=True)
+    _ = (stale / "automation" / "__init__.py").write_text("", encoding="utf-8")
+
+    result = _run(tmp_path, source, state, decision_rc=2, cwd=stale)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    worktree = state / "worktree"
+    assert _lines(tmp_path / "deploy-calls.log") == [f"{worktree}|{tagged}|--apply"]
+    assert (state / "completed" / tagged).is_file()
+
+    second = _run(tmp_path, source, state, decision_rc=2, cwd=stale)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert len(_lines(tmp_path / "probe-calls.log")) == 1

@@ -69,6 +69,15 @@ class ReconcileState:
     mirror_state: str = "unknown"
 
 
+@dataclass(frozen=True, slots=True)
+class Backlog:
+    """릴리스 뒤에 쌓인 미배포 커밋의 관측. head 가 비면 백로그가 없다는 뜻이다."""
+
+    head: str = ""
+    count: int | None = None
+    mirror_state: str = "unknown"
+
+
 def _drift_notice(*, origin_sha: str, current_sha: str, failures: int, elapsed: float) -> str:
     return (
         "prod has not converged to origin/main.\n"
@@ -197,6 +206,7 @@ def reconcile_tick(
     now: float,
     converge: Converge,
     deliver: Deliver,
+    backlog: Backlog | None = None,
 ) -> ReconcileState:
     """One reconciliation tick. Returns the state to persist.
 
@@ -214,6 +224,23 @@ def reconcile_tick(
             recovery = _recovery_notice(current_sha=current_sha)
             if not deliver(recovery):
                 return replace(state, pending_notice=recovery, incident_open=False)
+            state = ReconcileState()
+        if backlog is not None and backlog.head and backlog.head != origin_sha:
+            # 릴리스에는 도달했는데 그 뒤로 미배포 커밋이 쌓여 있다. 수렴 사고는 없으므로
+            # clean reset 이 맞지만 백로그 시계까지 지우면 3일 임계에 영영 닿지 못한다.
+            # 예전에는 그 시계가 UNSIGNED-HEAD 위에서 돌았다 — 수렴이 tip 동일성을 요구하던
+            # 동안에는 릴리스 사이 매 틱이 그 예외였기 때문이다. 이제 노드는 tip 과 무관하게
+            # 최신 릴리스로 수렴하므로 시계를 여기에 둔다. 새 릴리스가 착지하면 위 수렴 경로가
+            # 상태를 비워 다음 틱이 새 에피소드를 연다.
+            return reconcile_unsigned_head(
+                state,
+                remote_head=backlog.head,
+                current_sha=origin_sha,
+                now=now,
+                deliver=deliver,
+                commit_count=backlog.count,
+                mirror_state=backlog.mirror_state,
+            )
         return ReconcileState()
 
     drift_since = state.drift_since if state.drift_since is not None else now

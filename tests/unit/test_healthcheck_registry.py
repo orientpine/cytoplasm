@@ -238,7 +238,7 @@ def test_each_group_holds_the_probes_that_belong_to_it() -> None:
     rag = [row for row in every if row.split("|")[2] == rag_node]
     report_hub = [row for row in every if "report-hub" in row.split("|")[0]]
     core = [row for row in every if row not in rag and row not in report_hub]
-    assert (len(core), len(report_hub), len(rag)) == (14, 3, 5), (
+    assert (len(core), len(report_hub), len(rag)) == (15, 3, 5), (
         len(core), len(report_hub), len(rag)
     )
 

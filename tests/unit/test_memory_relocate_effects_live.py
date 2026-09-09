@@ -10,6 +10,7 @@ from automation.interop.approval_lifecycle import ApprovalRequest, Outcome, Post
 from automation.interop.approval_surface import (
     ApprovalKind,
     ApprovalSurfaceError,
+    KIND_LABELS,
     ChannelFacts,
     RequestThread,
     request_thread_name,
@@ -278,11 +279,11 @@ def _effects_with_verdict(
     )
 
 
-def test_post_effect_opens_a_request_thread_titled_by_the_pending_id_only(
+def test_post_effect_opens_a_request_thread_titled_by_the_note_filename(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: a persisted relocation whose note path and entry text are the masked content.
+    # Given: a persisted relocation whose filename identifies the note under review.
     entry_text = "운영 참고: 반출 절차 본문 그대로"
     record = _record(entry_text=entry_text)
     _save(tmp_path / "relocations.json", record)
@@ -297,15 +298,15 @@ def test_post_effect_opens_a_request_thread_titled_by_the_pending_id_only(
     # When: the tick posts the approval request.
     receipt = effects.post_approval(record)
 
-    # Then: the binding was resolved for THIS request's thread, titled with the pending id.
-    key = record_key(record.source_kind, record.entry_sha256)
+    # Then: only the note filename is passed, not the pending id or vault directories.
     assert receipt == ("msg-1", "chan-9")
-    assert [getattr(spec, "title", None) for spec in specs] == [key]
+    assert [getattr(spec, "title", None) for spec in specs] == ["relocated.md"]
 
-    # And: the owner-visible thread name leaks no note path, file name or entry text.
+    # And: the Discord name uses the shipped label without exposing the entry or path.
     name = request_thread_name(ApprovalKind.OBSIDIAN_WRITE, specs[0])
-    assert name.startswith("옵시디언 · memory:")
-    for secret in (entry_text, record.note_relpath, "relocated.md"):
+    assert name == f"{KIND_LABELS[ApprovalKind.OBSIDIAN_WRITE]} · relocated.md"
+    assert len(name) <= 100
+    for secret in (entry_text, record.note_relpath):
         assert secret not in name
 
 
@@ -532,7 +533,7 @@ def test_re_requesting_the_same_relocation_reuses_its_live_request_thread(
     # Then: one approval key keeps ONE thread — no empty orphan per re-request,
     # every post landed in it, and the record still points at that first thread.
     assert directory.opened == [
-        request_thread_name(ApprovalKind.OBSIDIAN_WRITE, RequestThread(title=key))
+        request_thread_name(ApprovalKind.OBSIDIAN_WRITE, RequestThread(title="relocated.md"))
     ]
     assert first == second == ("msg-1", directory.thread_id(0))
     assert transport.channels == [directory.thread_id(0)]

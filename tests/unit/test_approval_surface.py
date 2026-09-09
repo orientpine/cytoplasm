@@ -603,6 +603,21 @@ def test_request_thread_name_labels_and_truncates() -> None:
     ) == "캘린더 · draft-42"
 
 
+@pytest.mark.parametrize("title", ["2026-09-08 라이프로그 회의 준비.md", "가" * 57 + ".md"])
+def test_obsidian_request_thread_name_preserves_the_bounded_note_filename(title: str) -> None:
+    from automation.interop import approval_surface as module
+
+    name = module.request_thread_name(
+        ApprovalKind.OBSIDIAN_WRITE, module.RequestThread(title=title),
+    )
+
+    label, separator, filename = name.partition(" · ")
+    assert label == module.KIND_LABELS[ApprovalKind.OBSIDIAN_WRITE]
+    assert separator == " · "
+    assert filename == title[:module.REQUEST_TITLE_LIMIT]
+    assert len(name) <= module.THREAD_NAME_LIMIT == 100
+
+
 def test_request_thread_name_covers_every_kind() -> None:
     # Given / When: every approval kind is rendered with an id-only title
     from automation.interop import approval_surface as module

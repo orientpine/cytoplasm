@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import partial
 
 import pytest
 
@@ -9,9 +10,14 @@ from automation.plaud_sync.render import (
     MAX_MESSAGE_CHARS,
     RENDER_VERSION,
     PlaudRenderError,
-    render_plaud_approval,
-    summary_preview,
+    render_plaud_approval as render_current,
+    summary_preview as preview_current,
 )
+
+
+# Existing v3 fixtures remain frozen and explicitly reachable.
+render_plaud_approval = partial(render_current, render_version="plaud-sync-render-v3")
+summary_preview = partial(preview_current, render_version="plaud-sync-render-v3")
 
 
 _BASE = PlaudSyncRecord(
@@ -43,7 +49,7 @@ def _record(**overrides: object) -> PlaudSyncRecord:
 
 def test_card_carries_hash_id_path_and_version() -> None:
     content = render_plaud_approval(_record())
-    assert RENDER_VERSION in content
+    assert "plaud-sync-render-v3" in content
     assert "rec-001" in content
     assert f"sha256:{'b' * 64}" in content
     assert "000_PARA/Area/Lifelog/2026/2026-09-01-standup--abcdef123456.md" in content
@@ -96,7 +102,7 @@ def test_preview_is_empty_when_neither_section_has_content() -> None:
 
 def test_card_quotes_the_preview_and_carries_render_version_three() -> None:
     content = render_plaud_approval(_record(), preview="- 첫째 줄\n- 둘째 줄")
-    assert RENDER_VERSION == "plaud-sync-render-v3"
+    assert "plaud-sync-render-v3" in content
     assert "> - 첫째 줄\n> - 둘째 줄" in content
     assert "내용 미리보기" in content
 
@@ -169,3 +175,101 @@ def test_card_label_no_longer_promises_summary_lines_only() -> None:
     content = render_plaud_approval(_record(), preview="- 녹음:: x")
     assert "내용 미리보기(상위 5줄)" in content
     assert "요약 상위" not in content
+
+
+# v4: test selection, budgets, binding and Markdown structure; review copy on
+# the real surface rather than pinning the owner's prose in snapshots.
+def test_current_version_and_summary_budget() -> None:
+    assert RENDER_VERSION == "plaud-sync-render-v4"
+    assert preview_current(_SEVEN_LINE_BODY).splitlines() == [
+        "- 첫째 줄", "- 둘째 줄", "- 셋째 줄", "- 넷째 줄", "- 다섯째 줄", "- 여섯째 줄", "- 일곱째 줄",
+    ]
+
+
+def test_current_preview_prioritizes_summary_over_glance() -> None:
+    lines = preview_current(_V2_BODY).splitlines()
+    assert lines[:3] == ["첫 문장.", "둘째 문장.", "셋째 문장."]
+    assert len(lines) > len(summary_preview(_V2_BODY).splitlines())
+    assert "[00:00" not in "\n".join(lines)
+    assert "tags:" not in "\n".join(lines)
+    assert "세미나 참석" not in "\n".join(lines)
+
+
+@pytest.mark.parametrize(
+    ("glance", "summary", "expected"),
+    [("", "핵심.", "핵심."), ("- 녹음:: 오늘", "- (요약 없음)", "- 녹음:: 오늘")],
+)
+def test_current_preview_never_pads_summary_or_glance_with_transcript(
+    glance: str, summary: str, expected: str,
+) -> None:
+    body = f"## 한눈에\n{glance}\n\n## 요약\n{summary}\n\n## 전문\n[00:00 · 화자1] 잡음."
+    assert preview_current(body) == expected
+
+
+@pytest.mark.parametrize("collapsed", [False, True])
+def test_current_transcript_fallback_has_a_source_marker(collapsed: bool) -> None:
+    transcript = "[00:00 · 화자1] 첫 발화."
+    section = f"> [!quote]- 전문 펼치기 (1 발화)\n> {transcript}" if collapsed else transcript
+    body = f"## 한눈에\n\n## 요약\n- (요약 없음)\n\n## 전문\n{section}"
+    lines = preview_current(body).splitlines()
+    assert lines[0].startswith("[") and lines[0].endswith("]")
+    assert lines[1:] == [transcript]
+    long_body = body + "\n" + "\n".join("가" * 300 for _ in range(20))
+    assert len(preview_current(long_body).splitlines()) == 7
+    assert len(render_current(_record(), preview=preview_current(long_body))) <= MAX_MESSAGE_CHARS
+
+
+def test_current_empty_preview_and_image_filtering() -> None:
+    assert preview_current("## 요약\n- (요약 없음)\n\n## 전문\n- (전문 없음)") == ""
+    assert preview_current("## 요약\n![poster](image.png)\n### 개요\n---\n핵심.") == "개요\n핵심."
+
+
+def test_current_maximal_preview_fits_with_realistic_metadata_and_preserves_binding() -> None:
+    sentence = "참석자들은 다음 회의 전까지 검토 자료와 일정 변경 사항을 정리하기로 합의했다 " * 12
+    body = (
+        "## 한눈에\n- 녹음:: 2026-09-08 (화) 09:00 · 45분 · 화자 3명\n"
+        "- 주제:: #lifelog/업무\n- 사람:: 참석자\n- 장소:: 회의실\n- 한 줄:: 진행 상황 검토\n\n"
+        "## 요약\n" + "\n".join(f"{index}: {sentence}." for index in range(20))
+        + "\n\n## 전문\n" + "[00:00 · 화자1] 어 음 다시 이야기해 볼까요.\n" * 500
+    )
+    record = _record(
+        recording_id="00000000-0000-4000-8000-000000000001",
+        note_title="주간 회의 검토와 다음 일정 조율 및 자료 준비에 관한 논의 (2026-09-08)",
+        note_relpath="000_PARA/Area/Lifelog/2026/2026-09-08-주간-회의-검토와-다음-일정-조율-및-자료-준비에-관한-논의--abcdef123456.md",
+    )
+    preview = preview_current(body)
+    lines = preview.splitlines()
+    old_preview = summary_preview(body)
+    assert len(lines) == 7
+    assert all(len(line) == 190 and line.endswith("…") for line in lines)
+    assert all(line.startswith(f"{index}:") for index, line in enumerate(lines))
+    assert len(preview) > len(old_preview)
+    assert "[00:00" not in preview
+    card = render_current(record, preview=preview)
+    assert len(card) <= MAX_MESSAGE_CHARS
+    assert sum(len(line) for line in lines) > len(card) / 2
+    assert [line[2:] for line in card.splitlines() if line.startswith("> ")] == lines
+    assert f"**{record.note_title}**" in card.splitlines()[0]
+    for value in (record.recording_id, record.recorded_at, record.note_relpath, record.action_hash):
+        assert value in card
+    assert record.action_hash in render_plaud_approval(record, preview=old_preview)
+    actions = card.rsplit("\n\n", 1)[1].splitlines()
+    assert len(actions) == 3
+    assert "✅" in actions[0] and "⛔" not in actions[0]
+    assert "✅" not in actions[1] and "⛔" not in actions[1]
+    assert "⛔" in actions[2] and "✅" not in actions[2]
+
+
+def test_current_card_fails_closed_for_oversized_metadata_or_raw_preview() -> None:
+    with pytest.raises(PlaudRenderError):
+        render_current(_record(note_relpath="x" * MAX_MESSAGE_CHARS))
+    with pytest.raises(PlaudRenderError):
+        render_current(_record(), preview="x" * MAX_MESSAGE_CHARS)
+
+
+@pytest.mark.parametrize("version", ["plaud-sync-render-v2", "plaud-sync-render-v5", ""])
+def test_unknown_render_versions_fail_closed(version: str) -> None:
+    with pytest.raises(PlaudRenderError):
+        preview_current(_V2_BODY, render_version=version)
+    with pytest.raises(PlaudRenderError):
+        render_current(_record(), render_version=version)

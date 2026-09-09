@@ -7,14 +7,23 @@ from pathlib import Path
 
 import pytest
 
+from automation.interop.approval_lifecycle import Outcome, PostedApproval, Verdict
+from automation.interop.approval_surface import (
+    ApprovalBinding,
+    ApprovalKind,
+    ApprovalSurface,
+    RequestThread,
+    request_thread_name,
+)
 from automation.plaud_sync.effects_live import (
     build_effects,
     note_plan_for,
     result_notice_text,
     thread_candidates,
 )
-from automation.plaud_sync.model import PlaudSyncRecord
-from automation.plaud_sync.store import save_note_body
+from automation.plaud_sync.model import PlaudSyncRecord, PlaudSyncState
+from automation.plaud_sync.store import load_state, save_note_body, save_state
+from automation.plaud_sync.watch_step import ResolveEffects
 from automation.obsidian_write.config import ObsidianWriteConfig
 
 _BODY = "## 요약\n\n- x\n\n## 전문\n\n말씀\n"
@@ -139,7 +148,7 @@ class _RecordingTransport:
 
 def _notifier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[object, _RecordingTransport]:
+) -> tuple[ResolveEffects, _RecordingTransport]:
     """Live effects with every network/config boundary replaced by a recorder."""
     module = "automation.plaud_sync.effects_live"
     transports: list[_RecordingTransport] = []
@@ -164,6 +173,47 @@ def _notifier(
         now=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
     )
     return effects, transports[0]
+
+
+@pytest.mark.parametrize("filename", ["2026-09-08 라이프로그 회의 준비.md", "가" * 57 + ".md"])
+def test_post_approval_titles_the_request_thread_with_the_note_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str,
+) -> None:
+    module = "automation.plaud_sync.effects_live"
+    record = _record(
+        status="planned", message_id=None, channel_id="", approval_thread_id=None,
+        note_relpath=f"000_PARA/Area/Lifelog/2026/{filename}",
+    )
+    save_state(
+        tmp_path / "plaud.json",
+        PlaudSyncState(version=1, last_poll_at=None, records={record.recording_id: record}),
+    )
+    save_note_body(tmp_path, record.recording_id, _BODY)
+    specs: list[RequestThread] = []
+
+    def resolve(
+        kind: ApprovalKind, directory: object, owner_id: str, *, request: RequestThread,
+    ) -> ApprovalBinding:
+        del directory, owner_id
+        specs.append(request)
+        return ApprovalBinding(kind, ApprovalSurface.AGENT_CHAT_THREAD, "9", 8)
+
+    def post(*args: object, **kwargs: object) -> Verdict:
+        del args, kwargs
+        return Verdict(Outcome.POSTED, posted=PostedApproval("msg-9", "9"))
+
+    monkeypatch.setattr(f"{module}.resolve_new_binding", resolve)
+    monkeypatch.setattr(f"{module}.request_approval", post)
+    effects, _ = _notifier(tmp_path, monkeypatch)
+
+    assert effects.post_approval(record) == ("msg-9", "9")
+    assert specs == [RequestThread(title=filename)]
+    name = request_thread_name(ApprovalKind.OBSIDIAN_WRITE, specs[0])
+    assert name.partition(" · ")[2] == filename[:40]
+    assert len(name) <= 100
+    persisted = load_state(tmp_path / "plaud.json").records[record.recording_id]
+    assert persisted.approval_thread_id == "9"
+    assert persisted.action_hash == record.action_hash
 
 
 def test_notify_posts_the_result_into_the_request_thread_and_closes_it(

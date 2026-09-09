@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -250,3 +251,53 @@ def test_ticket_excerpt_and_comment_never_include_sensitive_error_text(tmp_path:
     assert "secret-value" not in visible
     assert "sha256=" in visible
     assert "/srv/autophagy-private/repair-logs/t_repair01/" in visible
+
+
+def _run_manual(
+    monkeypatch: pytest.MonkeyPatch,
+    service: RepairService,
+    message: str,
+) -> None:
+    """Drive the real manual entry point with the board and registry replaced."""
+    monkeypatch.setattr(repair_cli, "_service", lambda: service)
+    monkeypatch.setattr(repair_cli, "publish", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(sys, "argv", ["repair-cli", "manual", message])
+    assert repair_cli.main() == 0
+
+
+def test_two_manual_requests_sharing_a_first_word_open_separate_cards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Given: two unrelated manual repairs whose text happens to start with the same word.
+
+    When: each is submitted through the manual entry point.
+    Then: each opens its own card.
+
+    The dedup signature is digest(source, location, first token of the excerpt), and the
+    manual path used to pass constant source and location — so the first word decided the
+    card alone. 2026-09-09 실측: "캘린더 등록 승인 요청이…" 와 "메일 다이제스트 오류" 가 7월·8월에
+    종결된 무관한 카드로 각각 빨려 들어가 보드에서 사라졌다.
+    """
+    kanban = _ReopeningKanban()
+    service = RepairService(kanban, FakePrivateLogs(), RepairRegistry(tmp_path / "state.json"))
+
+    _run_manual(monkeypatch, service, "!repair 캘린더 등록 승인 요청이 보이지 않고 폐기된다")
+    _run_manual(monkeypatch, service, "!repair 캘린더 초대 메일이 참석자에게 가지 않는다")
+
+    assert kanban.created == ["t_card1", "t_card2"]
+    assert kanban.requests[0].idempotency_key != kanban.requests[1].idempotency_key
+    assert len(kanban.blocked) == 2
+
+
+def test_the_same_manual_request_still_thickens_one_card(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """중복제거 자체는 살아 있어야 한다 — 같은 요청을 두 번 말하면 카드는 하나다."""
+    kanban = _ReopeningKanban()
+    service = RepairService(kanban, FakePrivateLogs(), RepairRegistry(tmp_path / "state.json"))
+
+    _run_manual(monkeypatch, service, "!repair 메일 다이제스트 오류")
+    _run_manual(monkeypatch, service, "!repair   메일   다이제스트\n오류  ")
+
+    assert kanban.created == ["t_card1"]
+    assert "Repair occurrence: 2" in kanban.comments[1][1]

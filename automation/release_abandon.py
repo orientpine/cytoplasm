@@ -9,7 +9,7 @@ release kind 의 같은 탈출구다 — 인가 경계는 하나도 넓히지 �
 A1  운영자가 이름 댄 version·head_sha·message_id 세 필드가 저장된 레코드와 **정확히**
     일치할 때만 움직인다. 맹목적 삭제는 없다(``skill_gate_retire`` R1).
 A2  요청 경로가 잡는 것과 같은 키 리스 아래에서만 변경한다(R2).
-A3  Discord 를 호출하지 않는다 — 소유자의 ⛔ 는 그대로 남아 보인다(R3).
+A3  원 메시지·소유자 리액션은 바꾸지 않는다. archive 뒤 상태 회신만 best-effort로 추가한다.
 A4  감사 줄을 fsync 한 뒤에야 레코드가 pending 을 떠난다. 크래시는 감사 없는 삭제가 아니라
     복구 가능한 레코드를 남긴다(R5).
 A5  레코드는 지워지지 않고 release-history 규약대로 0600 archive 로 바이트 그대로 옮겨진다 —
@@ -21,16 +21,21 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
+from http.client import HTTPException
 from pathlib import Path
 from typing import Final
 
 from automation import skill_gate, skill_gate_retire
-from automation.release_retire import archive_bytes
-from automation.release_spec import ReleaseSpecError
+from automation.interop.approval_lifecycle import ApprovalRecordsError, ApprovalSurfaceError
+from automation.interop.approval_types import Probe
+from automation.release_retire import archive_bytes, retire_released_record
+from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_record
+from automation.skill_gate_approval import SkillApprovalGate
 from automation.skill_gate_request import lease
 from automation.skill_gate_specs import mask
 
@@ -162,6 +167,16 @@ def abandon(
             record_path.unlink()
         except (ReleaseSpecError, OSError):
             return _refused(ReleaseAbandon.ARCHIVE_FAILED)
+        # 승인 본문 수정은 바이트 바인딩을 깨므로 원 메시지를 참조하는 회신만 더한다.
+        try:
+            skill_gate._api("POST", f"/channels/{found['channel_id']}/messages", {
+                "content": f"⛔ 만료 — {' '.join(order.reason.split())[:1000]}",
+                "message_reference": {"message_id": order.message_id, "fail_if_not_exists": True},
+                "allowed_mentions": {"parse": [], "replied_user": False},
+            })
+        except (OSError, HTTPException, ValueError, KeyError, SystemExit) as error:
+            # _api의 자격증명 부재는 SystemExit다. 이 부가 표시는 회수 결과를 바꾸지 않는다.
+            print(f"RELEASE-ABANDON-NOTICE-FAIL {type(error).__name__}", file=sys.stderr)
         return ReleaseAbandoned(
             ReleaseAbandon.ABANDONED,
             0,
@@ -169,6 +184,57 @@ def abandon(
             f" message_id={mask(order.message_id)} archive={archived.name}",
             archived,
         )
+
+
+def retire_previous(
+    head: str, tip: str, gate_factory: Callable[[ReleaseSpec], SkillApprovalGate],
+) -> int:
+    """Retire executed approvals; abandon an overtaken approval only with an explicit tip."""
+    path = skill_gate.GATE_DIR / "pending/release.json"
+    try:
+        decoded = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print("RELEASE-RETIRE: no previous release record", file=sys.stderr)
+        return 0
+    except (OSError, json.JSONDecodeError):
+        print("RELEASE-RETIRE-BLOCK: release record is unreadable", file=sys.stderr)
+        return 4
+    if not isinstance(decoded, dict):
+        return 4
+    record = {str(name): str(value) for name, value in decoded.items()}
+    try:
+        spec = spec_from_record(record)
+        gate = gate_factory(spec)
+        outstanding = gate.outstanding("release")
+        decision = gate.probe(outstanding[0]) if outstanding else Probe.UNVERIFIABLE
+    except (ReleaseSpecError, ApprovalRecordsError, ApprovalSurfaceError, OSError) as error:
+        print(f"RELEASE-RETIRE-BLOCK: {error}", file=sys.stderr)
+        return 4
+    # 미결정·미확인 요청은 lifecycle 의 재사용/supersede 가 소유한다 — retire 가 여기서 막으면
+    # '재실행=재개' 계약이 깨진다(2026-08-31 v1.0.139 재개 실측). retire 는 실행 완료(✅ + 서명
+    # 태그)된 승인만 감사 archive 로 옮기고, tip 을 벗어난 승인만 아래 감사형 abandon 으로 보낸다.
+    if decision is not Probe.APPROVED:
+        print("RELEASE-RETIRE: not an executed approval — leaving it to the request lifecycle", file=sys.stderr)
+        return 0
+    if tip and spec.head_sha not in (head, tip):
+        order = ReleaseAbandonOrder(
+            spec.version, spec.head_sha, record.get("message_id", ""),
+            f"approved release superseded by origin/main {tip} (release.sh auto-recovery)",
+            skill_gate_retire.actor(),
+        )
+        return emit(abandon(
+            skill_gate.GATE_DIR, order, skill_gate_retire.abandon_log(skill_gate.APPROVAL_LOG),
+        ))
+    try:
+        archived = retire_released_record(
+            path, skill_gate.GATE_DIR / "release-history", expected_head=head, decision=decision,
+        )
+    except (ReleaseSpecError, OSError) as error:
+        print(f"RELEASE-RETIRE-BLOCK: {error}", file=sys.stderr)
+        return 4
+    print(f"RELEASE-RETIRE: archived {head[:12]}" if archived is not None
+          else "RELEASE-RETIRE: no previous release record", file=sys.stderr)
+    return 0
 
 
 def emit(result: ReleaseAbandoned) -> int:

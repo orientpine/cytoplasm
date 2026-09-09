@@ -33,6 +33,7 @@ from automation.node_config import NodeConfigError, load_node_config
 from automation.update_trust_state import (
     ReleaseFloorError,
     advance_release_floor,
+    parse_release_version,
     release_floor_path,
 )
 
@@ -182,6 +183,25 @@ def _verify_remote_tag(
         return TrustedUpdate(tag=tag.name, commit_sha=commit_sha)
 
 
+def _release_candidates(release: RemoteRelease) -> tuple[_ReleaseTag, ...]:
+    """Newest release first — 이름 사전순은 v1.10.0 을 v1.9.0 보다 낮게 본다.
+
+    릴리스 절차가 낼 수 없는 이름은 릴리스가 아니므로 후보에서 빠진다. 그 판정은
+    parse_release_version 하나가 갖고 여기서 사본을 만들지 않는다. 이 필터가 파서가 아니라
+    여기 있는 이유는 git_tag_signature 가 automation 의존을 질 수 없기 때문이다 — 스킬 배포
+    스테이징과 peer 증명 단독 체크아웃이 그 파일만 싣는다.
+    """
+    ordered: list[tuple[tuple[int, int, int], _ReleaseTag]] = []
+    for tag in release.tags:
+        try:
+            ordering = parse_release_version(tag.name)
+        except ReleaseFloorError:
+            continue
+        ordered.append((ordering, tag))
+    ordered.sort(key=lambda item: item[0], reverse=True)
+    return tuple(tag for _, tag in ordered)
+
+
 def _remote_argument(remote_url: str | None) -> str:
     if remote_url is None:
         return "origin"
@@ -228,7 +248,7 @@ def resolve_signed_update(
         allowed_signers=allowed_signers,
     )
     last_error: UpdateTrustError | None = None
-    for tag in release.tags:
+    for tag in _release_candidates(release):
         try:
             update = _verify_remote_tag(verifier, tag)
             # Freshness AFTER authorship: an unverified tag name must never be
@@ -243,7 +263,7 @@ def resolve_signed_update(
             return update
     if last_error is not None:
         raise last_error
-    raise UpdateTrustError("UNSIGNED-HEAD", "origin/main has no trusted signed release tag")
+    raise UpdateTrustError("UNSIGNED-HEAD", "origin has no trusted signed release tag")
 
 
 def resolve_update_target(
