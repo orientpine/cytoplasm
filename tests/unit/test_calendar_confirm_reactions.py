@@ -11,6 +11,9 @@ from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from automation import owner_notice
 from automation.interop.approval_surface import POLICY_VERSION
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -29,6 +32,7 @@ AGENT_CHAT_CHANNEL_ID = "1526487935975952390"
 AGENT_CHAT_THREAD_ID = "1526487935975952391"
 AGENT_CHAT_GUILD_ID = "1526487935975952392"
 REQUEST_THREAD_ID = "1526487935975952400"
+REQUEST_NOTICE_MESSAGE_ID = "1526487935975952401"
 
 
 def _load_watch_module():
@@ -52,7 +56,6 @@ class FakeDiscord:
     sent_messages: list[str] = field(default_factory=list)
     message_reads: int = 0
     reaction_reads: list[str] = field(default_factory=list)
-    notify_error: bool = False
 
     def message_content(self, _entry: PendingConfirm) -> str:
         self.message_reads += 1
@@ -65,8 +68,7 @@ class FakeDiscord:
         return self.reactions.get(emoji, ())
 
     def send_owner_dm(self, content: str) -> None:
-        if self.notify_error:
-            raise watch.ConfirmWatchError("owner DM notification failed")
+        """리마인더 배달 전용 — 결과·정리 통지는 `owner_notice` 파사드가 가져갔다(2026-09-10)."""
         self.sent_messages.append(content)
 
 
@@ -99,12 +101,11 @@ def _run(
     created: datetime | None = None,
     content: str = "calendar confirmation sha256:sha-123",
     draft_hash: str = "sha-123",
-    notify_error: bool = False,
     record: dict | None = None,
 ) -> tuple[PendingConfirmStore, FakeDiscord, FakeCommands]:
     store = PendingConfirmStore(tmp_path / "pending-confirms.jsonl")
     store.append(_entry(created=created))
-    discord = FakeDiscord(reactions, content, notify_error=notify_error)
+    discord = FakeDiscord(reactions, content)
     commands = FakeCommands()
     watch.run_once(
         store=store,
@@ -118,6 +119,35 @@ def _run(
     return store, discord, commands
 
 
+@pytest.fixture(autouse=True)
+def _isolated_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """이 스위트는 실행하는 사람의 실제 캘린더 게이트를 절대 읽지 않는다.
+
+    `run_once` 는 고아 초안 스윕을 함께 돌리고, 그 스윕은 2026-09-10 부터 카드가 없는
+    초안에 **실제로 카드를 올린다**. 이 파일의 `_run` 은 `CALENDAR_GATE_DIR` 을 설정하지
+    않으므로 격리가 없으면 스윕이 `~/.hermes/calendar-gate` 를 읽는다 — 실측으로 이
+    워크스테이션에 pending 초안이 398건 있고, `now=datetime.now(UTC)` 로 도는 케이스는
+    그중 3분~24시간 나이의 초안에 대해 실제 `request_confirmation` 을 호출했다(토큰이
+    없어 실패했을 뿐이다). 스윕 입력이 필요한 케이스는 `list_drafts=` 로 명시 주입한다 —
+    그 자리는 `test_calendar_orphan_draft_sweep.py` 다.
+    """
+    monkeypatch.setattr(calendar_gate, "list_drafts", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def notices(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """스레드가 없는 결과 통지는 `owner_notice` 파사드로 나간다(2026-09-10 소유자 지시).
+
+    목적지(#notifications ↔ 소유자 DM)는 파사드가 설정에서 정하므로 여기서는 **무엇이
+    나갔는지**만 본다 — 목적지 해석은 `test_calendar_owner_notice_routing.py` 가 고정한다.
+    """
+    delivered: list[str] = []
+    monkeypatch.setattr(
+        owner_notice, "notify_owner", lambda notice: delivered.append(notice) is None
+    )
+    return delivered
+
+
 def test_confirm_when_owner_has_only_approve_reaction(tmp_path: Path) -> None:
     # Given
     store, _discord, commands = _run(tmp_path, {"✅": ({"id": "cha-owner", "bot": False},)})
@@ -128,14 +158,17 @@ def test_confirm_when_owner_has_only_approve_reaction(tmp_path: Path) -> None:
     assert store.load() == ()
 
 
-def test_discard_without_confirm_when_owner_has_cancel_reaction(tmp_path: Path) -> None:
+def test_discard_without_confirm_when_owner_has_cancel_reaction(
+    tmp_path: Path, notices: list[str]
+) -> None:
     # Given
     store, discord, commands = _run(tmp_path, {"⛔": ({"id": "cha-owner", "bot": False},)})
 
     # When / Then
     assert commands.confirmed == []
     assert commands.discarded == ["abc123"]
-    [notice] = discord.sent_messages
+    assert discord.sent_messages == []  # 워처가 직접 DM 을 열지 않는다
+    [notice] = notices
     assert "캘린더 삭제 취소" in notice
     assert "abc123" in notice
     assert "소유자 ⛔ 리액션으로 취소되었습니다" in notice
@@ -175,7 +208,7 @@ def test_ignore_bot_and_non_owner_reactions(tmp_path: Path) -> None:
     assert len(store.load()) == 1
 
 
-def test_discard_when_confirmation_expires(tmp_path: Path) -> None:
+def test_discard_when_confirmation_expires(tmp_path: Path, notices: list[str]) -> None:
     # Given
     expired = datetime(2026, 7, 15, 11, 59, tzinfo=UTC)
 
@@ -185,7 +218,8 @@ def test_discard_when_confirmation_expires(tmp_path: Path) -> None:
     # Then
     assert commands.confirmed == []
     assert commands.discarded == ["abc123"]
-    [notice] = discord.sent_messages
+    assert discord.sent_messages == []  # 워처가 직접 DM 을 열지 않는다
+    [notice] = notices
     assert "캘린더 삭제 만료 취소" in notice
     assert "abc123" in notice
     assert "확정 시간이 지나 취소되었습니다" in notice
@@ -240,7 +274,11 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
             return {"id": OWNER_DM_CHANNEL_ID, "name": "", "recipients": [{"id": "cha-owner"}], "type": 1}
         if path == f"/channels/{AGENT_CHAT_CHANNEL_ID}":
             return {"id": AGENT_CHAT_CHANNEL_ID, "guild_id": AGENT_CHAT_GUILD_ID, "name": "agent-chat", "type": 0}
-        if path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/threads":
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages":
+            return {"id": REQUEST_NOTICE_MESSAGE_ID}
+        if method == "POST" and path == (
+            f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/{REQUEST_NOTICE_MESSAGE_ID}/threads"
+        ):
             return {"id": REQUEST_THREAD_ID}
         if path == f"/channels/{REQUEST_THREAD_ID}":
             return {"id": REQUEST_THREAD_ID, "name": f"캘린더 · {draft['id']}",
@@ -267,8 +305,20 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
     assert entry[0].channel_id == REQUEST_THREAD_ID
     assert entry[0].surface == "agent-chat-thread"
     assert entry[0].policy_version == POLICY_VERSION
-    assert ("POST", f"/channels/{AGENT_CHAT_CHANNEL_ID}/threads",
-            {"name": f"캘린더 · {draft['id']}", "auto_archive_duration": 10080, "type": 11}) in calls
+    assert [
+        call for call in calls
+        if call[1].startswith(f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages")
+    ] == [
+        ("POST", f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages", {
+            "content": (
+                f"🔔 승인 대기 · 캘린더 · {draft['id']}\n"
+                "이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
+            ),
+        }),
+        ("POST", f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/{REQUEST_NOTICE_MESSAGE_ID}/threads", {
+            "name": f"캘린더 · {draft['id']}", "auto_archive_duration": 10080,
+        }),
+    ]
     assert [call for call in calls if call[0] == "PUT"] == [
             ("PUT", f"/channels/{REQUEST_THREAD_ID}/messages/msg-1/reactions/%E2%9C%85/@me", None),
             ("PUT", f"/channels/{REQUEST_THREAD_ID}/messages/msg-1/reactions/%E2%9B%94/@me", None),
@@ -276,21 +326,25 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
 
 
 
-def test_cancel_discard_purges_entry_when_owner_notify_fails(tmp_path: Path) -> None:
-    # Given the owner's ⛔ where the follow-up DM notification fails
-    store, _discord, commands = _run(
-        tmp_path, {"⛔": ({"id": "cha-owner", "bot": False},)}, notify_error=True
-    )
+def test_cancel_discard_purges_entry_when_owner_notify_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given the owner's ⛔ where the notice cannot be delivered (파사드가 False 로 답한다)
+    monkeypatch.setattr(owner_notice, "notify_owner", lambda notice: False)
+    store, _discord, commands = _run(tmp_path, {"⛔": ({"id": "cha-owner", "bot": False},)})
 
     # When / Then — the successful discard is not rolled back by the notify failure
     assert commands.discarded == ["abc123"]
     assert store.load() == ()
 
 
-def test_expiry_discard_with_notify_failure_leaves_no_stale_entry_for_next_tick(tmp_path: Path) -> None:
-    # Given an expired entry whose cancellation DM notification fails
+def test_expiry_discard_with_notify_failure_leaves_no_stale_entry_for_next_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an expired entry whose cancellation notice cannot be delivered (파사드가 False)
     expired = datetime(2026, 7, 15, 11, 59, tzinfo=UTC)
-    store, _discord, commands = _run(tmp_path, {}, created=expired, notify_error=True)
+    monkeypatch.setattr(owner_notice, "notify_owner", lambda notice: False)
+    store, _discord, commands = _run(tmp_path, {}, created=expired)
     assert commands.discarded == ["abc123"]
 
     # When the next tick runs against a resolver that fails for missing drafts

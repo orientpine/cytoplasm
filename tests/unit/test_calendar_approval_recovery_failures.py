@@ -41,6 +41,15 @@ def _entry() -> object:
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """실행하는 사람의 실제 캘린더 게이트를 읽지 않는다 — 이 파일은 `CALENDAR_GATE_DIR` 을
+    설정하지 않는데, `run_once` 가 함께 도는 고아 스윕은 2026-09-10 부터 카드 없는 초안에
+    실제로 카드를 올리기 때문이다(`test_calendar_confirm_reactions.py` 의 같은 가드 참조).
+    """
+    monkeypatch.setattr(watch.calendar_gate, "list_drafts", lambda: [])
+
+
 class _ApprovedDiscord:
     def message_content(self, _entry: object) -> str:
         return "sha256:hash123"

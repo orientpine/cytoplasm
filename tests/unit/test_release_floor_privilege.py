@@ -126,3 +126,35 @@ def test_provision_migrates_existing_floor_exactly_without_deleting_source(
     assert authoritative.read_bytes() == exact
     assert legacy.read_bytes() == exact
     assert load_release_floor(authoritative) == release_floor("v7.8.9", _SHA_2)
+
+
+def test_privileged_advance_leaves_the_anchor_reachable_by_the_ops_pre_gate(tmp_path: Path) -> None:
+    # Given: an installation whose authoritative anchor has never been written.
+    path = tmp_path / "update-trust" / "release-floor.json"
+
+    # When: the root helper writes the first floor.
+    privileged_advance_release_floor(path, "v1.0.0", _SHA_1)
+
+    # Then: ops must traverse the parent and read the file. advance_release_floor runs as
+    # ops on every reconciler tick, so a parent only root can enter turns that read into
+    # "UPDATE-TRUST-BLOCK RELEASE-FLOOR: cannot read release floor" and skips the tick
+    # forever — measured 2026-09-08, the tick after prod finally converged to v1.6.3.
+    assert path.parent.stat().st_mode & 0o777 == 0o755
+    assert path.stat().st_mode & 0o777 == 0o644
+
+
+def test_privileged_advance_repairs_an_anchor_directory_installed_unreachable(
+    tmp_path: Path,
+) -> None:
+    # Given: an anchor directory an earlier install left closed to ops.
+    path = tmp_path / "update-trust" / "release-floor.json"
+    path.parent.mkdir(mode=0o700, parents=True)
+    save_release_floor(path, release_floor("v1.0.0", _SHA_1))
+    path.parent.chmod(0o700)
+
+    # When: the root helper advances the floor.
+    privileged_advance_release_floor(path, "v1.0.1", _SHA_2)
+
+    # Then: it heals the directory instead of leaving the node wedged until a human
+    # notices. The write is the only moment root is here.
+    assert path.parent.stat().st_mode & 0o777 == 0o755

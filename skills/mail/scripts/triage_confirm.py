@@ -92,6 +92,10 @@ def _api(method: str, path: str, payload: dict | None = None) -> object:
     return _send(request)  # 마지막 시도는 실패해도 그대로 올린다
 
 
+def fetch_channel(channel_id: str) -> object:
+    return _api("GET", f"/channels/{channel_id}")
+
+
 def post_approval_request(content: str, channel_id: str) -> str:
     message = _api("POST", f"/channels/{channel_id}/messages", {"content": content})
     return str(message["id"])

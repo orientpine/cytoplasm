@@ -5,7 +5,7 @@ observe lifecycle state and use minimum-information links to the original messag
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -330,6 +330,30 @@ class ApprovalProbe(Protocol):
     def probe(self, request: ApprovalRequest) -> Probe: ...
 
 
+def channel_guild_resolver(
+    fetch_channel: Callable[[str], object],
+) -> Callable[[str], str | None]:
+    """Cache channel guild ids so server/thread links open inside their guild.
+
+    Each resolver fetches a channel at most once. DMs have no guild: None preserves
+    the supported @me link. Fetch failures propagate rather than inventing a DM link.
+    """
+    cache: dict[str, str | None] = {}
+
+    def resolve(channel_id: str) -> str | None:
+        if channel_id not in cache:
+            match fetch_channel(channel_id):
+                case {"guild_id": str(guild_id)}:
+                    cache[channel_id] = guild_id or None
+                case Mapping():
+                    cache[channel_id] = None
+                case _:
+                    raise ReminderBoundaryError("Discord channel response must be a mapping")
+        return cache[channel_id]
+
+    return resolve
+
+
 @dataclass(frozen=True, slots=True)
 class ReminderContext:
     """Injected watcher runtime; no config, clock, state, or transport is global."""
@@ -340,7 +364,7 @@ class ReminderContext:
     deliver: Callable[[str, str], None]
     clock: Callable[[], datetime]
     guild_id: str | None = None
-    guild_id_for: Callable[[str], str] | None = None
+    guild_id_for: Callable[[str], str | None] | None = None
     source_channel_id_for: Callable[[ApprovalRequest], str] | None = None
 
 

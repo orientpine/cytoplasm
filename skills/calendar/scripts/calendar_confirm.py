@@ -215,6 +215,16 @@ def owner_approval_channel(owner: str) -> str:
     return calendar_binding.approval_directory().owner_dm()
 
 
+def post_message(channel_id: str, content: str) -> None:
+    """Post a minimum-information reminder without creating an approval card."""
+    _api("POST", f"/channels/{channel_id}/messages", {"content": content})
+
+
+def fetch_channel(channel_id: str) -> object:
+    """Read channel metadata for the reminder's server-aware source link."""
+    return _api("GET", f"/channels/{channel_id}")
+
+
 def send_owner_dm(owner: str, content: str) -> None:
     """Send a private, terse result notification to the calendar owner."""
     if owner != owner_id():

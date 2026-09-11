@@ -53,6 +53,8 @@ class FakeDiscord:
     #: 만들어진 요청별 스레드 id → 만들 때 쓴 이름(실제 Discord 가 그렇게 기술한다).
     thread_names: dict[str, str] = field(default_factory=dict)
     posts: int = 0
+    #: 요청별 스레드가 매달리는 안내 메시지 — 승인 카드가 아니므로 따로 센다.
+    notices: list[str] = field(default_factory=list)
 
     def __call__(
         self,
@@ -65,7 +67,17 @@ class FakeDiscord:
             return {"id": CHANNEL_ID}
         if method == "GET" and path == f"/channels/{CHANNEL_ID}":
             return {"id": CHANNEL_ID, "name": "", "recipients": [{"id": OWNER_ID}], "type": 1}
-        if method == "POST" and path == f"/channels/{AGENT_CHAT_ID}/threads":
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_ID}/messages":
+            # 안내 메시지: 승인 카드는 스레드 안에 게시되므로 채널 id 로 구별된다.
+            self.notices.append(str((payload or {})["content"]))
+            return {"id": f"wiki-notice-{len(self.notices)}"}
+        if (
+            method == "POST"
+            and len(parts) == 5
+            and parts[1] == AGENT_CHAT_ID
+            and parts[2] == "messages"
+            and parts[4] == "threads"
+        ) or (method == "POST" and path == f"/channels/{AGENT_CHAT_ID}/threads"):
             name = str((payload or {})["name"])
             thread_id = str(int(REQUEST_THREAD_ID) + len(self.threads))
             self.threads.append(name)

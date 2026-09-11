@@ -70,6 +70,7 @@ class FakeDiscord:
         self.post_channels: list[str] = []
         self.posts = 0
         self.request_threads: list[str] = []
+        self.request_notice_ids: list[str] = []
 
     def request_thread_id(self, index: int) -> str:
         return f"{int(REQUEST_THREAD_ID) + index}"
@@ -94,6 +95,19 @@ class FakeDiscord:
         parts = path.strip("/").split("/")
         if method == "POST" and path == "/users/@me/channels":
             return {"id": OWNER_DM_CHANNEL_ID}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages":
+            notice_id = f"notice-{len(self.request_notice_ids) + 1}"
+            self.request_notice_ids.append(notice_id)
+            return {"id": notice_id}
+        if (
+            method == "POST"
+            and len(parts) == 5
+            and parts[:3] == ["channels", AGENT_CHAT_CHANNEL_ID, "messages"]
+            and parts[4] == "threads"
+        ):
+            assert parts[3] in self.request_notice_ids
+            self.request_threads.append(str((_payload or {})["name"]))
+            return {"id": self.request_thread_id(len(self.request_threads) - 1)}
         if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/threads":
             self.request_threads.append(str((_payload or {})["name"]))
             return {"id": self.request_thread_id(len(self.request_threads) - 1)}

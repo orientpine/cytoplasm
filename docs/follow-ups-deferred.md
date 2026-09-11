@@ -2082,3 +2082,23 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   event_type 을 티켓으로 볼 것인가**를 먼저 정해야 한다(무제한이면 healthcheck 폭주와 같은 모양이 된다).
   **다른 두 detect 경로(수동·헬스체크)는 살아 있어 동작은 정상 · 관측 공백 · 심각도 중**.
   ↳ 처리(2026-09-09 · 해소): **켜지 않기로 결정**했다. 조사해 보니 붙일 훅이 없다 — `hermes_plugin.register()` 가 등록하는 것은 Hermes 가 실제로 부르는 여섯(`pre_gateway_dispatch`·`pre_tool_call`·`transform_llm_output`·`kanban_task_{claimed,completed,blocked}`)뿐이고 "에러를 동반한 라이프사이클 실패" 훅은 벤더에 없다. `hermes_hook.handle` 은 `agent:start` 같은 옛 이벤트 어휘로 쓰였고 어디에도 등록되지 않으며, 그 보고 절반은 `kanban_task_*` → `_send_kanban_report` 가 이미 같은 `TaskReport` 로 `#agents-log` 에 보낸다(즉 **대체된 선행 구현**이다). 티켓 절반은 지금 형태로 켜면 해롭다 — `record_lifecycle_failure` 의 `subprocess.run(timeout=90)` 이 async 훅 안에서 턴을 최대 90초 세우고, dedup 서명의 location 이 `task_id` 라 실패한 task 마다 새 카드가 열리며, 수리 카드가 blocked 로 생성되므로 `kanban_task_blocked` 에 걸면 자기 피드백 루프가 된다. 그래서 고아 `automation/interop/hermes_hook.py` 를 삭제하고 결정을 `automation/interop/AGENTS.md` 에 남겼다. 그 기능은 인프라 실패=healthcheck detect, 소유자가 눈치챈 실패=`!repair` 가 덮으며 둘 다 같은 날 릴리스 런타임 사본으로 고정됐다.
+
+## 캘린더 카드 누락 백스톱과 통지 라우팅 착지 후 남긴 것 (2026-09-10)
+
+> [이관 2026-09-11 · 해소] 2026-09-10 에 남긴 2건이 다음 사이클에 둘 다 닫혔다. 아래는 그때의 원문이고 각 항목 끝의 `[해소 …]` 가 실제 처리다.
+
+- **단위 테스트가 개발자 홈의 실제 캘린더 게이트에 초안을 쌓는다** → `create_draft` 를 부르면서
+  `CALENDAR_GATE_DIR` 을 설정하지 않는 스위트(공유 픽스처 `tests/unit/approval_characterization_fixtures.py`
+  포함 20개 파일)가 각 게이트의 기본 경로(`~/.hermes/*-gate`)에 쓴다. 실측: 이 워크스테이션의
+  `~/.hermes/calendar-gate/drafts` 에 pending 초안 **398건**(노드는 executed 97·pending 1). 이번
+  사이클에서는 **읽는 쪽**만 닫았다 — 카드 게시 백스톱이 그 초안들에 도달할 수 있게 되었으므로
+  `test_calendar_confirm_reactions.py`·`test_calendar_approval_recovery_failures.py` 에
+  `_isolated_gate` autouse 가드를 넣어 `list_drafts` 를 빈 목록으로 고정했다. **쓰는 쪽**은 공유
+  픽스처와 budget·mail·wiki 계열까지 걸쳐 있어 별도 사이클이 필요하다.
+  **영향: 프로덕션 무관 · 개발자 홈 오염 + 테스트가 로컬 상태에 의존 · 심각도 낮음**. [해소 2026-09-11: 쓰는 쪽을 닫았다. `tests/unit/conftest.py` 가 수집 전(import 시점, 모듈들이 import 시 `Path.home()` 을 평가하므로)에 HOME 을 `tempfile.mkdtemp(prefix="autophagy-unit-home-")` 로 바꾸고 `XDG_CONFIG_HOME`·`XDG_CACHE_HOME`·`XDG_DATA_HOME`·`XDG_STATE_HOME` 을 지우며 종료 시 그 디렉터리를 없앤다(자식 프로세스도 상속). `tests/unit/test_unit_home_isolation.py` 가 이를 고정한다(`--noconftest` 면 실패). 실측: HEAD 5e1239b7e 에서 일회용 HOME 으로 돈 전체 실행이 그 홈에 19개 파일을 썼고, conftest 뒤 같은 전체 실행(7944건 통과)은 0개(증적 `docs/qa/UNIT-HOME-0911/01-unit-home-isolation.txt`). 이미 쌓인 `~/.hermes` 잔재(이 워크스테이션 calendar-gate 427·wiki-gate 358·entity-preflight 2194 파일)는 소유자 데이터라 자동으로 지우지 않는다. 정리 절차는 [단위 테스트 홈 격리](기능소개/단위-테스트-홈-격리.md).]
+- **승인 리마인더 배달은 아직 소유자 DM 고정이다** → `confirm_reaction_watch._process_entries` 의
+  `ReminderContext(deliver=lambda _channel_id, content: discord.send_owner_dm(content))` 가 넘겨받은
+  `channel_id` 를 버리고 DM 으로 보낸다. 이번 지시("정리 통지를 `#notifications` 로")의 범위 밖이고,
+  「요청별 승인 스레드 규칙」은 리마인더가 **그 요청의 스레드**에서 완결되기를 요구하므로 목적지가
+  `#notifications` 인지 스레드인지는 소유자 판단이 필요하다 — 고르기 전에는 고치지 않는다.
+  **영향: 리마인더가 스레드가 아닌 DM 으로 감 · 동작은 정상 · 심각도 낮음**. [해소 2026-09-11: 새 소유자 결정은 필요 없었다. 목적지는 기존 「요청별 승인 스레드 규칙」이 이미 정해 두었고(리마인더는 그 요청의 `#agent-chat` 스레드에서 완결), calendar 워처의 deliver 가 넘겨받은 `channel_id` 로 `DiscordApi.post_message` 를 부르도록 바꿔 그 규칙을 따르게 했다. 스레드 링크의 guild id 는 새 공용 헬퍼 `automation/interop/approval_reminder.py::channel_guild_resolver` 가 채우고(DM 승인은 `@me` 유지) todo·mail·repair 워처도 같은 리졸버를 쓴다(그쪽 스레드 카드 링크가 `@me` 였다). 증적: `docs/qa/REM-THREAD-0911/01-calendar-reminder-thread.txt` (전: DM open + `@me` 링크 / 후: 스레드로 POST 1건 `https://discord.com/channels/<guild>/<thread>/<card>`, DM open 0).]

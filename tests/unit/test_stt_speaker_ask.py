@@ -73,3 +73,24 @@ def test_a_long_draft_is_clipped_before_it_is_sent() -> None:
     _ = ask("x" * (stt_speaker_ask.MAX_DRAFT_CHARS + 500))
 
     assert len(seen[0]) == len(seen[1])
+
+
+def test_a_patent_sensitive_draft_reaches_the_permitted_codex_route() -> None:
+    """규칙이 이름으로 허용한 경로일 때는 특허 초안도 묻는다 (2026-09-09 소유자 결정).
+
+    민감도 규칙이 patent-sensitive 에 허용하는 경로는 Codex OAuth 하나이고, 그 경로일 때
+    묻지 않으면 소유자의 비공개 전사본이 화자 수를 잃을 뿐 아무것도 지켜지지 않는다.
+    """
+    from automation.codex_llm import VerifiedRoute
+
+    seen: list[str] = []
+
+    def complete(prompt: str) -> str:
+        seen.append(prompt)
+        return "3"
+
+    ask = stt_speaker_ask.resolve(_ON, repo_root=REPO, complete=VerifiedRoute(complete))
+
+    assert ask is not None
+    assert ask("특허 출원 회의입니다. 청구항을 검토했습니다.") == "3"
+    assert len(seen) == 1

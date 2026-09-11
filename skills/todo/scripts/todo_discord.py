@@ -54,6 +54,9 @@ class TodoDiscordTransport:
         encoded = quote(emoji, safe="")
         self.api("PUT", f"/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me")
 
+    def fetch_channel(self, channel_id: str) -> JsonValue:
+        return self.api("GET", f"/channels/{channel_id}")
+
     def get_message(self, channel_id: str, message_id: str) -> str | None:
         payload = _json_object(self.api("GET", f"/channels/{channel_id}/messages/{message_id}"))
         return _required_string(payload, "content")

@@ -140,7 +140,12 @@ def test_render_text_carries_attribution_and_score() -> None:
 def test_cli_fake_unreachable_is_single_attempt_exit_zero(tmp_path: Path) -> None:
     proc = subprocess.run(
         [sys.executable, str(_SCRIPTS / "recall_cli.py"), "search", "질문", "--json"],
-        env={"RECALL_FAKE_ERROR": "unreachable", "RECALL_LOG_DIR": str(tmp_path)},
+        # env 를 새로 만들면 HOME 도 넘긴다 — 빠지면 자식이 passwd 의 실제 홈에서 ~/.hermes 를 읽는다.
+        env={
+            "HOME": str(tmp_path),
+            "RECALL_FAKE_ERROR": "unreachable",
+            "RECALL_LOG_DIR": str(tmp_path),
+        },
         capture_output=True, text=True, check=False,
     )
     assert proc.returncode == 0

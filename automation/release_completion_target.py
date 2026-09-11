@@ -108,12 +108,48 @@ def gather(repo: Path, state: Path) -> CompletionFacts:
     )
 
 
+def tagged_release(repo: Path) -> str | None:
+    """origin/main 에서 도달 가능한 가장 가까운 **릴리스 커밋** — 완결 여부와 무관하다.
+
+    `decide` 의 대상 선정과 쓰임이 다르므로 판정도 다르다. 저기서는 "무엇을 완결했다고
+    적을 것인가"를 물어 번호가 정확히 하나여야 하지만, 여기서 쓰는 사실은 "그 sha 가
+    이미 잘린 릴리스인가" 하나뿐이다 — 한 커밋에 번호가 둘이어도 잘렸다는 사실은 변하지
+    않는다. prerelease 접미 태그만 붙은 커밋은 릴리스가 아니므로 `release_tags` 가
+    거른다(무엇이 릴리스 번호인지는 계속 그 함수가 단독으로 정한다).
+
+    이 사실은 `release_approval decision --tagged` 로 건너가, **이미 실행된 릴리스**를
+    낡은 승인으로 오인해 소유자에게 거짓 ⛔ 를 보내는 일을 막는다(2026-09-10 v1.6.7).
+    """
+    head = _git(repo, "rev-parse", "origin/main")
+    if head is None:
+        return None
+    tagged = _nearest_release_commit(repo, head)
+    if tagged is None or not release_tags(repo, tagged):
+        return None
+    return tagged
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """rc 0 이면 stdout 에 `<sha> <version>`, rc 1 이면 사유만 — 호출부는 rc 로 분기한다."""
+    """rc 0 이면 stdout 에 `<sha> <version>`, rc 1 이면 사유만 — 호출부는 rc 로 분기한다.
+
+    `--print-tagged` 는 그 대신 잘린 릴리스 커밋 하나만 찍는다(없으면 rc 1 에 무출력).
+    완결기가 그 값을 argv 에 실어 나르므로 사유 문구를 섞지 않는다.
+    """
     parser = argparse.ArgumentParser(prog="release-completion-target")
     _ = parser.add_argument("--repo", required=True)
     _ = parser.add_argument("--state", required=True)
+    _ = parser.add_argument(
+        "--print-tagged",
+        action="store_true",
+        help="도달 가능한 가장 가까운 릴리스 커밋만 출력한다(완결 여부와 무관)",
+    )
     args = parser.parse_args(argv)
+    if bool(args.print_tagged):
+        tagged = tagged_release(Path(str(args.repo)))
+        if tagged is None:
+            return 1
+        print(tagged)
+        return 0
     decision = decide(gather(Path(str(args.repo)), Path(str(args.state))))
     match decision:
         case Reconcile(sha, version):

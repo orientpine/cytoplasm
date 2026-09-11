@@ -14,7 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
@@ -26,7 +26,9 @@ __all__ = [
     "CodexClient",
     "CodexError",
     "CodexUnavailableError",
+    "VerifiedRoute",
     "complete",
+    "route_is_verified",
 ]
 
 PROVIDER: Final = "openai-codex"
@@ -44,6 +46,31 @@ _STDERR_TAIL_LIMIT: Final = 200
 _SECRET: Final = re.compile(
     r"(?:sk-[A-Za-z0-9_-]+|Bearer\s+\S+|eyJ[A-Za-z0-9_.-]{16,}|[A-Za-z0-9_-]{32,})"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedRoute:
+    """A completer that IS the route the sensitivity rules already permit.
+
+    ``configs/sensitivity-rules.yaml`` says the tag ``patent-sensitive`` "permits only
+    the Codex OAuth route (openai-codex)". A gate therefore has two separate questions
+    to answer — "is this text sensitive?" and "is this route permitted?" — and only the
+    second one decides whether the call may happen. Wrapping the Codex completer states
+    that answer in the type system, so a gate can let permitted text through the one
+    route the rules allow while a completer of unknown provenance stays refused,
+    because an arbitrary callable is not this wrapper.
+    """
+
+    complete: Callable[[str], str]
+    provider: str = PROVIDER
+
+    def __call__(self, prompt: str) -> str:
+        return self.complete(prompt)
+
+
+def route_is_verified(completer: object) -> bool:
+    """True only for the Codex OAuth route the sensitivity rules permit."""
+    return isinstance(completer, VerifiedRoute) and completer.provider == PROVIDER
 
 
 class CodexError(RuntimeError):

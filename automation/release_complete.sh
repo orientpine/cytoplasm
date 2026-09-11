@@ -155,7 +155,17 @@ export RELEASE_APPROVAL_CMD
 release_command="${RELEASE_COMPLETE_RELEASE_CMD:-$WORKTREE/automation/release.sh}"
 read -r -a release_cmd <<< "$release_command"
 
-"${approval[@]}" decision --head "$head" --notify-stale
+# 결정에는 **잘린 릴리스 sha** 를 함께 준다. 그 사실이 없으면 결정 경로는 이미 실행된
+# 릴리스를 낡은 승인으로 오인해 소유자에게 거짓 ⛔("…가 origin/main …와 달라 자동 완결할
+# 수 없습니다")를 보낸다 — 2026-09-10 v1.6.7 실측: 적용 완료 통지가 이미 나간 릴리스인데
+# 팁이 그 뒤로 전진했다는 이유만으로 경고가 갔다. 판정은 release_approval 이 단독으로 하고
+# 여기서는 사실만 나른다 — 태그 해석 사본을 bash 에 만들지 않는다.
+tagged_release="$(cd "$REPO_ROOT" && PYTHONPATH="$REPO_ROOT" \
+  python3 -m automation.release_completion_target \
+  --repo "$WORKTREE" --state "$STATE" --print-tagged 2>/dev/null)" || tagged_release=""
+decision_argv=(decision --head "$head" --notify-stale)
+[[ -n "$tagged_release" ]] && decision_argv+=(--tagged "$tagged_release")
+"${approval[@]}" "${decision_argv[@]}"
 decision_rc=$?
 case "$decision_rc" in
   0)

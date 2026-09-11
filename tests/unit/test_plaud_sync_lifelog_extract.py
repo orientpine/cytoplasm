@@ -12,6 +12,7 @@ from automation.plaud_sync.lifelog_extract import (
     parse_extraction,
     summarize,
 )
+from automation.codex_llm import VerifiedRoute
 from automation.plaud_sync.lifelog_extract_live import build_extractor
 from automation.plaud_sync.lifelog_model import (
     ExtractionSkipped,
@@ -839,3 +840,27 @@ def test_live_reference_drop_report_does_not_turn_failed_calls_into_extractions(
         _ = extractor(_recording())
     captured = capsys.readouterr()
     assert captured.out == captured.err == ""
+
+
+def test_build_extractor_runs_patent_sensitive_text_through_the_permitted_codex_route(
+    tmp_path: Path,
+) -> None:
+    # Given: the rules permit the Codex OAuth route for patent-sensitive text, and this
+    # completer IS that route. Refusing it suppressed the owner's own private lifelog
+    # note as "추출:: 생략 (민감도 게이트)" (2026-09-09 owner decision).
+    root = _prepare_repo(tmp_path)
+    seen: list[str] = []
+
+    def complete(prompt: str) -> str:
+        seen.append(prompt)
+        return _payload()
+
+    extractor = build_extractor({}, repo_root=root, complete=VerifiedRoute(complete))
+
+    # When: a patent-sensitive recording is extracted.
+    outcome = extractor(_recording(summary="특허 출원 일정 회의"))
+
+    # Then: the permitted route ran and the note keeps its extracted fields.
+    assert isinstance(outcome, LifelogExtraction)
+    assert outcome.people == ("김철수",)
+    assert len(seen) == 1

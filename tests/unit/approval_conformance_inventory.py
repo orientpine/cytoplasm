@@ -85,6 +85,9 @@ _EXEMPT: Final[Mapping[str, str]] = {
     "automation/repair/repair_ops_reaction_watch.py::RepairApprovalWatcher._process.deliver": "기존 승인 원문을 가리키는 무반응 최소정보 리마인더이며 새 승인 포인터를 저장하지 않는다.",
     "skills/budget/scripts/budget_confirm.py::notify_result": "발송/취소 결과 안내(원 채널 스레드, 소유자 DM 폴백)이며 승인 요청 메시지를 저장하지 않는다.",
     "skills/calendar/scripts/calendar_confirm.py::send_owner_dm": "확정 결과 알림 DM이며 pending 승인 메시지를 만들지 않는다.",
+    "skills/calendar/scripts/calendar_confirm.py::post_message": "기존 승인 원문을 가리키는 무반응 최소정보 리마인더이며 새 승인 포인터를 저장하지 않는다.",
+    "skills/calendar/scripts/confirm_reaction_watch.py::DiscordApi.post_message": "기존 승인 원문을 가리키는 무반응 최소정보 리마인더이며 새 승인 포인터를 저장하지 않는다.",
+    "skills/calendar/scripts/confirm_reaction_watch.py::_process_entries": "기존 승인 원문을 가리키는 무반응 최소정보 리마인더이며 새 승인 포인터를 저장하지 않는다.",
     "skills/coordination/scripts/confirm_reaction_watch.py::DiscordApi.send_owner_dm": "워처의 처리 결과 알림이며 승인 요청을 게시하지 않는다.",
     "skills/coordination/scripts/coordination_lifecycle.py::finish": "피어 조율 완료 통지이며 승인 메시지 포인터를 만들지 않는다.",
     "skills/coordination/scripts/coordination_lifecycle.py::send_owner_dm": "조율 완료 알림 DM이며 승인 게이트가 아니다.",
@@ -176,8 +179,6 @@ _SURFACE_NAMING_ALLOWED: Final[Mapping[str, str]] = {
         "봇이 어느 서버에도 초대되지 않았을 때의 조치 안내문 — 승인 표면 해석이 아니다.",
     "automation/research_trends/research_trends.py::_send_dm":
         "연구동향 리포트 DM 본문이며 승인 표면과 무관하다.",
-    "skills/calendar/scripts/confirm_reaction_watch.py::DiscordApi.send_owner_dm":
-        "ops 대면 전송 실패 진단 라벨 — 어느 표면이 실패했는지가 진단의 내용 자체다.",
     "skills/doctype/scripts/doctype_review.py::send_review":
         "문서종 검토 알림 — 소유자에게 어디서 볼지 알려주는 안내문이다.",
     "skills/proposal/scripts/proposal_dm.py::send_review":

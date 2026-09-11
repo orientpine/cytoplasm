@@ -38,6 +38,28 @@ STALE_MESSAGE = "message-stale"
 LIVE_MESSAGE = "message-live"
 
 
+class _WatchFakeDiscord(FakeDiscord):
+    """Fake surface with explicit coverage for the announcement-backed thread flow."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.post_requests: list[tuple[str, str, dict | None]] = []
+
+    def api(self, method: str, path: str, payload: dict | None = None):
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/messages":
+            self.post_requests.append((method, path, payload))
+            self.notice_count += 1
+            notice_id = f"notice-{self.notice_count}"
+            self.contents[notice_id] = str((payload or {}).get("content", ""))
+            return {"id": notice_id}
+        if method == "POST" and path.startswith(
+            f"/channels/{AGENT_CHAT_CHANNEL}/messages/"
+        ) and path.endswith("/threads"):
+            self.post_requests.append((method, path, payload))
+            return super().api(method, path, payload)
+        return super().api(method, path, payload)
+
+
 def _draft(draft_id: str, uid: str, message_id: str) -> dict:
     record = {
         "argv": ["python3", "-m", "mailon.main", "send", "--to", "owner@example.com"],
@@ -95,9 +117,9 @@ def _api_with_one_missing_message(drafts: tuple[dict, ...], missing: str):
     return request
 
 
-def _mail_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[FakeDiscord, Path]:
+def _mail_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[_WatchFakeDiscord, Path]:
     """Confine the draft store and the Discord surface to tmp_path."""
-    fake = FakeDiscord([])
+    fake = _WatchFakeDiscord()
     interop = tmp_path / "interop-config.json"
     interop.write_text(
         json.dumps({"owner_id": OWNER, "agent_chat_channel_id": AGENT_CHAT_CHANNEL}),
@@ -177,4 +199,12 @@ def test_when_an_old_approval_message_is_gone_then_the_lifecycle_unbinds_and_rep
     assert stored["message_id"] == "m-2"
     assert stored["status"] == "pending"
     assert fake.posts == 2
+    assert [
+        (method, path) for method, path, _payload in fake.post_requests
+    ] == [
+        ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages"),
+        ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages/notice-1/threads"),
+    ]
+    # 되살아난 요청은 자기가 이미 연 스레드로 돌아간다 — 두 번째 안내도, 두 번째 스레드도
+    # 만들지 않는다(한 요청에 스레드 하나).
     assert "DELETE:m-1" not in fake.calls

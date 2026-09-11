@@ -70,6 +70,10 @@ class RepairDiscordApi:
         """Pre-add one terminal emoji so the owner can decide with one tap."""
         _ = self._api("PUT", f"/channels/{self.binding.channel_id}/messages/{message_id}/reactions/{quote(emoji, safe='')}/@me")
 
+    def fetch_channel(self, channel_id: str) -> object:
+        """Read channel metadata for server-aware approval reminder links."""
+        return self._api("GET", f"/channels/{channel_id}")
+
     def content(self, message_id: str) -> str:
         """Read the original request before accepting any associated reaction."""
         payload = self._mapping(self._api("GET", f"/channels/{self.binding.channel_id}/messages/{message_id}"))

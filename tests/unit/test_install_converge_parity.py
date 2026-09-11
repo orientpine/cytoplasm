@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import Final
 
 from automation.install.assets import build_inputs
+from automation.install.plan import _directories as _installer_directories
 from automation.node_config import default_node_config
+from automation.update_trust_state import release_floor_path
 
 _REPO: Final = Path(__file__).resolve().parents[2]
 _PROVISIONER: Final = _REPO / "automation" / "provision-deploy-converge.sh"
@@ -93,3 +95,22 @@ def test_the_verifier_the_converger_requires_is_installed_with_its_package() -> 
         "automation/node_config.py",
         "automation/node.example.toml",
     } <= placed, sorted(placed)
+
+
+def test_the_installer_creates_the_anchor_directory_the_provisioner_does() -> None:
+    # Given: the provisioner opens the authoritative floor's parent to the ops pre-gate.
+    provisioner = _PROVISIONER.read_text(encoding="utf-8")
+    assert 'install -d -m 0755 -o root -g root "$(dirname "$RELEASE_FLOOR_PATH")"' in provisioner
+
+    # When: the installer's directory plan is built. (_directories is private because the
+    # plan is; this is the only other place allowed to know that shape.)
+    config = default_node_config()
+    planned = {
+        (spec.path, spec.mode, spec.owner, spec.group) for spec in _installer_directories(config)
+    }
+
+    # Then: the same directory at the same mode. Without it the anchor is first created by
+    # save_release_floor at 0700 and the ops pre-gate can never read it again — the tick
+    # after the 2026-09-08 v1.6.3 convergence failed exactly there.
+    anchor = release_floor_path(config).parent
+    assert (anchor, 0o755, "root", "root") in planned, sorted(str(path) for path, *_ in planned)

@@ -59,6 +59,8 @@ class FakeDiscordRest:
         self.approve_users = approve_users
         self.contents: dict[str, str] = {}
         self.channels: dict[str, str] = {}
+        self.notices: list[str] = []
+        self.request_thread_calls: list[tuple[str, dict]] = []
         self.threads: list[str] = []
         self._posted = 0
 
@@ -66,8 +68,18 @@ class FakeDiscordRest:
         channel = path.split("/")[2]
         if method == "POST" and path == "/users/@me/channels":
             return {"id": CHANNEL_ID}
-        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/threads":
-            self.threads.append(str((payload or {})["name"]))
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages":
+            assert payload is not None
+            self.notices.append(str(payload["content"]))
+            return {"id": f"wiki-notice-{len(self.notices)}"}
+        if (
+            method == "POST"
+            and path.startswith(f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/")
+            and path.endswith("/threads")
+        ):
+            assert payload is not None
+            self.request_thread_calls.append((path, payload))
+            self.threads.append(str(payload["name"]))
             return {"id": CHANNEL_ID, "type": 11, "parent_id": AGENT_CHAT_CHANNEL_ID}
         if method == "GET" and path == f"/channels/{CHANNEL_ID}":
             if self.threads:
@@ -158,6 +170,13 @@ def test_post_confirm_message_adds_confirm_message_id(wiki_env: FakeDiscordRest,
     assert sorted(stored.keys()) == STORED_POSTED_FIELDS
     assert posted["confirm_message_id"] == "wiki-msg-1"
     assert stored["confirm_message_id"] == "wiki-msg-1"
+    assert wiki_env.notices == [
+        f"🔔 승인 대기 · 위키 · {draft['id']}\n이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
+    ]
+    assert wiki_env.request_thread_calls == [(
+        f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/wiki-notice-1/threads",
+        {"name": f"위키 · {draft['id']}", "auto_archive_duration": 10080},
+    )]
     assert wiki_env.contents["wiki-msg-1"] == f"저장 {draft['id']} sha256:{NOTE_SHA256}"
 
 
@@ -309,11 +328,13 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
     patent_storage.private_directory(paths.workspace_root / SLUG)
     patent_storage.write_private(paths.workspace_root / SLUG / "draft.md", "private draft\n")
     messages: dict[str, str] = {}
+    notices: list[str] = []
+    request_thread_calls: list[tuple[str, dict[str, object]]] = []
     posted: list[str] = []
     post_channels: list[str] = []
 
     def api(
-        method: str, path: str, payload: dict[str, str] | None = None
+        method: str, path: str, payload: dict[str, object] | None = None
     ) -> dict[str, object] | list[dict[str, str | bool]]:
         if method == "POST" and path == "/users/@me/channels":
             return {"id": CHANNEL_ID}
@@ -326,6 +347,26 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
                 "parent_id": AGENT_CHAT_CHANNEL_ID,
                 "type": 11,
             }]}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages":
+            assert payload is not None
+            assert payload == {
+                "content": (
+                    f"🔔 승인 대기 · 특허 반출 · {SLUG}\n"
+                    "이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
+                )
+            }
+            notices.append(str(payload["content"]))
+            return {"id": f"patent-notice-{len(notices)}"}
+        if method == "POST" and path == (
+            f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/patent-notice-1/threads"
+        ):
+            assert payload is not None
+            assert payload == {
+                "name": f"특허 반출 · {SLUG}",
+                "auto_archive_duration": 10080,
+            }
+            request_thread_calls.append((path, payload))
+            return {"id": REQUEST_THREAD_ID}
         if method == "POST" and path.endswith("/messages"):
             message_id = f"msg-{len(posted) + 1}"
             posted.append(message_id)
@@ -369,6 +410,13 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
     # Then
     assert first.message_id == "msg-1"
     assert second.message_id == first.message_id
+    assert notices == [
+        f"🔔 승인 대기 · 특허 반출 · {SLUG}\n이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
+    ]
+    assert request_thread_calls == [(
+        f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/patent-notice-1/threads",
+        {"name": f"특허 반출 · {SLUG}", "auto_archive_duration": 10080},
+    )]
     assert posted == ["msg-1"]
     assert post_channels == [REQUEST_THREAD_ID]
     assert set(messages) == {"msg-1"}

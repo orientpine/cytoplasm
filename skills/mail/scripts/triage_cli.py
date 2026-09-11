@@ -193,6 +193,7 @@ def _remind_pending(draft: dict, config: object | None) -> None:
     lifecycle = triage_approval.lifecycle()
     reminder = triage_approval._repo_module("approval_reminder")
     lease_module = triage_approval._lease_module()
+    guild_id_for = reminder.channel_guild_resolver(triage_confirm.fetch_channel)
     context = reminder.ReminderContext(
         config=config,
         journal=lease_module.ReminderJournal(triage_gate.gate_dir() / "reminder-journal"),
@@ -200,6 +201,7 @@ def _remind_pending(draft: dict, config: object | None) -> None:
         deliver=lambda channel_id, content: triage_confirm.post_approval_request(
             content, channel_id
         ),
+        guild_id_for=guild_id_for,
         clock=lambda: datetime.now(UTC),
     )
     lifecycle.remind_owner_approval(

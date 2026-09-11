@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, Final, assert_never
 from urllib.error import HTTPError
 
 import triage_confirm
@@ -41,6 +41,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
 LEASE_DIRNAME = "approval-leases"
 JOURNAL_DIRNAME = "posting-journal"
 SUPERSEDED_STATUS = "superseded"
+#: Discord refuses a longer message body with HTTP 400. The lifecycle reserves the posting
+#: journal BEFORE it posts and mail never enriches that reservation with a message id, so a
+#: 400 left a key no later attempt could resolve — every retry then refused with
+#: POSTING_JOURNAL_STALE and the draft was wedged for good (repair ticket t_82644d12).
+_MESSAGE_LIMIT: Final = 2000
 _TRANSPORT_ERRORS = (triage_gate.GateError, OSError, json.JSONDecodeError, KeyError, TypeError)
 
 
@@ -102,6 +107,22 @@ def approval_key(draft: dict) -> str:
 approval_directory = triage_binding.approval_directory
 stored_binding = triage_binding.stored_binding
 reaction_instruction = triage_binding.reaction_instruction
+
+
+def _approval_content(draft: dict, notice: str) -> str:
+    """The exact bytes ``MailApprovalGate.post`` would send — rendered in ONE place.
+
+    The pre-flight size check and the post itself must never render differently, or the
+    check would clear a message the post cannot deliver.
+    """
+    return (
+        triage_core.render_approvals_message(
+            draft,
+            destination=triage_core.ApprovalRenderDestination.OWNER_DM,
+            instruction=reaction_instruction(draft),
+        )
+        + notice
+    )
 
 
 def post_channel_id(draft: dict) -> str:
@@ -269,14 +290,7 @@ class MailApprovalGate:
             return
 
     def post(self, intent: ApprovalIntent) -> PostedApproval:
-        content = (
-            triage_core.render_approvals_message(
-                self.draft,
-                destination=triage_core.ApprovalRenderDestination.OWNER_DM,
-                instruction=reaction_instruction(self.draft),
-            )
-            + self.notice
-        )
+        content = _approval_content(self.draft, self.notice)
         message_id = triage_confirm.post_approval_request(content, intent.channel_id)
         for emoji in (triage_confirm.APPROVE_EMOJI, triage_confirm.CANCEL_EMOJI):
             try:
@@ -312,8 +326,25 @@ def _live_requests(draft: dict) -> tuple[ApprovalRequest, ...]:
         return ()
 
 
+def _refuse_unpostable_content(draft: dict, notice: str) -> None:
+    """Refuse a message Discord cannot accept BEFORE the journal reserves its key.
+
+    Entering the lifecycle is what reserves the posting journal, and that reservation is
+    what a later attempt trips over once the post fails. Refusing here costs the owner one
+    legible error instead of a permanently unusable approval key (t_82644d12).
+    """
+    size = len(_approval_content(draft, notice))
+    if size > _MESSAGE_LIMIT:
+        raise triage_gate.GateError(
+            f"승인 메시지가 Discord 한도를 넘음({size}/{_MESSAGE_LIMIT}자) — 게시하지 않음. "
+            "본문을 줄여 다시 시도하거나 첨부 방식 승인이 필요하다.",
+            3,
+        )
+
+
 def request_approval(draft: dict, *, notice: str = "") -> Verdict:
     """Run the shared lifecycle for one draft while holding its key's lease."""
+    _refuse_unpostable_content(draft, notice)
     return lifecycle().request_owner_approval(
         confirm_intent(draft), MailApprovalGate(draft, notice), confirm_lease(), posting_journal()
     )

@@ -26,6 +26,7 @@ for _root in (
         sys.path.insert(0, str(_root))
         break
 from automation.skill_mount import skill_scripts  # noqa: E402 — 코드 루트 확정 뒤에만 가능하다
+from automation import owner_notice  # noqa: E402 — 같은 이유: 코드 루트가 정해진 뒤에만 import 된다
 
 
 def _load_env_secrets(path: Path = _ENV_SECRETS) -> None:
@@ -75,12 +76,18 @@ _transport_failure = _diagnostics.transport_failure
 APPROVE_EMOJI = "\u2705"
 CANCEL_EMOJI = "\u26d4"
 EXPIRY = timedelta(hours=24)
+#: 에이전트 자신의 `post-confirm` 이 이기도록 두는 시간. 정상 경로는 초안을 만든 그 턴에서
+#: 곧바로 이어지므로 초 단위로 끝난다 — 이 유예를 넘겼다는 것은 그 턴이 2단계에 도달하지
+#: 못했다는 뜻이고, 그때부터는 이 워처가 대신 카드를 올린다.
+POST_GRACE = timedelta(minutes=3)
 class DiscordClient(Protocol):
     def message_content(self, entry: PendingConfirm) -> str | None: ...
 
     def reaction_users(self, entry: PendingConfirm, emoji: str) -> tuple[Mapping[str, str | bool], ...]: ...
 
-    def send_owner_dm(self, content: str) -> None: ...
+    def post_message(self, channel_id: str, content: str) -> None: ...
+
+    def fetch_channel(self, channel_id: str) -> object: ...
 
 
 class CommandRunner(Protocol):
@@ -111,12 +118,19 @@ class DiscordApi:
         except (calendar_gate.GateError, HTTPError, URLError, OSError) as error:
             raise _transport_failure("reaction query failed", "discord.reactions", error) from error
 
-    def send_owner_dm(self, content: str) -> None:
-        """Send a terse owner notification after cancellation or expiry."""
+    def post_message(self, channel_id: str, content: str) -> None:
+        """Post a reminder to the channel authorized by the shared policy."""
         try:
-            calendar_confirm.send_owner_dm(self.owner_id, content)
+            calendar_confirm.post_message(channel_id, content)
         except (calendar_gate.GateError, HTTPError, URLError, OSError) as error:
-            raise _transport_failure("owner DM notification failed", "discord.notify", error) from error
+            raise _transport_failure("reminder post failed", "discord.notify", error) from error
+
+    def fetch_channel(self, channel_id: str) -> object:
+        """Read channel metadata for the reminder's server-aware source link."""
+        try:
+            return calendar_confirm.fetch_channel(channel_id)
+        except (calendar_gate.GateError, HTTPError, URLError, OSError) as error:
+            raise _transport_failure("channel query failed", "discord.channel", error) from error
 
 
 _ACTION_LABELS: Final = {"create": "등록", "update": "수정", "delete": "삭제"}
@@ -235,14 +249,20 @@ def sweep_orphan_drafts(
     now: datetime,
     list_drafts: Callable[[], list[dict]] | None = None,
 ) -> tuple[str, ...]:
-    """Discard pending drafts whose confirmation DM was never posted (best-effort).
+    """Post the card a pending draft never got, and discard it only if that keeps failing.
 
     draft-create 와 post-confirm 은 별개 단계다 — post-confirm 이 불리지 않으면 초안은
     pending-confirms 원장에 없어 이 워처의 어떤 경로도 다시 보지 않는다(2026-07~08
-    실측 33건 누적, 전부 행사일 경과). 게시된 확인에 묶인 초안은 건드리지 않고,
-    EXPIRY(24h) 유예가 지난 고아만 기존 discard 경로로 폐기한 뒤 소유자에게 알린다.
-    나이를 알 수 없는 초안은 폐기하지 않는다(보존이 안전한 방향). 실패는 tick 을
-    죽이지 않는다 — 다음 tick 이 다시 본다.
+    실측 33건 누적, 전부 행사일 경과). 게시된 확인에 묶인 초안은 건드리지 않는다.
+
+    **2026-09-10**: 폐기만으로는 부족하다는 것이 실측으로 드러났다 — 노드 agent 계정의
+    승인 lease 는 09-06 이후 하나도 늘지 않았고 posting-journal 은 비어 있는데 pending
+    초안은 계속 쌓였다. 즉 `request_owner_approval` 이 **아예 호출되지 않았고**, 소유자는
+    24시간 뒤 "게시되지 않은 채 폐기했습니다" 통지 3건만 받았다. 그래서 이제 두 분기다:
+    `POST_GRACE` 를 넘긴 고아는 기존 승인 게이트로 **카드를 올리고**(새 승인 기계장치
+    없음), EXPIRY(24h)까지도 카드가 붙지 못한 고아만 기존 discard 경로로 폐기한 뒤
+    소유자에게 알린다. 나이를 알 수 없는 초안은 어느 쪽도 하지 않는다(보존이 안전한
+    방향). 실패는 tick 을 죽이지 않는다 — 다음 tick 이 다시 본다.
     """
     reader = list_drafts if list_drafts is not None else calendar_gate.list_drafts
     posted = {entry.draft_id for entry in snapshot}
@@ -268,7 +288,12 @@ def sweep_orphan_drafts(
             created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
         except ValueError:
             continue
-        if created.tzinfo is None or now.astimezone(UTC) - created <= EXPIRY:
+        if created.tzinfo is None:
+            continue
+        age = now.astimezone(UTC) - created
+        if age <= EXPIRY:
+            if age > POST_GRACE:
+                _post_missing_confirmation(record, draft_id)
             continue
         try:
             commands.discard(draft_id)
@@ -282,6 +307,29 @@ def sweep_orphan_drafts(
         _notify_result(discord, record, _orphan_notice(record, draft_id))
         swept.append(draft_id)
     return tuple(swept)
+
+
+def _post_missing_confirmation(record: Mapping[str, object], draft_id: str) -> None:
+    """Post the approval card this draft's own ``post-confirm`` never posted.
+
+    새 승인 기계장치를 만들지 않는다 — 에이전트가 불렀어야 할 바로 그
+    `calendar_approval.request_confirmation` 을 그대로 부른다(단일 게이트 재사용). 그
+    파사드는 승인 키 단위 lease 와 posting journal 로 스스로 멱등하므로, 에이전트가 같은
+    순간에 post-confirm 을 돌려도 카드가 둘이 되지 않는다(둘째는 PENDING 으로 답한다).
+
+    실패는 이 초안 하나만 건너뛴다 — 폐기하지 않고 다음 tick 이 다시 본다. EXPIRY 까지
+    끝내 못 올리면 기존 폐기 경로가 소유자에게 알린다.
+    """
+    try:
+        _ = calendar_approval.request_confirmation(record)
+    except Exception as error:  # noqa: BLE001 — 초안 하나의 실패가 나머지를 막으면 안 된다.
+        print(
+            f"calendar-confirm-watch missing card post failed draft={draft_id}: "
+            f"{_redact(str(error))}",
+            file=sys.stderr,
+        )
+        return
+    print(f"calendar-confirm-watch posted missing card draft={draft_id}", file=sys.stderr)
 
 
 def _process_entries(
@@ -329,8 +377,11 @@ def _process_entries(
                             store.path.parent / "reminder-journal"
                         ),
                         request_type=kind,
-                        deliver=lambda _channel_id, content: discord.send_owner_dm(content),
+                        deliver=lambda channel_id, content: discord.post_message(channel_id, content),
                         clock=lambda: now,
+                        guild_id_for=reminder.channel_guild_resolver(
+                            lambda channel_id: discord.fetch_channel(channel_id)
+                        ),
                     )
                     calendar_approval.lifecycle().remind_owner_approval(
                         request, decision, lease, context
@@ -397,18 +448,19 @@ def _notify_thread(record: Mapping[str, object], content: str, outcome: str = ""
 
 
 def _notify_owner(discord: DiscordClient, content: str) -> None:
-    """Send a post-action owner notification, swallowing errors so a notification
-    failure cannot re-retain an already-completed (discarded/confirmed) entry.
+    """Send a post-action owner notification through the shared owner-notice facade.
 
-    The command (discard/confirm) has already succeeded at this point; the
-    pending-confirm JSONL entry will be purged by ``remove_completed``.  A
-    transient Discord outage must not cause the entry to be retained and
-    re-evaluated on every subsequent tick.
+    목적지는 이 워처가 정하지 않는다 — `automation.owner_notice.notify_owner` 가
+    `owner_notice_channel_id`(#notifications)를 존중하고, 미설정이면 소유자 DM 으로
+    되돌린다(ON-1/ON-2). 2026-09-10 소유자 지시로 옮겼다: 카드 없이 폐기된 초안의 정리
+    통지가 DM 에만 쌓여, 소유자가 정기 통지를 모아 보는 채널에서 보이지 않았다.
+
+    파사드는 **절대 예외를 던지지 않고** False 로만 답한다. 그 실패가 이미 끝난
+    (discard/confirm) 항목을 다시 붙잡으면 매 tick 재평가되므로, 여기서는 한 줄만 남긴다.
     """
-    try:
-        discord.send_owner_dm(content)
-    except ConfirmWatchError as error:
-        print(f"calendar-confirm-watch owner notification failed: {_redact(str(error))}", file=sys.stderr)
+    del discord  # 목적지는 파사드 몫이다 — 이 클라이언트는 스레드·리마인더 경로가 쓴다
+    if not owner_notice.notify_owner(content):
+        print("calendar-confirm-watch owner notification failed: NOTIFY-FAIL", file=sys.stderr)
 
 
 def reaction_action(entry: PendingConfirm, owner_id: str, discord: DiscordClient) -> str:

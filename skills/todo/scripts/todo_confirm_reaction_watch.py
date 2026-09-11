@@ -150,6 +150,7 @@ def run_once(
                         channel_id, content
                     ),
                     clock=lambda: moment,
+                    guild_id_for=reminder.channel_guild_resolver(transport.fetch_channel),
                 )
                 lifecycle().remind_owner_approval(request, decision, lease, context)
             lifecycle().resolve_owner_decision(request, decision, lease)

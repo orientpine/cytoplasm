@@ -43,6 +43,7 @@ AGENT_CHAT_THREAD = "1526487935975952391"
 REQUEST_THREAD = "1526487935975952392"
 REQUEST_THREAD_NAME = "과제비 메일 · s"
 MESSAGE_ID = "message-1"
+NOTICE_MESSAGE_ID = "notice-message-1"
 
 type DraftValue = str | int | list[str] | list[list[str]]
 type BudgetDraft = dict[str, DraftValue]
@@ -123,7 +124,11 @@ def _surface_api(
 
     def request(method: str, path: str, payload: dict | None = None):
         requests.append((method, path))
-        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/threads":
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/messages":
+            return {"id": NOTICE_MESSAGE_ID}
+        if method == "POST" and path == (
+            f"/channels/{AGENT_CHAT_CHANNEL}/messages/{NOTICE_MESSAGE_ID}/threads"
+        ):
             if thread_names is not None:
                 thread_names.append(str((payload or {}).get("name", "")))
             return {"id": REQUEST_THREAD}
@@ -367,8 +372,12 @@ def test_request_posts_to_its_own_request_thread(monkeypatch: pytest.MonkeyPatch
     # Then: the single approval message lands in THIS request's own thread — named by the
     # outbound mail 제목, never the shared per-kind thread — with the policy's reaction line
     assert message_id == MESSAGE_ID
-    posts = [path for method, path in requests if method == "POST" and path.endswith("/messages")]
-    assert posts == [f"/channels/{REQUEST_THREAD}/messages"]
+    posts = [path for method, path in requests if method == "POST"]
+    assert posts == [
+        f"/channels/{AGENT_CHAT_CHANNEL}/messages",
+        f"/channels/{AGENT_CHAT_CHANNEL}/messages/{NOTICE_MESSAGE_ID}/threads",
+        f"/channels/{REQUEST_THREAD}/messages",
+    ]
     assert names == [REQUEST_THREAD_NAME]
     assert reaction_instruction(
         ApprovalKind.BUDGET_MAIL, ApprovalSurface.AGENT_CHAT_THREAD

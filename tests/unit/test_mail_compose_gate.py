@@ -35,6 +35,7 @@ APPROVALS_CHANNEL = "approvals-1"
 DM_CHANNEL = "100000000000000002"
 AGENT_CHAT_CHANNEL = "100000000000000003"
 AGENT_CHAT_THREAD = "100000000000000004"
+NOTICE_MESSAGE_ID = "100000000000000005"
 MESSAGE_ID = "message-1"
 
 COMPOSE_TO = "x@y.z"
@@ -95,7 +96,11 @@ def _dm_post_api(requests: list[tuple[str, str]]):
             return {"type": 1, "name": "", "recipients": [{"id": OWNER_ID}]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
             return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
-        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/threads":
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/messages":
+            return {"id": NOTICE_MESSAGE_ID}
+        if method == "POST" and path == (
+            f"/channels/{AGENT_CHAT_CHANNEL}/messages/{NOTICE_MESSAGE_ID}/threads"
+        ):
             return {"id": AGENT_CHAT_THREAD}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
             return {
@@ -214,13 +219,17 @@ def test_compose_post_targets_dm_channel_with_reaction_order(
     monkeypatch.setattr(triage_confirm, "_api", _dm_post_api(requests))
     # When: the compose pipeline posts the confirmation request
     triage_pipeline.compose_and_post(COMPOSE_TO, COMPOSE_SUBJECT, COMPOSE_BODY, post=True)
-    # Then: the agent-chat thread message is posted, then ✅ and ⛔ are pre-added in that order
+    # Then: an agent-chat announcement anchors the thread before its approval card
+    # is posted, then ✅ and ⛔ are pre-added in that order.
     expected = [
+        ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages"),
+        ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages/{NOTICE_MESSAGE_ID}/threads"),
+        ("GET", f"/channels/{AGENT_CHAT_THREAD}"),
         ("POST", f"/channels/{AGENT_CHAT_THREAD}/messages"),
         ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9C%85/@me"),
         ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9B%94/@me"),
     ]
-    assert [item for item in requests if item in expected] == expected
+    assert requests == expected
 
 
 def test_compose_no_post_creates_draft_without_network(
@@ -473,7 +482,11 @@ def _dm_payload_api(payloads: list[dict]):
             return {"type": 1, "name": "", "recipients": [{"id": OWNER_ID}]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
             return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
-        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/threads":
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/messages":
+            return {"id": NOTICE_MESSAGE_ID}
+        if method == "POST" and path == (
+            f"/channels/{AGENT_CHAT_CHANNEL}/messages/{NOTICE_MESSAGE_ID}/threads"
+        ):
             return {"id": AGENT_CHAT_THREAD}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
             return {

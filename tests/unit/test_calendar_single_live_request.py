@@ -77,6 +77,7 @@ class FakeDiscord:
         self.post_channels: list[str] = []
         self.posts = 0
         self.request_threads: list[str] = []
+        self.notice_ids: list[str] = []
 
     def request_thread_id(self, index: int) -> str:
         return f"{int(REQUEST_THREAD_ID) + index}"
@@ -87,6 +88,14 @@ class FakeDiscord:
         parts = path.strip("/").split("/")
         if method == "POST" and path == "/users/@me/channels":
             return {"id": OWNER_DM_CHANNEL_ID}
+        if (
+            method == "POST"
+            and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages"
+        ):
+            # The request announcement is separate from approval-card posts.
+            notice_id = f"notice-{len(self.notice_ids) + 1}"
+            self.notice_ids.append(notice_id)
+            return {"id": notice_id}
         if method == "POST" and parts[0] == "channels" and parts[-1] == "threads":
             # 요청별 승인 스레드: agent-chat 지시 메시지 앵커(5조각) 또는 채널 스레드(3조각).
             self.request_threads.append(str((payload or {})["name"]))

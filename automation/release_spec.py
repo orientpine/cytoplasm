@@ -104,6 +104,26 @@ def spec_from_record(record: Mapping[str, str]) -> ReleaseSpec:
     )
 
 
+def spec_from_plan(payload: Mapping[str, object], release_nonce: str) -> ReleaseSpec:
+    """One immutable spec from the plan JSON `release.sh` carries between steps.
+
+    `spec_from_record` 의 형제다 — 둘 다 바깥 표현(계획 JSON · 저장 레코드)을 같은 스펙으로
+    되살리므로 한 자리에 둔다. 2026-09-10 에 `release_approval` 에서 옮겼다: 그 모듈이 250
+    pure-LOC 천장을 넘겼고, 이 함수의 집은 원래 여기다(이 모듈 자신이 같은 이유로 갈라졌다).
+    """
+    surfaces = payload.get("surface_digests")
+    if not isinstance(surfaces, list):
+        raise ReleaseSpecError("plan payload carries no surface digest list")
+    return ReleaseSpec(
+        version=str(payload.get("version", "")),
+        head_sha=str(payload.get("head", "")),
+        release_nonce=release_nonce,
+        surface_digests=tuple((str(row[0]), str(row[1])) for row in surfaces),
+        patch_notes=str(payload.get("patch_notes", "")),
+        major_note=str(payload.get("major_note", "")),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ReleaseSpec:
     """release: one owner decision over version + HEAD + the complete surface digest set."""

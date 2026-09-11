@@ -14,6 +14,7 @@ from automation.install.component_assets import (
     FileSpec as FileSpec, FileState as FileState,
 )
 from automation.node_config import NodeConfig
+from automation.update_trust_state import release_floor_path
 
 
 CheckName: TypeAlias = Literal["hermes-gateway", "discord-readiness", "deploy-key-registration",
@@ -218,6 +219,10 @@ def _directories(config: NodeConfig) -> tuple[DirectorySpec, ...]:
         DirectorySpec(config.repair_capability, 0o2750, agent, ops),
         DirectorySpec(config.libexec_dir, 0o755, root, root),
         DirectorySpec(config.libexec_dir / "autophagy-converge.d", 0o755, root, root),
+        # root writes the rollback anchor, ops reads it in the converge pre-gate. The
+        # provisioner has always created it 0755; the installer did not, so the first
+        # write made it 0700 and every later tick skipped (2026-09-08).
+        DirectorySpec(release_floor_path(config).parent, 0o755, root, root),
         DirectorySpec(config.agent_home / ".hermes", 0o700, agent, agent),
         DirectorySpec(config.peer_home / ".hermes", 0o700, config.peer_account, config.peer_account),
         DirectorySpec(config.peer_home / ".ssh", 0o700, config.peer_account, config.peer_account),

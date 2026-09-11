@@ -603,6 +603,46 @@ def test_reconcile_does_not_repeat_a_completed_release(tmp_path: Path) -> None:
     assert len(_lines(tmp_path / "deploy-calls.log")) == 1
 
 
+def test_the_decision_carries_the_cut_release_so_it_is_not_called_stale(
+    tmp_path: Path,
+) -> None:
+    """Given: 릴리스 태그가 잘린 뒤 origin/main 이 그 앞으로 전진했다.
+
+    When: 완결기가 소유자 결정을 묻는다.
+    Then: 그 결정에 **잘린 릴리스 sha** 를 함께 실어 보낸다.
+
+    이 사실이 없으면 결정 경로는 이미 실행된 릴리스를 낡은 승인으로 오인해 소유자에게
+    거짓 ⛔("…가 origin/main …와 달라 자동 완결할 수 없습니다")를 보낸다 — 2026-09-10
+    v1.6.7 실측(완결·적용 통지가 이미 나간 릴리스였다). 판정은 `release_approval` 이
+    단독으로 하고 완결기는 사실만 나른다(사본 0).
+    """
+    _origin, source = _origin_and_source(tmp_path)
+    tagged = _tag_and_advance(source, "v9.9.9")
+    state = tmp_path / "state"
+
+    result = _run(tmp_path, source, state, decision_rc=2)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    tip = _git(source, "rev-parse", "origin/main")
+    assert _lines(tmp_path / "calls.log") == [
+        f"decision --head {tip} --notify-stale --tagged {tagged}"
+    ]
+
+
+def test_the_decision_omits_the_cut_release_when_no_release_tag_exists(
+    tmp_path: Path,
+) -> None:
+    """태그가 없는 이력에는 실을 사실이 없다 — argv 는 예전과 바이트 그대로다."""
+    _origin, source = _origin_and_source(tmp_path)
+    state = tmp_path / "state"
+
+    result = _run(tmp_path, source, state, decision_rc=7)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    head = _git(source, "rev-parse", "origin/main")
+    assert _lines(tmp_path / "calls.log") == [f"decision --head {head} --notify-stale"]
+
+
 def test_a_stale_checkout_as_cwd_does_not_shadow_the_completer_runtime(
     tmp_path: Path,
 ) -> None:

@@ -81,6 +81,15 @@ class FakeDiscord:
             }]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
             return {"id": AGENT_CHAT_THREAD, "type": 11, "name": "승인-budget-mail", "parent_id": AGENT_CHAT_CHANNEL}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/messages":
+            return {"id": "notice-1"}
+        if (method == "POST" and len(parts) == 5
+                and parts[:3] == ["channels", AGENT_CHAT_CHANNEL, "messages"]
+                and parts[4] == "threads"):
+            thread_id = str(int(AGENT_CHAT_THREAD) + len(self.thread_names) + 1)
+            self.thread_names[thread_id] = str((payload or {}).get("name", ""))
+            return {"id": thread_id, "type": 11, "name": self.thread_names[thread_id],
+                    "parent_id": AGENT_CHAT_CHANNEL}
         if method == "POST" and parts[-1] == "threads":
             thread_id = str(int(AGENT_CHAT_THREAD) + len(self.thread_names) + 1)
             self.thread_names[thread_id] = str((payload or {}).get("name", ""))

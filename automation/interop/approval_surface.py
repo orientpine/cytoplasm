@@ -97,10 +97,30 @@ REQUEST_TITLE_LIMIT: Final = 40
 THREAD_NAME_LIMIT: Final = 100  # Discord channel/thread name limit
 
 
+def _request_title(request: RequestThread) -> str:
+    """The producer-masked title, whitespace-folded and clipped to the shared limit."""
+    return " ".join(request.title.split())[:REQUEST_TITLE_LIMIT] or "요청"
+
+
 def request_thread_name(kind: ApprovalKind, request: RequestThread) -> str:
     """``<kind label> · <title≤40>`` clipped to Discord's 100-char thread name."""
-    title = " ".join(request.title.split())[:REQUEST_TITLE_LIMIT] or "요청"
-    return f"{KIND_LABELS[kind]} · {title}"[:THREAD_NAME_LIMIT]
+    return f"{KIND_LABELS[kind]} · {_request_title(request)}"[:THREAD_NAME_LIMIT]
+
+
+def request_thread_notice(kind: ApprovalKind, request: RequestThread) -> str:
+    """The channel-visible announcement a request thread hangs on (2026-09-09).
+
+    A thread created directly on the channel renders in #agent-chat as a contentless
+    "started a thread" system line: the owner sees a name but nothing saying a decision
+    is waiting, and calendar approvals went unnoticed until they were discarded (repair
+    ticket t_e23d85a1, owner report 2026-09-09). Anchoring the thread on this message
+    puts the request itself in the channel. It repeats only what the thread name already
+    shows — the producer-masked title — so it widens no disclosure.
+    """
+    return (
+        f"🔔 승인 대기 · {KIND_LABELS[kind]} · {_request_title(request)}\n"
+        "이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
+    )
 
 
 def kind_thread_name(kind: ApprovalKind) -> str:

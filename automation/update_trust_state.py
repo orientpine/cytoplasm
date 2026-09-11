@@ -171,6 +171,11 @@ def privileged_advance_release_floor(path: Path, tag: str, commit_sha: str) -> N
     if floor is None or candidate.ordering > floor.ordering:
         save_release_floor(path, candidate)
         try:
+            # Both halves of "root writes, ops reads": the file readable AND the parent
+            # traversable. save_release_floor creates a 0700 parent, so the first write on
+            # a node the installer built closed the anchor to ops, and every tick after it
+            # failed with RELEASE-FLOOR: cannot read (2026-09-08, right after v1.6.3 landed).
+            path.parent.chmod(0o755)
             path.chmod(0o644)
         except OSError as error:
             raise ReleaseFloorError(

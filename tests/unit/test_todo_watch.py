@@ -92,6 +92,24 @@ def _runtime_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUTOPHAGY_RUNTIME_ROOT", str(_REPO))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_gws(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test in this file may reach the real ``gws`` binary.
+
+    ``run_once`` ends by executing every approved write. On a workstation where
+    ``gws`` is on PATH with the owner's credentials, a ✅ fixture that does not
+    inject a runner inserts a real Google Tasks entry — measured 2026-09-11: every
+    full-suite run added a "합성 워처 과제" and a "만료 직전" task to the owner's list.
+    ``pytest.fail`` derives from ``BaseException`` on purpose: ``_execute_one``
+    swallows ``Exception`` into a ``failed:`` outcome, which would hide the leak.
+    """
+
+    def forbid(argv: object) -> dict[str, object]:
+        pytest.fail(f"unit tests must never reach the real gws binary: argv={argv!r}")
+
+    monkeypatch.setattr(import_module("todo_cli"), "run_gws", forbid)
+
+
 def _fixture(root: Path, *, title: str = "합성 워처 과제") -> Fixture:
     todo = import_module("todo_cli")
     store_module = import_module("todo_approval_store")
@@ -147,6 +165,7 @@ def test_owner_approval_appends_once_passes_real_gate_and_archives_outcome(
 ) -> None:
     item = _fixture(tmp_path)
     item.transport.reactions["✅"] = ((_OWNER, False),)
+    monkeypatch.setattr(item.todo, "run_gws", FakeGws())
     surface = import_module("automation.interop.approval_surface")
     validated: list[str] = []
     real_validate = surface.validate_stored_binding
@@ -198,9 +217,12 @@ def test_hash_mismatch_consumes_nothing(tmp_path: Path) -> None:
     assert not item.log.exists()
 
 
-def test_reaction_before_ttl_is_consumed_but_after_ttl_is_expired(tmp_path: Path) -> None:
+def test_reaction_before_ttl_is_consumed_but_after_ttl_is_expired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     before = _fixture(tmp_path / "before", title="만료 직전")
     before.transport.reactions["✅"] = ((_OWNER, False),)
+    monkeypatch.setattr(before.todo, "run_gws", FakeGws())
     _run(before, _NOW + before.store_module.TODO_APPROVAL_TTL - timedelta(seconds=1))
     assert before.store.archives(before.record.key)[0].outcome == "approved"
     assert len(before.log.read_text(encoding="utf-8").splitlines()) == 1

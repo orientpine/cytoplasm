@@ -18,6 +18,7 @@ import wiki_gate  # noqa: E402
 
 OWNER_ID = "owner-1"
 CHANNEL_ID = "1526487935975952385"
+NOTICE_ID = "wiki-request-notice"
 AGENT_CHAT_ID = "1526487935975952400"
 MESSAGE_ID = "message-1"
 NOTE_TEXT = (
@@ -40,6 +41,8 @@ class FakeDiscordRest:
     missing_message: bool = False
     calls: list[tuple[str, str, dict[str, str] | None]] = field(default_factory=list)
     threads: list[str] = field(default_factory=list)
+    #: 요청별 스레드가 매달리는 안내 메시지 본문 — 승인 카드와 구별해 센다.
+    notices: list[str] = field(default_factory=list)
 
     def __call__(
         self,
@@ -50,7 +53,11 @@ class FakeDiscordRest:
         self.calls.append((method, path, payload))
         if method == "POST" and path == "/users/@me/channels":
             return {"id": CHANNEL_ID}
-        if method == "POST" and path == f"/channels/{AGENT_CHAT_ID}/threads":
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_ID}/messages":
+            # 요청별 스레드가 매달릴 안내 메시지 (2026-09-09).
+            self.notices.append(str((payload or {})["content"]))
+            return {"id": NOTICE_ID}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_ID}/messages/{NOTICE_ID}/threads":
             self.threads.append(str((payload or {})["name"]))
             return {"id": CHANNEL_ID, "type": 11, "parent_id": AGENT_CHAT_ID}
         if method == "GET" and path == f"/channels/{CHANNEL_ID}":
@@ -125,8 +132,13 @@ def test_post_confirm_message_preadds_reactions_and_records_bound_message(
     assert fake.calls == [
         (
             "POST",
-            f"/channels/{AGENT_CHAT_ID}/threads",
-            {"name": f"위키 · {draft['id']}", "auto_archive_duration": 10080, "type": 11},
+            f"/channels/{AGENT_CHAT_ID}/messages",
+            {"content": fake.notices[0]},
+        ),
+        (
+            "POST",
+            f"/channels/{AGENT_CHAT_ID}/messages/{NOTICE_ID}/threads",
+            {"name": f"위키 · {draft['id']}", "auto_archive_duration": 10080},
         ),
         ("GET", f"/channels/{CHANNEL_ID}", None),
         ("POST", f"/channels/{CHANNEL_ID}/messages", {"content": wiki_gate.confirm_text(draft)}),

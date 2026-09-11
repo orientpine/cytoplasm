@@ -590,24 +590,35 @@ def test_request_thread_other_http_errors_fail_closed_without_leaking(interop_co
 def test_request_thread_creates_a_channel_thread_without_an_origin(interop_config: Path) -> None:
     # Given: a cron-born request with no instruction message at all.
     _agent_chat_config(interop_config, "chan-1")
-    fake = FakeApi("bot-a", {("POST", "/channels/chan-1/threads"): {"id": "thread-new"}})
+    fake = FakeApi("bot-a", {
+        ("POST", "/channels/chan-1/messages"): {"id": "msg-new"},
+        ("POST", "/channels/chan-1/messages/msg-new/threads"): {"id": "thread-new"},
+    })
     directory = _directory(fake)
 
     # When: the per-request thread is resolved.
     thread_id = directory.agent_chat_request_thread(ApprovalKind.REPAIR, _request_thread(title="t_abc"))
 
-    # Then: a fresh public thread is created under agent-chat, never a kind thread.
+    # Then: the request announces itself under agent-chat and the thread hangs on that
+    # message, carrying the request name — never a shared per-kind thread, and never a
+    # bare channel thread the owner cannot see (2026-09-09).
     assert thread_id == "thread-new"
-    assert fake.calls == [(
-        "POST", "/channels/chan-1/threads",
-        {"name": "수리 · t_abc", "auto_archive_duration": 10080, "type": 11},
-    )]
+    assert fake.calls[-1] == (
+        "POST", "/channels/chan-1/messages/msg-new/threads",
+        {"name": "수리 · t_abc", "auto_archive_duration": 10080},
+    )
+    assert ("POST", "/channels/chan-1/threads") not in [
+        (method, path) for method, path, _payload in fake.calls
+    ]
 
 
 def test_request_thread_ignores_an_origin_outside_agent_chat(interop_config: Path) -> None:
     # Given: the instruction came from a channel the owner-only surface must not use.
     _agent_chat_config(interop_config, "chan-1")
-    fake = FakeApi("bot-a", {("POST", "/channels/chan-1/threads"): {"id": "thread-new"}})
+    fake = FakeApi("bot-a", {
+        ("POST", "/channels/chan-1/messages"): {"id": "msg-new"},
+        ("POST", "/channels/chan-1/messages/msg-new/threads"): {"id": "thread-new"},
+    })
     directory = _directory(fake)
 
     # When / Then: the approval still lands under agent-chat, not on the foreign message.
@@ -615,7 +626,10 @@ def test_request_thread_ignores_an_origin_outside_agent_chat(interop_config: Pat
         ApprovalKind.TODO,
         _request_thread(title="보고서", origin_channel_id="chan-lab", origin_message_id="msg-9"),
     ) == "thread-new"
-    assert all("/messages/" not in path for _method, path, _payload in fake.calls)
+    assert all(
+        "chan-lab" not in path and "msg-9" not in path
+        for _method, path, _payload in fake.calls
+    )
 
 
 def test_request_thread_refuses_an_unset_config_key(interop_config: Path) -> None:
@@ -628,3 +642,36 @@ def test_request_thread_refuses_an_unset_config_key(interop_config: Path) -> Non
     with pytest.raises(ApprovalSurfaceError):
         _ = directory.agent_chat_request_thread(ApprovalKind.TODO, _request_thread())
     assert fake.calls == []
+
+
+def test_request_thread_announces_the_request_with_a_guidance_message(
+    interop_config: Path,
+) -> None:
+    # Given: a cron-born request (a plaud lifelog note) with no instruction message.
+    # Discord renders a bare channel thread as a contentless "started a thread" line, so
+    # the owner cannot tell an approval is waiting (2026-09-09 owner report; t_e23d85a1).
+    _agent_chat_config(interop_config, "chan-1")
+    fake = FakeApi("bot-a", {
+        ("POST", "/channels/chan-1/messages"): {"id": "msg-new"},
+        ("POST", "/channels/chan-1/messages/msg-new/threads"): {"id": "thread-anchored"},
+    })
+    directory = _directory(fake)
+
+    # When: the per-request thread is resolved.
+    thread_id = directory.agent_chat_request_thread(
+        ApprovalKind.OBSIDIAN_WRITE,
+        _request_thread(title="2026-09-09-110506--cdd47d0c7384.md"),
+    )
+
+    # Then: the channel carries a readable notice and the thread hangs on THAT message.
+    assert thread_id == "thread-anchored"
+    assert [(method, path) for method, path, _payload in fake.calls] == [
+        ("POST", "/channels/chan-1/messages"),
+        ("POST", "/channels/chan-1/messages/msg-new/threads"),
+    ]
+    notice = fake.calls[0][2]
+    assert notice is not None
+    content = notice["content"]
+    assert isinstance(content, str)
+    assert "승인" in content
+    assert "2026-09-09-110506--cdd47d0c7384.md" in content

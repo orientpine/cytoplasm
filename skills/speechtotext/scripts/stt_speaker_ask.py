@@ -49,12 +49,23 @@ def resolve(
         return None
 
     def _ask(draft: str) -> str:
-        if _PATENT_TAG in gate(draft):
+        if _PATENT_TAG in gate(draft) and not _verified(ask):
+            # 규칙이 허용하는 경로는 Codex OAuth 하나뿐이고, 그 경로면 묻는 것이 규칙을
+            # 지키는 것이다. 출처를 확인할 수 없는 completer 만 거른다(fail-closed).
             print("RECOUNT-SKIP patent-sensitive", file=sys.stderr)
             return ""
         return ask(template.replace(_PLACEHOLDER, draft[:MAX_DRAFT_CHARS]))
 
     return _ask
+
+
+def _verified(ask: Callable[[str], str]) -> bool:
+    """민감도 규칙이 이름으로 허용한 Codex OAuth 경로인가 — 확인 못 하면 아니다."""
+    try:
+        from automation.codex_llm import route_is_verified  # noqa: PLC0415 - 런타임 의존
+    except Exception:  # noqa: BLE001 - 확인할 수 없으면 허용하지 않는다(fail-closed)
+        return False
+    return route_is_verified(ask)
 
 
 def _template(path: Path) -> str | None:
@@ -85,6 +96,7 @@ def _codex(env: Mapping[str, str]) -> Callable[[str], str] | None:
         from automation.codex_llm import (  # noqa: PLC0415 - 런타임 의존
             CodexClient,
             CodexError,
+            VerifiedRoute,
         )
 
         client = CodexClient.from_environment(env)
@@ -98,4 +110,5 @@ def _codex(env: Mapping[str, str]) -> Callable[[str], str] | None:
             print(f"RECOUNT-FAIL {type(failure).__name__}", file=sys.stderr)
             return ""
 
-    return _complete
+    # 민감도 규칙이 이름으로 허용한 그 경로임을 표시해 내보낸다.
+    return VerifiedRoute(_complete)

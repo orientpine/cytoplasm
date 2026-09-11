@@ -20,7 +20,7 @@ from automation.interop.approval_lifecycle import (
     remind_owner_approval,
     resolve_owner_decision,
 )
-from automation.interop.approval_reminder import ReminderContext
+from automation.interop.approval_reminder import ReminderContext, channel_guild_resolver
 from automation.interop.approval_reminder_config import (
     ApprovalReminderConfig,
     load_approval_reminder_config,
@@ -144,6 +144,7 @@ class RepairApprovalWatcher:
                 request_type=pending.kind or ApprovalKind.REPAIR,
                 deliver=deliver,
                 clock=self.now,
+                guild_id_for=channel_guild_resolver(discord.fetch_channel),
             )
             _ = remind_owner_approval(request, decision, lease, context)
         _ = resolve_owner_decision(request, decision, lease)

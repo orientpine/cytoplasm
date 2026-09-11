@@ -39,6 +39,7 @@ APPROVALS_CHANNEL = "100000000000000001"
 DM_CHANNEL = "100000000000000002"
 AGENT_CHAT_CHANNEL = "100000000000000003"
 AGENT_CHAT_THREAD = "100000000000000004"
+ANNOUNCEMENT_MESSAGE_ID = "announcement-message-1"
 MESSAGE_ID = "message-1"
 
 
@@ -165,7 +166,11 @@ def test_new_reply_draft_posts_to_the_agent_chat_thread(
             return {"type": 1, "name": "", "recipients": [{"id": OWNER_ID}]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
             return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
-        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/threads":
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/messages":
+            return {"id": ANNOUNCEMENT_MESSAGE_ID}
+        if method == "POST" and path == (
+            f"/channels/{AGENT_CHAT_CHANNEL}/messages/{ANNOUNCEMENT_MESSAGE_ID}/threads"
+        ):
             return {"id": AGENT_CHAT_THREAD}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
             return {"type": 11, "name": "메일 회신 · Re: 민감 문의", "parent_id": AGENT_CHAT_CHANNEL}
@@ -205,12 +210,23 @@ def test_new_reply_draft_posts_to_the_agent_chat_thread(
     # Then: the request got its OWN thread, named after this mail...
     [draft] = triage_gate.list_drafts()
     assert [
-        (item[1], (item[2] or {}).get("name"))
+        (item[1], item[2])
         for item in requests
         if item[0] == "POST" and item[1].endswith("/threads")
-    ] == [(f"/channels/{AGENT_CHAT_CHANNEL}/threads", "메일 회신 · Re: 민감 문의")]
+    ] == [
+        (
+            f"/channels/{AGENT_CHAT_CHANNEL}/messages/{ANNOUNCEMENT_MESSAGE_ID}/threads",
+            {"name": "메일 회신 · Re: 민감 문의", "auto_archive_duration": 10080},
+        )
+    ]
     # ...and the one approval message is in that thread with full reply and hash
-    posts = [item for item in requests if item[0] == "POST" and item[1].endswith("/messages")]
+    posts = [
+        item
+        for item in requests
+        if item[0] == "POST"
+        and item[1].endswith("/messages")
+        and item[1] != f"/channels/{AGENT_CHAT_CHANNEL}/messages"
+    ]
     assert actions == [f"draft:{draft['id']}", f"posted:{MESSAGE_ID}"]
     assert len(posts) == 1
     _method, channel_path, payload = posts[0]

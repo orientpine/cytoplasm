@@ -20,6 +20,7 @@ from automation.release_completion_target import (
     decide,
     gather,
     main,
+    tagged_release,
 )
 
 _TAGGED: Final = "1" * 40
@@ -157,3 +158,56 @@ def test_main_prints_only_a_reason_when_there_is_nothing_to_do(
 
     assert code == 1
     assert capsys.readouterr().out.strip() == "TIP-IS-RELEASE"
+
+
+class TestTaggedRelease:
+    """"그 sha 는 이미 잘린 릴리스인가" — 완결 대상 선정과는 다른 질문이다.
+
+    이 사실 하나가 `release_approval decision --tagged` 로 건너가 거짓 ⛔ 를 막는다
+    (2026-09-10 v1.6.7: 완결·적용 통지가 끝난 릴리스에 "자동 완결할 수 없습니다" 가 갔다).
+    """
+
+    def test_a_the_nearest_release_behind_the_tip_is_reported(self, tmp_path: Path) -> None:
+        source, tagged = _repo_with_tag(tmp_path, "v9.9.9", commits=2)
+
+        assert tagged_release(source) == tagged
+
+    def test_b_two_release_numbers_on_one_commit_still_report_that_commit(
+        self, tmp_path: Path
+    ) -> None:
+        """번호가 둘이어도 **잘렸다는 사실**은 모호하지 않다 — `decide` 의 보류와 갈라진다."""
+        source, tagged = _repo_with_tag(tmp_path, "v9.9.9", commits=2)
+        _ = _git(source, "tag", "-a", "v9.10.0", "-m", "v9.10.0", tagged)
+
+        assert tagged_release(source) == tagged
+        assert decide(gather(source, tmp_path / "state")) == NoWork("VERSION-AMBIGUOUS")
+
+    def test_c_a_prerelease_tag_is_not_a_cut_release(self, tmp_path: Path) -> None:
+        source, _tagged = _repo_with_tag(tmp_path, "v9.9.9-rc1", commits=2)
+
+        assert tagged_release(source) is None
+
+    def test_d_the_cli_prints_the_sha_alone(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source, tagged = _repo_with_tag(tmp_path, "v9.9.9", commits=2)
+
+        code = main(
+            ["--repo", str(source), "--state", str(tmp_path / "state"), "--print-tagged"]
+        )
+
+        assert code == 0
+        assert capsys.readouterr().out.strip() == tagged
+
+    def test_e_the_cli_stays_silent_without_a_cut_release(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """무출력이어야 한다 — 완결기가 이 값을 그대로 argv 에 싣는다."""
+        source, _tagged = _repo_with_tag(tmp_path, "v9.9.9-rc1", commits=2)
+
+        code = main(
+            ["--repo", str(source), "--state", str(tmp_path / "state"), "--print-tagged"]
+        )
+
+        assert code == 1
+        assert capsys.readouterr().out == ""

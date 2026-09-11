@@ -58,6 +58,7 @@ class FakeDiscord:
         #: 요청별 승인 스레드 — 만들어진 스레드 id → 만들 때 준 이름.
         self.threads: dict[str, str] = {}
         self.post_channels: list[str] = []
+        self.notice_count = 0
 
     def api(self, method: str, path: str, payload: dict | None = None):
         parts = path.strip("/").split("/")
@@ -67,6 +68,11 @@ class FakeDiscord:
             return {"type": 1, "name": "", "recipients": [{"id": OWNER}]}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_CHANNEL}":
             return {"type": 0, "name": "agent-chat", "guild_id": "guild-1"}
+        if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/messages":
+            self.notice_count += 1
+            notice_id = f"notice-{self.notice_count}"
+            self.contents[notice_id] = str((payload or {}).get("content", ""))
+            return {"id": notice_id}
         if method == "POST" and parts[-1] == "threads":
             thread_id = str(int(AGENT_CHAT_THREAD) + len(self.threads) + 1)
             self.threads[thread_id] = str((payload or {}).get("name", ""))

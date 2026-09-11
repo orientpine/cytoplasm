@@ -463,7 +463,7 @@ class TestSendAtTheNode:
         monkeypatch.setenv("NODE_RELEASE_CURRENT", str(self._pointer(tmp_path, _SHA)))
         sent: list[str] = []
         monkeypatch.setattr(
-            owner_notice, "notify_owner_dm", lambda notice: sent.append(notice) or True
+            owner_notice, "notify_owner", lambda notice: sent.append(notice) or True
         )
 
         # When
@@ -471,15 +471,48 @@ class TestSendAtTheNode:
             ["send", "--version", "v1.2.4", "--head", _SHA]
         )
 
-        # Then: 번호는 인자 그대로 쓰고 DM 은 파사드가 연다
+        # Then: 번호는 인자 그대로 쓰고 목적지는 파사드가 정한다
         assert exit_code == 0
         assert sent == [f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {_SHA[:12]})"]
+
+    def test_a2_the_notice_lands_in_the_configured_notice_channel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-09-10 소유자 지시: 적용 완료도 #notifications 에서 나온다.
+
+        목적지를 파사드 밖에서 정하지 않는다 — `notify_owner` 가 `OWNER_NOTICE_CHANNEL_ID`
+        를 존중하고, 미설정 설치는 종전대로 소유자 DM 으로 되돌린다(ON-1). 이전 판본은
+        `notify_owner_dm` 이라 통지 채널이 설정돼 있어도 **일부러** DM 으로만 갔다.
+        """
+        # Given: 통지 채널이 설정된 설치 + 이 릴리스를 가리키는 활성 포인터
+        monkeypatch.setenv("NODE_RELEASE_CURRENT", str(self._pointer(tmp_path, _SHA)))
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "unit-test-token")
+        monkeypatch.setenv("AUTOPHAGY_OWNER_ID", "42")
+        monkeypatch.setenv("OWNER_NOTICE_CHANNEL_ID", "1500000000000000002")
+        sent: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            owner_notice, "send_notice", lambda token, channel, body: sent.append((channel, body))
+        )
+        monkeypatch.setattr(
+            owner_notice,
+            "owner_dm_channel",
+            lambda token, owner_id: pytest.fail("채널이 지정되면 DM 을 열지 않는다"),
+        )
+
+        # When
+        exit_code = release_applied_notice.main(["send", "--version", "v1.2.4", "--head", _SHA])
+
+        # Then
+        assert exit_code == 0
+        assert sent == [
+            ("1500000000000000002", f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {_SHA[:12]})")
+        ]
 
     def test_b_undelivered_notice_is_a_nonzero_exit_so_the_sweep_retries(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("NODE_RELEASE_CURRENT", str(self._pointer(tmp_path, _SHA)))
-        monkeypatch.setattr(owner_notice, "notify_owner_dm", lambda notice: False)
+        monkeypatch.setattr(owner_notice, "notify_owner", lambda notice: False)
 
         assert release_applied_notice.main(["send", "--version", "v1.2.4", "--head", _SHA]) == 3
 
@@ -490,7 +523,7 @@ class TestSendAtTheNode:
         monkeypatch.setenv("NODE_RELEASE_CURRENT", str(self._pointer(tmp_path, _OTHER)))
         monkeypatch.setattr(
             owner_notice,
-            "notify_owner_dm",
+            "notify_owner",
             lambda notice: pytest.fail("포인터가 다르면 보내지 않는다"),
         )
 
@@ -509,7 +542,7 @@ class TestSendAtTheNode:
         monkeypatch.setenv("NODE_RELEASE_CURRENT", str(tmp_path / "absent"))
         monkeypatch.setattr(
             owner_notice,
-            "notify_owner_dm",
+            "notify_owner",
             lambda notice: pytest.fail("포인터를 못 읽으면 보내지 않는다"),
         )
 

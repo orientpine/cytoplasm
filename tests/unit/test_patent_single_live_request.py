@@ -80,6 +80,8 @@ class FakeDiscord:
         if method == "POST" and path.endswith("/threads"):
             self.threads.append(str((payload or {})["name"]))
             return {"id": self.request_thread_id(len(self.threads) - 1)}
+        if method == "POST" and parts == ["channels", AGENT_CHAT_CHANNEL, "messages"]:
+            return {"id": "announcement-1"}
         if method == "POST" and path.endswith("/messages"):
             self.posts += 1
             self.post_channels.append(parts[1])

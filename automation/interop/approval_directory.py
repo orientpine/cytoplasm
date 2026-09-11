@@ -3,8 +3,12 @@
 AS-1.3 exempts only this module from the approval-path resolver guard: it may
 open the owner DM, read the approval-channel config keys, consult the cache,
 scan guilds, (v7) find-or-create the per-kind approval threads under the
-``agent_chat_channel_id`` channel, and (2026-09-01) open per-request approval
-threads there. AS-3.2 retired the per-flow ``*_APPROVALS_CHANNEL_ID`` compatibility
+``agent_chat_channel_id`` channel, (2026-09-01) open per-request approval
+threads there, and (2026-09-09) post the one announcement message a per-request
+thread is anchored on — a thread opened directly on the channel renders as a
+contentless "started a thread" line, so the announcement is what makes a waiting
+decision visible at all. It posts nothing else: approval cards stay the
+producers' to write, inside the thread. AS-3.2 retired the per-flow ``*_APPROVALS_CHANNEL_ID`` compatibility
 branch, so an approval surface is now resolved from the config key, the cache or a
 guild scan and from nothing else — no caller can name an environment variable to
 point one somewhere. The exemption is intentionally narrower than the whole
@@ -31,6 +35,7 @@ from automation.interop.approval_surface import (
     RequestThread,
     kind_thread_name,
     request_thread_name,
+    request_thread_notice,
 )
 
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
@@ -173,28 +178,45 @@ class DiscordChannelDirectory:
         An instruction message that lives in agent-chat anchors the thread — the same
         thread a result notice would open, so a 400 ("already has a thread") means the
         message id doubles as the thread id. Any other origin is ignored on this
-        owner-only surface and a fresh public thread is created under agent-chat.
+        owner-only surface; the request then announces itself in agent-chat and hangs
+        the thread on THAT message, so the channel always shows a decision is waiting
+        (2026-09-09 owner report; repair ticket t_e23d85a1).
         Nothing is looked up: one request never shares a thread with another.
         """
         channel_id = self.agent_chat()
         name = request_thread_name(kind, request)
-        if request.origin_message_id and request.origin_channel_id == channel_id:
-            path = f"/channels/{channel_id}/messages/{request.origin_message_id}/threads"
-            try:
-                created = self._request(
-                    "POST", path, {"name": name, "auto_archive_duration": 10080},
-                )
-            except ApprovalSurfaceError as error:
-                if _http_status(error) == 400:
-                    return request.origin_message_id
-                raise
-        else:
+        anchor = (
+            request.origin_message_id
+            if request.origin_message_id and request.origin_channel_id == channel_id
+            else self._announce_request(channel_id, kind, request)
+        )
+        try:
             created = self._request(
                 "POST",
-                f"/channels/{channel_id}/threads",
-                {"name": name, "auto_archive_duration": 10080, "type": 11},
+                f"/channels/{channel_id}/messages/{anchor}/threads",
+                {"name": name, "auto_archive_duration": 10080},
             )
+        except ApprovalSurfaceError as error:
+            if _http_status(error) == 400:
+                return anchor
+            raise
         return _required_string(_json_object(created, "request thread"), "id", "request thread")
+
+    def _announce_request(
+        self, channel_id: str, kind: ApprovalKind, request: RequestThread
+    ) -> str:
+        """Post the request announcement the thread will hang on, and return its id.
+
+        Every request now anchors on a real message, so #agent-chat shows what is waiting
+        instead of a contentless "started a thread" line. Fails closed like every other
+        call here: a channel that refuses the announcement would refuse the thread too.
+        """
+        posted = self._request(
+            "POST",
+            f"/channels/{channel_id}/messages",
+            {"content": request_thread_notice(kind, request)},
+        )
+        return _required_string(_json_object(posted, "request notice"), "id", "request notice")
 
     def describe(self, channel_id: str) -> ChannelFacts:
         """Return parsed channel facts or refuse an unverifiable Discord response."""

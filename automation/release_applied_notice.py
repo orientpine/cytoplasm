@@ -1,4 +1,4 @@
-"""릴리스가 실제 운영환경에 적용되면 소유자 DM 으로 한 번 알린다 (2026-09-05 지시).
+"""릴리스가 실제 운영환경에 적용되면 소유자에게 한 번 알린다 (2026-09-05 지시).
 
 **승인 반응은 적용이 아니다.** ✅ 는 "잘라도 좋다"는 허락일 뿐이고, 태그가 잘린 뒤에도
 전량 반영은 막힐 수 있다(샌드박스 블록·수렴 실패). 그래서 적용 판정의 근거를 셋으로
@@ -13,8 +13,12 @@ sha 를 가리킬 때만 "적용되었습니다"가 참이다.
 조상이면 그 릴리스는 지금 돌고 있지 않으므로 SUPERSEDED 로 기록만 하고 보내지 않는다.
 
 절반은 워크스테이션(`sweep`, 완결 타이머가 매 틱 호출)에서, 절반은 노드(`send`,
-`release_approval_remote.sh` 가 agent 자격으로 실행)에서 돈다. DM 오픈은 언제나
-`owner_notice` 파사드 안에서만 일어난다(ON-2/ON-3).
+`release_approval_remote.sh` 가 agent 자격으로 실행)에서 돈다.
+
+**목적지는 이 모듈이 정하지 않는다.** 2026-09-10 소유자 지시로 DM 전용
+(`notify_owner_dm`)에서 `owner_notice.notify_owner` 로 옮겼다 — 파사드가
+`owner_notice_channel_id`(#notifications)를 존중하고, 그 키가 없는 설치만 소유자 DM 으로
+되돌린다(ON-1). 어느 쪽이든 DM 오픈은 파사드 안에서만 일어난다(ON-2/ON-3).
 """
 from __future__ import annotations
 
@@ -249,7 +253,7 @@ def sweep(state: Path, repo: Path) -> None:
 
 
 def send(version: str, head: str) -> int:
-    """노드에서 도는 절반 — 포인터를 다시 확인하고 파사드에 DM 을 맡긴다."""
+    """노드에서 도는 절반 — 포인터를 다시 확인하고 목적지는 파사드에 맡긴다."""
     current = os.environ.get("NODE_RELEASE_CURRENT", "").strip() or _DEFAULT_RELEASE_CURRENT
     try:
         pointer = os.path.basename(os.readlink(current))
@@ -262,7 +266,7 @@ def send(version: str, head: str) -> int:
             file=sys.stderr,
         )
         return 4
-    delivered = owner_notice.notify_owner_dm(
+    delivered = owner_notice.notify_owner(
         f"릴리스 {version} 가 적용되었습니다. (HEAD {head[:12]})"
     )
     return 0 if delivered else 3

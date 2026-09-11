@@ -14,7 +14,6 @@ import argparse
 import json
 import secrets
 import sys
-from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Final, assert_never
@@ -34,7 +33,7 @@ from automation.interop.approval_lifecycle import (
 )
 from automation.interop.approval_surface import ApprovalKind
 from automation.interop.discord_transport import DiscordTransport
-from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_record
+from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_plan, spec_from_record
 from automation.release_retire import notify_stale_approval
 from automation.skill_gate_approval import GateSurface, SkillApprovalGate
 
@@ -44,21 +43,6 @@ DECISION_APPROVED: Final = 0
 DECISION_UNAVAILABLE: Final = 2
 DECISION_PENDING: Final = 7
 DECISION_DENIED: Final = 9
-
-
-def spec_from_plan(payload: Mapping[str, object], release_nonce: str) -> ReleaseSpec:
-    """One immutable spec from the plan JSON `release.sh` carries between steps."""
-    surfaces = payload.get("surface_digests")
-    if not isinstance(surfaces, list):
-        raise ReleaseSpecError("plan payload carries no surface digest list")
-    return ReleaseSpec(
-        version=str(payload.get("version", "")),
-        head_sha=str(payload.get("head", "")),
-        release_nonce=release_nonce,
-        surface_digests=tuple((str(row[0]), str(row[1])) for row in surfaces),
-        patch_notes=str(payload.get("patch_notes", "")),
-        major_note=str(payload.get("major_note", "")),
-    )
 
 
 def decision_exit(probe: Probe) -> int:
@@ -225,7 +209,22 @@ def cmd_decision(args: argparse.Namespace) -> int:
         return DECISION_UNAVAILABLE
     record = {str(name): str(value) for name, value in decoded.items()}
     expected_head = str(getattr(args, "head", "") or "")
+    tagged_head = str(getattr(args, "tagged", "") or "")
     mismatched = bool(expected_head and record.get("head_sha", "") != expected_head)
+    if mismatched and tagged_head and record.get("head_sha", "") == tagged_head:
+        # 이 요청은 낡은 것이 아니라 **이미 실행된 릴리스**다 — 소유자 ✅ 를 받아 서명
+        # 태그까지 잘렸고, 남은 일은 다음 release.sh 의 감사 회수뿐이다. 팁이 그 뒤로
+        # 전진했다는 이유만으로 "자동 완결할 수 없습니다" 를 보내면 거짓말이 된다
+        # (2026-09-10 실측: v1.6.7 의 적용 완료 통지와 ⛔ 가 나란히 도착했다).
+        #
+        # 인가 의미는 한 뼘도 넓히지 않는다 — rc 는 그대로 UNAVAILABLE 이라 옛 ✅ 로 새
+        # 팁을 자르는 문은 잠긴 채다. Discord 도 다시 조회하지 않는다: 프로브 결과가
+        # 무엇이든 답이 같으므로 조회는 예산만 쓴다.
+        print(
+            f"RELEASE-DECISION: executed release {tagged_head[:12]} awaiting retirement",
+            file=sys.stderr,
+        )
+        return DECISION_UNAVAILABLE
     if mismatched and not getattr(args, "notify_stale", False):
         print("RELEASE-DECISION: live request is bound to a different HEAD", file=sys.stderr)
         return DECISION_UNAVAILABLE
@@ -285,6 +284,11 @@ def main(argv: list[str] | None = None) -> int:
     decision = commands.add_parser("decision", help="소유자 결정 조회(0/9/7/2)")
     decision.add_argument("--head", default="")
     decision.add_argument("--notify-stale", action="store_true")
+    decision.add_argument(
+        "--tagged",
+        default="",
+        help="origin/main 에서 도달 가능한 가장 가까운 릴리스 커밋 — 완결기가 실어 준다",
+    )
     decision.set_defaults(run=cmd_decision)
     args = parser.parse_args(argv)
     return int(args.run(args))

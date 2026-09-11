@@ -179,3 +179,39 @@ OWNER 2·OBSERVE 2 이관. 불릿은 지우지 않고 원 `##` 헤딩·본문 �
 
 > ↳ 2026-09-09 정책 결정으로 해소 — 결론은 **켜지 않는다**이고 대체된 선행 구현을 삭제했다. 원문과 판단 근거는
 > [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+
+## 승인 요청 안내 메시지·비공개 표면 허용경로 착지 후 남긴 것 (2026-09-09)
+
+> 착지 기능: [승인 요청 안내 메시지](기능소개/승인-요청-안내-메시지.md) ·
+> [비공개 표면의 민감도 게이트](기능소개/비공개-표면-허용경로-추출.md)
+
+- **안내 메시지는 새 요청에만 붙는다.** 이미 열려 있는 요청 스레드(진행 중인 캘린더·plaud 카드)는 옛
+  형식이라 채널에서 여전히 본문 없는 시스템 줄로 보인다. 조치: 필요하면 각 워처의 **기존** 재게시 경로
+  (`plaud_sync_watch.py --repost-posted` 등)로 다시 올린다 — 새 재게시 수단을 만들지 않는다.
+  영향 범위: 표시만, 승인·해시 바인딩과 무관. 심각도: 낮음.
+- **긴 본문 승인은 여전히 게시할 수 없다.** 수리 티켓 t_82644d12 의 두 절반 중 **쐐기**만 닫았다 —
+  Discord 2000자를 넘는 승인 메시지는 이제 posting journal 을 예약하기 **전에** 거부되므로 그 키가
+  영구히 막히지 않지만(예전에는 HTTP 400 뒤 모든 재시도가 POSTING_JOURNAL_STALE), 소유자가 요청한
+  「요약 메시지 + 동일 메시지 본문 첨부」 게시·검증은 아직 없다. 조치: multipart 첨부 게시와
+  lifecycle·리액션 확인 두 경로의 첨부 검증, 그리고 형식 판별자를 설계해 별도 사이클에서 구현한다
+  (기존 승인 해시 검사는 그대로 두어야 이미 게시된 승인이 무효가 되지 않는다).
+  영향 범위: `skills/mail/scripts/triage_{core,approval,confirm,gate}.py`. 심각도: 중.
+- **`VerifiedRoute` 채택은 두 곳뿐이다**(`lifelog_extract_live`·`stt_speaker_ask`). 같은 모양의 게이트가
+  회의록 등 **공개·공유 산출물** 경로에도 있으나 소유자 지시 범위("내가 보는 private 채널")를 벗어난다.
+  조치: 확장하려면 표면별로 따로 판단한다. 영향 범위: 없음(현행이 규칙과 일치). 심각도: 낮음.
+
+## 캘린더 카드 누락 백스톱과 통지 라우팅 착지 후 남긴 것 (2026-09-10)
+
+> ↳ 2026-09-11 두 건 모두 해소 — 단위 테스트 홈 격리(`tests/unit/conftest.py`)와 리마인더의 요청 스레드 배달로 닫혔다. 원문과 판단 근거는
+> [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
+
+## Google Tasks 합성 과제 유입 수리 중 발견한 인접 결함 (2026-09-11)
+
+- **meeting 단위 테스트 4건이 워크스테이션의 실제 `gws` 로 소유자 Drive 를 읽는다** → PATH 에 로그만 남기는 가짜 `gws` 를 두고
+  전량 스위트를 돌린 실측(`PYTEST_CURRENT_TEST` 기록): `tests/unit/test_meeting_skill.py::test_meeting_drive_publish_uses_note_date_and_label`(10회)
+  · `::test_sensitive_meeting_skips_drive_publish`(4) · `::test_drive_facade_import_failure_does_not_block_local_save`(2) ·
+  `tests/unit/test_meeting_project_ingest.py::test_pending_transcript_minutes_publish_under_its_project`(4) 가 `drive files list/get`
+  (KIMM·autophagy 루트 폴더 조회, 폴더 id 재검증)을 실행한다. 조치: 네 테스트가 `DriveClient`/`drive_outputs` 의 `run` 을 주입하거나
+  `DRIVE_PUBLISH_ENABLED` 을 명시적으로 끄게 하고, `tests/AGENTS.md` 의 gws 가드 선례(`test_todo_watch.py::_no_real_gws`)와
+  같은 파일 단위 autouse 가드를 둔다. **영향: 읽기 전용(쓰기 0)이라 외부효과는 없으나 `~/.hermes/drive-publish/folders.json`
+  실 캐시를 읽어 결과가 워크스테이션 상태에 좌우되고, gws 없는 호스트(CI)와 동작이 갈린다 · 심각도 낮음**.

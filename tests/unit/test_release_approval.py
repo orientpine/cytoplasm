@@ -19,6 +19,7 @@ from automation.release_approval import (
     DECISION_APPROVED,
     DECISION_DENIED,
     DECISION_PENDING,
+    DECISION_UNAVAILABLE,
     decision_exit,
     spec_from_plan,
     spec_from_record,
@@ -258,6 +259,102 @@ def test_decision_names_the_version_bound_to_the_current_head(
     captured = capsys.readouterr()
     assert exit_code == DECISION_APPROVED
     assert captured.err == f"RELEASE-DECISION: approved version={record['version']}\n"
+
+
+_TIP = "e" * 40
+_OTHER_RELEASE = "f" * 40
+
+
+def _never_notify(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        release_approval,
+        "notify_stale_approval",
+        lambda record, tip: pytest.fail("실행된 릴리스는 소유자에게 경고하지 않는다"),
+    )
+
+
+def test_an_executed_release_awaiting_retirement_is_not_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """✅ 를 받고 태그까지 잘린 릴리스의 레코드는 낡은 것이 아니다 — 회수를 기다릴 뿐이다.
+
+    2026-09-10 소유자 관측: "릴리스 v1.6.7 가 적용되었습니다" 와 "⛔ … 자동 완결할 수
+    없습니다" 가 함께 왔다. 실측 원인은 완결기가 **origin/main 팁**을 들고 결정을 물었기
+    때문이다 — v1.6.7(4c3250aa7b17)은 09-09 14:24 에 완결되고 14:27 에 적용 통지까지
+    나갔는데, 그 뒤 팁이 389c555b3 → 8aef847ab 로 전진하자 매 틱이 HEAD 불일치로 서면서
+    ⛔ 를 한 번 냈다. 그 문구는 거짓이다: 그 릴리스는 자동 완결에 성공했다.
+
+    그래서 완결기가 "그 sha 는 이미 잘린 릴리스"라는 사실(`--tagged`)을 함께 주면, 이
+    경로는 경고하지 않고 판독용 한 줄만 남긴다. 승인 의미는 그대로다 — 옛 ✅ 로 새 팁을
+    인가하는 문은 여전히 잠겨 있고(rc 는 변함없이 UNAVAILABLE), 회수는 다음 release.sh 의
+    감사 회수가 한다.
+    """
+    record = _pending(tmp_path)
+    monkeypatch.setattr(skill_gate, "GATE_DIR", tmp_path)
+    _never_notify(monkeypatch)
+    monkeypatch.setattr(
+        release_approval,
+        "_gate",
+        lambda spec: pytest.fail("실행된 릴리스는 Discord 를 다시 조회하지 않는다"),
+    )
+
+    exit_code = release_approval.main(
+        ["decision", "--head", _TIP, "--notify-stale", "--tagged", record["head_sha"]]
+    )
+
+    assert exit_code == DECISION_UNAVAILABLE
+    assert capsys.readouterr().err == (
+        f"RELEASE-DECISION: executed release {record['head_sha'][:12]} awaiting retirement\n"
+    )
+
+
+def test_a_record_bound_to_an_untagged_head_still_warns_the_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """진짜 낡은 승인 — 승인은 받았지만 태그가 잘리지 않은 채 팁이 지나간 경우는 그대로 알린다."""
+    record = _pending(tmp_path)
+    monkeypatch.setattr(skill_gate, "GATE_DIR", tmp_path)
+    monkeypatch.setattr(release_approval, "_gate", lambda spec: _StubGate(Probe.APPROVED))
+    warned: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        release_approval,
+        "notify_stale_approval",
+        lambda stored, tip: warned.append((stored["head_sha"], tip)),
+    )
+
+    exit_code = release_approval.main(
+        ["decision", "--head", _TIP, "--notify-stale", "--tagged", _OTHER_RELEASE]
+    )
+
+    assert exit_code == DECISION_UNAVAILABLE
+    assert warned == [(record["head_sha"], _TIP)]
+    assert "live request is bound to a different HEAD" in capsys.readouterr().err
+
+
+def test_without_the_tagged_fact_the_warning_path_is_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--tagged` 없는 호출(release.sh 의 대기 루프)은 바이트 그대로 예전 경로다."""
+    record = _pending(tmp_path)
+    monkeypatch.setattr(skill_gate, "GATE_DIR", tmp_path)
+    monkeypatch.setattr(release_approval, "_gate", lambda spec: _StubGate(Probe.APPROVED))
+    warned: list[str] = []
+    monkeypatch.setattr(
+        release_approval, "notify_stale_approval", lambda stored, tip: warned.append(tip)
+    )
+
+    exit_code = release_approval.main(["decision", "--head", _TIP, "--notify-stale"])
+
+    assert exit_code == DECISION_UNAVAILABLE
+    assert warned == [_TIP]
+    assert "live request is bound to a different HEAD" in capsys.readouterr().err
+    assert record["head_sha"] != _TIP
 
 
 def test_release_kind_is_permanently_routed_to_approvals() -> None:
