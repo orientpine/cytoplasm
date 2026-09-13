@@ -347,3 +347,17 @@ remote_tag="$(GIT_TERMINAL_PROMPT=0 git ls-remote -- "$remote" "refs/tags/$versi
   || block "destination tag does not match the signed local tag"
 
 log "PUBLIC-EXPORT-OK repository=$repository_name visibility=$visibility source_sha=$source_commit commit=$export_commit tag=$version target=$target_dir"
+
+# The cycle is not finished here, and its remainder fails silently: existing nodes keep
+# converging on the signed tag, so a missing release note blocks only NEW installs --
+# `--update-trust-key` is required and its `update-trust.pub` asset lives on that page,
+# together with the out-of-band fingerprint that authenticates it (P0-6 bootstrap).
+# Printing the commands is deliberate: the rule already existed in prose and was still
+# missed (v1.6.7 shipped a tag with no release object). This stays advisory -- the push
+# already happened, so a non-zero exit here would misreport a successful export.
+log "PUBLIC-EXPORT-NOTE-PENDING $version — the export is pushed but the cycle ends at the release note (docs/guide/manual-maintainer.md §1.7):"
+log "  1. ssh-keygen -y -f \"$signing_key\" > /tmp/update-trust.pub   # public half only; never upload the private key"
+log "  2. ssh-keygen -lf /tmp/update-trust.pub                        # the fingerprint line the note must carry"
+log "  3. gh release create $version --repo $repository_name --title '$version — <one-line summary>' --notes-file <notes.md>"
+log "  4. gh release upload $version --repo $repository_name /tmp/update-trust.pub && rm -f /tmp/update-trust.pub"
+log "  5. gh release view $version --repo $repository_name --json assets   # update-trust.pub attached?"

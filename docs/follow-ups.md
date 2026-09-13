@@ -258,3 +258,12 @@ doctype·proposal 검토 호출 시점에는 Drive URL이 전달되지 않으므
   구조적으로 덮을 수 없다. **남은 것은 밀폐성뿐** — 네 테스트가 아직 `run` 주입 없이 실 캐시 경로를 *시도*하므로
   `DriveClient`/`drive_outputs` 의 `run` 을 주입하거나 `DRIVE_PUBLISH_ENABLED` 을 명시적으로 끄면 워크스테이션 상태에
   좌우되지 않는다. **영향: 외부효과 0(쓰기 0·읽기도 이제 차단) · 심각도 낮음**.
+
+## 반출 릴리스 노트 안내 착지 후 남긴 것 (2026-09-13)
+
+- **단위 테스트가 형제 테스트 모듈을 import 하면 편집기가 매번 가짜 오류를 낸다** → `pyrightconfig.json` 의
+  `executionEnvironments` 에 `tests/unit` 이 없어 `from test_public_export import …` 같은 교차 import 8곳이 전부
+  `reportImplicitRelativeImport` 를 낸다. 편집기 전용 설정이라 런타임·pytest·CI 는 무영향이지만, 편집 직후 진단을
+  읽는 경로(에이전트 포함)에서는 진짜 오류와 섞인다.
+  ↳ **조치**: `tests/unit` executionEnvironment 를 더하고, 선언 목록을 고정하는 `tests/unit/test_pyright_config.py` 를
+  같은 커밋에서 갱신한다(PR #420 이 `skills/*/scripts` 19개를 더한 것과 같은 형태). **영향: 동작 결함 아님 · 심각도 낮음**.

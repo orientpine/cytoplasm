@@ -213,11 +213,24 @@ bash automation/public_export.sh \
     상태를 허용하지 않는다.
 12. push한 원격을 **다시 읽어** `main`과 태그가 로컬과 정확히 같은지 확인한다.
 
-성공하면 마지막 줄은 이렇다.
+13. 성공을 알린 **직후에 남은 단계를 찍는다** — 사이클은 §1.7의 릴리스 노트에서 끝나기
+    때문이다. `PUBLIC-EXPORT-NOTE-PENDING`은 advisory이며 종료 코드는 그대로 0이다
+    (push와 read-back이 이미 끝난 자리에서 non-zero를 내면 성공한 반출을 실패로
+    보고하게 된다). 차단 경로에서는 나오지 않는다.
+
+성공하면 끝은 이렇다. 첫 줄이 "반출이 됐다", 그 아래가 "아직 안 끝났다"이다.
 
 ```
 [public-export] PUBLIC-EXPORT-OK repository=orientpine/cytoplasm visibility=public source_sha=<private sha> commit=<public sha> tag=v1.0.1 target=<dir>
+[public-export] PUBLIC-EXPORT-NOTE-PENDING v1.0.1 — the export is pushed but the cycle ends at the release note (docs/guide/manual-maintainer.md §1.7):
+[public-export]   1. ssh-keygen -y -f "<signing key>" > /tmp/update-trust.pub   # public half only; never upload the private key
+[public-export]   2. ssh-keygen -lf /tmp/update-trust.pub                        # the fingerprint line the note must carry
+[public-export]   3. gh release create v1.0.1 --repo orientpine/cytoplasm --title 'v1.0.1 — <one-line summary>' --notes-file <notes.md>
+[public-export]   4. gh release upload v1.0.1 --repo orientpine/cytoplasm /tmp/update-trust.pub && rm -f /tmp/update-trust.pub
+[public-export]   5. gh release view v1.0.1 --repo orientpine/cytoplasm --json assets   # update-trust.pub attached?
 ```
+
+버전과 대상 저장소는 **그 실행의 인자로 이미 채워져** 나오므로 그대로 붙여 쓴다.
 
 v1.0.0 실측값: `source_sha=f54cf28fdf541631c14c6dd03a3a13c6eac8a86d`,
 `commit=4789b2ad73f4d66c3f5f91e13311910e0a2e022c`, 내보낸 트리에서 `3902 passed`,
@@ -247,9 +260,21 @@ gitleaks 0건. 첫 실행은 export 트리 내부 `pytest` 3건이 이 머신의
 그래서 커밋 생성 · 그 커밋에 대한 서명 · push가 **한 번의 스크립트 실행 안에서**
 일어난다. 셋을 사람이 나눠 하는 순간 이 실수가 가능해진다.
 
-### 1.7 릴리스 노트 게시 (스크립트 범위 밖)
+### 1.7 릴리스 노트 게시 (사이클의 마지막 단계 — 선택이 아니다)
 
-스크립트는 태그까지만 만든다. GitHub Release 노트는 유지보수자가 따로 올린다.
+스크립트는 태그까지만 만들고 **노트는 사람이 올린다**. 그렇다고 이것이 부록은 아니다 —
+릴리스 객체와 거기 붙는 `update-trust.pub` 자산·지문 공지가 없으면 신규 설치는 시작조차
+하지 못한다(루트 `AGENTS.md` 「공개 릴리스 규칙」의 종결 조건 셋 중 둘이 여기서 생긴다).
+
+스크립트가 성공 직후 **이 절의 명령을 버전·저장소까지 채워서 찍는다**
+(`PUBLIC-EXPORT-NOTE-PENDING`, §1.5). 산문으로만 두었을 때 실제로 잊혔기 때문이다 —
+2026-09-09 v1.6.7은 태그만 올라가 목록의 Latest가 v1.6.1에 멈춰 있었다. 아래는 그
+출력의 정본이며, 터미널을 이미 닫았을 때 되짚는 자리다.
+
+**제목은 `vX.Y.Z` 하나로 두지 않는다.** 무엇이 바뀌었는지 한 줄이 제목에 있어야 목록에서
+읽힌다(루트 「릴리스 패치노트 작성 규칙」과 같은 기준). 실측 반례: v1.6.9는 제목이 맨
+`v1.6.9`라 목록만 보고는 그 릴리스가 무엇인지 알 수 없다. 형식은
+`v1.6.8 — 공개 저장소 첫 화면 개편 · 반출 사이클에 릴리스 노트 게시 포함`처럼 쓴다.
 
 ```bash
 gh release create v1.0.1 --repo orientpine/cytoplasm \
@@ -669,7 +694,9 @@ floor 이상인지 확인해야 하며, 잘못 전환한 뒤 태그 삭제나 �
 - [ ] 워킹트리 clean, 대상 디렉터리는 체크아웃 **밖**의 새 경로
 - [ ] source commit에 유일한 semantic release tag가 있다(독립 버전이면 `--version` 명시)
 - [ ] `automation/public_export.sh` 1회 실행 → `PUBLIC-EXPORT-OK`
-- [ ] GitHub Release 노트 게시 (**지문 재게시** + MAJOR면 조치 안내)
+      (그 아래 `PUBLIC-EXPORT-NOTE-PENDING`이 남은 명령을 버전까지 채워 찍는다 — 그대로 쓴다)
+- [ ] GitHub Release 노트 게시 (**지문 재게시** + MAJOR면 조치 안내, 제목에 한 줄 요약)
+- [ ] 그 릴리스에 `update-trust.pub` 자산이 붙었다 → `gh release view <version> --json assets`
 - [ ] 공개 저장소에서 `git verify-tag <version>` 통과
 - [ ] 내 노드 `readlink /srv/autophagy-agent-current`가 2분 내 전진
 - [ ] 공개 저장소에 손으로 push한 것이 없다
