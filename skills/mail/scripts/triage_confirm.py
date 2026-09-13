@@ -97,15 +97,13 @@ def fetch_channel(channel_id: str) -> object:
 
 
 def post_approval_request(content: str, channel_id: str) -> str:
-    message = _api("POST", f"/channels/{channel_id}/messages", {"content": content})
-    return str(message["id"])
+    return str(_api("POST", f"/channels/{channel_id}/messages", {"content": content})["id"])
 
 
 def add_reaction(message_id: str, emoji: str, channel_id: str) -> None:
     _api(
         "PUT",
-        f"/channels/{channel_id}/messages/{message_id}"
-        f"/reactions/{quote(emoji, safe='')}/@me",
+        f"/channels/{channel_id}/messages/{message_id}/reactions/{quote(emoji, safe='')}/@me",
     )
 
 
@@ -153,17 +151,9 @@ EXPIRED_OUTCOME = "EXPIRED"
 
 
 def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
-    """Deliver a send/cancel result to the request's approval thread, else to the owner.
+    """실행 후 종결 봉투(outcome 없는 중간 통지는 문자열). 라우팅·재렌더·종결·폴백은 deliver 소유."""
+    from triage_result_notice import result_message
 
-    라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
-    `automation.interop.origin_notice.deliver`가 소유한다(2026-08-23 일반화 —
-    스킬별 사본 증식 방지). 이 함수는 mail의 주입 지점(_api/_dm_transport/
-    dm_owner)과 스레드 이름만 바인딩한다.
-
-    레코드의 ``approval_thread_id`` 가 있으면 결과는 승인 요청이 열린 그 스레드로
-    간다. ``outcome`` 은 종결 상태(발송/취소/만료)일 때만 주며, 그때 공유 구현이
-    스레드 이름에 상태 접두어를 붙이고 아카이브한다. 중간 통지는 비워 둔다.
-    """
     try:
         origin_notice = _origin_notice()
     except ImportError as error:  # 낡은 interop 런타임/샌드박스 — 결과는 그래도 소유자에게 닿아야 한다
@@ -172,6 +162,15 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
             file=sys.stderr,
         )
         return dm_owner(content)
+    message = result_message(draft, content, outcome)
+    if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        return str(origin_notice.deliver(
+            api=_api, transport_factory=_dm_transport, record=draft,
+            thread_name=f"메일: {draft['subject']} (draft {draft['id']})",
+            content=content, fallback=dm_owner,
+            outcome=origin_notice.ThreadOutcome[outcome] if outcome else None,
+            message=message, fallback_destination=None,
+        ))
     return str(origin_notice.deliver(
         api=_api,
         transport_factory=_dm_transport,

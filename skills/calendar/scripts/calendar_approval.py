@@ -5,15 +5,17 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Protocol
 from urllib.error import HTTPError, URLError
 
 import calendar_confirm
 import calendar_gate
 import calendar_binding
+from calendar_card import draft_created as _draft_created, prepare_draft
+from calendar_confirm_input import DraftRecord
 from calendar_pending import PendingConfirm, PendingConfirmError, PendingConfirmStore
 
 if TYPE_CHECKING:
@@ -28,7 +30,6 @@ if TYPE_CHECKING:
 
 LEASE_DIRNAME = "approval-leases"
 JOURNAL_DIRNAME = "posting-journal"
-DraftRecord: TypeAlias = dict[str, str | list[str]]
 _TRANSPORT_ERRORS = (calendar_gate.GateError, URLError, OSError, json.JSONDecodeError, KeyError, TypeError)
 
 
@@ -73,16 +74,7 @@ def _lease_module() -> ModuleType:
     return _repo_module("approval_lease")
 
 
-def approval_key(draft: DraftRecord) -> str:
-    calendar_id = draft.get("calendar_id")
-    event_id = draft.get("event_id")
-    start = draft.get("start")
-    if not isinstance(calendar_id, str) or not calendar_id:
-        raise calendar_gate.GateError("드래프트 calendar_id 누락 — 승인 키 생성 거부", 3)
-    subject = event_id if isinstance(event_id, str) and event_id else start
-    if not isinstance(subject, str) or not subject:
-        raise calendar_gate.GateError("드래프트 event_id/start 누락 — 승인 키 생성 거부", 3)
-    return f"calendar:{calendar_id}:{subject}"
+approval_key = calendar_binding.approval_key
 
 
 def confirm_intent(
@@ -219,6 +211,7 @@ class CalendarApprovalGate:
                 dm_message_id=posted.message_id,
                 created=_draft_created(created_at),
                 key=intent.key,
+                render_version=str(self.draft.get("render_version", "1")),
                 kind=str(binding.kind),
                 surface=str(binding.surface),
                 channel_id=binding.channel_id,
@@ -247,14 +240,22 @@ class CalendarApprovalGate:
 def request_confirmation(draft: DraftRecord) -> PendingConfirm:
     facade = lifecycle()
     store = PendingConfirmStore()
-    binding = calendar_binding.reusable_binding(store, approval_key(draft)) or calendar_binding.new_binding(draft)
-    # 이 요청의 스레드를 초안에 새긴다 — 실행·취소·만료 통지가 같은 스레드로 돌아간다.
-    draft = calendar_gate.bind_approval_thread(draft, binding.channel_id)
+    key = approval_key(draft)
+    binding = calendar_binding.reusable_binding(store, key)
+    owner = calendar_confirm.owner_id()
+    journal = posting_journal()
+    channel = binding.channel_id if binding else (journal.outstanding(key) or {}).get("channel_id", "")
+
+    def prepare() -> tuple[ApprovalIntent, CalendarApprovalGate]:
+        prepared = prepare_draft(draft)
+        resolved = binding or calendar_binding.new_binding(prepared)
+        prepared = calendar_gate.bind_approval_thread(prepared, resolved.channel_id, resolved.guild_id)
+        return confirm_intent(prepared, resolved), CalendarApprovalGate(prepared, store, owner, resolved)
+
     verdict = facade.request_owner_approval(
-        confirm_intent(draft, binding),
-        CalendarApprovalGate(draft, store, calendar_confirm.owner_id(), binding),
-        confirm_lease(),
-        posting_journal(),
+        facade.ApprovalIntent(key, str(draft["sha256"]), channel),
+        CalendarApprovalGate(draft, store, owner, binding),
+        confirm_lease(), journal, prepare=prepare,
     )
     return _entry_from_verdict(verdict, store)
 
@@ -289,10 +290,3 @@ def _entry_from_verdict(verdict: Verdict, store: PendingConfirmStore) -> Pending
     if entry is None:
         raise calendar_gate.GateError("pending confirm 결과를 찾을 수 없습니다", 3)
     return entry
-
-
-def _draft_created(value: str) -> datetime:
-    created = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if created.tzinfo is None:
-        raise calendar_gate.GateError("드래프트 created UTC 누락", 3)
-    return created.astimezone(UTC)

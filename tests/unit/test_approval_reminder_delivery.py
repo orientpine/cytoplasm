@@ -36,7 +36,7 @@ def test_discord_thread_uses_same_canonical_link_shape() -> None:
 
 
 def test_discord_dm_link_uses_me_route() -> None:
-    result = discord_message_link(DiscordSource(channel_id="222", message_id="333"))
+    result = discord_message_link(DiscordSource(channel_id="222", message_id="333", space="dm"))
     assert result.url == "https://discord.com/channels/@me/222/333"
     assert result.status is LinkStatus.AVAILABLE
 
@@ -45,7 +45,7 @@ def test_discord_dm_link_uses_me_route() -> None:
 def test_discord_link_rejects_malformed_identifiers(
     channel_id: str, message_id: str, guild_id: str | None
 ) -> None:
-    result = discord_message_link(DiscordSource(channel_id, message_id, guild_id))
+    result = discord_message_link(DiscordSource(channel_id, message_id, guild_id, space="dm"))
     assert result.status is LinkStatus.INVALID
     assert result.url is None
     assert "x" not in (result.detail or "")

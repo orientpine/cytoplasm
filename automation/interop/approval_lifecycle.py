@@ -374,6 +374,8 @@ def request_owner_approval(
     lease: ApprovalLease,
     journal: PostingJournal,
     notifier: Callable[[str], bool] | None = None,
+    *,
+    prepare: Callable[[], tuple[ApprovalIntent, ApprovalGate]] | None = None,
 ) -> Verdict:
     """``notifier`` is the optional owner-notice sink used only when a supersede loses
     its replacement (L6/L7). Default None keeps the staged gate import-free; it still
@@ -407,16 +409,23 @@ def request_owner_approval(
         others = tuple(request for request, probe in snapshot if probe is Probe.BOUND_PENDING and request.action_hash != intent.action_hash)
         gone = tuple(request for request, probe in snapshot if probe is Probe.MISSING)
         cleared: list[Cleared] = []
-        for request in gone:
-            gate.drop(request)
-            cleared.append(Cleared(request, Reason.MESSAGE_MISSING))
         if same:
+            for request in gone:
+                gate.drop(request)
+                cleared.append(Cleared(request, Reason.MESSAGE_MISSING))
             canonical, duplicates = same[0], same[1:]
             halted = _destroy(gate, duplicates, Reason.DUPLICATE_COLLAPSED, cleared)
             if halted is not None:
                 return halted
             pending_reason = Reason.DUPLICATE_COLLAPSED if duplicates else None
             return Verdict(Outcome.PENDING, pending_reason, live=canonical, cleared=tuple(cleared))
+        # Resolve intact bindings first. New-card preflight must precede even
+        # record deletion or journal reservation, not just the eventual POST.
+        if prepare is not None:
+            intent, gate = prepare()
+        for request in gone:
+            gate.drop(request)
+            cleared.append(Cleared(request, Reason.MESSAGE_MISSING))
         halted = _destroy(gate, others, Reason.CONTENT_CHANGED, cleared)
         if halted is not None:
             return halted

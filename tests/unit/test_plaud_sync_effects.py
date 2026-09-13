@@ -27,6 +27,8 @@ from automation.plaud_sync.watch_step import ResolveEffects
 from automation.obsidian_write.config import ObsidianWriteConfig
 
 _BODY = "## 요약\n\n- x\n\n## 전문\n\n말씀\n"
+_WRITTEN = "✅ lifelog 저장 완료: `000_PARA/Area/Lifelog/2026/2026-09-01-standup--abcdef123456.md`"
+_ABANDONED = "⛔ 취소됨: 녹음 `rec-001` 노트는 저장되지 않았습니다."
 
 _BASE = PlaudSyncRecord(
     version=1,
@@ -75,15 +77,19 @@ def test_note_plan_for_tampered_body_is_none(tmp_path: Path) -> None:
 
 
 def test_result_notice_names_note_on_written() -> None:
+    # Given: the base release's captured compatibility bytes.
+    # When: a successful vault write is announced.
     text = result_notice_text(_record(), "written")
-    assert _BASE.note_relpath in text
-    assert "✅" in text
+    # Then: optional-runtime fallback keeps the shipped bytes.
+    assert text == _WRITTEN
 
 
 def test_result_notice_names_recording_on_abandoned() -> None:
+    # Given: the base release's captured compatibility bytes.
+    # When: a cancelled request is announced.
     text = result_notice_text(_record(), "abandoned")
-    assert "rec-001" in text
-    assert "⛔" in text
+    # Then: optional-runtime fallback keeps the shipped bytes.
+    assert text == _ABANDONED
 
 
 def test_thread_candidates_prefers_live_requests_of_the_same_key() -> None:
@@ -226,7 +232,9 @@ def test_notify_posts_the_result_into_the_request_thread_and_closes_it(
     effects.notify_result(_record(), "written")
 
     # Then: it lands in THAT thread (no second thread, no new approval message)...
-    assert _RecordingSender.sent == [("thread-1", result_notice_text(_record(), "written"))]
+    ((channel, body),) = _RecordingSender.sent
+    assert channel == "thread-1"
+    assert "discord.com/channels" not in body
     # ...and the thread is renamed with the done prefix and archived, so the list of
     # active threads stays exactly the list of open requests.
     (patch,) = [call for call in transport.calls if call[0] == "PATCH"]
@@ -274,7 +282,9 @@ def test_notify_falls_back_to_the_bound_channel_when_the_thread_send_fails(
     effects.notify_result(_record(), "written")
 
     # Then: the confirmed result still reaches the owner on the bound surface.
-    assert transport.posted == [("thread-1", result_notice_text(_record(), "written"))]
+    ((channel, body),) = transport.posted
+    assert channel == "thread-1"
+    assert "discord.com/channels" not in body
 
 
 def test_notify_is_best_effort_and_marks_a_total_failure_on_stderr(

@@ -14,10 +14,13 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SKILL = REPO / "skills" / "meeting"
@@ -87,3 +90,53 @@ def test_explicit_override_still_wins(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AUTOPHAGY_RUNTIME_ROOT", str(tmp_path))
 
     assert meeting_runtime.runtime_root() == tmp_path
+
+
+@pytest.mark.parametrize("thread_status, target", [(200, "333"), (400, "222"), (503, "111")])
+def test_plugin_sends_when_automation_is_unimportable(tmp_path: Path, thread_status: int, target: str) -> None:
+    # Given: an isolated gateway plugin copy, no repository/package path, and HTTP responses.
+    plugin_path = tmp_path / "meeting_plugin.py"
+    shutil.copy(SKILL / "plugin/__init__.py", plugin_path)
+    script = f'''
+import importlib.util, io, json, sys
+from types import SimpleNamespace
+from urllib.error import HTTPError
+assert importlib.util.find_spec("automation") is None
+spec = importlib.util.spec_from_file_location("meeting_plugin", {str(plugin_path)!r})
+plugin = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = plugin
+spec.loader.exec_module(plugin)
+requests = []
+def urlopen(request, timeout):
+    payload = json.loads(request.data)
+    requests.append([request.selector, payload])
+    if request.selector.endswith("/threads") and {thread_status} != 200:
+        raise HTTPError(request.full_url, {thread_status}, "fixture", None, None)
+    return io.BytesIO(b'{{"id":"333"}}')
+plugin.urlopen = urlopen
+plugin._config = lambda: {{"owner_id": "555"}}
+plugin._launch = lambda trigger, python: None
+event = SimpleNamespace(text="!meeting 합성 회의", message_id="222",
+    source=SimpleNamespace(user_id="555", chat_id="111", is_bot=False))
+result = plugin.pre_gateway_dispatch(event, None, None)
+assert importlib.util.find_spec("automation") is None
+print(json.dumps({{"result": result, "requests": requests, "automation": False}}, ensure_ascii=False))
+'''
+    # When: the real gateway hook runs in a fresh stdlib-only process.
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", script], cwd=tmp_path,
+        capture_output=True, text=True, timeout=30,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "DISCORD_BOT_TOKEN": "fixture"},
+    )
+    # Then: anchor creation/reuse/fallback works and the exact string ACK reaches HTTP.
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "result": {"action": "skip", "reason": "meeting_ingest"},
+        "requests": [
+            ["/api/v10/channels/111/messages/222/threads", {"name": "회의록 처리"}],
+            [f"/api/v10/channels/{target}/messages", {"content": "회의록 접수 — 민감도 게이트 통과 후 처리 중입니다 (수 분 내 결과 통지)."}],
+        ],
+        "automation": False,
+    }
+    print(result.stdout, end="")

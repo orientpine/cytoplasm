@@ -1,10 +1,6 @@
-"""What a release approval binds the owner's ✅ to: version, HEAD, surface digest set.
-
-Split out of ``skill_gate_specs`` under the repo's 250 pure-LOC ceiling (AS-1.11
-precedent) — adding ``ReleaseSpec`` there pushed that module to 365 pure LOC. The
-shared primitives (``_hash``, ``StoredBinding``, ``binding_fields``, the approval
-line) stay in ``skill_gate_specs`` and are imported here, so there is exactly one
-copy of each; only the release-shaped spec lives in this module.
+"""Release approval binding: version, HEAD and complete surface digest set.
+Stored digests validate posted cards without rendering; pre-digest v1-v3 use frozen replay.
+Record/detail replay stays staged here; producer-only preflight lives in release_card.
 """
 from __future__ import annotations
 
@@ -25,6 +21,8 @@ from automation.skill_gate_specs import (
 RELEASE_ACTION: Final = "release.deploy"
 #: 카드 한 통과 상세 메시지 한 통의 상한 — Discord 한도 2000 아래의 같은 여유폭.
 MESSAGE_LIMIT: Final = 1900
+#: 신규 카드가 쓰는 판본. 1·2·3 은 이미 게시된 카드의 재생 전용이며 문구가 동결이다.
+NEW_RENDER_VERSION: Final = 4
 
 _RELEASE_VERSION: Final = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 _COMMIT_SHA: Final = re.compile(r"[0-9a-f]{40}\Z")
@@ -35,6 +33,10 @@ _SHA256: Final = re.compile(r"[0-9a-f]{64}\Z")
 
 class ReleaseSpecError(ValueError):
     """A release approval cannot be rendered or bound safely."""
+
+
+class EnvelopeUnavailable(ReleaseSpecError):
+    """봉투를 부를 수 없다 — 신규 카드만 직전 판본으로 내려가고, 저장된 판본은 fail-closed."""
 
 
 def detail_header(version: str, head_sha: str, index: int, total: int) -> str:
@@ -133,8 +135,9 @@ class ReleaseSpec:
     release_nonce: str
     surface_digests: tuple[tuple[str, str], ...]
     patch_notes: str
-    render_version: int = 3
+    render_version: int = NEW_RENDER_VERSION
     major_note: str = ""
+    posted_text: str = ""
 
     def __post_init__(self) -> None:
         if _RELEASE_VERSION.fullmatch(self.version) is None:
@@ -156,8 +159,8 @@ class ReleaseSpec:
             raise ReleaseSpecError("surface names and sha256 digests must be canonical")
         if not isinstance(self.patch_notes, str) or not self.patch_notes.strip():
             raise ReleaseSpecError("release patch notes must not be empty")
-        if self.render_version not in (1, 2, 3):
-            raise ReleaseSpecError("release render version must be 1, 2 or 3")
+        if self.render_version not in (1, 2, 3, 4):
+            raise ReleaseSpecError("release render version must be 1, 2, 3 or 4")
         if "\n" in self.major_note:
             raise ReleaseSpecError("the operator note must stay on one card line")
         object.__setattr__(self, "surface_digests", rows)
@@ -192,7 +195,9 @@ class ReleaseSpec:
 
     def render(self) -> str:
         """게시할 카드 본문. 버전형이며 과거 판본은 저장된 레코드를 위해 동결이다."""
-        renderers = {1: self._render_v1, 2: self._render_v2, 3: self._render_v3}
+        if self.posted_text:
+            return self.posted_text
+        renderers = {1: self._render_v1, 2: self._render_v2, 3: self._render_v3, 4: self._render_v4}
         content = renderers[self.render_version]()
         if len(content) > 1900:
             raise ReleaseSpecError(
@@ -245,6 +250,12 @@ class ReleaseSpec:
             f"{_APPROVAL_LINE}"
         )
 
+    def _render_v4(self) -> str:
+        """v4(신규 기본): 저장된 레코드만으로 재생되는 봉투 — 시계도 계획도 읽지 않는다."""
+        from automation.release_spec_message import render_v4
+
+        return render_v4(self, bundle_names=self._bundle_names())
+
     def new_record(self, message_id: str, binding: ApprovalBinding) -> dict[str, str]:
         return {
             "version": self.version,
@@ -258,6 +269,7 @@ class ReleaseSpec:
             "major_note": self.major_note,
             "message_id": message_id,
             "action_hash": self.action_hash(),
+            "content_sha256": _hash(self.render()),
             "approval_action": RELEASE_ACTION,
             "approval_destination": f"release:{self.version}",
             **binding_fields(binding),
@@ -273,5 +285,6 @@ class ReleaseSpec:
             return False
         return (
             record.get("action_hash", "") == replay.action_hash() == self.action_hash()
-            and content == replay.render()
+            and (_hash(content) == record["content_sha256"] if "content_sha256" in record
+                 else replay.render_version < 4 and content == replay.render())
         )

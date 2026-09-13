@@ -14,6 +14,10 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import OwnerMessage
 
 KST = timezone(timedelta(hours=9), "KST")
 WINDOW_MIN = timedelta(minutes=55)
@@ -46,6 +50,7 @@ class CalendarEvent:
     event_id: str
     start: datetime
     summary: str
+    source_url: str | None = None
 
     @property
     def start_iso(self) -> str:
@@ -77,6 +82,7 @@ def parse_events(payload: str) -> list[CalendarEvent]:
                 event_id=str(item.get("id", "")),
                 start=datetime.fromisoformat(date_time),
                 summary=str(item.get("summary", "")),
+                source_url=link if isinstance(link := item.get("htmlLink"), str) else None,
             )
         )
     return events
@@ -138,6 +144,33 @@ def milestone_offset(deadline: str, today: date) -> str | None:
 def milestone_key(entry: dict[str, str], offset: str) -> str:
     """Idempotency key: one reminder per milestone identity per offset."""
     return f"{entry.get('title', '')}|{entry.get('deadline', '')}|{offset}"
+
+
+@dataclass(frozen=True, slots=True)
+class ReminderContext:
+    """멱등 키와 원본 위치. 일정 조회 구간이 있을 때만 관측 구간을 담는다."""
+
+    key: str
+    source: tuple[str, str]
+    url: str | None = None
+    window: tuple[datetime, datetime] | None = None
+
+
+def reminder_message(content: str, context: ReminderContext | None) -> OwnerMessage | None:
+    """플랫 런타임도 import 가능하며, 봉투 부재는 기존 문자열로 배달한다."""
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, Periodic, Ref, Result
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        return None
+    if context is None:
+        return None
+    detail = Result(outcome="executed") if context.window is None else Periodic(*context.window)
+    return OwnerMessage(
+        subject_key=context.key, subject="리마인더", fact=content,
+        location=Ref(scope="resource", url=context.url, search=context.source),
+        owner=Action(verb="none"), agent_next="다음 틱에 새 대상 확인",
+        recovery="not_applicable", detail=detail,
+    )
 
 
 def compose_event_reminder(event: CalendarEvent, now: datetime) -> str:

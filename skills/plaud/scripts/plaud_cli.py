@@ -39,6 +39,8 @@ class Pending:
     thread_id: str
     note_name: str
     recorded_at: str
+    guild_id: str = ""
+    thread_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +85,14 @@ def _transcript(raw: dict[str, object], transcripts_dir: Path) -> Path | None:
     return candidate if stem and candidate.is_file() else None
 
 
+def _thread_url(guild_id: str, thread_id: str) -> str | None:
+    """샌드박스용 인라인 예외 — 공유 discord_link와의 동등성은 테스트로 고정한다."""
+    if not all(value.isascii() and value.isdecimal() and value.strip("0")
+               for value in (guild_id, thread_id)):
+        return None
+    return f"https://discord.com/channels/{guild_id}/{thread_id}"
+
+
 def summarize(payload: object, transcripts_dir: Path | None = None) -> StatusSummary:
     """Fold the raw state into counts and the owner-facing pending list (fail-closed)."""
     if not isinstance(payload, dict):
@@ -106,12 +116,15 @@ def summarize(payload: object, transcripts_dir: Path | None = None) -> StatusSum
             raise StatusError(f"record {key} has an unknown status: {status!r}")
         counts[status] += 1
         if status == "posted":
+            guild_id = _text(raw, "approval_guild_id")
             pending.append(
                 Pending(
                     recording_id=_text(raw, "recording_id", str(key)),
                     thread_id=_text(raw, "approval_thread_id", _text(raw, "channel_id", "?")),
                     note_name=Path(_text(raw, "note_relpath")).name,
                     recorded_at=_text(raw, "recorded_at"),
+                    guild_id=guild_id,
+                    thread_url=_thread_url(guild_id, _text(raw, "approval_thread_id")),
                 )
             )
         elif status == "approved":
@@ -155,7 +168,8 @@ def render(summary: StatusSummary) -> str:
         f"- 승인 대기(posted) {len(summary.pending)}건:",
     ]
     lines.extend(
-        f"  - {p.recording_id} · 스레드 {p.thread_id} · {p.note_name}" for p in summary.pending
+        f"  - {p.recording_id} · 스레드 {p.thread_url or p.thread_id} · {p.note_name}"
+        for p in summary.pending
     )
     if summary.approved:
         lines.append(f"- 저장 대기(approved) {len(summary.approved)}건:")
@@ -194,6 +208,7 @@ def _payload(summary: StatusSummary) -> dict[str, object]:
             {
                 "recording_id": p.recording_id,
                 "thread_id": p.thread_id,
+                "thread_url": p.thread_url,
                 "note_name": p.note_name,
                 "recorded_at": p.recorded_at,
             }

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 
 from automation.memory_relocate.model import RelocationRecord
 from automation.memory_relocate.render import (
     MAX_MESSAGE_CHARS,
-    RENDER_VERSION,
     RenderError,
-    render_relocation_approval,
+    render_relocation_approval as render_current,
 )
+
+
+RENDER_VERSION = "mc-reloc-render-v1"
+render_relocation_approval = partial(render_current, render_version=RENDER_VERSION)
 
 
 def _record() -> RelocationRecord:

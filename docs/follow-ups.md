@@ -180,6 +180,46 @@ OWNER 2·OBSERVE 2 이관. 불릿은 지우지 않고 원 `##` 헤딩·본문 �
 > ↳ 2026-09-09 정책 결정으로 해소 — 결론은 **켜지 않는다**이고 대체된 선행 구현을 삭제했다. 원문과 판단 근거는
 > [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
 
+## 문서 검토 안내의 전송 경계 (2026-09-11)
+
+- **doctype·proposal·procurement 검토 안내가 통지 파사드 밖에서 전송된다** → 전송 수단을
+  `owner_notice`로 옮길지 별도 설계한다. 지금은 doctype·proposal의 `hermes send` argv·청킹·실패 처리와
+  procurement의 직접 메시지 POST·첨부 경로를 그대로 두고, 본문만 소유자 메시지 봉투로 렌더한다.
+  **영향: 세 검토 안내의 전송 정책 일원화 미완 · 심각도 낮음**.
+
+새 안내는 검토 문서를 대상으로 식별하고, procurement가 이미 받은 Drive 링크를 위치로 싣는다.
+링크가 없는 첨부·발행 실패 경로와 doctype·proposal의 문서 경로는
+`Ref(scope="resource", url=None, search=("문서 검색", 파일명))`으로 안내한다.
+doctype·proposal 검토 호출 시점에는 Drive URL이 전달되지 않으므로 추측하거나 재발행하지 않는다.
+문서 경로는 대상 식별에 남고, 제안서의 검토 의견은 기존처럼 해당 문서에 저장된다.
+봉투를 import할 수 없거나 렌더러가 필드를 거부하면 기존 본문을 바이트 그대로 전송한다.
+
+## 소유자 메시지 계약 착지 후 남긴 것 (2026-09-12)
+
+- **분할기가 두 벌이다** — `interop/chunker.chunk_message`는 URL 경계를 보존하지만 `release_spec.split_messages`는 줄·머리글 예산으로 나눈다.
+  → 저장 레코드의 상세 재생·조각 수를 보존하는 공통 분할 계약을 먼저 정하고 통합을 검토한다. `release_notes.post_details`는 별도 분할기가 아니라 그 결과의 전송자다.
+  **영향: 릴리스 상세와 일반 통지의 URL 절단·분할 정책이 달라질 수 있음 · 심각도 중**.
+- **지침 링크·앵커에 상시 가드가 없다** — 보드 A4는 `done.md`의 경로만 보고 앵커를 버리며, todo 28 검사기는 일회성 증적이다.
+  → 루트 지침·가이드·소개 문서의 상대 링크와 앵커를 검사하는 저장소 가드를 추가하고 없는 경로·제목 변이로 실패를 증명한다.
+  **영향: 낡은 지침 링크가 테스트 통과 뒤에도 남을 수 있음 · 심각도 중**.
+- **발신자 그래프가 iterator 반환값에서 발신자를 잃는다** — `dict(zip((True, 1.0), (client.log, client.send_owner_dm)))[1]`은 실제 발신하지만 CLEAN이다.
+  → `owner_message_sender_ast.py`의 iterator 허용과 `owner_message_sender_bindings.py`의 Call 결과 사이에 발신자 전파를 보존하거나, 전파를 증명 못 하면 거부한다. 표기별 예외 추가는 피한다.
+  **영향: 명시적 발신자가 있어도 봉투 미채택을 놓치는 수정 가능한 검사 공백 · 심각도 중**.
+- **승인 lease가 원래 거부 예외를 TypeError로 바꾼다** — 생성기형 `FileKeyLease.hold`를 빠져나오는 frozen `SubmissionArtifactError`의 traceback 대입이 실패한다.
+  → class 기반 context manager로 잠금·해제를 보존하고 실제 제출 거부 경로에서 원 예외·게시 0건·잠금 해제를 함께 검증한다.
+  **영향: 과대 제출 카드 거부의 진단·오류 처리, 무승인 발송은 아님 · 심각도 중**.
+- **승인 카드 3종이 봉투 뒤에 바인딩 footer 한 줄을 남긴다** — budget(`budget_core.py:250`)·calendar(`calendar_confirm.py:147`)·coordination(`coordination_lifecycle.py:137`)이 5필드 뒤에 `sha256`(budget 은 `draft id` 포함)을 덧붙여 6줄이 된다. 그 footer 는 이 계획보다 앞서 존재했고 승인 해시 바인딩이 의존한다.
+  → 줄 수만을 이유로 카드 버전을 신설하지 않는다(이미 게시된 카드의 바이트를 바꾸면 소유자의 ✅ 가 소급 무효가 된다). 다른 이유로 카드 서식을 손댈 때 바인딩을 다섯 필드 안에 수용할 수 있는지 함께 검토한다.
+  **영향: 표시상 군더더기뿐 — F3 실측으로 행동 필드 뒤에 오고 경쟁 지시를 만들지 않으며 승인 위치를 가리지 않는다(해시를 필드 안으로 옮기면 오히려 가독성 저하) · 심각도 낮음**.
+- **publish 카드가 기계용 wire 접두부로 11줄이 된다** — `skill_gate_specs.py:319`가 파싱 대상 접두부 뒤에 봉투를 잇는다. `_PUBLISH_BINDING`(`skill_gate_publish.py:34-38`)이 개행 구분 6줄 접두부를 요구해, F4 실측상 현재 11줄은 바인딩 일치·5줄 봉투 단독은 불일치·접두부를 5줄에 접어도 불일치다.
+  → 「승인 흐름·게이트·POLICY_VERSION 불변」을 지키는 한 줄이지 않으므로, 게이트 파서 변경이 **독립적으로** 정당화될 때만 다룬다. peer attestation 은 publish 에 요구되지 않으므로 peer 의존은 근거가 아니다 — 게이트 파서 단독으로 성립한다.
+  **영향: 소유자 가시 해악 미입증(F4) · 심각도 낮음**.
+
+발신자 검사의 교훈: todo 38 초반의 모양 열거 대신, 현재는 알려진 발신자가 지나가는 모든 subscript에 하나의 값 기반 인증 조건을 적용한다.
+불리언·실수·슬라이스·음수 인덱스의 누락을 남은 결함으로 다시 적지 않는다. 위 iterator 반환값 공백과
+발신자 단서 자체가 없는 동적 경계는 다르며, 후자는 [보류 원장](follow-ups-deferred.md#소유자-메시지-계약-착지-후-남긴-것-2026-09-12)에 있다.
+근거: [해시 감사](qa/OMUX/hash-binding-audit.md), [계약·파사드·분할기·검사 코드 대조와 재현 증적](../.omo/evidence/owner-message-ux/task-30.txt).
+
 ## 승인 요청 안내 메시지·비공개 표면 허용경로 착지 후 남긴 것 (2026-09-09)
 
 > 착지 기능: [승인 요청 안내 메시지](기능소개/승인-요청-안내-메시지.md) ·
@@ -211,7 +251,10 @@ OWNER 2·OBSERVE 2 이관. 불릿은 지우지 않고 원 `##` 헤딩·본문 �
   전량 스위트를 돌린 실측(`PYTEST_CURRENT_TEST` 기록): `tests/unit/test_meeting_skill.py::test_meeting_drive_publish_uses_note_date_and_label`(10회)
   · `::test_sensitive_meeting_skips_drive_publish`(4) · `::test_drive_facade_import_failure_does_not_block_local_save`(2) ·
   `tests/unit/test_meeting_project_ingest.py::test_pending_transcript_minutes_publish_under_its_project`(4) 가 `drive files list/get`
-  (KIMM·autophagy 루트 폴더 조회, 폴더 id 재검증)을 실행한다. 조치: 네 테스트가 `DriveClient`/`drive_outputs` 의 `run` 을 주입하거나
-  `DRIVE_PUBLISH_ENABLED` 을 명시적으로 끄게 하고, `tests/AGENTS.md` 의 gws 가드 선례(`test_todo_watch.py::_no_real_gws`)와
-  같은 파일 단위 autouse 가드를 둔다. **영향: 읽기 전용(쓰기 0)이라 외부효과는 없으나 `~/.hermes/drive-publish/folders.json`
-  실 캐시를 읽어 결과가 워크스테이션 상태에 좌우되고, gws 없는 호스트(CI)와 동작이 갈린다 · 심각도 낮음**.
+  (KIMM·autophagy 루트 폴더 조회, 폴더 id 재검증)을 실행한다.
+  ↳ **2026-09-12 외부 도달은 닫혔다** — `tests/unit/conftest.py` 의 PATH 거부 스텁이 이 네 테스트의 `drive files list` 를
+  exit 97 로 거부한다(실측: 가드 아래 `-k meeting` 305 passed — 네 테스트는 거부를 받고도 통과한다). 제안됐던 *파일 단위*
+  autouse 가드는 채택하지 않았다: 같은 날 형제 워크트리의 pre-patch 사본이 실제로 Tasks 에 썼고, 파일 단위 가드는 그것을
+  구조적으로 덮을 수 없다. **남은 것은 밀폐성뿐** — 네 테스트가 아직 `run` 주입 없이 실 캐시 경로를 *시도*하므로
+  `DriveClient`/`drive_outputs` 의 `run` 을 주입하거나 `DRIVE_PUBLISH_ENABLED` 을 명시적으로 끄면 워크스테이션 상태에
+  좌우되지 않는다. **영향: 외부효과 0(쓰기 0·읽기도 이제 차단) · 심각도 낮음**.

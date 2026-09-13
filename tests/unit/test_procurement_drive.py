@@ -60,4 +60,5 @@ def test_drive_publish_failure_keeps_empty_link_and_continues(
 
     record = json.loads(next(stub.iterdir()).read_text(encoding="utf-8"))
     assert "mode=drive-link" in result
-    assert "(Drive 링크: )" in record["content"]
+    assert target.name in record["content"].splitlines()[2]
+    assert "https://" not in record["content"]

@@ -12,12 +12,12 @@ from __future__ import annotations
 import json
 import os
 import sys
-import uuid
 from contextlib import suppress
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any
+from calendar_confirm_input import DraftRecord as DraftRecord
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -34,8 +34,6 @@ calendar_binding = import_module("calendar_binding")
 _authz = import_module("calendar_confirm_authz")
 create_watcher_authorization = _authz.create_watcher_authorization
 
-DraftRecord: TypeAlias = dict[str, str | list[str]]
-
 API = "https://discord.com/api/v10"
 USER_AGENT = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
 DM_SCAN_LIMIT = 50
@@ -45,6 +43,15 @@ CANCEL_EMOJI = "\u26d4"
 OUTCOME_DONE = "done"
 OUTCOME_CANCELLED = "cancelled"
 OUTCOME_EXPIRED = "expired"
+
+# Preserve the public transport injection seams while separating input validation.
+from calendar_confirm_input import (  # noqa: E402
+    _adapter as _adapter, _require_e2e_secret as _require_e2e_secret,
+    confirm_via_injection as confirm_via_injection, sign_injection as sign_injection,
+    confirm_via_owner_scan as confirm_via_owner_scan, _pending_entry as _pending_entry,
+    _validate_pending_binding as _validate_pending_binding,
+    _reaction_action as _reaction_action, _owner_reacted as _owner_reacted,
+)
 
 
 def confirm_text(draft: DraftRecord) -> str:
@@ -60,25 +67,6 @@ def owner_id() -> str:
     if not isinstance(owner, str) or not owner:
         raise GateError("interop config에 owner_id가 없습니다", 3)
     return owner
-
-
-def _adapter() -> Any:
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
-    sys.path.insert(0, str(runtime))
-    try:
-        from automation.interop import injection_adapter
-    except ImportError:
-        raise GateError(f"injection adapter 불가 (INTEROP_RUNTIME={runtime})", 3) from None
-    return injection_adapter
-
-
-def _require_e2e_secret() -> str:
-    if os.environ.get("E2E_TEST_MODE") != "1":
-        raise GateError("주입 경로는 E2E_TEST_MODE=1 전용입니다 (프로덕션 게이트웨이 금지)", 1)
-    secret = os.environ.get("INTEROP_E2E_SECRET", "")
-    if not secret:
-        raise GateError("INTEROP_E2E_SECRET 누락", 1)
-    return secret
 
 
 def bot_token() -> str:
@@ -105,55 +93,6 @@ def consume_watcher_authorization(draft: DraftRecord, authorization_path: Path) 
     )
 
 
-def confirm_via_injection(draft: DraftRecord, injection_path: Path) -> str:
-    secret = _require_e2e_secret()
-    adapter = _adapter()
-    envelope = json.loads(injection_path.read_text(encoding="utf-8"))
-    event = adapter.InboundEvent(
-        event_id=str(envelope["event"]["event_id"]),
-        user_id=str(envelope["event"]["user_id"]),
-        channel_id=str(envelope["event"]["channel_id"]),
-        text=str(envelope["event"]["text"]),
-    )
-    if not adapter.accept_test_event(
-        event, str(envelope["signature"]), secret.encode("utf-8"), e2e_test_mode=True
-    ):
-        raise GateError("주입 승인 서명 불일치 — 거부", 1)
-    if event.user_id != owner_id():
-        raise GateError("주입 승인 발신자가 소유자가 아님 — 거부", 1)
-    if event.channel_id != draft["channel_id"]:
-        raise GateError("주입 승인 채널 불일치 — 거부", 1)
-    if event.text != confirm_text(draft):
-        raise GateError("주입 승인 텍스트/해시 불일치 — 거부", 1)
-    return f"injected:{event.event_id}"
-
-
-def sign_injection(
-    draft: DraftRecord, out_path: Path, user_id: str | None, channel_id: str | None, forge_signature: bool
-) -> None:
-    secret = _require_e2e_secret()
-    adapter = _adapter()
-    event = adapter.InboundEvent(
-        event_id=str(uuid.uuid4()),
-        user_id=user_id or owner_id(),
-        channel_id=channel_id or draft["channel_id"],
-        text=confirm_text(draft),
-    )
-    signature = "0" * 64 if forge_signature else adapter.sign_event(event, secret.encode("utf-8"))
-    write_json(
-        out_path,
-        {
-            "event": {
-                "event_id": event.event_id,
-                "user_id": event.user_id,
-                "channel_id": event.channel_id,
-                "text": event.text,
-            },
-            "signature": signature,
-        },
-    )
-
-
 def _api(method: str, path: str, payload: dict[str, str] | None = None) -> Any:
     token = bot_token()
     request = Request(
@@ -175,32 +114,42 @@ def _parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def confirm_via_owner_scan(draft: DraftRecord) -> str:
-    owner = owner_id()
-    channel_id = calendar_binding.approval_directory().owner_dm()
-    messages = _api("GET", f"/channels/{channel_id}/messages?limit={DM_SCAN_LIMIT}")
-    accepted = {f"실행 {draft['id']}", confirm_text(draft)}
-    for message in messages:
-        author = message.get("author", {})
-        if str(author.get("id", "")) != owner or bool(author.get("bot", False)):
-            continue
-        if str(message.get("content", "")).strip() not in accepted:
-            continue
-        if _parse_ts(str(message["timestamp"])) < _parse_ts(str(draft["created"])):
-            continue
-        return f"dm:{message['id']}"
-    raise GateError(
-        f"소유자의 '실행 {draft['id']}' DM 확인을 찾지 못함 — 실행하지 않습니다", 1
-    )
-
-
-def post_confirmation_message(draft: DraftRecord, channel_id: str) -> tuple[str, str]:
-    """Post the owner confirmation message and pre-add the two reaction choices."""
-    content = (
-        f"{_change_summary(draft)}\n\n{calendar_binding.reaction_instruction()}. "
+def _render_v1(draft: DraftRecord) -> str:
+    """Frozen calendar card; confirm_text remains the separate signed-input protocol."""
+    return (
+        f"{_change_summary(draft)}\n\n이 메시지에 ✅ 실행 / ⛔ 취소. "
         f"텍스트 fallback: `실행 {draft['id']}`/`취소 {draft['id']}`\n"
         f"sha256:{draft['sha256']}"
     )
+
+
+def render_confirmation(draft: DraftRecord) -> str:
+    version = draft.get("render_version", "1")
+    if version == "1":
+        return _render_v1(draft)
+    from automation.interop.approval_card import CardRenderError
+    if version != "2":
+        raise CardRenderError("unknown calendar card render version")
+    from automation.interop import owner_message
+    if not callable(getattr(owner_message, "render", None)):
+        raise CardRenderError("owner envelope unavailable")
+    here = owner_message.Ref(scope="self")
+    envelope = owner_message.OwnerMessage(
+        subject_key=str(draft["id"]), subject="캘린더 변경", fact=str(draft["action"]),
+        location=here, owner=owner_message.Action("react", here, calendar_binding.reaction_instruction()),
+        agent_next="승인된 캘린더 변경만 실행", recovery="not_applicable",
+        detail=owner_message.Approval(None, "캘린더를 변경하지 않음"),
+    )
+    try:
+        body = owner_message.render(envelope, destination=here)
+    except owner_message.OwnerMessageError as error:
+        raise CardRenderError("calendar envelope cannot render") from error
+    return f"{body}\nsha256:{draft['sha256']}"
+
+
+def post_confirmation_message(draft: DraftRecord, channel_id: str) -> tuple[str, str]:
+    """Post only the card prepared before surface resolution, or replay a stored version."""
+    content = draft.get("approval_content") or render_confirmation(draft)
     message = _api("POST", f"/channels/{channel_id}/messages", {"content": content})
     message_id = _required_string(message, "id", "확정 DM 메시지 id가 없습니다")
     _api("PUT", f"/channels/{channel_id}/messages/{message_id}/reactions/{quote(APPROVE_EMOJI, safe='')}/@me")
@@ -249,7 +198,7 @@ def _thread_transport(channel_id: str):
     return DiscordTransport(token=bot_token(), channel_id=channel_id)
 
 
-def notify_result(draft: DraftRecord, content: str, outcome: str = "") -> object:
+def notify_result(draft: dict[str, str | list[str]], content: str, outcome: str = "") -> object:
     """Route a result to the request's own approval thread, else the owner fallback.
 
     라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
@@ -267,6 +216,15 @@ def notify_result(draft: DraftRecord, content: str, outcome: str = "") -> object
             file=sys.stderr,
         )
         return send_owner_dm(owner_id(), content)
+    message = import_module("calendar_result_message").build(draft, content, outcome)
+    if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        return origin_notice.deliver(
+            api=_api, transport_factory=_thread_transport, record=draft,
+            thread_name=f"캘린더 확정 (draft {draft['id']})", content=content,
+            fallback=lambda body: send_owner_dm(owner_id(), body),
+            outcome=origin_notice.ThreadOutcome[outcome.upper()] if outcome else None,
+            message=message, fallback_destination=None,
+        )
     return origin_notice.deliver(
         api=_api,
         transport_factory=_thread_transport,
@@ -341,39 +299,6 @@ def _change_summary(draft: DraftRecord) -> str:
         action=str(draft["action"]), summary=str(draft["summary"]), start=str(draft["start"]),
         end=str(draft["end"]), calendar_id=str(draft["calendar_id"]), event_id=str(draft["event_id"]),
     )
-
-
-def _pending_entry(draft_id: str, *, required: bool = True) -> PendingConfirm | None:
-    try:
-        entries = [entry for entry in PendingConfirmStore().load() if entry.draft_id == draft_id]
-    except PendingConfirmError as error:
-        raise GateError("pending confirm store를 신뢰할 수 없습니다", 3) from error
-    if len(entries) == 1:
-        return entries[0]
-    if not required and not entries:
-        return None
-    raise GateError("반응 확인용 pending confirm이 유일하지 않습니다", 1)
-
-
-def _validate_pending_binding(draft: DraftRecord, entry: PendingConfirm) -> None:
-    if draft.get("sha256") != entry.sha256:
-        raise GateError("pending confirm 드래프트 해시 불일치", 1)
-    if f"sha256:{entry.sha256}" not in confirmation_message_content(entry):
-        raise GateError("확정 DM 드래프트 해시 불일치", 1)
-
-
-def _reaction_action(entry: PendingConfirm, owner: str) -> str:
-    cancel = _owner_reacted(confirmation_reaction_users(entry, CANCEL_EMOJI), owner)
-    approve = _owner_reacted(confirmation_reaction_users(entry, APPROVE_EMOJI), owner)
-    if cancel:
-        return CANCEL_EMOJI
-    if approve:
-        return APPROVE_EMOJI
-    return ""
-
-
-def _owner_reacted(users: tuple[dict[str, str | bool], ...], owner: str) -> bool:
-    return any(user.get("id", "") == owner and not bool(user.get("bot", False)) for user in users)
 
 
 def _required_string(value: Any, key: str, message: str) -> str:

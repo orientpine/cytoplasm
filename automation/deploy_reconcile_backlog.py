@@ -5,6 +5,12 @@
 """
 from __future__ import annotations
 
+import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import OwnerMessage, Periodic, Result
+
 
 def release_backlog_notice(
     *,
@@ -35,4 +41,31 @@ def release_backlog_notice(
         "릴리스하려면 워크스테이션에서 `automation/release.sh` 를 실행하세요 (소유자 ✅ 1회).\n"
         "노드는 서명 없는 head 를 설치하지 않으며, 이 상태는 사고가 아닙니다."
         f"{mirror_notice}"
+    )
+
+
+def backlog_message(content: str, detail: Periodic | Result) -> OwnerMessage | None:
+    """새 통지와 durable 재시도가 같은 대상·릴리스 안내를 갖게 한다."""
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, Ref
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        return None
+    parsed = re.fullmatch(
+        r"릴리스 대기 중인 머지가 쌓여 있습니다 \(머지=축적, 릴리스=배포\)\.\n"
+        r"  미배포 커밋 : ([^\n]*)\n  origin/main : ([^\n]*)\n"
+        r"  runtime     : ([^\n]*)\n.*", content, re.DOTALL,
+    )
+    if parsed is None:
+        return None
+    summary, head, runtime = parsed.groups()
+    frozen = "`git format-patch`" in content
+    owner_step = "워크스테이션에서 실행; 소유자 ✅ 1회"
+    if frozen:
+        owner_step = "먼저 git format-patch → 개발 체크아웃 적용·commit/push; reset --hard 금지; " + owner_step
+    return OwnerMessage(
+        subject_key=head, subject="릴리스 백로그",
+        fact=f"미배포 {summary}; runtime {runtime}" + ("; 관측 미러 동결" if frozen else ""),
+        location=Ref(scope="resource", search=("Git 커밋", head)),
+        owner=Action("open", Ref(scope="resource", search=("명령", "automation/release.sh")), owner_step),
+        agent_next="서명된 릴리스만 수렴; 미러 안전 판정 유지", recovery="not_applicable", detail=detail,
     )

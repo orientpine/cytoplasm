@@ -39,6 +39,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -133,8 +134,11 @@ def _release_runtime_root() -> Path:
     return release if release.is_dir() else Path("/srv/autophagy-agents")
 
 
+@dataclass(frozen=True, slots=True)
 class DmSender:
     """Owner-notice transport — 목적지(지정 채널/DM)는 owner_notice 파사드가 정한다(ON-2)."""
+
+    context: poller_core.ReminderContext | None = None
 
     def send(self, body: str) -> None:
         if os.environ.get("REMINDER_DRY_RUN", "") == "1":
@@ -144,9 +148,15 @@ class DmSender:
         root = str(_release_runtime_root())
         if root not in sys.path:
             sys.path.insert(0, root)
+        from automation import owner_notice
         from automation.owner_notice import notify_owner
 
-        if not notify_owner(body):
+        message = poller_core.reminder_message(body, self.context)
+        if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+            ok = notify_owner(body, message=message)
+        else:
+            ok = notify_owner(body)
+        if not ok:
             # claim-before-send: raise → 호출자가 claim 을 release 해 다음 틱 재시도
             raise RuntimeError("owner notice delivery failed")
 
@@ -165,10 +175,13 @@ def _deliver(db: Path, sender: DmSender, kind: str, key: str, body: str) -> None
 def main() -> int:
     now = poll_now()
     db = _env_path("REMINDER_DB", "~/state/reminders.db")
-    sender = DmSender()
     for event in fetch_events(now):
         if not poller_core.in_reminder_window(event.start, now):
             continue
+        sender = DmSender(poller_core.ReminderContext(
+            key=poller_core.event_key(event), source=("일정 검색", event.event_id),
+            url=event.source_url, window=(now, now + LOOKAHEAD),
+        ))
         _deliver(
             db, sender, "event", poller_core.event_key(event),
             poller_core.compose_event_reminder(event, now),
@@ -178,6 +191,11 @@ def main() -> int:
         offset = poller_core.milestone_offset(entry.get("deadline", ""), today)
         if offset is None:
             continue
+        source = entry.get("source") or poller_core.milestone_key(entry, offset)
+        sender = DmSender(poller_core.ReminderContext(
+            key=poller_core.milestone_key(entry, offset), source=("마일스톤 출처", source),
+            url=source if source.startswith(("https://", "http://")) else None,
+        ))
         _deliver(
             db, sender, "milestone", poller_core.milestone_key(entry, offset),
             poller_core.compose_milestone_reminder(entry, offset),

@@ -98,25 +98,29 @@ def test_posts_in_request_channel_when_reminder_is_due(
     )
 
     # Then: shipped reminder copy goes only to the authorized card channel, never a DM.
-    link = f"https://discord.com/channels/{guild_id or '@me'}/{_THREAD}/{_MESSAGE}"
+    link = f"https://discord.com/channels/{guild_id}/{_THREAD}/{_MESSAGE}" if guild_id else None
     expected = reminder.compose_reminder(
         reminder.ApprovalReminder(ApprovalKind.CALENDAR, timedelta(hours=3), link)
     )
     assert discord.posts == [(_THREAD, expected)]
     assert discord.dms == []
-    assert link in discord.posts[0][1]
+    if link is not None:
+        assert link in discord.posts[0][1]
+    else:
+        assert "discord.com" not in discord.posts[0][1]
     assert retained == (entry,)
 
 
 @pytest.mark.parametrize("payload", [{}, {"guild_id": ""}, {"guild_id": None}])
-def test_resolves_dm_link_when_channel_has_no_guild(payload: Mapping[str, str | None]) -> None:
+def test_requires_explicit_dm_space_when_channel_has_no_guild(payload: Mapping[str, str | None]) -> None:
     # Given: a DM channel response has no non-empty guild id.
     resolve = reminder.channel_guild_resolver(lambda _: payload)
     # When
     guild_id = resolve(_THREAD)
-    # Then: missing guild metadata retains Discord's supported DM route.
+    # Missing guild alone is unknown; an explicitly known DM retains its supported link.
     assert guild_id is None
-    assert reminder.discord_message_link(reminder.DiscordSource(_THREAD, _MESSAGE, guild_id)).url == (
+    assert reminder.discord_message_link(reminder.DiscordSource(_THREAD, _MESSAGE, guild_id)).url is None
+    assert reminder.discord_message_link(reminder.DiscordSource(_THREAD, _MESSAGE, guild_id, space="dm")).url == (
         f"https://discord.com/channels/@me/{_THREAD}/{_MESSAGE}"
     )
 

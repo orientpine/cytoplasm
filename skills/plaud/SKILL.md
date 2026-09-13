@@ -25,7 +25,7 @@ Obsidian vault 에 밀어 넣는다. 이 스킬은 그 워처의 **상태 파일
   `posted`(카드 게시, ✅ 대기) · `approved`(✅ 받음, 다음 틱에 저장) · `written`(vault 저장 완료) ·
   `abandoned`(⛔·만료·최소 길이 미만·전사 포기)
 - 전사 대기 중인 녹음: 녹음 id · 시도 횟수 · 마지막 사유(예: `rc=4 로컬 전사 도구를 찾지 못했습니다`)
-- 승인 대기 중인 녹음 목록: 녹음 id · 승인 스레드 id · 노트 파일명
+- 승인 대기 중인 녹음 목록: 녹음 id · 클릭 가능한 승인 스레드 URL(좌표 미상 시 기존 id) · 노트 파일명
 - **로컬 전사본 목록** — `~/.hermes/plaud-sync/transcripts/<노트 stem>.md`. speechtotext 전사본과 같은
   형식(헤더 `- 화자: …` 범례 + `---` + `[HH:MM:SS] 화자N · 이름` 블록)이라 회의록 체인이 그대로 읽는다.
 
@@ -42,7 +42,14 @@ python3 /srv/autophagy-skills/live/plaud/scripts/plaud_cli.py status          # 
 python3 /srv/autophagy-skills/live/plaud/scripts/plaud_cli.py status --json   # 기계용 (transcripts[].path 포함)
 ```
 
-출력 첫 줄은 항상 `PLAUD-STATUS state=<present|absent>` 다.
+사람용 출력 첫 줄은 항상 `PLAUD-STATUS state=<present|absent>` 다.
+
+`--json`의 `pending[]`는 기존 `thread_id` 등 모든 키를 유지하고 `thread_url`을 더한다.
+저장된 `approval_guild_id`와 `approval_thread_id`가 모두 양의 ASCII 숫자 문자열일 때만
+URL을 만든다. 길드가 없는 옛 레코드나 불완전한 좌표는 `thread_url: null`이며, DM 링크를
+추측하지 않는다. 링크가 없으면 함께 출력된 노트 파일명(스레드 제목)과 녹음 id로 찾는다.
+예: "plaud 승인 대기 몇 건이야"에 표시된 URL을 열어 승인 카드를 보고, URL이 없으면
+노트 파일명으로 Discord를 검색한다. 상태 조회는 네트워크 호출이나 상태 파일 수정을 하지 않는다.
 
 - `state=absent` — 워처가 아직 한 번도 성공적으로 돌지 않았다(상태 파일 없음). 그대로
   전하고, 필요하면 `hermes cron list --all | grep -A12 plaud-sync` 로 마지막 틱 결과를 본다.
@@ -91,13 +98,24 @@ python3 /srv/autophagy-skills/live/meeting/scripts/meeting_cli.py ingest \
 재구현하지 않는다. `--file`은 전사 텍스트를 넘길 뿐 원음을 외부 전사 API로 보내지 않는다.
 다만 위 보관 옵트인을 켰다면 원음의 owner-only Drive 사본이 있을 수 있다.
 
+## 워처의 결과 통지
+
+저장 완료(`written`)·취소(`abandoned`) 결과는 워처가 `origin_notice.deliver(message=)`의
+소유자 메시지 봉투로 **승인 카드를 올린 같은 스레드**에 보낸다. 스레드 전송 실패 시에도
+폴백은 `approval_thread_id`(없으면 저장된 `channel_id`)로 가므로 두 경로 모두 자기 링크를
+붙이지 않는다. 위치는 승인 카드 좌표이며, 길드를 모르는 옛 레코드는 링크를 추측하지 않고
+녹음 id 검색 키를 보존한다. 봉투 모듈이나 지원 시그니처가 없는 옛 런타임은 기존 문구로 보낸다.
+종결·아카이브는 기존처럼 스레드 게시 성공 뒤 종결 결과에만 적용하며 진행 중 요청은 닫지 않는다.
+노트 본문·전문은 통지에 싣지 않는다 — 승인 카드의 `summary_preview` 인용과 vault가 그 자리다.
+승인 해시와 이미 게시된 카드는 그대로 두며, 이 통지 변경을 위해 재게시하지 않는다.
+
 ## 하지 않는 것
 
 - Plaud 를 폴하지 않고, 오디오를 내려받거나 전사하지 않으며(그건 워처의 일), Discord 에 아무것도
   올리지 않고, vault 에 쓰지 않는다.
 - 노트 본문을 읽지 않는다(파일명만 보고한다). 본문은 승인 카드의 미리보기와 vault 에 있다.
-- 승인 결정을 대신하지 않는다 — ✅/⛔ 는 `#agent-chat` 의 `obsidian-write · <녹음 id>`
-  스레드에서 소유자만 누른다.
+- 승인 결정을 대신하지 않는다 — ✅/⛔ 는 `#agent-chat` 의 노트 파일명을 제목으로 한
+  요청별 스레드에서 소유자만 누른다.
 
 ## 운영자 참고 — 승인 카드를 새 형식으로 다시 올릴 때
 

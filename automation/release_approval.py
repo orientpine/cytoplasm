@@ -33,6 +33,7 @@ from automation.interop.approval_lifecycle import (
 )
 from automation.interop.approval_surface import ApprovalKind
 from automation.interop.discord_transport import DiscordTransport
+from automation.release_card import card_for_new_request
 from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_plan, spec_from_record
 from automation.release_retire import notify_stale_approval
 from automation.skill_gate_approval import GateSurface, SkillApprovalGate
@@ -174,14 +175,22 @@ def cmd_request(args: argparse.Namespace) -> int:
     if not isinstance(payload, dict):
         raise ReleaseSpecError("plan file is not a JSON object")
     spec = spec_from_plan(payload, secrets.token_hex(16))
-    gate = _gate(spec)
-    reused = skill_gate_request.reuse(gate)
+    # 살아 있는 바인딩부터 해소한다 — 소유자가 이미 보고 있는 카드는 그 바이트에 결정이
+    # 묶여 있으므로, 재사용 경로는 렌더러를 부르지 않는다(다시 그린 한 글자가 곧 거절이다).
+    reused = skill_gate_request.reuse(_gate(spec))
     if reused is not None:
         return _emit_request(reused)
+    # 재사용할 것이 없을 때에만 렌더한다. 최종 카드와 그 예산을 첫 효과(게시·레코드·저널)
+    # 앞에서 확정하므로, 한도를 넘긴 요청은 고아 카드도 반쯤 만들어진 레코드도 남기지 않는다.
+    card, refusal = card_for_new_request(spec)
+    if card is None:
+        refused = skill_gate_request.Requested(None, skill_gate_request.LIFECYCLE_REFUSAL_EXIT, refusal)
+        return _emit_request(refused)
+    gate = _gate(card)
     print(skill_gate_surface.where_to_look(ApprovalKind.RELEASE), file=sys.stderr)
     requested = skill_gate_request.post_request(gate, fresh=False)
     if requested.posted and requested.record is not None:
-        requested = replace(requested, record=_deliver_details(gate, spec, requested.record))
+        requested = replace(requested, record=_deliver_details(gate, card, requested.record))
     return _emit_request(requested)
 
 

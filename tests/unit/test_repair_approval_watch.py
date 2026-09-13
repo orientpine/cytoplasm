@@ -13,6 +13,7 @@ from automation.repair.repair_ops_cli import RepairOpsConfig
 from automation.repair.repair_ops_pending import CANCEL_EMOJI, APPROVE_EMOJI, PendingRepairApproval, PendingRepairApprovalStore, PostingOwnerApproval
 from automation.repair.repair_ops_reaction_watch import RepairApprovalWatcher
 from automation.repair.repair_patch_binding import content_action_hash, load_patch_artifact
+from automation.stored_content import hash_parts
 
 
 OWNER_ID = "280680578314010625"
@@ -95,14 +96,17 @@ def _watcher(
     return RepairApprovalWatcher(store, discord, commands, OWNER_ID, audit_log, now=lambda: NOW)
 
 
-def test_post_when_sandbox_is_green_then_binds_hash_and_preadds_owner_reactions(tmp_path: Path) -> None:
+def test_post_when_sandbox_is_green_then_binds_hash_and_preadds_owner_reactions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Given: a green repair has a repository-only patch and no prior approval request.
+    monkeypatch.chdir(tmp_path)
     store = PendingRepairApprovalStore(tmp_path / "pending")
     discord = FakeDiscord()
     approval = PostingOwnerApproval(OWNER_ID, store, discord, now=lambda: NOW, nonce=lambda: "a" * 32)
 
     # When: RepairAgent reaches the production owner-approval boundary.
-    patch = _patch(tmp_path)
+    patch = _patch(Path())
     permitted = approval.permits("t-repair-1", patch)
 
     # Then: it waits after posting a request bound to the patch BYTES, showing the
@@ -111,7 +115,7 @@ def test_post_when_sandbox_is_green_then_binds_hash_and_preadds_owner_reactions(
     artifact = load_patch_artifact(patch)
     pending = store.get("t-repair-1")
     assert permitted is False
-    assert pending == PendingRepairApproval(
+    expected_record = PendingRepairApproval(
         "t-repair-1",
         "patch.diff",
         expected_hash,
@@ -119,21 +123,19 @@ def test_post_when_sandbox_is_green_then_binds_hash_and_preadds_owner_reactions(
         "approval-message-1",
         NOW,
         content_binding_version=2,
+        render_version=3,
+        content_sha256=hash_parts(discord.posts[0]),
         patch_sha256=artifact.patch_sha256,
         changes=artifact.changes,
-        patch_source_path=str(patch),
+        patch_source_path="plans/t-repair-1/patch.diff",
     )
+    assert pending == expected_record
     assert discord.posts == [
-        "[repair] 승인 요청\n"
-        + "- ticket: `t-repair-1`\n"
-        + f"- action_hash: `{expected_hash}`\n"
-        + f"- patch_sha256: `{artifact.patch_sha256}`\n"
-        + "- changed_files: 1 total, +1/-1\n"
-        + "  - automation/mod.py (+1/-1)\n"
-        + "- repair_nonce: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\n"
-        + "- sandbox: PASS (offline-subset bank + repro GREEN)\n"
-        + f"- patch_body: 비노출 — ops 호스트의 `{patch}` 에서 확인\n"
-        + "- cha가 이 메시지에 ✅ 승인 또는 ⛔ 취소 리액션"
+        """대상: 수리 승인 (t-repair-1)
+사실: action_hash: sha256:a27d45a2b2814af7930f1bf2dafcee22f55cd76f33111b49117bfc2379315465; patch_sha256: 260e4060e17b03469cc39ab00d442db269adef55e4c6528269c6f54f1a34b410; 1 files +1/-1; - automation/mod.py (+1/-1); nonce: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; sandbox: PASS; 패치 본문 비노출: `plans/t-repair-1/patch.diff` (승인 요청; 만료: 2026-07-20T12:00:00+00:00)
+위치: 이 메시지
+인계: 소유자: 위 위치 · 반응 ✅ 승인 또는 ⛔ 취소; 다음: 승인된 패치만 반영
+되돌리기: 해당 없음; 취소 시: 패치 미반영, 티켓 재개"""
     ]
     assert discord.added_reactions == [("approval-message-1", APPROVE_EMOJI), ("approval-message-1", CANCEL_EMOJI)]
     # The path is announced on purpose so cha can inspect it; the BODY never is.

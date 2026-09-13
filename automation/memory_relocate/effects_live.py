@@ -35,6 +35,7 @@ from .binding import RelocationHashFields, relocation_action_hash
 from .model import RelocationRecord, record_key
 from .plan import RelocationPlan, build_relocation_plan
 from .rag_verify import verify_ingested
+from .render import prepare_approval_card
 from .relocation_store import RelocationStore, RelocationStoreError
 from .watch_step import ResolveEffects
 
@@ -114,6 +115,8 @@ def build_effects(*, memory_dir: Path, state_path: Path, rag_state_path: Path, t
             if text is None:
                 return None
             key = record_key(record.source_kind, record.entry_sha256)
+            live = live_requests(key)
+            card = None if live else prepare_approval_card(record, text)
             # One approval key keeps ONE thread: this runs before the façade decides
             # PENDING, so a live request of the same key lends its thread instead of
             # leaving an empty one behind per tick. A request whose message went MISSING
@@ -124,7 +127,7 @@ def build_effects(*, memory_dir: Path, state_path: Path, rag_state_path: Path, t
             binding = reuse_request_thread(
                 ApprovalKind.OBSIDIAN_WRITE,
                 thread_candidates(
-                    live_requests(key),
+                    live,
                     approval_thread_id=record.approval_thread_id,
                     rebind=lambda thread_id: replace(record, channel_id=thread_id),
                 ),
@@ -136,11 +139,15 @@ def build_effects(*, memory_dir: Path, state_path: Path, rag_state_path: Path, t
                 owner_id,
                 request=RequestThread(title=PurePosixPath(record.note_relpath).name),
             )
-            bound = replace(record, approval_thread_id=binding.channel_id)
+            bound = replace(
+                record, approval_thread_id=binding.channel_id,
+                approval_guild_id=binding.guild_id or record.approval_guild_id,
+            )
             store.update(bound)
             verdict = request_approval(
                 bound,
                 text,
+                card=card,
                 store=store,
                 transport=transport,
                 binding=binding,

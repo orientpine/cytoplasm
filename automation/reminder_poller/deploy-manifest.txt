@@ -1,2 +1,4 @@
 # 알림 폴러는 agent no-agent cron이 계정 홈 스크립트를 직접 실행한다.
 agent|automation/reminder_poller/poll_reminders.py|.hermes/scripts/poll_reminders.py|required
+agent|automation/reminder_poller/poller_core.py|.hermes/reminder_poller_runtime/poller_core.py|required
+agent|automation/reminder_poller/reminder_store.py|.hermes/reminder_poller_runtime/reminder_store.py|required

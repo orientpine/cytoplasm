@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -24,9 +26,24 @@ from automation.release_approval import (
     spec_from_plan,
     spec_from_record,
 )
-from automation.interop.approval_lifecycle import Probe
+from automation.interop.approval_lifecycle import (
+    ApprovalIntent,
+    ApprovalRequest,
+    PostedApproval,
+    Probe,
+)
 from automation.interop.discord_transport import SentMessage
-from automation.release_spec import ReleaseSpec, ReleaseSpecError
+from automation.release_card import (
+    CARD_REFUSED_PREFIX,
+    PREVIOUS_RENDER_VERSION,
+    card_for_new_request,
+)
+from automation.release_spec import (
+    MESSAGE_LIMIT,
+    NEW_RENDER_VERSION,
+    ReleaseSpec,
+    ReleaseSpecError,
+)
 
 
 def _spec() -> ReleaseSpec:
@@ -60,7 +77,11 @@ def _pending(gate_dir: Path) -> dict[str, str]:
     return record
 
 
-def _plan_file(tmp_path: Path, patch_notes: str = "") -> str:
+def _plan_file(
+    tmp_path: Path,
+    patch_notes: str = "",
+    surface_digests: tuple[tuple[str, str], ...] = (),
+) -> str:
     spec = _spec()
     path = tmp_path / "plan.json"
     _ = path.write_text(
@@ -68,7 +89,9 @@ def _plan_file(tmp_path: Path, patch_notes: str = "") -> str:
             {
                 "version": spec.version,
                 "head": spec.head_sha,
-                "surface_digests": [list(row) for row in spec.surface_digests],
+                "surface_digests": [
+                    list(row) for row in (surface_digests or spec.surface_digests)
+                ],
                 "patch_notes": patch_notes or spec.patch_notes,
             }
         ),
@@ -78,6 +101,67 @@ def _plan_file(tmp_path: Path, patch_notes: str = "") -> str:
 
 
 _LONG_NOTES = "\n".join(f"- 변경 {index} " + "가" * 60 for index in range(60))
+
+#: `_spec()` 의 action_hash — 렌더러가 아니라 바인딩 입력에서 나오는 독립 상수다.
+_ACTION_HASH = "980a7cea657cf3ff0328e212ae6b14a699fff8b5f6ba739cd9401be7994c2801"
+#: 이미 게시된 판본의 바이트. 기준 fc1c7a0f8 에서 그대로 떠 왔고, 여기서 다시 렌더하지 않는다.
+_V1_POSTED = (
+    "[release] v1.2.3 배포 승인 요청\n"
+    "- version: `v1.2.3`\n"
+    "- HEAD: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\n"
+    "- release_nonce: `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`\n"
+    "- surface `home:skills/mail`: `cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc`\n"
+    "- surface `skill:meeting`: `dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd`\n"
+    "- 패치노트:\n"
+    "- mail wrapper\n"
+    "- meeting skill\n"
+    "- 승인 방법: 이 메시지에 cha가 ✅ 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
+)
+_V2_POSTED = (
+    "[release] v1.2.3 배포 승인 요청\n"
+    "- 배포 기준: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\n"
+    "- 배포 번들 (2): `home:skills/mail`, `skill:meeting`\n"
+    "- 승인 바인딩: `980a7cea657cf3ff0328e212ae6b14a699fff8b5f6ba739cd9401be7994c2801`\n"
+    "- 변경 내용:\n"
+    "- mail wrapper\n"
+    "- meeting skill\n"
+    "- 승인 방법: 이 메시지에 cha가 ✅ 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
+)
+#: 봉투 판본(v4)의 바이트. 다섯 필드 · 한 필드 한 줄이며, 기계 판독 줄은 이 카드에 없다.
+_V4_POSTED = (
+    "대상: 릴리스 배포 승인 (release:v1.2.3)\n"
+    "사실: 배포 기준 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`;"
+    " 배포 번들 (2): `home:skills/mail`, `skill:meeting`;"
+    " 승인 바인딩 `980a7cea657cf3ff0328e212ae6b14a699fff8b5f6ba739cd9401be7994c2801`;"
+    " 변경 상세 아래 1개 메시지 (같은 릴리스 v1.2.3 · 기준 aaaaaaaaaaaa)"
+    " (승인 요청; 만료: 기한 없음)\n"
+    "위치: 이 메시지\n"
+    "인계: 소유자: 위 위치 · 반응 ✅ 승인 또는 ⛔ 취소 (소유자 전용 — 봇/타인 리액션은 거부됨);"
+    " 다음: 승인된 릴리스만 태그·배포\n"
+    "되돌리기: 해당 없음; 취소 시: 배포 미실행, 요청 폐기"
+)
+_MAJOR_NOTE = "MAJOR: 운영자 조치 필요 — automation/x.py:SCHEMA_VERSION"
+_V4_MAJOR_POSTED = (
+    "대상: 릴리스 배포 승인 (release:v1.2.3)\n"
+    "사실: 배포 기준 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`;"
+    " 배포 번들 (2): `home:skills/mail`, `skill:meeting`;"
+    " 승인 바인딩 `980a7cea657cf3ff0328e212ae6b14a699fff8b5f6ba739cd9401be7994c2801`;"
+    " 변경 상세 아래 1개 메시지 (같은 릴리스 v1.2.3 · 기준 aaaaaaaaaaaa);"
+    " MAJOR: 운영자 조치 필요 — automation/x.py:SCHEMA_VERSION"
+    " (승인 요청; 만료: 기한 없음)\n"
+    "위치: 이 메시지\n"
+    "인계: 소유자: 위 위치 · 반응 ✅ 승인 또는 ⛔ 취소 (소유자 전용 — 봇/타인 리액션은 거부됨);"
+    " 다음: 승인된 릴리스만 태그·배포\n"
+    "되돌리기: 해당 없음; 취소 시: 배포 미실행, 요청 폐기"
+)
+_V3_POSTED = (
+    "[release] v1.2.3 배포 승인 요청\n"
+    "- 배포 기준: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\n"
+    "- 배포 번들 (2): `home:skills/mail`, `skill:meeting`\n"
+    "- 승인 바인딩: `980a7cea657cf3ff0328e212ae6b14a699fff8b5f6ba739cd9401be7994c2801`\n"
+    "- 변경 상세: 아래 1개 메시지 (같은 릴리스 v1.2.3 · 기준 aaaaaaaaaaaa)\n"
+    "- 승인 방법: 이 메시지에 cha가 ✅ 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
+)
 
 
 class _RecordingTransport:
@@ -128,6 +212,48 @@ def _posted(
 
     monkeypatch.setattr(release_approval, "detail_transport", transport_for)
     return channels
+
+
+@dataclass(frozen=True, slots=True)
+class _GateDir:
+    """`post_request` 가 리스·저널 경로를 얻는 표면 — 디렉터리 하나면 충분하다."""
+
+    gate_dir: Path
+
+
+class _LifecycleGate:
+    """실제 lifecycle 을 그대로 태우는 게이트 — 게시·레코드·저널만 관찰한다."""
+
+    def __init__(self, gate_dir: Path, spec: ReleaseSpec) -> None:
+        self.surface = _GateDir(gate_dir)
+        self.spec = spec
+        self.posted: list[str] = []
+
+    def channel_id(self) -> str:
+        return "222"
+
+    def path(self) -> Path:
+        return self.surface.gate_dir / "pending" / "release.json"
+
+    def stored(self) -> dict[str, str] | None:
+        return None
+
+    def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
+        return ()
+
+    def post(self, intent: ApprovalIntent) -> PostedApproval:
+        self.posted.append(intent.action_hash)
+        return PostedApproval(message_id=_MESSAGE_ID, channel_id=intent.channel_id)
+
+    def new_record(self, posted: PostedApproval) -> dict[str, str]:
+        return self.spec.new_record(posted.message_id, _binding())
+
+    def commit(self, intent: ApprovalIntent, posted: PostedApproval, created_at: str) -> None:
+        path = self.path()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _ = path.write_text(
+            self.spec.serialize(self.new_record(posted)), encoding="utf-8"
+        )
 
 
 class _StubGate:
@@ -400,7 +526,7 @@ def test_record_persists_every_authorizing_field_and_surface_binding() -> None:
     assert record["surface"] == "skill-approvals"
     assert record["channel_id"] == binding.channel_id
     assert record["policy_version"] == str(POLICY_VERSION)
-    assert record["render_version"] == "3"
+    assert record["render_version"] == "4"
     assert spec.bound(spec.render(), record)
 
 
@@ -429,7 +555,7 @@ def test_release_message_is_fail_closed_above_1900_characters() -> None:
 def test_the_card_points_at_the_detail_messages_instead_of_carrying_them() -> None:
     """Given a v3 release spec / When the card renders / Then it names the bundles,
     the binding and how many detail messages follow — and no patch-note line."""
-    spec = _spec()
+    spec = replace(_spec(), render_version=PREVIOUS_RENDER_VERSION)
 
     lines = spec.render().splitlines()
 
@@ -450,7 +576,9 @@ def test_the_card_points_at_the_detail_messages_instead_of_carrying_them() -> No
 def test_a_major_release_card_carries_the_operator_line_before_the_detail_pointer() -> None:
     """Given machine-contract signals / When the card renders /
     Then the operator line stands above the detail pointer."""
-    spec = replace(_spec(), major_note="MAJOR: 운영자 조치 필요 — automation/x.py:SCHEMA_VERSION")
+    spec = replace(
+        _spec(), render_version=PREVIOUS_RENDER_VERSION, major_note=_MAJOR_NOTE
+    )
 
     lines = spec.render().splitlines()
 
@@ -463,6 +591,7 @@ def test_the_card_counts_every_detail_message_it_points_at() -> None:
     Then its count equals the messages the same spec produces."""
     spec = replace(
         _spec(),
+        render_version=PREVIOUS_RENDER_VERSION,
         patch_notes="\n".join(f"- 변경 {index} " + "가" * 60 for index in range(60)),
     )
 
@@ -470,34 +599,64 @@ def test_the_card_counts_every_detail_message_it_points_at() -> None:
 
     assert len(messages) > 1
     assert f"- 변경 상세: 아래 {len(messages)}개 메시지 " in spec.render()
+    assert f"변경 상세 아래 {len(messages)}개 메시지 " in replace(
+        spec, render_version=NEW_RENDER_VERSION
+    ).render()
 
 
-def test_the_frozen_v1_and_v2_renders_stay_byte_identical() -> None:
-    """이미 게시된 승인은 그 바이트로만 재검증된다 — 옛 버전 문구는 영구 동결이다."""
-    spec = _spec()
+@pytest.mark.parametrize(
+    ("version", "posted"),
+    ((1, _V1_POSTED), (2, _V2_POSTED), (3, _V3_POSTED), (4, _V4_POSTED)),
+)
+def test_the_frozen_renders_stay_byte_identical(version: int, posted: str) -> None:
+    """이미 게시된 승인은 그 바이트로만 재검증된다 — 옛 판본 문구는 영구 동결이다."""
+    assert replace(_spec(), render_version=version).render() == posted
 
-    assert replace(spec, render_version=1).render() == (
-        "[release] v1.2.3 배포 승인 요청\n"
-        "- version: `v1.2.3`\n"
-        f"- HEAD: `{'a' * 40}`\n"
-        f"- release_nonce: `{'b' * 32}`\n"
-        f"- surface `home:skills/mail`: `{'c' * 64}`\n"
-        f"- surface `skill:meeting`: `{'d' * 64}`\n"
-        "- 패치노트:\n"
-        "- mail wrapper\n"
-        "- meeting skill\n"
-        "- 승인 방법: 이 메시지에 cha가 ✅ 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
-    )
-    assert replace(spec, render_version=2).render() == (
-        "[release] v1.2.3 배포 승인 요청\n"
-        f"- 배포 기준: `{'a' * 40}`\n"
-        "- 배포 번들 (2): `home:skills/mail`, `skill:meeting`\n"
-        f"- 승인 바인딩: `{spec.action_hash()}`\n"
-        "- 변경 내용:\n"
-        "- mail wrapper\n"
-        "- meeting skill\n"
-        "- 승인 방법: 이 메시지에 cha가 ✅ 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
-    )
+
+@pytest.mark.parametrize(
+    ("version", "posted"),
+    ((1, _V1_POSTED), (2, _V2_POSTED), (3, _V3_POSTED), (4, _V4_POSTED)),
+)
+def test_a_stored_record_replays_its_own_version_and_stays_bound(
+    version: int, posted: str
+) -> None:
+    """소유자가 이미 누른 카드: 레코드가 적은 판본이 그대로 재생되고 프로브가 받아들인다."""
+    spec = replace(_spec(), render_version=version)
+    record = spec.new_record(_MESSAGE_ID, _binding())
+
+    replay = spec_from_record(record)
+
+    assert record["render_version"] == str(version)
+    assert replay.render() == posted
+    assert spec.bound(posted, record)
+    assert not spec.bound(posted + " ", record)
+
+
+def test_a_bound_request_is_reused_without_ever_calling_the_renderer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """살아 있는 카드는 그 바이트에 소유자 결정이 묶여 있다 — 재사용은 렌더러를 부르지 않는다.
+
+    재사용이 재렌더에 의존하면 렌더 실패 한 번이 이미 유효한 바인딩을 거절로 바꾼다.
+    """
+    record = _pending(tmp_path)
+    rendered: list[int] = []
+
+    def _observed(self: ReleaseSpec) -> str:
+        rendered.append(self.render_version)
+        raise AssertionError("the bound reuse path must not render the card")
+
+    monkeypatch.setattr(skill_gate, "GATE_DIR", tmp_path)
+    monkeypatch.setattr(ReleaseSpec, "render", _observed)
+
+    exit_code = release_approval.main(["request", "--plan-file", _plan_file(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert rendered == []
+    assert json.loads(captured.out)["message_id"] == record["message_id"]
 
 
 @pytest.mark.parametrize(
@@ -651,3 +810,210 @@ def test_a_detail_post_failure_is_loud_and_leaves_the_card_binding_alone(
     )
     stored = json.loads(gate.path().read_text(encoding="utf-8"))
     assert json.loads(stored["detail_message_ids"]) == ["detail-1"]
+
+
+def _recording_gates(
+    gates: list[_LifecycleGate], gate_dir: Path
+) -> Callable[[ReleaseSpec], _LifecycleGate]:
+    """`_gate` 대체 — 만들어진 게이트를 전부 붙잡아 효과를 나중에 셀 수 있게 한다."""
+
+    def build(spec: ReleaseSpec) -> _LifecycleGate:
+        gate = _LifecycleGate(gate_dir, spec)
+        gates.append(gate)
+        return gate
+
+    return build
+
+
+def _no_transport(channel_id: str) -> _RecordingTransport:
+    raise AssertionError(f"a refused card must post no detail message to {channel_id}")
+
+
+def test_a_new_release_card_is_the_owner_envelope_within_the_limit() -> None:
+    """Given a new release / When the card renders / Then five envelope fields carry
+    every fact the frozen card carried, each on one line and inside the budget."""
+    spec = _spec()
+
+    content = spec.render()
+
+    assert spec.render_version == NEW_RENDER_VERSION
+    assert content == _V4_POSTED
+    assert len(content.splitlines()) == 5
+    assert len(content) <= MESSAGE_LIMIT
+    assert spec.patch_notes not in content
+    assert spec.release_nonce not in content
+    assert all(digest not in content for _name, digest in spec.surface_digests)
+
+
+def test_a_major_release_carries_the_operator_note_inside_the_envelope_fact() -> None:
+    """Given a machine-contract signal / When the envelope card renders /
+    Then the operator note rides the fact line instead of adding a sixth line."""
+    spec = replace(_spec(), major_note=_MAJOR_NOTE)
+
+    content = spec.render()
+
+    assert content == _V4_MAJOR_POSTED
+    assert len(content.splitlines()) == 5
+
+
+def test_the_render_version_never_enters_the_action_hash() -> None:
+    """판본은 표현이지 승인 대상이 아니다 — 같은 입력이면 어느 판본이든 같은 해시다."""
+    digests = {
+        replace(_spec(), render_version=version).action_hash() for version in (1, 2, 3, 4)
+    }
+
+    assert digests == {_ACTION_HASH}
+
+
+def test_an_unknown_stored_render_version_is_refused_and_never_binds() -> None:
+    """모르는 판본은 오늘과 똑같이 거절된다 — 넓히는 것은 4 하나뿐이다."""
+    record = {**_spec().new_record(_MESSAGE_ID, _binding()), "render_version": "5"}
+
+    with pytest.raises(ReleaseSpecError):
+        _ = spec_from_record(record)
+    assert not _spec().bound(_V4_POSTED, record)
+
+
+def test_a_missing_envelope_falls_back_to_the_previous_version_and_records_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """봉투를 import 할 수 없으면 직전 판본을 렌더하고 레코드도 그 판본을 적는다."""
+    monkeypatch.setitem(sys.modules, "automation.interop.owner_message", None)
+
+    card, refusal = card_for_new_request(_spec())
+
+    assert refusal == ""
+    assert card is not None
+    assert card.render_version == PREVIOUS_RENDER_VERSION
+    assert card.render() == _V3_POSTED
+    record = card.new_record(_MESSAGE_ID, _binding())
+    assert record["render_version"] == "3"
+    assert card.bound(_V3_POSTED, record)
+
+
+def test_a_card_over_the_limit_is_refused_before_the_post_record_or_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Given a release whose card cannot fit / When the request runs / Then it is refused
+    with the card unposted, no pending record and no journal reservation."""
+    crowded = tuple((f"skill:demo-{index:03d}", f"{index:064x}") for index in range(110))
+    gates: list[_LifecycleGate] = []
+    monkeypatch.setattr(release_approval, "_gate", _recording_gates(gates, tmp_path))
+    monkeypatch.setattr(release_approval, "detail_transport", _no_transport)
+
+    exit_code = release_approval.main(
+        ["request", "--plan-file", _plan_file(tmp_path, surface_digests=crowded)]
+    )
+
+    captured = capsys.readouterr()
+    assert all(gate.posted == [] for gate in gates), "the card was posted anyway"
+    assert not (tmp_path / "pending" / "release.json").exists(), "a pending record survived"
+    assert not (tmp_path / "posting-journal").exists(), "a journal reservation survived"
+    assert not (tmp_path / "approval-leases").exists(), "the request took the lease"
+    assert exit_code == 6
+    assert captured.err.startswith(CARD_REFUSED_PREFIX)
+    assert "1900" in captured.err
+    assert captured.out == ""
+
+
+def test_a_card_within_the_limit_is_posted_with_the_version_it_recorded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Given a release that fits / When the request runs / Then the same seam posts it
+    and the stored record replays the exact bytes the owner is looking at."""
+    gates: list[_LifecycleGate] = []
+    transport = _RecordingTransport()
+    def _transport(channel_id: str) -> _RecordingTransport:
+        assert channel_id == "222"
+        return transport
+
+    monkeypatch.setattr(release_approval, "_gate", _recording_gates(gates, tmp_path))
+    monkeypatch.setattr(release_approval, "detail_transport", _transport)
+
+    exit_code = release_approval.main(["request", "--plan-file", _plan_file(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert [gate.posted for gate in gates if gate.posted] == [[_ACTION_HASH]]
+    stored = json.loads((tmp_path / "pending" / "release.json").read_text("utf-8"))
+    assert stored["render_version"] == "4"
+    assert spec_from_record(stored).render() == _V4_POSTED
+    assert json.loads(captured.out)["render_version"] == "4"
+
+
+@pytest.mark.parametrize(
+    ("version", "posted"),
+    ((1, _V1_POSTED), (2, _V2_POSTED), (3, _V3_POSTED), (4, _V4_POSTED)),
+)
+def test_the_record_persists_the_posted_digest(version: int, posted: str) -> None:
+    from hashlib import sha256
+
+    spec = replace(_spec(), render_version=version)
+    record = spec.new_record(_MESSAGE_ID, _binding())
+
+    assert record["content_sha256"] == sha256(posted.encode("utf-8")).hexdigest()
+
+
+def test_preflight_pins_the_posted_bytes_before_recording_their_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hashlib import sha256
+
+    calls: list[int] = []
+
+    def once(spec: ReleaseSpec) -> str:
+        calls.append(spec.render_version)
+        assert len(calls) == 1, "posting and recording must use the preflight bytes"
+        return _V4_POSTED
+
+    monkeypatch.setattr(ReleaseSpec, "_render_v4", once)
+    card, refusal = card_for_new_request(_spec())
+    assert card is not None and refusal == ""
+    assert card.render() == _V4_POSTED
+    record = card.new_record(_MESSAGE_ID, _binding())
+    assert record["content_sha256"] == sha256(_V4_POSTED.encode("utf-8")).hexdigest()
+    assert calls == [4]
+
+
+@pytest.mark.parametrize(
+    ("version", "posted"), ((1, _V1_POSTED), (2, _V2_POSTED), (3, _V3_POSTED)),
+)
+def test_pre_digest_records_keep_the_frozen_legacy_binding(version: int, posted: str) -> None:
+    spec = replace(_spec(), render_version=version)
+    record = spec.new_record(_MESSAGE_ID, _binding())
+    del record["content_sha256"]
+
+    assert spec.bound(posted, record)
+    assert not spec.bound(posted + " ", record)
+
+
+def test_a_v4_record_without_its_digest_fails_closed() -> None:
+    record = _spec().new_record(_MESSAGE_ID, _binding())
+    del record["content_sha256"]
+
+    assert not _spec().bound(_V4_POSTED, record)
+
+
+def test_a_clicked_fallback_card_stays_bound_after_the_envelope_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as missing:
+        missing.setitem(sys.modules, "automation.interop.owner_message", None)
+        card, refusal = card_for_new_request(_spec())
+        assert card is not None and refusal == ""
+        record = card.new_record(_MESSAGE_ID, _binding())
+    assert record["render_version"] == "3"
+    calls: list[int] = []
+
+    def forbidden(spec: ReleaseSpec) -> str:
+        calls.append(spec.render_version)
+        raise AssertionError("clicked fallback approval must not render")
+
+    monkeypatch.setattr(ReleaseSpec, "render", forbidden)
+    assert spec_from_record(record).bound(_V3_POSTED, record)
+    assert not spec_from_record(record).bound(_V3_POSTED + " ", record)
+    assert calls == []

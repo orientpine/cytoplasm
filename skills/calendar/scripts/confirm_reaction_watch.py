@@ -192,18 +192,18 @@ class OwnerDecision:
 
     def apply(self, _request, decision) -> None:
         state = calendar_approval.lifecycle().Probe
-        record = self.draft_record(self.entry.draft_id)  # 실행/폐기 전에 읽어야 남아 있다
+        record = {**self.draft_record(self.entry.draft_id), "dm_message_id": self.entry.dm_message_id}
         match decision:
             case state.APPROVED:
                 self.commands.confirm(self.entry, self.owner_id)
-                if _has_thread(record):
-                    # 승인 스레드(또는 채널 지시)가 있는 건에만 결과를 돌려주고 그 스레드를
-                    # 닫는다 — 둘 다 없는 옛 초안은 종전대로 무통지.
-                    _notify_thread(
-                        record,
-                        _executed_notice(record, self.entry.draft_id),
-                        calendar_confirm.OUTCOME_DONE,
-                    )
+                # 승인 스레드(또는 채널 지시)로 결과를 돌려주고 닫는다.
+                # 둘 다 없는 옛 초안도 기존 소유자 DM 경로로 실행 결과를 알린다.
+                _notify_result(
+                    self.discord,
+                    record,
+                    _executed_notice(record, self.entry.draft_id),
+                    calendar_confirm.OUTCOME_DONE,
+                )
             case state.CANCELLED:
                 self.commands.discard(self.entry.draft_id)
                 _notify_result(
@@ -357,7 +357,7 @@ def _process_entries(
                         retained.append(entry)
                         continue
                     decision.probe(calendar_approval.request_of(entry))
-                    record = draft_record(entry.draft_id)  # 폐기 전에 읽는다
+                    record = {**draft_record(entry.draft_id), "dm_message_id": entry.dm_message_id}
                     commands.discard(entry.draft_id)
                     _notify_result(
                         discord, record, _expired_notice(record, entry.draft_id),
@@ -371,6 +371,7 @@ def _process_entries(
                     reminder = calendar_approval._repo_module("approval_reminder")
                     surface = calendar_approval._repo_module("approval_surface")
                     kind = surface.ApprovalKind(entry.kind or surface.ApprovalKind.CALENDAR)
+                    guild_id = draft_record(entry.draft_id).get("approval_guild_id")
                     context = reminder.ReminderContext(
                         config=reminder_config,
                         journal=calendar_approval._lease_module().ReminderJournal(
@@ -379,6 +380,8 @@ def _process_entries(
                         request_type=kind,
                         deliver=lambda channel_id, content: discord.post_message(channel_id, content),
                         clock=lambda: now,
+                        guild_id=guild_id if isinstance(guild_id, str) and guild_id else None,
+                        space_for=lambda _channel: reminder.stored_reminder_space(entry.surface),
                         guild_id_for=reminder.channel_guild_resolver(
                             lambda channel_id: discord.fetch_channel(channel_id)
                         ),
@@ -433,7 +436,7 @@ def _notify_result(
     if _has_thread(record):
         _notify_thread(record, content, outcome)
         return
-    _notify_owner(discord, content)
+    _notify_owner(discord, content, record, outcome)
 
 
 def _notify_thread(record: Mapping[str, object], content: str, outcome: str = "") -> None:
@@ -447,7 +450,9 @@ def _notify_thread(record: Mapping[str, object], content: str, outcome: str = ""
         )
 
 
-def _notify_owner(discord: DiscordClient, content: str) -> None:
+def _notify_owner(
+    discord: DiscordClient, content: str, record: Mapping[str, object], outcome: str,
+) -> None:
     """Send a post-action owner notification through the shared owner-notice facade.
 
     목적지는 이 워처가 정하지 않는다 — `automation.owner_notice.notify_owner` 가
@@ -459,8 +464,18 @@ def _notify_owner(discord: DiscordClient, content: str) -> None:
     (discard/confirm) 항목을 다시 붙잡으면 매 tick 재평가되므로, 여기서는 한 줄만 남긴다.
     """
     del discord  # 목적지는 파사드 몫이다 — 이 클라이언트는 스레드·리마인더 경로가 쓴다
-    if not owner_notice.notify_owner(content):
-        print("calendar-confirm-watch owner notification failed: NOTIFY-FAIL", file=sys.stderr)
+    try:
+        from calendar_result_message import build
+
+        # 일정 내용은 넘기지 않는다. 읽지 못한 초안도 기존 fact의 id는 보존한다.
+        draft: dict[str, str | list[str]] = {
+            "id": str(record.get("id", "초안 id 미상")), "action": str(record.get("action", "")),
+        }
+        message = build(draft, content, outcome)
+        if not owner_notice.notify_owner(content, message=message):
+            print("calendar-confirm-watch owner notification failed: NOTIFY-FAIL", file=sys.stderr)
+    except Exception as error:  # noqa: BLE001 — import·렌더 실패도 완료된 항목을 되살리지 않는다
+        print(f"calendar-confirm-watch owner notification failed: {_redact(str(error))}", file=sys.stderr)
 
 
 def reaction_action(entry: PendingConfirm, owner_id: str, discord: DiscordClient) -> str:

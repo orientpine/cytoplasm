@@ -110,7 +110,10 @@ def test_a_threadless_result_notice_lands_in_the_notice_channel(
     watch._notify_result(discord, {"id": "aaaa11", "action": "create"}, "⛔ 취소 (draft aaaa11)")
 
     # Then: 파사드가 지정 채널로 보냈고 DM 은 열리지 않았다
-    assert notice_channel == [(_CHANNEL, "⛔ 취소 (draft aaaa11)")]
+    assert len(notice_channel) == 1
+    assert notice_channel[0][0] == _CHANNEL
+    assert "aaaa11" in notice_channel[0][1]
+    assert len(notice_channel[0][1].splitlines()) == 5
     assert discord.dms == []
 
 
@@ -155,7 +158,10 @@ def test_c_without_a_configured_channel_the_facade_still_reaches_the_owner_dm(
 
     watch._notify_result(_Discord(), {"id": "bbbb22", "action": "create"}, "🧹 정리")
 
-    assert sent == [("dm-1", "🧹 정리")]
+    assert len(sent) == 1
+    assert sent[0][0] == "dm-1"
+    assert "bbbb22" in sent[0][1]
+    assert len(sent[0][1].splitlines()) == 5
 
 
 def test_d_a_request_with_its_own_thread_is_untouched_by_this_rule(

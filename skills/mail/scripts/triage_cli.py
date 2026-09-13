@@ -193,6 +193,7 @@ def _remind_pending(draft: dict, config: object | None) -> None:
     lifecycle = triage_approval.lifecycle()
     reminder = triage_approval._repo_module("approval_reminder")
     lease_module = triage_approval._lease_module()
+    guild_id = draft.get("approval_guild_id")
     guild_id_for = reminder.channel_guild_resolver(triage_confirm.fetch_channel)
     context = reminder.ReminderContext(
         config=config,
@@ -203,6 +204,8 @@ def _remind_pending(draft: dict, config: object | None) -> None:
         ),
         guild_id_for=guild_id_for,
         clock=lambda: datetime.now(UTC),
+        guild_id=guild_id if isinstance(guild_id, str) and guild_id else None,
+        space_for=lambda _channel: reminder.stored_reminder_space(draft.get("surface")),
     )
     lifecycle.remind_owner_approval(
         triage_approval.request_of(draft),

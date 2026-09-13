@@ -37,6 +37,8 @@ agent|automation/rag_ingest/cron/rag_ingest_watch.py|.hermes/scripts/rag_ingest_
 
 # --- automation/reminder_poller/deploy-manifest.txt ---
 agent|automation/reminder_poller/poll_reminders.py|.hermes/scripts/poll_reminders.py|required
+agent|automation/reminder_poller/poller_core.py|.hermes/reminder_poller_runtime/poller_core.py|required
+agent|automation/reminder_poller/reminder_store.py|.hermes/reminder_poller_runtime/reminder_store.py|required
 
 # --- automation/repair/deploy-manifest.txt ---
 agent|automation/repair/cron/repair_report_consume_watch.py|.hermes/scripts/repair_report_consume_watch.py|required

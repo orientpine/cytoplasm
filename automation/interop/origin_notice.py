@@ -21,10 +21,15 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 from urllib.error import HTTPError
 
+if TYPE_CHECKING:
+    from .owner_message import OwnerMessage, Ref
+
 ApiCall = Callable[..., object]
+ACCEPTS_OWNER_MESSAGE: Final = True
+_RecordValue = TypeVar("_RecordValue")
 
 #: Discord PUBLIC_THREAD channel type.
 _PUBLIC_THREAD = 11
@@ -74,6 +79,28 @@ class OriginRef:
 
     def __bool__(self) -> bool:
         return bool(self.thread_id or self.channel_id)
+
+
+def approval_location(
+    record: dict[str, _RecordValue], *, search: tuple[str, str] | None = None,
+    message_id: str | None = None,
+) -> Ref:
+    """승인 카드 좌표. 별도 dm_message_id(calendar/coordination)는 명시적으로 넘긴다.
+
+    기본 message_id는 mail/budget/todo/plaud/repair 레코드 필드다. 지시 메시지
+    origin_message_id는 승인 카드가 아니므로 추측하지 않는다. 불량/빈 좌표는 미상이다.
+    """
+    from .owner_message import Ref
+
+    guild, channel, card = (
+        value if isinstance(value, str) and value else None
+        for value in (record.get("approval_guild_id"), record.get("approval_thread_id"),
+                      message_id if message_id is not None else record.get("message_id"))
+    )
+    return Ref(
+        scope="message", space="guild" if guild else "unknown", guild_id=guild,
+        channel_id=channel, message_id=card, search=search,
+    )
 
 
 def resolve_thread_id(api: ApiCall, origin: OriginRef, name: str) -> str:
@@ -142,6 +169,8 @@ def deliver(
     content: str,
     fallback: Callable[[str], object],
     outcome: ThreadOutcome | None = None,
+    message: OwnerMessage | None = None,
+    fallback_destination: Ref | None = None,
 ) -> object:
     """Post a result notice to the request/origin thread, else the owner fallback.
 
@@ -150,19 +179,52 @@ def deliver(
     자체의 실패는 삼키지 않는다: 각 스킬의 호출부가 자기 tick 보호 규약대로
     처리한다(mail `_notify_sent` 선례). ``outcome`` 이 있으면 스레드 게시가
     성공한 뒤에만 그 스레드를 종결 표시한다 — 폴백 경로에는 닫을 스레드가 없다.
+
+    message가 있으면 실제 목적지마다 재렌더한다. 폴백 목적지 미지정은 다른 표면이다.
+    렌더/선택 모듈 import 실패는 NOTIFY-RENDER-FAIL 후 기존 content로 내려간다.
+    반환은 단일/다중 조각 모두 마지막 message_id, 폴백은 호출자 반환값 그대로다.
+    기존 주입 인자들은 호출부 호환 계약이므로 묶거나 제거하지 않는다.
+
+    RETAINED: content: str 경로는 영구 예외가 있어 퇴역하지 않는다. budget_confirm.dm_owner와
+    calendar_confirm.send_owner_dm은 여기서 렌더한 문자열(또는 구 런타임 폴백)을 받는 경계다.
+    approval_reminder._PointerSender의 최소정보 계약과 obsidian_write.gate_binding의 카드 없는
+    위임도 영구 예외다. meeting 게이트웨이는 INTEROP_RUNTIME을 보장받지 못해 별도 문자열
+    ACK를 유지한다. 모든 경계·능력 폴백의 대체와 예외 해소, 격리 meeting 배달 검증 후에만
+    퇴역을 재판정한다(test_owner_message_adoption_conformance의 원장 참조).
     """
+    def body_for(thread_id: str | None = None) -> str:
+        if message is None:
+            return content
+        try:
+            from .owner_message import Ref, render
+
+            destination = fallback_destination if fallback_destination is not None else Ref(scope="none")
+            if thread_id is not None:
+                guild = record.get("approval_guild_id") or None
+                destination = Ref(
+                    scope="channel", space="guild" if guild else "unknown",
+                    guild_id=guild, channel_id=thread_id,
+                )
+            return render(message, destination=destination)
+        except Exception as error:  # noqa: BLE001 — 선택 렌더 경계는 어떤 모듈 오류에도 통지를 보존한다
+            print(
+                f"NOTIFY-RENDER-FAIL id={record.get('id', '')} err={type(error).__name__}",
+                file=sys.stderr,
+            )
+            return content
+
     origin = OriginRef.of_record(record)
     if not origin:
-        return fallback(content)
+        return fallback(body_for())
     try:
         thread_id = resolve_thread_id(api, origin, thread_name)
-        sent = transport_factory(thread_id).send(content)
+        sent = transport_factory(thread_id).send(body_for(thread_id))
     except Exception as error:  # noqa: BLE001 — 결과 통지는 표면 실패로 죽지 않는다
         print(
             f"NOTIFY-THREAD-FAIL id={record.get('id', '')} err={type(error).__name__}",
             file=sys.stderr,
         )
-        return fallback(content)
+        return fallback(body_for())
     if outcome is not None:
         close_thread(api, thread_id, outcome, record_id=str(record.get("id", "")))
     return sent[-1].message_id

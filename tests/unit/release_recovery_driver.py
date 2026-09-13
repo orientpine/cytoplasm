@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from automation import owner_notice, release_approval, skill_gate
 from automation.interop.approval_types import Probe
+from automation.interop.owner_message import OwnerMessage
 from automation.release_spec import spec_from_record
 from automation.interop.approval_surface import (
     ApprovalBinding, ApprovalKind, ApprovalSurface, POLICY_VERSION,
@@ -36,7 +37,7 @@ def main() -> int:
     release_approval._gate = lambda spec: OwnerGate()
     skill_gate._api = lambda method, path, payload: {"id": "status-reply"}
 
-    def notice(body: str) -> bool:
+    def notice(body: str, *, message: OwnerMessage | None = None) -> bool:
         with (skill_gate.GATE_DIR / "notices").open("a", encoding="utf-8") as stream:
             stream.write("notice\n")
         return True

@@ -1,4 +1,4 @@
-"""Owner-facing approval card for one plaud lifelog note push (render v4).
+"""Owner-facing approval card for one plaud lifelog note push (render v5).
 
 v2 (2026-09-02, owner request): the card quotes the first five sentence-sized
 lines of the frozen note so the owner can tell what a recording contains before
@@ -27,7 +27,7 @@ from .lifelog_fields import (
 )
 from .model import PlaudSyncRecord
 
-RENDER_VERSION: Final = "plaud-sync-render-v4"
+RENDER_VERSION: Final = "plaud-sync-render-v5"
 MAX_MESSAGE_CHARS: Final = 1900
 # 1330 content characters + 21 quote/newline characters leave 549 for the card.
 # Longer metadata still fails closed; the binding is never clipped to make room.
@@ -69,7 +69,7 @@ def summary_preview(body: str, *, render_version: str = RENDER_VERSION) -> str:
     """
     if render_version == "plaud-sync-render-v3":
         return _summary_preview_v3(body)
-    if render_version != "plaud-sync-render-v4":
+    if render_version not in {"plaud-sync-render-v4", "plaud-sync-render-v5"}:
         raise PlaudRenderError(f"unsupported plaud render version: {render_version}")
     sections = lifelog_sections(body)
     units = _units(sections.get(SUMMARY_HEADING, "")) + _units(sections.get(GLANCE_HEADING, ""))
@@ -101,15 +101,52 @@ def render_plaud_approval(
     quoted = "\n".join(
         f"> {line}" for line in preview.splitlines() if line.strip()
     ) or "> (미리보기 없음)"
-    if render_version == "plaud-sync-render-v3":
-        content = _render_v3(record, quoted)
-    elif render_version == "plaud-sync-render-v4":
-        content = _render_v4(record, quoted)
-    else:
-        raise PlaudRenderError(f"unsupported plaud render version: {render_version}")
+    match render_version:
+        case "plaud-sync-render-v3":
+            content = _render_v3(record, quoted)
+        case "plaud-sync-render-v4":
+            content = _render_v4(record, quoted)
+        case "plaud-sync-render-v5":
+            content = _render_v5(record, quoted)
+        case _:
+            raise PlaudRenderError(f"unsupported plaud render version: {render_version}")
     if len(content) > MAX_MESSAGE_CHARS:
         raise PlaudRenderError("plaud approval card exceeds the postable length")
     return content
+
+
+def prepare_approval_card(record: PlaudSyncRecord, preview: str = "") -> tuple[str, str]:
+    """Select once before effects; a stored version is replayed without fallback."""
+    if record.render_version is not None:
+        return record.render_version, render_plaud_approval(record, preview=preview, render_version=record.render_version)
+    try:
+        return RENDER_VERSION, render_plaud_approval(record, preview=preview)
+    except PlaudRenderError:
+        version = "plaud-sync-render-v4"
+        return version, render_plaud_approval(record, preview=preview, render_version=version)
+
+
+def _render_v5(record: PlaudSyncRecord, quoted: str) -> str:
+    try:
+        from automation.interop import owner_message as om
+    except ImportError as error:
+        raise PlaudRenderError("owner envelope unavailable") from error
+    if not callable(getattr(om, "render", None)):
+        raise PlaudRenderError("owner envelope renderer unavailable")
+    here = om.Ref(scope="self")
+    message = om.OwnerMessage(
+        subject_key=record.recording_id, subject=f"PLAUD 노트: {record.note_title}",
+        fact=f"{record.recorded_at}; {record.note_relpath}; plaud-sync-render-v5",
+        location=here, owner=om.Action("react", here, "✅ 승인 / ⛔ 취소"),
+        agent_next="Obsidian 저장·recall 인제스트; 수정은 이 스레드에 답글",
+        recovery="not_applicable", detail=om.Approval(None, "저장 취소"),
+    )
+    try:
+        lines = om.render(message, destination=here).splitlines()
+        # Binding stays before the preview and decisions, outside the five human fields.
+        return "\n".join((*lines[:3], f"- action_hash: `{record.action_hash}`", "", quoted, "", *lines[3:]))
+    except om.OwnerMessageError as error:
+        raise PlaudRenderError("owner envelope cannot render") from error
 
 
 def _render_v3(record: PlaudSyncRecord, quoted: str) -> str:

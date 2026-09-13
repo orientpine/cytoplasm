@@ -18,6 +18,21 @@ from automation.memory_curator.effects import alert_owner
 from automation.reminder_poller import poll_reminders
 
 Sender = Callable[[str], object]
+_INTEROP_RECEIPT = (
+    "대상: 에이전트 위임 응답 (corr-1)\n"
+    "사실: 위임 응답 수신 (실행 완료)\n"
+    "위치: 링크 없음 (공간 미상); 검색: Discord 검색 / corr-1\n"
+    "인계: 소유자: 조치 없음; 다음: 추가 실행 없음\n"
+    "되돌리기: 해당 없음"
+)
+
+_CURATOR_BODY = (
+    "대상: 메모리 큐레이터 점검 (memory-curator)\n"
+    "사실: near-cap body (실행 완료)\n"
+    "위치: 해당 없음\n"
+    "인계: 소유자: 조치 없음; 다음: 다음 주기에 메모리 상태를 다시 확인합니다.\n"
+    "되돌리기: 해당 없음"
+)
 
 
 def _interop_sender(correlation_id: str) -> None:
@@ -66,9 +81,9 @@ def notice_attempts(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
 @pytest.mark.parametrize(
     ("sender", "input_body", "delivered_body"),
     (
-        (_interop_sender, "corr-1", "Interop delegation result: corr-1"),
+        (_interop_sender, "corr-1", _INTEROP_RECEIPT),
         (_reminder_sender, "reminder body", "reminder body"),
-        (_curator_sender, "near-cap body", "near-cap body"),
+        (_curator_sender, "near-cap body", _CURATOR_BODY),
     ),
 )
 def test_notice_senders_attempt_configured_channel(
@@ -89,9 +104,9 @@ def test_notice_senders_attempt_configured_channel(
 @pytest.mark.parametrize(
     ("sender", "input_body", "delivered_body"),
     (
-        (_interop_sender, "corr-1", "Interop delegation result: corr-1"),
+        (_interop_sender, "corr-1", _INTEROP_RECEIPT),
         (_reminder_sender, "reminder body", "reminder body"),
-        (_curator_sender, "near-cap body", "near-cap body"),
+        (_curator_sender, "near-cap body", _CURATOR_BODY),
     ),
 )
 def test_notice_senders_fall_back_to_owner_dm_when_channel_is_absent(

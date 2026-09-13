@@ -66,9 +66,9 @@ BUDGET_DRAFT_KEYS = [
 # RTS-4 added the four content-binding keys: the record must be able to reproduce
 # the approval message, and the message now names the changed files and the digest.
 REPAIR_PENDING_KEYS = [
-    "action_hash", "changes", "channel_id", "content_binding_version", "created_at", "kind",
+    "action_hash", "changes", "channel_id", "content_binding_version", "content_sha256", "created_at", "kind",
     "message_id", "nonce", "patch_name", "patch_sha256", "patch_source_path", "policy_version",
-    "surface", "ticket_id",
+    "render_version", "surface", "ticket_id",
 ]
 
 BUDGET_ROWS_A = [["인건비", "100", "10", "90", "2026-07-14"]]

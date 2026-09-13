@@ -187,7 +187,7 @@ def load_draft(draft_id: str) -> dict:
 
 def set_approval_binding(
     draft: dict, *, kind: str, surface: str, channel_id: str, policy_version: int,
-    approval_thread_id: str = "",
+    approval_thread_id: str = "", approval_guild_id: str | None = None,
 ) -> dict:
     """Persist the whole binding; ``approval_thread_id`` is the request's own thread.
 
@@ -211,6 +211,8 @@ def set_approval_binding(
     }
     if approval_thread_id:
         updated["approval_thread_id"] = approval_thread_id
+    if approval_guild_id is not None:
+        updated["approval_guild_id"] = approval_guild_id
     write_json(path, updated)
     return updated
 
@@ -234,6 +236,8 @@ def set_message_id(
     updated = {**current, "message_id": message_id, "channel_id": channel_id}
     if approval_created_at:
         updated["approval_created_at"] = approval_created_at
+    if "render_version" in draft:
+        updated["render_version"] = draft["render_version"]
     write_json(path, updated)
     return updated
 

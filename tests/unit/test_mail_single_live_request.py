@@ -59,6 +59,7 @@ class FakeDiscord:
         self.threads: dict[str, str] = {}
         self.post_channels: list[str] = []
         self.notice_count = 0
+        self.notices: dict[str, str] = {}
 
     def api(self, method: str, path: str, payload: dict | None = None):
         parts = path.strip("/").split("/")
@@ -71,7 +72,7 @@ class FakeDiscord:
         if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL}/messages":
             self.notice_count += 1
             notice_id = f"notice-{self.notice_count}"
-            self.contents[notice_id] = str((payload or {}).get("content", ""))
+            self.notices[notice_id] = str((payload or {}).get("content", ""))
             return {"id": notice_id}
         if method == "POST" and parts[-1] == "threads":
             thread_id = str(int(AGENT_CHAT_THREAD) + len(self.threads) + 1)

@@ -358,24 +358,22 @@ def test_repair_cli_gives_each_ticket_its_own_approval_thread(
     monkeypatch.delenv("REPAIR_E2E_SECRET", raising=False)
     monkeypatch.setattr(repair_ops_discord, "directory_for_ops", lambda token, owner: directory)
     config = repair_ops_cli.RepairOpsConfig(
-        TICKET,
-        tmp_path / "checkout",
-        tmp_path / "logs",
-        tmp_path / "plans",
-        tmp_path / "approvals.jsonl",
-        None,
-        None,
+        TICKET, tmp_path / "checkout", tmp_path / "logs",
+        tmp_path / "plans", tmp_path / "approvals.jsonl",
+        None, None,
     )
 
-    # When: the CLI builds the approval this run will post with.
-    approval = repair_ops_cli._approval(config)  # pyright: ignore[reportPrivateUsage]
-
-    # Then: the ticket reached the directory, so the request the CLI is about to
-    # post lands in that ticket's own thread rather than a shared queue.
-    assert directory.request_specs == [(ApprovalKind.REPAIR, RequestThread(title=TICKET))]
+    approval = repair_ops_cli._approval(config)
     assert isinstance(approval, PostingOwnerApproval)
-    assert approval.binding is not None
-    assert approval.binding.channel_id == REQUEST_THREAD_ID
+    source = tmp_path / "patch.diff"
+    source.write_bytes(PATCH_BYTES)
+    http = _FakeDiscordHttp()
+    monkeypatch.setattr(repair_ops_discord, "_open_discord", http)
+    # When: the CLI's approval posts the prepared patch to its resolved surface.
+    approval.permits(TICKET, source)
+    # Then: the same policy still gives this ticket its own request thread.
+    assert directory.request_specs == [(ApprovalKind.REPAIR, RequestThread(title=TICKET))]
+    assert [channel for channel, _ in http.posts] == [REQUEST_THREAD_ID]
 
 
 def test_repair_record_carries_its_approval_thread_without_moving_the_hash(tmp_path: Path) -> None:
@@ -415,10 +413,10 @@ def test_repair_record_carries_its_approval_thread_without_moving_the_hash(tmp_p
     )
     assert pending.action_hash == V2_ACTION_HASH
 
-    # ...and the posted message is still the frozen v2 text, byte for byte, so every
-    # outstanding request keeps matching its own re-render.
+    # ...and new cards replay their stored version; records without a render
+    # version still reproduce the frozen v2 bytes on the same thread.
     assert transport.posts == [approval_request_content(pending)]
-    assert approval_request_content(replace(pending, patch_source_path=SOURCE)) == V2_GOLDEN
+    assert approval_request_content(replace(pending, patch_source_path=SOURCE, render_version=None)) == V2_GOLDEN
 
 
 def test_a_record_written_before_request_threads_still_loads(tmp_path: Path) -> None:

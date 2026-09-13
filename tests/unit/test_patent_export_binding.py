@@ -293,21 +293,15 @@ def test_a_legacy_manifest_without_an_approval_thread_id_still_loads(env: Bindin
 
 
 def test_the_approval_message_carries_the_policy_reaction_line(env: BindingEnv) -> None:
-    # Given: the one formatter allowed to phrase an owner reaction instruction.
-    policy = importlib.import_module("automation.interop.approval_surface")
-    expected = policy.reaction_instruction(
-        policy.ApprovalKind.PATENT_EXPORT,
-        policy.ApprovalSurface.AGENT_CHAT_THREAD,
-    )
-
-    # When: a brand-new export approval is posted.
+    # Given / When: a brand-new export approval is posted.
     patent_export.prepare_export(env.paths, SLUG, mode="enc")
 
-    # Then: the posted body carries that exact line and still names no surface,
-    # while the sha256 binding the gate verifies is unaffected by the extra line.
+    # Then: both machine-consumed reactions survive the new envelope instruction,
+    # while the sha256 binding the gate verifies is unaffected.
     stored = manifest.load_manifest(SLUG)
     content = env.fake.messages[str(stored.message_id)][1]
-    assert expected in content
+    assert gate.APPROVE_EMOJI in content
+    assert gate.CANCEL_EMOJI in content
     assert "#approvals" not in content
     assert gate.approval_binding_matches(stored, content)
 

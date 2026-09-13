@@ -522,7 +522,7 @@ FS3 K2-A는 비동결 `skill_review`·`peer_attest` 실행 환경을 공용 러�
 
 ## 수리 티켓 스윕-2 종결 중 발견한 후속 과제 (2026-08-17)
 
-TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보드·증적을 정리하며 남은 것들. 기능은 [todo 소유자-DM 승인 경로](기능소개/todo-소유자-DM-승인-경로.md) · [승인 게시 복구와 강화 저널](기능소개/승인-게시-복구와-강화-저널.md) · [2-store 메모리 재배치](기능소개/2-store-메모리-재배치.md).
+TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보드·증적을 정리하며 남은 것들. 기능은 [todo 소유자-DM 승인 경로](기능소개/todo-승인-경로.md) · [승인 게시 복구와 강화 저널](기능소개/승인-게시-복구와-강화-저널.md) · [2-store 메모리 재배치](기능소개/2-store-메모리-재배치.md).
 
 - **`docs/guide/gate-ledger-inventory.md`가 이번 변경만큼 낡았다** — 그 문서는 스윕-2 freeze 목록에 있어 이번 사이클에서 손대지 않았다(변경 0 확인). 그 사이 `todo` 승인이 `~/.hermes/todo-approvals/` 아래 approval store·lease·posting-journal 디렉터리를 새로 쓰고, 메모리 재배치의 posting journal 레코드가 3필드에서 5필드(`message_id`·`channel_id` 추가)로 늘었다 → freeze가 풀리면 등록부에 이 경로·권한(0600/0700)과 레코드 스키마를 반영한다. **경로 계약은 코드가 정본이라 동작 영향 없음 · 심각도: 낮음(문서 지연)**.
 - **수리 systemd 유닛의 `ExecStart`에 티켓 인자가 없다(현재도 유효한 잠복 관측)** — `autophagy-repair-agent.service`는 `repair_ops_cli.py`를 인자 없이 띄우지만 CLI는 티켓 id 하나를 필수로 요구한다. 현재 유닛은 static/inactive이고 실제 승인 워처는 CLI에 티켓 id를 직접 넘기므로 라이브 장애는 아니다. freeze가 풀려 이 유닛을 활성 경로로 쓸 때 큐 래퍼 또는 `%i` 템플릿으로 인자를 공급하고 회귀 검사를 추가한다. **동결 파일은 읽기만 함 · 심각도: 중(직접 기동 시 즉시 실패)**.
@@ -680,7 +680,7 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 ## 수리 티켓 스윕-2 종결 중 발견한 후속 과제 (2026-08-17)
 
-TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보드·증적을 정리하며 남은 것들. 기능은 [todo 소유자-DM 승인 경로](기능소개/todo-소유자-DM-승인-경로.md) · [승인 게시 복구와 강화 저널](기능소개/승인-게시-복구와-강화-저널.md) · [2-store 메모리 재배치](기능소개/2-store-메모리-재배치.md).
+TRACK-A(PR #125) · TRACK-BC(PR #123) · TRACK-D(PR #129)를 착지시키고 보드·증적을 정리하며 남은 것들. 기능은 [todo 소유자-DM 승인 경로](기능소개/todo-승인-경로.md) · [승인 게시 복구와 강화 저널](기능소개/승인-게시-복구와-강화-저널.md) · [2-store 메모리 재배치](기능소개/2-store-메모리-재배치.md).
 
 - **승인 단일성 E2E 재평가 조건이 발동했다(OBSERVE#5)** — 원 OBSERVE 원장의 기준은 “게이트 스키마/파사드 변경 시 재검토”이고, TRACK-BC가 공유층 `automation/interop/approval_lifecycle.py`와 `approval_lease.py`에 enriched journal·probe 복구 분기를 추가해 그 조건을 충족했다. 기존 단위·인터리빙 검사는 green이지만 producer 간 E2E 교차 케이스는 부재한다 → 다음 승인 생명주기 작업에서 새 복구 분기를 포함한 교차 E2E를 복원할지 재판정하고 근거를 원장에 남긴다. **알려진 동작 결함은 없음 · 심각도: 중(공유 승인층 회귀 탐지 범위)**.
   ↳ 재판정(2026-09-08 · 복원하지 않는다): 후속 과제 스윕 7 이 바로 그 「다음 승인 생명주기 작업」이었다(공유층에 릴리스 자가 회수 분기 추가). ① 단일성 불변식은 producer 를 추상화한 `tests/unit/test_approval_lifecycle_interleaving.py::test_two_producers_only_one_posts` 가 이미 고정하고, ② `automation/release_approval.py::cmd_request` 는 `tests/unit/approval_conformance_inventory.py:39` 의 `APPROVAL_PRODUCERS` 에 등재돼 파사드 경유가 기계로 강제되며, ③ 새 회수 분기는 **게시하지 않고 archive 만** 하므로 교차 E2E 가 더 잡을 회귀 표면이 없다(공유층 40 passed). 재발동 조건을 다시 적는다: **두 producer 가 같은 pending 레코드 파일을 공유하게 되면** 그때 교차 E2E 를 복원한다.
@@ -2082,6 +2082,30 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   event_type 을 티켓으로 볼 것인가**를 먼저 정해야 한다(무제한이면 healthcheck 폭주와 같은 모양이 된다).
   **다른 두 detect 경로(수동·헬스체크)는 살아 있어 동작은 정상 · 관측 공백 · 심각도 중**.
   ↳ 처리(2026-09-09 · 해소): **켜지 않기로 결정**했다. 조사해 보니 붙일 훅이 없다 — `hermes_plugin.register()` 가 등록하는 것은 Hermes 가 실제로 부르는 여섯(`pre_gateway_dispatch`·`pre_tool_call`·`transform_llm_output`·`kanban_task_{claimed,completed,blocked}`)뿐이고 "에러를 동반한 라이프사이클 실패" 훅은 벤더에 없다. `hermes_hook.handle` 은 `agent:start` 같은 옛 이벤트 어휘로 쓰였고 어디에도 등록되지 않으며, 그 보고 절반은 `kanban_task_*` → `_send_kanban_report` 가 이미 같은 `TaskReport` 로 `#agents-log` 에 보낸다(즉 **대체된 선행 구현**이다). 티켓 절반은 지금 형태로 켜면 해롭다 — `record_lifecycle_failure` 의 `subprocess.run(timeout=90)` 이 async 훅 안에서 턴을 최대 90초 세우고, dedup 서명의 location 이 `task_id` 라 실패한 task 마다 새 카드가 열리며, 수리 카드가 blocked 로 생성되므로 `kanban_task_blocked` 에 걸면 자기 피드백 루프가 된다. 그래서 고아 `automation/interop/hermes_hook.py` 를 삭제하고 결정을 `automation/interop/AGENTS.md` 에 남겼다. 그 기능은 인프라 실패=healthcheck detect, 소유자가 눈치챈 실패=`!repair` 가 덮으며 둘 다 같은 날 릴리스 런타임 사본으로 고정됐다.
+
+## 소유자 메시지 계약 착지 후 남긴 것 (2026-09-12)
+
+- **[OBSERVE] 해시 감사의 유일한 EXCLUDED는 `automation/obsidian_write/gate_binding.py::request_approval`** — 자체 카드·probe 없이 주입 gate에 위임해 카드 안전성을 판정할 수 없다.
+  → 구체 caller·게시 어댑터를 도입하는 때 그 probe·record·hash를 감사한 뒤 이관 여부를 재판정한다. 현재는 미이관 카드가 아니라 영구 위임 경계다.
+  **영향: 미래 어댑터의 감사 누락 가능성, 현재 독립 카드 없음 · 심각도 낮음**.
+- **[OBSERVE] 상태 CLI에 링크 정의 사본이 남는다** — `skills/plaud/scripts/plaud_cli.py::_thread_url`은 저장소 import가 없는 stdlib 샌드박스 때문에 인라인이다(`_LINK_LITERAL_ALLOWED`).
+  → 공유 정의 변경 때 `test_plaud_skill_status.py`의 정상·결손·잘못된 좌표 동등성 검사를 함께 확인하고, 격리 배포 조건이 바뀌면 공유화한다. 현 동등성 핀이 있어 지금 무조건 import로 바꾸지 않는다.
+  **영향: 길드·스레드 URL 정의의 향후 드리프트 위험 · 심각도 낮음**.
+- **[OWNER] 수리 패치 포인터도 96자로 접힌다** — `repair_approval_render._field`의 `MAX_FIELD_CHARS=96`이 본문 대신 보여 주는 `patch_source_path`에 적용된다.
+  → 소유자가 운영 경로의 길이 분포·접힘 빈도를 내용 없이 측정한 뒤, 필요하면 새 렌더 판본에서 완전한 포인터를 보존한다. todo 37은 골든의 임시 경로만 고쳤으며 이 작업도 운영 분포를 측정하지 않았다.
+  **영향: 긴 경로일 때 소유자가 패치를 찾는 유일한 안내가 불완전할 수 있음 · 심각도 중**.
+- **[OBSERVE] 문법적 발신자 단서가 없는 동적 호출은 정적 검사의 경계다** — 계산된 `getattr`, `eval`/`exec`, descriptor·monkeypatch·미상 런타임 신원은 추적 시작점 자체가 없을 수 있다.
+  → 이런 발신 경로를 도입할 때 사람 검토로 명시적 어댑터를 요구한다. `owner_message_sender_ast.py`의 선언된 한계이며, 단서가 있는데 `zip` 반환값에서 잃는 열린 결함과 혼동하지 않는다.
+  **영향: AST CLEAN을 모든 Python 발신의 의미적 증명으로 읽을 수 없음 · 심각도 중**.
+- **[OBSERVE] 과거 pre-digest / unversioned release·deploy·publish·managed 카드는 여전히 frozen replay에 의존한다** — 이 네 경로는 렌더러가 실패하면 유효한 소유자 클릭도 거부한다. `content_sha256`를 가진 기록은 영향이 없다.
+  → 실제 잔존 기록을 다룰 때 기존 검증 성공 뒤에만 digest 보정을 검토한다. 읽어온 미검증 본문을 바로 해시해 승인해서는 안 된다. 신규 기록은 digest를 저장한다.
+  **영향: 과거 카드의 렌더러 가용성 의존, 신규 digest 카드와 구분 필요 · 심각도 낮음**.
+- **[해소·운영 참고] 릴리스 과대 카드 거부는 전파 예외 대신 exit 6이다** — `release_card.card_for_new_request`의 거부를 `release_approval.cmd_request`가 lifecycle 거부 코드로 돌려준다.
+  → `release.sh` 운영자는 `RELEASE-CARD-REFUSED:`를 보고 요청 크기를 줄여 다시 요청한다. todo 25c 최종 게이트가 수용한 동작이며 실패를 성공으로 바꾼 것이 아니다.
+  **영향: 릴리스 요청 실패의 운영 판독, 신규 게시·레코드·저널 없음 · 심각도 낮음**.
+
+근거: [해시 감사 CSV](qa/OMUX/hash-binding-audit.csv), [코드 대조·현재 베이스 재현 증적](../.omo/evidence/owner-message-ux/task-30.txt).
+분할기 통합·문서 링크 가드·iterator 전파·lease 오류는 [열린 원장](follow-ups.md#소유자-메시지-계약-착지-후-남긴-것-2026-09-12)에 있다.
 
 ## 캘린더 카드 누락 백스톱과 통지 라우팅 착지 후 남긴 것 (2026-09-10)
 

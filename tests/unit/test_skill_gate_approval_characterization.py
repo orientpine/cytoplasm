@@ -112,7 +112,7 @@ def test_cmd_request_when_first_call_then_pending_record_field_set_is_exact(
     raw = _pending(tmp_path, _SKILL).read_text(encoding="utf-8")
     state = json.loads(raw)
     assert sorted(state.keys()) == [
-        "action_hash", "approval_action", "approval_destination", "channel_id", "deploy_nonce", "hash", "kind", "message_id", "policy_version", "surface"
+        "action_hash", "approval_action", "approval_destination", "channel_id", "content_sha256", "deploy_nonce", "hash", "kind", "message_id", "policy_version", "render_version", "surface"
     ]
     assert state["hash"] == _DIGEST
     assert state["message_id"] == "message-1"
@@ -130,6 +130,8 @@ def test_cmd_request_when_first_call_then_pending_record_field_set_is_exact(
         "kind": "skill-deploy",
         "policy_version": str(POLICY_VERSION),
         "surface": "skill-approvals",
+        "render_version": "2",
+        "content_sha256": state["content_sha256"],
     })
     assert calls == [("POST", f"/channels/{_CHANNEL_ID}/messages")]
 
@@ -419,12 +421,14 @@ def test_publish_request_when_posted_then_pending_path_and_field_set_are_exact(
         "approval_action",
         "approval_destination",
         "channel_id",
+        "content_sha256",
         "hash",
         "kind",
         "manifest_hash",
         "message_id",
         "policy_version",
         "publish_nonce",
+        "render_version",
         "surface",
         "tag",
     ]

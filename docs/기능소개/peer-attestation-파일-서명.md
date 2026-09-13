@@ -19,9 +19,10 @@ MOUNT되는 기존 4단계 게이트를 유지한다.
 
 1. 신규 설치기가 peer 홈에 서명 keypair를 만들고 공개키만 `/etc/autophagy/`에 0644로 게시한다.
 2. 스킬 배포가 peer 샌드박스 리뷰를 실행한다. peer는 stdout에 단일 signed attestation을 내보낸다.
-3. gate가 고정 namespace·공개키·요청 바인딩·30분 TTL을 검증하고 승인 메시지의 peer verdict를
-   fingerprint가 포함된 PASS로 갱신한다.
-4. cha가 같은 메시지에 ✅를 누르면 MOUNT한다. signed blob은 파일이나 공유 큐에 남기지 않는다.
+3. gate가 고정 namespace·공개키·요청 바인딩·30분 TTL을 검증한다. 승인 메시지는 게시 당시
+   본문 그대로 보존하며 peer verdict를 PATCH하지 않는다. 이미 PASS로 갱신된 옛 카드도 인식한다.
+4. 소유자가 같은 메시지에 ✅를 누르고 서명 검증도 통과하면 MOUNT한다. 신규 카드는 v2 봉투이며
+   저장된 본문 digest로 바인딩을 확인한다. signed blob은 파일이나 공유 큐에 남기지 않는다.
 
 ### 실패·거부 흐름
 

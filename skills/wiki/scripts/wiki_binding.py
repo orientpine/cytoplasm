@@ -25,6 +25,9 @@ class ApprovalBindingLike(Protocol):
     @property
     def policy_version(self) -> int: ...
 
+    @property
+    def guild_id(self) -> str | None: ...
+
 
 class OwnerDmDirectory(Protocol):
     def owner_dm(self) -> str: ...
@@ -162,6 +165,7 @@ def stored_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLik
                 surface_module.ApprovalSurface(record_surface),
                 persisted_channel,
                 version,
+                record.get("approval_guild_id"),
             )
         except (surface_module.ApprovalSurfaceError, TypeError, ValueError) as error:
             raise wiki_gate.GateError(f"저장된 승인 표면 검증 실패 — 거부: {error}", 1) from error
@@ -179,12 +183,18 @@ def stored_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLik
                 surface_module.ApprovalSurface(record_surface),
                 channel_id,
                 version,
+                record.get("approval_guild_id"),
             ),
             approval_directory(),
             wiki_gate.owner_id(),
         )
     except (surface_module.ApprovalSurfaceError, TypeError, ValueError) as error:
         raise wiki_gate.GateError(f"저장된 승인 표면 검증 실패 — 거부: {error}", 1) from error
+
+
+def bound_message_id(record: Mapping[str, str | int | None]) -> str:
+    message_id = record.get("confirm_message_id")
+    return message_id if isinstance(message_id, str) else ""
 
 
 def persisted_channel_id(record: Mapping[str, str | int | None]) -> str | None:

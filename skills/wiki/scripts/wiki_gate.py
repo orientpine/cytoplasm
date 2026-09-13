@@ -11,9 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import sys
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,8 +19,8 @@ import time
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from wiki_confirm_legacy import _owner_dm_surface as _owner_dm_surface, confirm_v1 as _confirm_v1
 
-import wiki_store
 
 GATE_DIR = Path(os.environ.get("WIKI_GATE_DIR", "~/.hermes/wiki-gate")).expanduser()
 INTEROP_CONFIG = Path(
@@ -51,105 +49,31 @@ class GateError(RuntimeError):
         self.exit_code = exit_code
 
 
-def _drafts_dir() -> Path:
-    GATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path = GATE_DIR / "drafts"
-    path.mkdir(mode=0o700, exist_ok=True)
-    return path
-
-
-def _draft_path(draft_id: str) -> Path:
-    if not draft_id.isalnum():
-        raise GateError(f"잘못된 드래프트 id: {draft_id!r}", 3)
-    return _drafts_dir() / f"{draft_id}.json"
-
-
-def create_draft(
-    action: str,
-    slug: str,
-    note_text: str,
-    channel_id: str,
-    *,
-    summary: str | None = None,
-) -> dict:
-    wiki_store.parse_note(note_text)  # raises SchemaError before anything persists
-    draft_id = secrets.token_hex(3)
-    while _draft_path(draft_id).exists():
-        draft_id = secrets.token_hex(3)
-    record = {
-        "action": action,
-        "channel_id": channel_id,
-        "created": wiki_store.utc_now(),
-        "id": draft_id,
-        "note_text": note_text,
-        "sha256": hashlib.sha256(note_text.encode("utf-8")).hexdigest(),
-        "slug": slug,
-        "status": "pending",
-    }
-    # 요약은 선택 사항 — 없으면 레코드 모양은 예전과 완전히 동일하다.
-    if isinstance(summary, str) and summary:
-        record["summary"] = summary
-    _write_json(_draft_path(draft_id), record)
-    return record
-
-
-def load_draft(draft_id: str) -> dict:
-    path = _draft_path(draft_id)
-    if not path.exists():
-        raise GateError(f"드래프트 없음: {draft_id}", 3)
-    record = json.loads(path.read_text(encoding="utf-8"))
-    if record.get("status") != "pending":
-        raise GateError(f"드래프트 {draft_id} 상태={record.get('status')} — pending 아님", 1)
-    return record
-
-
-def discard_draft(draft_id: str) -> None:
-    path = _draft_path(draft_id)
-    if not path.exists():
-        raise GateError(f"드래프트 없음: {draft_id}", 3)
-    path.unlink()
-
-
-def list_drafts() -> list[dict]:
-    if not (_drafts_dir()).is_dir():
-        return []
-    records = []
-    for path in sorted(_drafts_dir().glob("*.json")):
-        records.append(json.loads(path.read_text(encoding="utf-8")))
-    return records
-
-
-def _owner_dm_surface() -> str | None:
-    """공유 enum의 owner-DM 표면 값. 해석 불가하면 None — 요약을 생략할 뿐 게시는 막지 않는다."""
-    try:
-        import wiki_binding
-
-        surface = wiki_binding._repo_module("approval_surface").ApprovalSurface.OWNER_DM
-    except (ImportError, AttributeError, GateError):
-        return None
-    return str(surface)
-
-
 def confirm_text(draft: dict, *, surface: str | None = None) -> str:
-    """레거시 한 줄이 정본. 요약은 owner-dm 표면에서, 명시적으로 주어졌을 때만 덧붙인다.
-
-    위키 본문·제목은 그 표면 밖으로 나가면 안 되므로(skills/AGENTS.md), 표면을
-    확인할 수 없으면 요약을 생략한다(fail-closed).
-    """
-    legacy = f"저장 {draft['id']} sha256:{draft['sha256']}"
-    summary = draft.get("summary")
-    if not isinstance(summary, str) or not summary:
-        return legacy
-    effective_surface = surface if surface is not None else draft.get("surface")
-    owner_dm = _owner_dm_surface()
-    if owner_dm is None or effective_surface != owner_dm:
-        return legacy
-    budget = CONFIRM_MAX_CHARS - len(legacy) - 1  # 개행 1자
-    if budget <= 0:
-        return legacy
-    if len(summary) > budget:
-        summary = summary[: budget - 1] + "…"
-    return f"{legacy}\n{summary}"
+    """저장된 판본만 재생한다. 누락 판본은 동결된 레거시다."""
+    version = draft.get("render_version", 1)
+    match version:
+        case 1:
+            return _confirm_v1(draft, surface=surface)
+        case 2:
+            pass
+        case _:  # 저장 레코드 경계: 알 수 없는 판본을 해석하지 않는다.
+            raise GateError("알 수 없는 승인 렌더 판본 — 거부", 3)
+    try:
+        from automation.interop.owner_message import Action, Approval, OwnerMessage, OwnerMessageError, Ref, render
+    except ImportError as error:
+        raise GateError("승인 봉투 모듈 불가 — 거부", 3) from error
+    here = Ref(scope="self")
+    message = OwnerMessage(
+        subject_key=draft["id"], subject=draft["id"], fact=f"sha256:{draft['sha256']}",
+        location=here, owner=Action("react", here, "✅ 실행 / ⛔ 취소"),
+        agent_next="승인 시 저장", recovery="not_applicable",
+        detail=Approval(None, "저장하지 않음"),
+    )
+    try:
+        return render(message, destination=here)
+    except OwnerMessageError as error:
+        raise GateError("승인 봉투 렌더 불가 — 거부", 3) from error
 
 
 def post_confirm_message(draft: dict) -> dict:
@@ -158,11 +82,20 @@ def post_confirm_message(draft: dict) -> dict:
     import wiki_approval  # deferred: wiki_approval imports this module
     import wiki_binding
 
+    bound = bool(_confirm_message_id(draft))
+    prepared = draft if bound else {**draft, "render_version": 2}
+    content = None
+    if not bound:
+        try:
+            content = confirm_text(prepared)
+        except GateError:
+            prepared = {**draft, "render_version": 1}
+            content = confirm_text(prepared)
     facade = wiki_approval.lifecycle()
-    binding = wiki_binding.stored_binding(draft)
+    binding = wiki_binding.stored_binding(prepared)
     verdict = facade.request_owner_approval(
-        wiki_approval.confirm_intent(draft, binding),
-        wiki_approval.WikiApprovalGate(draft=draft, binding=binding),
+        wiki_approval.confirm_intent(prepared, binding),
+        wiki_approval.WikiApprovalGate(draft=prepared, binding=binding, content=content),
         wiki_approval.confirm_lease(),
         wiki_approval.posting_journal(),
     )
@@ -193,86 +126,6 @@ def _adapter() -> Any:
     except ImportError:
         raise GateError(f"injection adapter 불가 (INTEROP_RUNTIME={INTEROP_RUNTIME})", 3) from None
     return injection_adapter
-
-
-def _require_e2e_secret() -> str:
-    if os.environ.get("E2E_TEST_MODE") != "1":
-        raise GateError("주입 경로는 E2E_TEST_MODE=1 전용입니다 (프로덕션 게이트웨이 금지)", 1)
-    secret = os.environ.get("INTEROP_E2E_SECRET", "")
-    if not secret:
-        raise GateError("INTEROP_E2E_SECRET 누락", 1)
-    return secret
-
-
-def _persisted_injection_channel_id(draft: dict) -> str:
-    import wiki_binding
-
-    channel_id = wiki_binding.persisted_channel_id(draft)
-    if channel_id is None:
-        raise GateError("주입 승인에는 저장된 승인 바인딩이 필요함 — 거부", 1)
-    return channel_id
-
-
-def confirm_via_injection(draft: dict, injection_path: Path) -> str:
-    secret = _require_e2e_secret()
-    adapter = _adapter()
-    envelope = json.loads(injection_path.read_text(encoding="utf-8"))
-    event = adapter.InboundEvent(
-        event_id=str(envelope["event"]["event_id"]),
-        user_id=str(envelope["event"]["user_id"]),
-        channel_id=str(envelope["event"]["channel_id"]),
-        text=str(envelope["event"]["text"]),
-    )
-    if not adapter.accept_test_event(
-        event, str(envelope["signature"]), secret.encode("utf-8"), e2e_test_mode=True
-    ):
-        raise GateError("주입 승인 서명 불일치 — 거부", 1)
-    if event.user_id != owner_id():
-        raise GateError("주입 승인 발신자가 소유자가 아님 — 거부", 1)
-    if event.channel_id != _persisted_injection_channel_id(draft):
-        raise GateError("주입 승인 채널 불일치 — 거부", 1)
-    if event.text != confirm_text(draft):
-        raise GateError("주입 승인 텍스트/해시 불일치 — 거부", 1)
-    reaction_emoji = envelope["event"].get("reaction_emoji")
-    if reaction_emoji is not None:
-        if reaction_emoji == APPROVE_EMOJI:
-            return "injected-reaction:approve"
-        if reaction_emoji == CANCEL_EMOJI:
-            raise GateError("주입 취소 리액션으로 취소됨 — 저장하지 않습니다", 1)
-        raise GateError("주입 리액션 값이 승인/취소가 아님 — 거부", 1)
-    return f"injected:{event.event_id}"
-
-
-def sign_injection(
-    draft: dict,
-    out_path: Path,
-    user_id: str | None,
-    channel_id: str | None,
-    forge_signature: bool,
-    reaction_emoji: str | None = None,
-) -> None:
-    secret = _require_e2e_secret()
-    adapter = _adapter()
-    event = adapter.InboundEvent(
-        event_id=str(uuid.uuid4()),
-        user_id=user_id or owner_id(),
-        channel_id=channel_id or _persisted_injection_channel_id(draft),
-        text=confirm_text(draft),
-    )
-    signature = "0" * 64 if forge_signature else adapter.sign_event(event, secret.encode("utf-8"))
-    _write_json(
-        out_path,
-        {
-            "event": {
-                "event_id": event.event_id,
-                "user_id": event.user_id,
-                "channel_id": event.channel_id,
-                "text": event.text,
-                **({"reaction_emoji": reaction_emoji} if reaction_emoji is not None else {}),
-            },
-            "signature": signature,
-        },
-    )
 
 
 #: 배포 게이트(`automation/skill_gate.py`)와 같은 값. 소유자의 결정을 읽는 경로는
@@ -429,68 +282,21 @@ def _reaction_users(channel_id: str, message_id: str, emoji: str) -> list[dict]:
     return users
 
 
-def apply_draft(wiki_root: Path, draft: dict, approval_ref: str, method: str) -> Path:
-    import wiki_binding
+from wiki_drafts import (  # noqa: E402 - 기존 공개 파사드 보존
+    _drafts_dir as _drafts_dir,
+    _draft_path as _draft_path,
+    create_draft as create_draft,
+    load_draft as load_draft,
+    discard_draft as discard_draft,
+    list_drafts as list_drafts,
+    apply_draft as apply_draft,
+    _append_audit as _append_audit,
+    _write_json as _write_json,
+)
 
-    channel_id = wiki_binding.persisted_channel_id(draft)
-    if channel_id is None:
-        draft_id = draft.get("id")
-        if isinstance(draft_id, str):
-            draft = load_draft(draft_id)
-            channel_id = wiki_binding.persisted_channel_id(draft)
-    if channel_id is None:
-        raise GateError("저장에는 저장된 승인 바인딩이 필요함 — 거부", 1)
-    draft = {
-        **draft,
-        "channel_id": channel_id,
-        "kind": draft["kind"],
-        "policy_version": draft["policy_version"],
-        "surface": draft["surface"],
-    }
-    note_text = draft["note_text"]
-    if hashlib.sha256(note_text.encode("utf-8")).hexdigest() != draft["sha256"]:
-        raise GateError("드래프트 내용 해시 불일치 — 저장 중단", 1)
-    wiki_store.parse_note(note_text)  # re-validate at save time (fail-closed)
-    wiki_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(wiki_root, 0o700)
-    path = wiki_store.note_path(wiki_root, draft["slug"])
-    if draft["action"] == "create" and path.exists():
-        raise GateError(f"이미 존재하는 노트: {draft['slug']} (수정은 --edit 사용)", 2)
-    if draft["action"] == "edit" and not path.exists():
-        raise GateError(f"수정 대상 노트 없음: {draft['slug']}", 2)
-    path.write_text(note_text, encoding="utf-8")
-    path.chmod(0o600)
-    draft = {**draft, "status": "saved", "approval_ref": approval_ref, "method": method}
-    _write_json(_draft_path(draft["id"]), draft)
-    _append_audit(draft, approval_ref, method)
-    return path
-
-
-def _append_audit(draft: dict, approval_ref: str, method: str) -> None:
-    action = f"wiki.{draft['action']}"
-    audit_method = "dm_text" if method == "owner_dm_reply" else method
-    payload = {
-        "action": action,
-        "approval": {"channel": draft.get("channel_id", "dm"), "method": audit_method, "ref": approval_ref},
-        "payload": {"note_sha256": draft["sha256"]},
-        "target_id": f"note:{draft['slug']}",
-    }
-    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    record = {
-        "action": action,
-        "approval": payload["approval"],
-        "hash": f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}",
-        "result": {"status": "saved"},
-        "target_id": f"note:{draft['slug']}",
-        "timestamp": wiki_store.utc_now(),
-    }
-    audit = GATE_DIR / "audit.jsonl"
-    with audit.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-    audit.chmod(0o600)
-
-
-def _write_json(path: Path, record: dict) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    path.chmod(0o600)
+from wiki_injection import (  # noqa: E402 - 기존 공개 파사드 보존
+    _require_e2e_secret as _require_e2e_secret,
+    _persisted_injection_channel_id as _persisted_injection_channel_id,
+    confirm_via_injection as confirm_via_injection,
+    sign_injection as sign_injection,
+)

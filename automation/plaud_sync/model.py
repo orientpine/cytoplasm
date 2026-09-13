@@ -38,7 +38,7 @@ _RECORD_KEYS: Final = frozenset(
         "last_block_reason",
     }
 )
-_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "transcribe_attempts", "next_transcribe_at"})
+_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "approval_guild_id", "transcribe_attempts", "next_transcribe_at", "render_version"})
 
 
 class PlaudSyncError(ValueError):
@@ -67,8 +67,10 @@ class PlaudSyncRecord:
     note_content_sha256: str | None
     last_block_reason: str | None
     approval_thread_id: str | None = None
+    approval_guild_id: str | None = None
     transcribe_attempts: int = 0
     next_transcribe_at: str | None = None
+    render_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,8 +174,10 @@ def parse_record(raw: object) -> PlaudSyncRecord:
         approval_thread_id=_string_or_none(
             data.get("approval_thread_id"), "approval_thread_id"
         ),
+        approval_guild_id=_string_or_none(data.get("approval_guild_id"), "approval_guild_id"),
         transcribe_attempts=_integer(data.get("transcribe_attempts", 0), "transcribe_attempts"),
         next_transcribe_at=_schedule(data.get("next_transcribe_at")),
+        render_version=_string_or_none(data.get("render_version"), "render_version"),
     )
 
 
@@ -218,10 +222,14 @@ def serialize_record(record: PlaudSyncRecord) -> dict[str, object]:
     }
     if record.approval_thread_id is not None:
         row["approval_thread_id"] = record.approval_thread_id
+    if record.approval_guild_id is not None:
+        row["approval_guild_id"] = record.approval_guild_id
     if record.transcribe_attempts:
         row["transcribe_attempts"] = record.transcribe_attempts
     if record.next_transcribe_at is not None:
         row["next_transcribe_at"] = record.next_transcribe_at
+    if record.render_version is not None:
+        row["render_version"] = record.render_version
     return row
 
 

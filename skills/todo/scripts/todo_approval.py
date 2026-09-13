@@ -4,19 +4,22 @@ from __future__ import annotations
 import importlib
 import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from types import ModuleType
 from typing import TYPE_CHECKING, Final
 from urllib.error import HTTPError
 
+from todo_approval_model import TodoApprovalIntent
 from todo_approval_ports import DirectoryLike, TransportLike
+from todo_approval_render import RENDER_VERSION, prepare_approval_card, render_todo_approval
 from todo_approval_store import (
     ApprovalState,
     TodoApprovalRecord,
     TodoApprovalSpec,
     TodoApprovalStore,
     TodoApprovalStoreError,
+    approval_ttl,
 )
 
 if TYPE_CHECKING:
@@ -41,23 +44,6 @@ class TodoApprovalError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class TodoApprovalIntent:
-    action_hash: str
-    target_id: str
-    argv_summary: str
-    title: str
-    due: str | None
-    origin_channel_id: str = ""
-    origin_message_id: str = ""
-    tasklist: str = ""
-    notes: str | None = None
-
-    @property
-    def key(self) -> str:
-        return f"todo:{self.action_hash}"
-
-
-@dataclass(frozen=True, slots=True)
 class ApprovalRuntime:
     store: TodoApprovalStore
     transport: TransportLike
@@ -67,6 +53,8 @@ class ApprovalRuntime:
     lease: ApprovalLease
     journal: PostingJournal
     now: Callable[[], datetime]
+    render_version: str | None = None
+    card: tuple[str, str] | None = None
 
 
 def masked_argv_summary(argv: Sequence[str]) -> str:
@@ -189,7 +177,7 @@ class TodoApprovalGate:
         if record is None:
             raise lifecycle().ApprovalRecordsError("todo pending generation is absent")
         try:
-            self.runtime.store.bind_message(record, posted.message_id)
+            self.runtime.store.bind_message(record, posted.message_id, render_version=self.runtime.render_version)
         except TodoApprovalStoreError as error:
             raise lifecycle().ApprovalRecordsError(str(error)) from error
 
@@ -208,6 +196,7 @@ class TodoApprovalGate:
             origin_message_id=self.intent.origin_message_id,
             # 이 요청이 게시된 채널이 곧 이 요청 전용 스레드다 — 결과 통지가 그리로 돌아온다.
             approval_thread_id=binding.channel_id,
+            approval_guild_id=binding.guild_id,
             tasklist=self.intent.tasklist,
             title=self.intent.title,
             notes=self.intent.notes,
@@ -238,21 +227,36 @@ class TodoApprovalGate:
             raise lifecycle().ApprovalSurfaceError(str(error)) from error
 
     def _render(self) -> str:
-        due = self.intent.due or "-"
-        instruction = surface_module().reaction_instruction(
-            self.runtime.binding.kind,
-            self.runtime.binding.surface,
+        if self.runtime.card is not None:
+            return self.runtime.card[1]
+        record = self.runtime.store.active(self.intent.key)
+        expiry = None if record is None else record.created_at + approval_ttl()
+        return render_todo_approval(
+            self.intent, expiry, render_version=self.runtime.render_version or RENDER_VERSION,
         )
-        return (
-            "Google Tasks 등록 승인\n"
-            f"제목: {self.intent.title}\n"
-            f"기한: {due}\n"
-            f"argv hash: {self.intent.action_hash}\n"
-            f"{instruction}"
-        )
+
+
+def prepare_request_card(
+    intent: TodoApprovalIntent, store: TodoApprovalStore, now: datetime,
+    render_version: str | None = None,
+) -> tuple[str, str] | None:
+    record = store.active(intent.key)
+    if record is not None and now - record.created_at < approval_ttl():
+        if record.message_id is not None:
+            return None
+        now = record.created_at
+    version = render_version or prepare_approval_card(intent)[0]
+    return version, render_todo_approval(intent, now + approval_ttl(), render_version=version)
 
 
 def request_approval(intent: TodoApprovalIntent, runtime: ApprovalRuntime) -> Verdict:
+    now = runtime.now()
+    try:
+        card = runtime.card or prepare_request_card(intent, runtime.store, now, runtime.render_version)
+    except TodoApprovalStoreError:
+        card = None  # The lifecycle owns STORE_UNREADABLE refusal.
+    selected = replace(runtime, now=lambda: now, card=card,
+                       render_version=runtime.render_version if card is None else card[0])
     shared = lifecycle()
     approval_intent = shared.ApprovalIntent(
         intent.key,
@@ -261,7 +265,7 @@ def request_approval(intent: TodoApprovalIntent, runtime: ApprovalRuntime) -> Ve
     )
     return shared.request_owner_approval(
         approval_intent,
-        TodoApprovalGate(intent, runtime),
+        TodoApprovalGate(intent, selected),
         runtime.lease,
         runtime.journal,
     )

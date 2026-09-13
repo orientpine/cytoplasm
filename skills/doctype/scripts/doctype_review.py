@@ -43,13 +43,29 @@ def _chunks(message: str) -> tuple[str, ...]:
     return (*chunks, remaining)
 
 
-def send_review(target: str, message: str) -> None:
-    """Send metadata-only review text through Hermes' configured owner DM transport."""
+def send_review(target: str, message: str, file: Path | None = None) -> None:
+    """문서 좌표를 렌더하되 옛 런타임과 좌표 없는 호출은 원문을 보낸다."""
     if not target:
         return
+    content = message
+    if file is not None:
+        try:
+            from automation.interop.owner_message import Action, OwnerMessage, OwnerMessageError, Ref, Result, render
+        except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+            content = message
+        else:
+            location = Ref(scope="resource", search=("문서 검색", file.name))
+            try:
+                content = render(OwnerMessage(
+                    subject_key=str(file), subject="서류 초안", fact="검토 요청",
+                    location=location, owner=Action("open", target=location, argument="검토·제출은 직접"),
+                    agent_next=None, recovery="not_applicable", detail=Result("executed"),
+                ), destination=Ref(scope="none"))
+            except OwnerMessageError:
+                content = message
     binary = os.environ.get("DOCTYPE_DM_HERMES_BIN", "hermes")
     environment = {**os.environ, "PATH": f"{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
-    for chunk in _chunks(message):
+    for chunk in _chunks(content):
         try:
             completed = subprocess.run(
                 (binary, "send", "--to", target, chunk),

@@ -1,11 +1,9 @@
 """Render the owner-facing repair approval request.
 
-Two renderers live here on purpose. ``v1`` is frozen: records posted before
-content binding existed are still compared to their Discord message by exact
-equality, so a single changed character there would turn every outstanding
-legacy request into a binding mismatch and stall the gate. ``v2`` is the
-content-bound message. A future wording change becomes ``v3``; it never edits
-``v2`` in place, for the same reason.
+Three frozen posting versions live here on purpose. ``v1`` predates content
+binding; ``v2`` is the content-bound message; ``v3`` uses the owner envelope.
+Stored requests are read by ``repair_approval_content`` without rendering.
+The stored render version is independent of the content-binding hash schema.
 
 The patch body never reaches this module. Only counts, paths, and digests do —
 the body stays under the ops-private root and the message points at it.
@@ -13,7 +11,8 @@ the body stays under the ops-private root and the message points at it.
 
 from __future__ import annotations
 
-from typing import Final, Protocol
+from datetime import UTC, datetime, timedelta
+from typing import Final, Literal, Protocol, assert_never
 
 from automation.interop.approval_surface import ApprovalKind, ApprovalSurface, reaction_instruction, required_surface
 from automation.repair.repair_patch_binding import PatchFileDelta
@@ -40,8 +39,8 @@ class ApprovalRenderError(RuntimeError):
 class ApprovalRecordView(Protocol):
     """The persisted approval facts the message is reproduced from.
 
-    Deliberately a structural type: the renderer must never reach back into the
-    patch file, because the watcher re-renders long after the patch is gone.
+    Deliberately a structural type: posting uses the captured patch summary,
+    while the render-independent reader can verify it after the patch is gone.
     """
 
     @property
@@ -63,6 +62,12 @@ class ApprovalRecordView(Protocol):
     def content_binding_version(self) -> int | None: ...
 
     @property
+    def render_version(self) -> Literal[2, 3] | None: ...
+
+    @property
+    def created_at(self) -> datetime: ...
+
+    @property
     def patch_sha256(self) -> str | None: ...
 
     @property
@@ -73,12 +78,18 @@ class ApprovalRecordView(Protocol):
 
 
 def approval_request_content(pending: ApprovalRecordView) -> str:
-    """Render the one message this record is bound to, by its binding version."""
-    if pending.content_binding_version is None:
+    """Replay the stored wording version; an absent version selects frozen v1/v2."""
+    if pending.content_binding_version is None and pending.render_version is None:
         return _render_v1(pending)
     if pending.content_binding_version != CONTENT_BINDING_VERSION:
         raise ApprovalRenderError("unknown repair approval binding version")
-    content = _render_v2(pending)
+    match pending.render_version:
+        case None | 2:
+            content = _render_v2(pending)
+        case 3:
+            content = _render_v3(pending)
+        case unreachable:
+            assert_never(unreachable)
     if len(content) > MAX_APPROVAL_CONTENT_CHARS:
         raise ApprovalRenderError("repair approval request exceeds the postable length")
     return content
@@ -126,6 +137,36 @@ def _render_v2(pending: ApprovalRecordView) -> str:
         f"- cha가 {_instruction(pending)} 리액션",
     ]
     return "\n".join(lines)
+
+
+def _render_v3(pending: ApprovalRecordView) -> str:
+    """신규 카드만 봉투로 렌더한다. 재생 실패는 옛 문구로 대체하지 않는다."""
+    try:
+        from automation.interop.owner_message import Action, Approval, OwnerMessage, OwnerMessageError, Ref, render
+    except ImportError as error:
+        raise ApprovalRenderError("repair owner envelope is unavailable") from error
+    changes = pending.changes
+    if not changes or not pending.patch_sha256 or not pending.patch_source_path:
+        raise ApprovalRenderError("content-bound repair approval is missing its patch summary")
+    totals = f"{len(changes)} files +{sum(c.insertions for c in changes)}/-{sum(c.deletions for c in changes)}"
+    files = "; ".join(_file_line(change).strip() for change in changes[:MAX_VISIBLE_FILES])
+    omitted = max(0, len(changes) - MAX_VISIBLE_FILES)
+    if omitted:
+        files += f"; 외 {omitted}개 생략 (합계·해시는 전체)"
+    here = Ref(scope="self")
+    message = OwnerMessage(
+        subject_key=_field(pending.ticket_id), subject="수리 승인",
+        fact=(f"action_hash: {pending.action_hash}; patch_sha256: {pending.patch_sha256}; "
+              f"{totals}; {files}; nonce: {pending.nonce}; sandbox: PASS; "
+              f"패치 본문 비노출: `{_field(pending.patch_source_path)}`"),
+        location=here, owner=Action("react", here, "✅ 승인 또는 ⛔ 취소"),
+        agent_next="승인된 패치만 반영", recovery="not_applicable",
+        detail=Approval(pending.created_at.astimezone(UTC) + timedelta(hours=24), "패치 미반영, 티켓 재개"),
+    )
+    try:
+        return render(message, destination=here)
+    except OwnerMessageError as error:
+        raise ApprovalRenderError("repair owner envelope cannot render") from error
 
 
 def _file_line(change: PatchFileDelta) -> str:

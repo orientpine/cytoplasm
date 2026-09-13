@@ -40,7 +40,7 @@ def notices(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """
     delivered: list[str] = []
     monkeypatch.setattr(
-        owner_notice, "notify_owner", lambda notice: delivered.append(notice) is None
+        owner_notice, "notify_owner", lambda notice, *, message=None: delivered.append(notice) is None
     )
     return delivered
 

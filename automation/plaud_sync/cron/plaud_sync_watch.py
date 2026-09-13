@@ -131,8 +131,12 @@ def _merge_effect_bindings(
             )
         if current.approval_thread_id != initial.approval_thread_id:
             merged = replace(merged, approval_thread_id=current.approval_thread_id)
+        if current.approval_guild_id != initial.approval_guild_id:
+            merged = replace(merged, approval_guild_id=current.approval_guild_id)
         if current.last_block_reason != initial.last_block_reason:
             merged = replace(merged, last_block_reason=current.last_block_reason)
+        if current.render_version != initial.render_version:
+            merged = replace(merged, render_version=current.render_version)
         records[key] = merged
     return replace(
         result,

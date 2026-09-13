@@ -75,14 +75,30 @@ def send_review(file: Path, note: str) -> str:
                 link = result.links[0]
         except ImportError:
             link = ""
-    content = review_note(file, mode, note, link)
+    legacy = review_note(file, mode, note, link)
+    content = legacy
     stub = os.environ.get("PROCURE_DISCORD_STUB", "")
+    channel_id = "" if stub else _notice_channel()
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, OwnerMessageError, Ref, Result, render
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        content = legacy
+    else:
+        location = Ref(scope="resource", url=link or None, search=("문서 검색", file.name))
+        destination = Ref(scope="channel", channel_id=channel_id) if channel_id else Ref(scope="none")
+        try:
+            content = render(OwnerMessage(
+                subject_key=file.name, subject="구매 서류 초안", fact=note or "검토 요청",
+                location=location, owner=Action("open", target=location, argument="검토·제출은 직접"),
+                agent_next=None, recovery="not_applicable", detail=Result("executed"),
+            ), destination=destination)
+        except OwnerMessageError:
+            content = legacy
     if stub:
         record = {"mode": mode, "size": size, "file": file.name, "content": content}
         out = Path(stub) / f"dm-{uuid.uuid4().hex[:8]}.json"
         out.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
         return f"REVIEW-DM-SENT message=stub:{out.name} mode={mode} size={size}"
-    channel_id = _notice_channel()
     if mode == "attach":
         message = _post_attachment(channel_id, file, content)
     else:

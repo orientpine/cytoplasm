@@ -151,7 +151,7 @@ class PlaudSyncStore:
             if (current.message_id, current.channel_id) == (message_id, channel_id):
                 return
             raise PlaudSyncStoreError("plaud approval message id is already bound or stale")
-        self._persist(state, replace(current, message_id=message_id, channel_id=channel_id))
+        self._persist(state, replace(current, message_id=message_id, channel_id=channel_id, render_version=record.render_version))
 
     def clear_message_id(self, key: str, action_hash: str, message_id: str) -> None:
         state, current = self._current(key)

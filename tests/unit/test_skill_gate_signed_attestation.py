@@ -213,7 +213,7 @@ def test_cmd_check_when_peer_attest_mode_is_unset_then_rejects_before_discord(
     assert "peer_attest_mode" in capsys.readouterr().err
 
 
-def test_cmd_check_when_signed_record_is_valid_then_promotes_message_and_approves(
+def test_cmd_check_when_signed_record_is_valid_then_preserves_message_and_approves(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -224,10 +224,10 @@ def test_cmd_check_when_signed_record_is_valid_then_promotes_message_and_approve
     # When: the owner gate verifies the peer record and the owner's reaction.
     result = skill_gate.cmd_check(_args(private_key.with_suffix(".pub"), _blob(private_key)))
 
-    # Then: the existing message is upgraded in place with visible peer evidence and approved.
+    # Then: signature validation authorizes execution without rewriting the owner's card.
     assert result == 0
-    assert fake.patch_count == 1
-    assert "peer verdict: PASS (key fp SHA256:" in fake.content
+    assert fake.patch_count == 0
+    assert "- peer verdict: PENDING (awaiting signed peer record)" in fake.content
     assert fake.after_queries == 0
 
 

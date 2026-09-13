@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from automation.interop.owner_message import OwnerMessage
 from automation.managed_sync.cron import managed_sync_watch as watch
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -170,7 +171,7 @@ def test_a_failed_notice_does_not_undo_a_staged_release(
     monkeypatch.setattr(watch, "run_sync_once", staged)
     monkeypatch.setattr(watch, "run_roster_once", lambda: None)
 
-    def fail_notice(_notice: str) -> bool:
+    def fail_notice(_notice: str, *, message: OwnerMessage | None = None) -> bool:
         return False
 
     monkeypatch.setattr(watch, "notify_owner", fail_notice)

@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Final
 from urllib.error import HTTPError
 
+from automation.interop import origin_notice
 from automation.interop.approval_directory import DiscordChannelDirectory
 from automation.interop.approval_lease import FileKeyLease, PostingJournal
 from automation.interop.approval_lifecycle import ApprovalRequest, Probe
@@ -21,7 +22,7 @@ from automation.interop.approval_surface import (
 )
 from automation.interop.discord_transport import DiscordTransport as NoticeSender
 from automation.interop.external_effect_gate import ApprovalContext
-from automation.interop.origin_notice import ThreadOutcome, deliver
+from automation.interop.origin_notice import ThreadOutcome
 from automation.interop.reaction_approval import thread_candidates as shared_thread_candidates
 from automation.obsidian_write import gate_binding
 from automation.obsidian_write.config import ObsidianWriteError, load_config
@@ -31,7 +32,8 @@ from automation.obsidian_write.writer import write_note
 from .approval_gate import PlaudApprovalGate, request_approval
 from .model import PlaudSyncRecord
 from .reaction_transport import DiscordTransport, record_push_approval
-from .render import summary_preview
+from .render import prepare_approval_card, summary_preview
+from .result_message import result_notice_message
 from .store import PlaudSyncStore, load_note_body
 from .watch_step import ResolveEffects
 
@@ -129,9 +131,12 @@ def build_effects(
             plan = note_plan_for(state_dir, record)
             if plan is None:
                 return None
+            preview = summary_preview(plan.body)
+            live = live_requests(record.recording_id)
+            card = None if live else prepare_approval_card(record, preview)
             binding = reuse_request_thread(
                 ApprovalKind.OBSIDIAN_WRITE,
-                thread_candidates(record, live_requests(record.recording_id)),
+                thread_candidates(record, live),
                 directory,
                 owner_id,
             ) or resolve_new_binding(
@@ -140,11 +145,14 @@ def build_effects(
                 owner_id,
                 request=RequestThread(title=PurePosixPath(record.note_relpath).name),
             )
-            bound = replace(record, approval_thread_id=binding.channel_id)
+            bound = replace(
+                record, approval_thread_id=binding.channel_id,
+                approval_guild_id=binding.guild_id or record.approval_guild_id,
+            )
             store.update(bound)
             verdict = request_approval(
                 bound,
-                preview=summary_preview(plan.body),
+                preview=preview, card=card,
                 store=store,
                 transport=transport,
                 binding=binding,
@@ -224,16 +232,31 @@ def build_effects(
         if not channel:
             return
         try:
-            _ = deliver(
+            notice_record = {
+                "id": record.recording_id, "origin_channel_id": record.channel_id,
+                "approval_thread_id": record.approval_thread_id or "",
+                "approval_guild_id": record.approval_guild_id,
+                "message_id": record.message_id,
+            }
+            content = result_notice_text(record, outcome)
+            message = result_notice_message(record, content, outcome)
+            if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
+                origin_notice.deliver(
+                    api=transport.api,
+                    transport_factory=lambda thread_id: NoticeSender(token, thread_id),
+                    record=notice_record, thread_name=record.recording_id,
+                    content=content, message=message,
+                    fallback=lambda content: transport.post_message(channel, content),
+                    fallback_destination=replace(
+                        message.location, scope="channel", channel_id=channel, message_id=None,
+                    ),
+                    outcome=_TERMINAL_OUTCOMES.get(outcome),
+                )
+                return
+            origin_notice.deliver(
                 api=transport.api,
                 transport_factory=lambda thread_id: NoticeSender(token, thread_id),
-                record={
-                    "id": record.recording_id,
-                    "origin_channel_id": record.channel_id,
-                    "approval_thread_id": record.approval_thread_id or "",
-                },
-                thread_name=record.recording_id,
-                content=result_notice_text(record, outcome),
+                record=notice_record, thread_name=record.recording_id, content=content,
                 fallback=lambda content: transport.post_message(channel, content),
                 outcome=_TERMINAL_OUTCOMES.get(outcome),
             )

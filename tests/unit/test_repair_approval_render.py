@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Literal
 
 import pytest
 
@@ -49,6 +51,8 @@ class _Record:
     surface: ApprovalSurface | None = ApprovalSurface.OWNER_DM
     policy_version: int | None = POLICY_VERSION
     content_binding_version: int | None = None
+    render_version: Literal[2, 3] | None = None
+    created_at: datetime = datetime(2026, 9, 1, tzinfo=UTC)
     patch_sha256: str | None = None
     changes: tuple[PatchFileDelta, ...] | None = None
     patch_source_path: str | None = None

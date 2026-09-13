@@ -10,10 +10,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+from automation import owner_notice
 from automation.owner_notice import notify_owner
 from automation.selfskill_audit.claims import ApprovalClaimHit, find_approval_claims
 from automation.selfskill_audit.ledger import Action, Delta, audit, mark_reported
 from automation.selfskill_audit.local_log import append_run, update_pending_overlaps
+from automation.selfskill_audit.notice import audit_message
 from automation.selfskill_audit.overlap import OverlapHit, find_overlaps
 
 _ACCOUNT_LABEL: Final = re.compile(r"[a-z0-9_-]{1,32}")
@@ -76,16 +78,21 @@ def send_report(
     approval_claims: tuple["ApprovalClaimHit", ...] = (),
     pending_overlaps: int = 0,
 ) -> bool:
-    return notify_owner(
-        render_summary(
-            deltas,
-            account_label=account_label,
-            shadowed=shadowed,
-            overlaps=overlaps,
-            approval_claims=approval_claims,
-            pending_overlaps=pending_overlaps,
-        )
+    content = render_summary(
+        deltas,
+        account_label=account_label,
+        shadowed=shadowed,
+        overlaps=overlaps,
+        approval_claims=approval_claims,
+        pending_overlaps=pending_overlaps,
     )
+    label = account_label if _ACCOUNT_LABEL.fullmatch(account_label) else "unknown"
+    message = audit_message(content, label)
+    if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        ok = notify_owner(content, message=message)
+    else:
+        ok = notify_owner(content)
+    return ok
 
 
 def resolve_owner_id(home: Path = Path.home()) -> str:

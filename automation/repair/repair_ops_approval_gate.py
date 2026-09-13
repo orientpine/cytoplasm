@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
@@ -24,6 +24,9 @@ from automation.interop.approval_lifecycle import (
     Probe,
 )
 from automation.interop.approval_surface import ApprovalBinding
+from automation.repair.repair_approval_content import approval_content_matches
+from automation.repair.repair_approval_render import ApprovalRenderError
+from automation.stored_content import hash_parts
 from automation.repair.repair_ops_discord import RepairDiscordError
 from automation.repair.repair_ops_pending import (
     APPROVE_EMOJI,
@@ -99,7 +102,7 @@ def probe_pending(
         raise ApprovalSurfaceError(str(error)) from error
     if not content:
         return Probe.MISSING
-    if content != approval_request_content(pending):
+    if not approval_content_matches(pending, content):
         return Probe.BINDING_MISMATCH
     try:
         cancelled = transport.reaction_users(pending.message_id, CANCEL_EMOJI)
@@ -145,15 +148,44 @@ class RepairApprovalPayload:
     changes: tuple[PatchFileDelta, ...] | None = None
     patch_source_path: str | None = None
 
+    def prepare(self, intent: ApprovalIntent) -> tuple[PendingRepairApproval, str]:
+        """외부 효과 전에 판본·시각·본문을 한 번 동결해 post/commit이 공유한다."""
+        draft = self.draft(intent)
+        if draft.content_binding_version is not None:
+            draft = replace(draft, render_version=3)
+            try:
+                content = approval_request_content(draft)
+            except ApprovalRenderError:
+                draft = replace(draft, render_version=2)
+                content = approval_request_content(draft)
+        else:
+            content = approval_request_content(draft)
+        return replace(draft, content_sha256=hash_parts(content)), content
+
+    def draft(self, intent: ApprovalIntent) -> PendingRepairApproval:
+        """동결 전 payload에서 저장 레코드 초안을 만든다."""
+        binding = self.binding
+        return PendingRepairApproval(
+            _ticket(intent.key), self.patch_name, intent.action_hash, self.nonce, "", self.now(),
+            content_binding_version=None if self.patch_sha256 is None else CONTENT_BINDING_VERSION,
+            patch_sha256=self.patch_sha256, changes=self.changes, patch_source_path=self.patch_source_path,
+            approval_guild_id=None if binding is None else binding.guild_id,
+            kind=None if binding is None else binding.kind,
+            surface=None if binding is None else binding.surface,
+            channel_id=None if binding is None else binding.channel_id,
+            policy_version=None if binding is None else binding.policy_version,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class RepairApprovalGate:
     """Bind the repair pending store and its persisted surface to the shared lifecycle."""
 
     store: PendingRepairApprovalStore
-    transport: ApprovalRequestTransport
+    transport: ApprovalRequestTransport | Callable[[], ApprovalRequestTransport]
     owner_id: str
     payload: RepairApprovalPayload
+    prepared: tuple[PendingRepairApproval, str] | None = field(default=None, kw_only=True)
 
     def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
         """Return this ticket's live requests, refusing rather than skipping a bad record."""
@@ -192,9 +224,11 @@ class RepairApprovalGate:
         """Post exactly one nonce-bound request with both terminal reactions pre-added."""
         draft = self._draft(intent)
         try:
-            message_id = self.transport.post_approval(approval_request_content(draft))
-            self.transport.add_reaction(message_id, APPROVE_EMOJI)
-            self.transport.add_reaction(message_id, CANCEL_EMOJI)
+            content = approval_request_content(draft) if self.prepared is None else self.prepared[1]
+            transport = self.transport() if callable(self.transport) else self.transport
+            message_id = transport.post_approval(content)
+            transport.add_reaction(message_id, APPROVE_EMOJI)
+            transport.add_reaction(message_id, CANCEL_EMOJI)
         except _TRANSPORT_ERRORS as error:
             raise ApprovalSurfaceError(str(error)) from error
         return PostedApproval(message_id=message_id, channel_id=intent.channel_id)
@@ -206,23 +240,9 @@ class RepairApprovalGate:
         self.store.save(replace(draft, message_id=posted.message_id))
 
     def _draft(self, intent: ApprovalIntent) -> PendingRepairApproval:
-        binding = self.payload.binding
-        return PendingRepairApproval(
-            _ticket(intent.key),
-            self.payload.patch_name,
-            intent.action_hash,
-            self.payload.nonce,
-            "",
-            self.payload.now(),
-            content_binding_version=None if self.payload.patch_sha256 is None else CONTENT_BINDING_VERSION,
-            patch_sha256=self.payload.patch_sha256,
-            changes=self.payload.changes,
-            patch_source_path=self.payload.patch_source_path,
-            kind=None if binding is None else binding.kind,
-            surface=None if binding is None else binding.surface,
-            channel_id=None if binding is None else binding.channel_id,
-            policy_version=None if binding is None else binding.policy_version,
-        )
+        if self.prepared is not None:
+            return self.prepared[0]
+        return self.payload.draft(intent)
 
     def _record(self, request: ApprovalRequest) -> PendingRepairApproval | None:
         try:
@@ -238,9 +258,11 @@ class RepairApprovalGate:
 
 def _transport_for_pending(
     pending: PendingRepairApproval,
-    transport: ApprovalRequestTransport,
+    transport: ApprovalRequestTransport | Callable[[], ApprovalRequestTransport],
 ) -> ApprovalRequestTransport:
     """Select the record-bound transport when the implementation supports it."""
+    if callable(transport):
+        transport = transport()
     if isinstance(transport, PendingBoundTransport):
         return transport.for_pending(pending)
     return transport

@@ -5,15 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, TypeAlias
+from typing import Literal, Protocol
 
 from automation.interop.approval_lifecycle import ApprovalRecordsError
 from automation.interop.approval_surface import ApprovalKind, ApprovalSurface
 from automation.repair.repair_approval_render import approval_request_content
 from automation.repair.repair_ops_approval import repair_action_hash
+from automation.repair.repair_pending_schema import (
+    JSON_LOADS, JsonValue, PendingApprovalError, decode_binding as _decode_binding,
+)
 from automation.repair.repair_patch_binding import (
     ContentBinding,
     PatchBindingError,
@@ -38,20 +41,6 @@ __all__ = (
     "PostingOwnerApproval",
     "approval_request_content",
 )
-JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
-
-
-class JsonLoader(Protocol):
-    """Narrow json.loads at the trust boundary before pending-state parsing."""
-
-    def __call__(self, s: str) -> JsonValue: ...
-
-
-JSON_LOADS: JsonLoader = json.loads
-
-
-class PendingApprovalError(RuntimeError):
-    """A pending repair approval could not be safely persisted or decoded."""
 
 
 class ApprovalRequestTransport(Protocol):
@@ -76,6 +65,9 @@ class PendingRepairApproval:
     patch_sha256: str | None = None
     changes: tuple[PatchFileDelta, ...] | None = None
     patch_source_path: str | None = None
+    approval_guild_id: str | None = field(default=None, kw_only=True)
+    render_version: Literal[2, 3] | None = field(default=None, kw_only=True)
+    content_sha256: str | None = field(default=None, kw_only=True)
     # The resolved approval binding stays LAST: a shared conformance check reads
     # the final four annotated fields of every pending record in the system.
     kind: ApprovalKind | None = None
@@ -85,16 +77,11 @@ class PendingRepairApproval:
 
     @property
     def approval_thread_id(self) -> str:
-        """This request's own approval thread — read, never stored a second time.
+        """The binding channel IS this request's thread; never store a second copy.
 
-        The binding channel of a repair request IS its thread (the directory opens
-        one per request), so a stored copy could only ever disagree with it, and a
-        reader that picked the disagreeing one would look for the owner's decision
-        in the wrong place. Kept out of ``action_hash`` and out of the rendered
-        message: routing is not part of what the owner consented to. A record
-        with no channel answers "" instead of failing; one written before
-        per-request threads answers its shared kind thread, which no repair
-        notice consumer reads.
+        Thread and optional ``approval_guild_id`` are routing metadata outside
+        ``action_hash``. Missing channels return ""; pre-request-thread records
+        retain their legacy kind thread, which no repair notice consumer reads.
         """
         return self.channel_id or ""
 
@@ -148,6 +135,12 @@ class PendingRepairApprovalStore:
             "channel_id": pending.channel_id,
             "policy_version": pending.policy_version,
         }
+        if pending.content_sha256 is not None:
+            payload |= {"content_sha256": pending.content_sha256}
+        if pending.render_version is not None:
+            payload |= {"render_version": pending.render_version}
+        if pending.approval_guild_id is not None:
+            payload |= {"approval_guild_id": pending.approval_guild_id}
         if pending.content_binding_version is not None:
             if pending.patch_sha256 is None or pending.changes is None or pending.patch_source_path is None:
                 raise PendingApprovalError("content-bound repair approval is incomplete")
@@ -213,14 +206,24 @@ class PendingRepairApprovalStore:
         if not isinstance(decoded, dict):
             raise PendingApprovalError("pending repair approval fields are invalid")
         binding = _decode_content_binding(decoded)
+        render_version: Literal[2, 3] | None
+        match decoded.get("render_version"):
+            case None:
+                render_version = None
+            case 2 if type(decoded["render_version"]) is int:
+                render_version = 2
+            case 3 if type(decoded["render_version"]) is int:
+                render_version = 3
+            case _:
+                raise PendingApprovalError("pending repair render version is unsupported")
         fields: dict[str, str] = {}
         for key, value in decoded.items():
-            if key in _V2_KEYS:
+            if key in _V2_KEYS or key == "render_version":
                 continue
             match value:
                 case str():
                     fields[key] = value
-                case None if key in {"kind", "surface", "channel_id", "policy_version"}:
+                case None if key in {"kind", "surface", "channel_id", "policy_version", "approval_guild_id"}:
                     continue
                 case int() if key == "policy_version" and not isinstance(value, bool):
                     continue
@@ -248,6 +251,9 @@ class PendingRepairApprovalStore:
             surface,
             channel_id,
             policy_version,
+            approval_guild_id=fields.get("approval_guild_id"),
+            render_version=render_version,
+            content_sha256=fields.get("content_sha256"),
         )
         if pending.action_hash != _expected_action_hash(pending):
             raise PendingApprovalError("pending repair approval hash is invalid")
@@ -275,25 +281,6 @@ def _decode_content_binding(decoded: dict[str, JsonValue]) -> ContentBinding:
         return decode_content_binding(decoded)
     except PatchBindingError as error:
         raise PendingApprovalError(str(error)) from error
-
-
-def _decode_binding(
-    decoded: dict[str, JsonValue],
-) -> tuple[ApprovalKind | None, ApprovalSurface | None, str | None, int | None]:
-    raw_kind = decoded.get("kind")
-    raw_surface = decoded.get("surface")
-    raw_channel_id = decoded.get("channel_id")
-    raw_policy_version = decoded.get("policy_version")
-    match raw_kind, raw_surface, raw_channel_id, raw_policy_version:
-        case None, None, None, None:
-            return None, None, None, None
-        case str() as kind, str() as surface, str() as channel_id, int() as policy_version if not isinstance(policy_version, bool):
-            try:
-                return ApprovalKind(kind), ApprovalSurface(surface), channel_id, policy_version
-            except ValueError as error:
-                raise PendingApprovalError("pending repair approval binding is invalid") from error
-        case _:
-            raise PendingApprovalError("pending repair approval binding is incomplete")
 
 
 from automation.repair.repair_ops_posting import PostingOwnerApproval  # noqa: E402, F401

@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import importlib
-import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol, TypeAlias, assert_never
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote
 
 import coordinate_io as io
 import coordination_binding
+from coordination_discord import CoordinationDiscord, _TRANSPORT_ERRORS
 from coordination_pending import PendingConfirm, PendingConfirmError, PendingConfirmStore
+from coordination_card import OwnerCardDraft
 
 if TYPE_CHECKING:
     from automation.interop.approval_lifecycle import (
@@ -23,15 +22,7 @@ if TYPE_CHECKING:
         Verdict,
     )
 APPROVE_EMOJI, CANCEL_EMOJI = "\u2705", "\u26d4"
-DraftRecord: TypeAlias = dict[str, str | list[str]]
-_TRANSPORT_ERRORS = (
-    io.CoordinationError,
-    URLError,
-    OSError,
-    json.JSONDecodeError,
-    KeyError,
-    TypeError,
-)
+DraftRecord: TypeAlias = dict[str, str | list[str]] | OwnerCardDraft
 
 lifecycle = coordination_binding.lifecycle
 confirm_lease = coordination_binding.confirm_lease
@@ -46,10 +37,7 @@ class ApprovalPollSurface(Protocol):
     ) -> tuple[Mapping[str, str | bool], ...]: ...
 
 
-def approval_key(slot: str) -> str:
-    if not slot:
-        raise io.CoordinationError("조율 slot 누락 — 승인 키 생성 거부", 3)
-    return f"coord:{slot}"
+approval_key = coordination_binding.approval_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,54 +90,6 @@ def probe_entry(entry: PendingConfirm, owner_id: str, surface: ApprovalPollSurfa
     if watch._owner_reacted(approved, owner_id):
         return state.APPROVED
     return state.BOUND_PENDING
-
-
-@dataclass(frozen=True, slots=True)
-class CoordinationDiscord:
-    owner_id: str
-
-    def message_content(self, entry: PendingConfirm) -> str | None:
-        try:
-            message = io.api(
-                "GET", f"/channels/{entry.dm_channel_id}/messages/{entry.dm_message_id}"
-            )
-        except HTTPError as error:
-            if error.code == 404:
-                return None
-            raise lifecycle().ApprovalSurfaceError(str(error)) from error
-        except _TRANSPORT_ERRORS as error:
-            raise lifecycle().ApprovalSurfaceError(str(error)) from error
-        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
-            raise lifecycle().ApprovalSurfaceError("confirmation DM response is invalid")
-        return str(message["content"])
-
-    def reaction_users(
-        self, entry: PendingConfirm, emoji: str
-    ) -> tuple[Mapping[str, str | bool], ...]:
-        endpoint = (
-            f"/channels/{entry.dm_channel_id}/messages/{entry.dm_message_id}"
-            f"/reactions/{quote(emoji, safe='')}?limit=100"
-        )
-        try:
-            users = io.api("GET", endpoint)
-        except HTTPError as error:
-            if error.code == 404:
-                return ()
-            raise lifecycle().ApprovalSurfaceError(str(error)) from error
-        except _TRANSPORT_ERRORS as error:
-            raise lifecycle().ApprovalSurfaceError(str(error)) from error
-        if not isinstance(users, list):
-            raise lifecycle().ApprovalSurfaceError("reaction response is invalid")
-        return tuple(user for user in users if isinstance(user, dict))
-
-    def delete(self, entry: PendingConfirm) -> None:
-        try:
-            io.api("DELETE", f"/channels/{entry.dm_channel_id}/messages/{entry.dm_message_id}")
-        except HTTPError as error:
-            if error.code != 404:
-                raise lifecycle().ApprovalSurfaceError(str(error)) from error
-        except _TRANSPORT_ERRORS as error:
-            raise lifecycle().ApprovalSurfaceError(str(error)) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +154,7 @@ class CoordinationApprovalGate:
                 duration_min=self.payload.duration_min,
                 created=_draft_created(str(draft["created"])),
                 key=intent.key,
+                render_version=str(draft.get("render_version", "1")),
                 kind=str(binding.kind),
                 surface=str(binding.surface),
                 channel_id=binding.channel_id,
@@ -221,6 +162,7 @@ class CoordinationApprovalGate:
                 origin_channel_id=self.payload.origin_channel_id,
                 origin_message_id=self.payload.origin_message_id,
                 approval_thread_id=binding.channel_id,
+                approval_guild_id=binding.guild_id,
             )
         )
 
@@ -238,17 +180,28 @@ class CoordinationApprovalGate:
         return matches[0] if len(matches) == 1 else None
 
 
-def request_confirmation(payload: CoordinationApprovalPayload, owner_id: str) -> PendingConfirm:
+def request_confirmation(
+    payload: CoordinationApprovalPayload, owner_id: str,
+    *, prepare: Callable[[], CoordinationApprovalPayload] | None = None,
+) -> PendingConfirm:
     facade = lifecycle()
     store = PendingConfirmStore()
     binding = coordination_binding.reusable_binding(
         store, approval_key(payload.slot)
-    ) or coordination_binding.new_binding(owner_id, payload)
+    )
+    journal = posting_journal()
+    key = approval_key(payload.slot)
+    channel = binding.channel_id if binding else (journal.outstanding(key) or {}).get("channel_id", "")
+
+    def prepare_request():
+        prepared = payload if prepare is None else prepare()
+        resolved = binding or coordination_binding.new_binding(owner_id, prepared)
+        return confirm_intent(prepared, resolved), CoordinationApprovalGate(prepared, store, owner_id, resolved)
+
     verdict = facade.request_owner_approval(
-        confirm_intent(payload, binding),
+        facade.ApprovalIntent(key, str(payload.draft["sha256"]), channel),
         CoordinationApprovalGate(payload, store, owner_id, binding),
-        confirm_lease(),
-        posting_journal(),
+        confirm_lease(), journal, prepare=prepare_request,
     )
     return _entry_from_verdict(verdict, store)
 

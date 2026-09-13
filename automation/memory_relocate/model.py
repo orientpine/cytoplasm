@@ -52,6 +52,8 @@ class RelocationRecord:
     #: Thread this request's approval message lives in. Optional so a record written
     #: before the per-request thread keeps parsing, and outside ``action_hash``.
     approval_thread_id: str | None = None
+    approval_guild_id: str | None = None
+    render_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +100,7 @@ _RECORD_KEYS: Final = frozenset(
 )
 #: Keys a record MAY carry — a row written before them still parses, and an
 #: unknown key outside this set is still an unreadable shape (fail-closed).
-_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id"})
+_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "approval_guild_id", "render_version"})
 
 
 def _is_mapping(value: object) -> TypeGuard[dict[object, object]]:
@@ -212,6 +214,8 @@ def _parse_record(raw: object) -> RelocationRecord:
         approval_thread_id=_string_or_none(
             payload.get("approval_thread_id"), "approval_thread_id"
         ),
+        approval_guild_id=_string_or_none(payload.get("approval_guild_id"), "approval_guild_id"),
+        render_version=_string_or_none(payload.get("render_version"), "render_version"),
     )
 
 
@@ -245,6 +249,10 @@ def _serialize_record(record: RelocationRecord) -> dict[str, object]:
         if record.approval_thread_id is not None
         else {}
     )
+    if record.approval_guild_id is not None:
+        optional["approval_guild_id"] = record.approval_guild_id
+    if record.render_version is not None:
+        optional["render_version"] = record.render_version
     return {
         **optional,
         "version": record.version,

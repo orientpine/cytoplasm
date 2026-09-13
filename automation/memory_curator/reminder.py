@@ -19,8 +19,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import Ref
 
 #: 정책은 소유자가 사는 시계로 판단한다. 저장은 UTC 이고 변환만 여기서 한다.
 OWNER_TIMEZONE: Final = "Asia/Seoul"
@@ -41,7 +44,7 @@ class PendingApproval:
     draft_id: str
     source_file: str
     preview: str
-    jump_url: str
+    ref: Ref
 
 
 def in_quiet_window(now: datetime) -> bool:
@@ -70,9 +73,22 @@ def due(
 
 def render(pending: tuple[PendingApproval, ...]) -> str:
     """소유자가 스크롤로 찾지 못한 것이 문제였으므로, 링크가 본문이다."""
+    from automation.interop.owner_message import discord_link
+
+    from .notice import ReminderContent
+
     lines = [f"🔔 승인 대기 {len(pending)}건 — 아래 링크에서 처리하세요(이 알림 자체는 승인이 아닙니다)."]
-    lines.extend(
-        f"- `{item.draft_id}` [{item.source_file}] '{item.preview}' → {item.jump_url}"
-        for item in pending
-    )
-    return "\n".join(lines)
+    facts = lines.copy()
+    references: list[Ref] = []
+    for item in pending:
+        ref = item.ref
+        link = discord_link(space=ref.space, channel_id=ref.channel_id,
+                            message_id=ref.message_id, guild_id=ref.guild_id)
+        target = link.url or " / ".join(ref.search or ("Discord 검색", item.draft_id))
+        entry = f"- `{item.draft_id}` [{item.source_file}] '{item.preview}'"
+        lines.append(f"{entry} → {target}")
+        facts.append(entry if ref.scope == "resource" else lines[-1])
+        if ref.scope == "resource":
+            references.append(ref)
+    content = "\n".join(lines)
+    return ReminderContent(content, "\n".join(facts), tuple(references)) if references else content

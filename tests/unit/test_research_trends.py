@@ -185,7 +185,7 @@ def test_send_dm_raises_typed_owner_dm_error_when_not_delivered(
     from automation import owner_notice
 
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fixture-token")
-    monkeypatch.setattr(owner_notice, "notify_owner", lambda _report: False)
+    monkeypatch.setattr(owner_notice, "notify_owner", lambda _report, *, message=None: False)
 
     with pytest.raises(OwnerDmDeliveryError):
         research_trends._send_dm("report")
@@ -199,7 +199,7 @@ def test_send_dm_delegates_the_report_to_the_notice_facade(
     sent: list[str] = []
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "fixture-token")
     monkeypatch.setattr(
-        owner_notice, "notify_owner", lambda report: sent.append(report) or True
+        owner_notice, "notify_owner", lambda report, *, message=None: sent.append(report) or True
     )
 
     research_trends._send_dm("report")
@@ -222,7 +222,7 @@ def test_send_dm_exports_the_token_for_the_facade(
     monkeypatch.setattr(
         owner_notice,
         "notify_owner",
-        lambda _report: seen.append(os.environ.get("DISCORD_BOT_TOKEN", "")) or True,
+        lambda _report, *, message=None: seen.append(os.environ.get("DISCORD_BOT_TOKEN", "")) or True,
     )
 
     research_trends._send_dm("report")

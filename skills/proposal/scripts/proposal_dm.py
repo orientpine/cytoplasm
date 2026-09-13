@@ -44,12 +44,28 @@ def _chunks(message: str) -> tuple[str, ...]:
     return (*chunks, remaining)
 
 
-def send_review(target: str, message: str) -> None:
-    """Send every review chunk through Hermes' configured Discord transport."""
+def send_review(target: str, message: str, file: Path | None = None) -> None:
+    """검토가 저장된 문서를 안내하고 봉투가 없으면 기존 검토문을 보낸다."""
     if not target:
         return
+    content = message
+    if file is not None:
+        try:
+            from automation.interop.owner_message import Action, OwnerMessage, OwnerMessageError, Ref, Result, render
+        except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+            content = message
+        else:
+            location = Ref(scope="resource", search=("문서 검색", file.name))
+            try:
+                content = render(OwnerMessage(
+                    subject_key=str(file), subject="제안서", fact="최종 검토 완료",
+                    location=location, owner=Action("open", target=location),
+                    agent_next=None, recovery="not_applicable", detail=Result("executed"),
+                ), destination=Ref(scope="none"))
+            except OwnerMessageError:
+                content = message
     environment = {**os.environ, "PATH": f"{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
-    for chunk in _chunks(message):
+    for chunk in _chunks(content):
         try:
             completed = subprocess.run(
                 ("hermes", "send", "--to", target, chunk),

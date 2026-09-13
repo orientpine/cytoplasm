@@ -21,6 +21,12 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import OwnerMessage
+
+ACCEPTS_OWNER_MESSAGE: Final = True
 
 
 def owner_notice_channel(home: Path | None = None) -> str:
@@ -90,8 +96,19 @@ def send_notice(token: str, channel_id: str, body: str) -> None:
     _ = DiscordTransport(token=token, channel_id=channel_id).send(body)
 
 
-def notify_owner(notice: str) -> bool:
+def notify_owner(
+    content: str | None = None, *, notice: str | None = None, message: OwnerMessage | None = None,
+) -> bool:
     """Deliver one notice. False means "not delivered" — never an exception.
+
+    `message` 가 있으면 가드 안에서 렌더하고, 없으면 본문을 그대로 보낸다.
+    `notice=`는 기존 본문 별칭이다. 본문 누락·서로 다른 두 본문은 False로 거부한다.
+    정기 통지 목적지는 참조 스레드 밖이므로 봉투의 원본 링크를 숨기지 않는다.
+    RETAINED: content: str은 budget_confirm.dm_owner의 렌더 완료 본문·기존 폴백을 받는다.
+    전체 계약의 영구 예외는 calendar_confirm.send_owner_dm, approval_reminder._PointerSender,
+    카드 없는 obsidian_write.gate_binding 위임도 포함한다. meeting 게이트웨이의 별도 문자열
+    ACK는 INTEROP_RUNTIME 미보장 경계다. 이 경계·능력 폴백을 대체해 예외가 모두 해소되고
+    격리 meeting 배달이 검증될 때만 문자열 경로의 퇴역을 재판정한다(채택 원장 참조).
 
     The except is broad **on purpose**: a narrower tuple would let one unanticipated
     error stop prod from converging, which is precisely the failure this exists to
@@ -108,15 +125,26 @@ def notify_owner(notice: str) -> bool:
         )
         return False
     try:
+        body = content if content is not None else notice
+        if body is None or (notice is not None and content is not None and notice != content):
+            print("[owner-notice] NOTIFY-FAILED: TypeError", file=sys.stderr)
+            return False
         # 채널이 지정되면 그 채널로만 — DM 폴백 없음("해당 채널에서만"이 요구다).
-        send_notice(token, resolve_notice_target(token), notice)
+        channel_id = resolve_notice_target(token)
+        if message is not None:
+            from automation.interop.owner_message import Ref, render
+
+            body = render(message, destination=Ref(scope="channel", space="unknown", channel_id=channel_id))
+        send_notice(token, channel_id, body)
     except Exception as error:  # noqa: BLE001 - see docstring: escaping would stop prod
         print(f"[owner-notice] NOTIFY-FAILED: {type(error).__name__}", file=sys.stderr)
         return False
     return True
 
 
-def notify_owner_dm(notice: str) -> bool:
+def notify_owner_dm(
+    content: str | None = None, *, notice: str | None = None, message: OwnerMessage | None = None,
+) -> bool:
     """DM 으로만 배달한다 — 소유자가 DM 을 명시한 통지 전용.
 
     첫 소비자였던 릴리스 적용 완료는 2026-09-10 소유자 지시로 `notify_owner`(#notifications)
@@ -126,8 +154,14 @@ def notify_owner_dm(notice: str) -> bool:
 
     `notify_owner` 와 갈라지는 지점은 단 하나: 통지 채널이 설정돼 있어도 그리로 새지
     않는다. 지시가 "승인 요청 채널에만 머물지 말고 소유자 DM"이라 대상 자체가 요구다.
-    DM 오픈은 여전히 이 파사드 안에서만 일어난다(ON-2/ON-3) — 호출자는 문구만 준다.
-    실패는 False, 예외는 절대 나가지 않는다(모듈 docstring 의 계약 그대로).
+    DM 오픈은 여전히 이 파사드 안에서만 일어난다(ON-2/ON-3).
+    `message` 가 있으면 열린 DM 을 목적지로 렌더하고, 없으면 본문 그대로다.
+    `notice=` 별칭과 본문 누락·충돌 거부는 `notify_owner`와 같다.
+    import·렌더 실패도 False, 예외는 절대 나가지 않는다(모듈 docstring 의 계약 그대로).
+    RETAINED: content: str은 능력 폴백의 호환 계약이다. notify_owner에 적은 영구 예외
+    (budget·calendar 문자열 수신, 최소정보 리마인더, Obsidian 위임)와 격리 meeting 경계가
+    남아 있어 전체 문자열 계약을 퇴역하지 않는다. 그 경계·폴백을 대체하고 예외 해소와
+    격리 meeting 배달을 검증한 뒤에만 재판정한다.
     """
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     owner_id = _config_owner_id()
@@ -138,7 +172,16 @@ def notify_owner_dm(notice: str) -> bool:
         )
         return False
     try:
-        send_notice(token, owner_dm_channel(token, owner_id), notice)
+        body = content if content is not None else notice
+        if body is None or (notice is not None and content is not None and notice != content):
+            print("[owner-notice] NOTIFY-FAILED: TypeError", file=sys.stderr)
+            return False
+        channel_id = owner_dm_channel(token, owner_id)
+        if message is not None:
+            from automation.interop.owner_message import Ref, render
+
+            body = render(message, destination=Ref(scope="channel", space="dm", channel_id=channel_id))
+        send_notice(token, channel_id, body)
     except Exception as error:  # noqa: BLE001 - see docstring: escaping would stop prod
         print(f"[owner-notice] NOTIFY-FAILED: {type(error).__name__}", file=sys.stderr)
         return False

@@ -21,6 +21,7 @@ from typing import Protocol
 
 import budget_confirm
 import budget_gate
+from budget_core import BudgetCardDraft, JsonObject
 
 
 class _Directory(Protocol):
@@ -41,7 +42,7 @@ def approval_directory() -> _Directory:
     )
 
 
-def request_spec(record: dict):
+def request_spec(record: JsonObject | BudgetCardDraft):
     """This draft's own approval-thread spec: 제목만 실린다.
 
     스레드 이름은 발신할 메일의 제목이다 — 금액·잔액은 승인 카드 안에서만 마스킹된
@@ -56,7 +57,7 @@ def request_spec(record: dict):
     )
 
 
-def new_binding(record: dict) -> budget_gate.ApprovalBindingLike:
+def new_binding(record: JsonObject | BudgetCardDraft) -> budget_gate.ApprovalBindingLike:
     """Resolve the surface for a NEW post — the only surface resolution in this flow.
 
     요청 하나가 스레드 하나를 연다: 승인 카드·리마인더·결과 통지가 한 스레드에서
@@ -74,7 +75,7 @@ def new_binding(record: dict) -> budget_gate.ApprovalBindingLike:
         raise budget_gate.GateError(f"승인 표면 해석 실패 — 게시 거부: {error}", 3) from error
 
 
-def stored_binding(record: dict) -> budget_gate.ApprovalBindingLike:
+def stored_binding(record: JsonObject | BudgetCardDraft) -> budget_gate.ApprovalBindingLike:
     """The binding this record's message lives on — read from the record, never re-resolved."""
     surface = _surface()
     kind = surface.ApprovalKind.BUDGET_MAIL
@@ -89,7 +90,8 @@ def stored_binding(record: dict) -> budget_gate.ApprovalBindingLike:
         if bound:
             return surface.validate_stored_binding(
                 surface.ApprovalBinding(
-                    kind, surface.ApprovalSurface(record_surface), str(channel_id), version
+                    kind, surface.ApprovalSurface(record_surface), str(channel_id), version,
+                    record.get("approval_guild_id"),
                 ),
                 directory,
                 owner,
@@ -140,7 +142,7 @@ def reused_binding(outstanding: Iterable[object]) -> budget_gate.ApprovalBinding
 
 
 def binding_for(
-    record: dict, outstanding: Iterable[object] = ()
+    record: JsonObject | BudgetCardDraft, outstanding: Iterable[object] = ()
 ) -> budget_gate.ApprovalBindingLike:
     """A stored binding always wins; a never-posted record reuses this key's live thread."""
     channel_id = record.get("channel_id")
@@ -149,7 +151,7 @@ def binding_for(
     return reused_binding(outstanding) or new_binding(record)
 
 
-def reaction_instruction(record: dict, *, name_surface: bool = False) -> str:
+def reaction_instruction(record: JsonObject | BudgetCardDraft, *, name_surface: bool = False) -> str:
     """The owner-facing reaction line for THIS record's surface — never hardcoded.
 
     A record that already carries a binding is described by ITS stored surface; a

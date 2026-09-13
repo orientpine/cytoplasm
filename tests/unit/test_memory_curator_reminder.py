@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from automation.interop.owner_message import Ref
 from automation.memory_curator.reminder import (
     OWNER_TIMEZONE,
     PendingApproval,
@@ -38,7 +39,7 @@ def _pending(count: int = 1) -> tuple[PendingApproval, ...]:
             draft_id=f"d{index}",
             source_file="USER.md",
             preview="어떤 판단 근거",
-            jump_url=f"https://discord.com/channels/@me/1/{index}",
+            ref=Ref(scope="message", space="dm", channel_id="1", message_id=str(index + 1)),
         )
         for index in range(count)
     )
@@ -88,8 +89,8 @@ def test_the_reminder_names_the_file_and_links_the_message() -> None:
     text = render(_pending(2))
     assert "USER.md" in text
     assert "어떤 판단 근거" in text
-    assert "https://discord.com/channels/@me/1/0" in text
     assert "https://discord.com/channels/@me/1/1" in text
+    assert "https://discord.com/channels/@me/1/2" in text
     assert "2건" in text
 
 

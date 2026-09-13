@@ -13,11 +13,35 @@ import re
 import shlex
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
-from typing import TypeAlias
+from typing import Final, NotRequired, TypeAlias, TypedDict
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = "JsonScalar | list[JsonValue] | dict[str, JsonValue]"
 JsonObject: TypeAlias = "dict[str, JsonValue]"
+
+class BudgetCardDraft(TypedDict):
+    id: str
+    sha256: str
+    changes: list[list[str]]
+    prev_hash: str
+    new_hash: str
+    claim_key: NotRequired[str]
+    project: NotRequired[str]
+    year: NotRequired[int]
+    created: NotRequired[str]
+    render_version: NotRequired[str]
+    message_id: NotRequired[str]
+    approval_thread_id: NotRequired[str]
+    approval_guild_id: NotRequired[str]
+    origin_channel_id: NotRequired[str]
+    origin_message_id: NotRequired[str]
+    kind: NotRequired[str]
+    surface: NotRequired[str]
+    channel_id: NotRequired[str]
+    policy_version: NotRequired[int]
+
+
+BUDGET_APPROVAL_TTL: Final = timedelta(hours=24)
 
 KST = timezone(timedelta(hours=9), "KST")
 BALANCE_TAB = "항목별 잔액"
@@ -168,7 +192,7 @@ def render_mail(
     return subject, "\n".join(lines)
 
 
-def render_approvals_message(draft: dict, *, instruction: str = "") -> str:
+def _render_v1(draft: BudgetCardDraft, *, instruction: str = "") -> str:
     """Sanitized approval request: item/field visible, every value masked.
 
     ``instruction`` is the owner-facing reaction line and MUST come from
@@ -194,6 +218,36 @@ def render_approvals_message(draft: dict, *, instruction: str = "") -> str:
         " 확정 시 다음 30분 tick에 발송"
     )
     return "\n".join(lines)
+
+
+def render_approvals_message(draft: BudgetCardDraft, *, instruction: str = "") -> str:
+    """Missing versions replay frozen v1; only explicitly selected v2 uses the envelope."""
+    version = draft.get("render_version", "1")
+    if version == "1":
+        return _render_v1(draft, instruction=instruction)
+    from automation.interop.approval_card import CardRenderError
+    if version != "2":
+        raise CardRenderError("unknown budget card render version")
+    from automation.interop import owner_message
+    from automation.interop.approval_surface import ApprovalKind, reaction_instruction, required_surface
+    if not callable(getattr(owner_message, "render", None)):
+        raise CardRenderError("owner envelope unavailable")
+    here = owner_message.Ref(scope="self")
+    kind = ApprovalKind.BUDGET_MAIL
+    created = draft.get("created")
+    expiry = None if created is None else datetime.fromisoformat(created) + BUDGET_APPROVAL_TTL
+    message = owner_message.OwnerMessage(
+        subject_key=str(draft["id"]), subject="예산 변경 메일",
+        fact=" · ".join(_render_v1(draft).splitlines()[1:-2]), location=here,
+        owner=owner_message.Action("react", here, reaction_instruction(kind, required_surface(kind))),
+        agent_next="승인 시 다음 30분 tick에 발송", recovery="irreversible",
+        detail=owner_message.Approval(expiry, "메일을 발송하지 않음"),
+    )
+    try:
+        body = owner_message.render(message, destination=here)
+    except owner_message.OwnerMessageError as error:
+        raise CardRenderError("budget envelope cannot render") from error
+    return f"{body}\n- draft: `{draft['id']}` sha256: `{draft['sha256']}`"
 
 
 def build_gmail_argv(to: str, subject: str, body: str) -> tuple[str, ...]:

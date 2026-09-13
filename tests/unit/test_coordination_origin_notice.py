@@ -119,6 +119,32 @@ def _thread_api(created: list[dict | None], *, fail: bool = False):
     return api
 
 
+EXECUTED_NOTICE = (
+    "대상: 피어 미팅 (abc123)\n"
+    "사실: ✅ 일정 조율 완료 (coord-test123): 피어 미팅 — 2026-07-18 (토) 09:00~09:30 KST. 캘린더에 등록되었습니다. (실행 완료)\n"
+    "위치: 링크 없음 (공간 미상); 검색: Discord 검색 / abc123\n"
+    "인계: 소유자: 조치 없음; 다음: 추가 실행 없음\n되돌리기: 해당 없음"
+)
+LEGACY_EXECUTED_NOTICE = (
+    "대상: 피어 미팅 ()\n"
+    "사실: ✅ 일정 조율 완료 (coord-test123): 피어 미팅 — 2026-07-18 (토) 09:00~09:30 KST. 캘린더에 등록되었습니다. (실행 완료)\n"
+    "위치: 링크 없음 (공간 미상); 검색: Discord 검색 /\n"
+    "인계: 소유자: 조치 없음; 다음: 추가 실행 없음\n되돌리기: 해당 없음"
+)
+CANCELLED_NOTICE = (
+    "대상: abc123 (abc123)\n"
+    "사실: ⛔ 일정 조율 취소 (draft abc123) — 소유자 ⛔ 리액션으로 취소되었습니다. (취소됨)\n"
+    "위치: 링크 없음 (공간 미상); 검색: Discord 검색 / abc123\n"
+    "인계: 소유자: 조치 없음; 다음: 추가 실행 없음\n되돌리기: 해당 없음"
+)
+EXPIRED_NOTICE = (
+    "대상: abc123 (abc123)\n"
+    "사실: ⌛ 일정 조율 만료 취소 (draft abc123) — 확정 시간이 지나 취소되었습니다. (만료됨)\n"
+    "위치: 링크 없음 (공간 미상); 검색: Discord 검색 / abc123\n"
+    "인계: 소유자: 조치 없음; 다음: 추가 실행 없음\n되돌리기: 해당 없음"
+)
+
+
 def _executed_commands() -> tuple[coordination.Command, ...]:
     state, _ = coordination.on_owner_confirm(
         coordination.CoordinationState(
@@ -215,8 +241,7 @@ def test_finish_posts_the_completion_result_to_the_origin_thread(
     assert len(created) == 1
     assert spy.posts == [(
         THREAD_ID,
-        "✅ 일정 조율 완료 (coord-test123): 피어 미팅 — "
-        "2026-07-18 (토) 09:00~09:30 KST. 캘린더에 등록되었습니다.",
+        EXECUTED_NOTICE,
     )]
     assert dm_notices == []
     # …and the #team notice is unchanged by the routing switch
@@ -248,7 +273,7 @@ def test_finish_without_origin_still_uses_the_owner_fallback(
     assert exit_code == 0
     assert spy.posts == []
     assert [owner for owner, _content in dm_notices] == [OWNER]
-    assert dm_notices[0][1].startswith("✅ 일정 조율 완료 (coord-test123)")
+    assert dm_notices[0][1] == LEGACY_EXECUTED_NOTICE
 
 
 def _run_watch(
@@ -290,7 +315,7 @@ def test_watcher_cancel_result_goes_to_the_origin_thread(
     assert len(created) == 1
     assert spy.posts == [(
         THREAD_ID,
-        "⛔ 일정 조율 취소 (draft abc123) — 소유자 ⛔ 리액션으로 취소되었습니다.",
+        CANCELLED_NOTICE,
     )]
 
 
@@ -307,7 +332,7 @@ def test_watcher_expiry_result_goes_to_the_origin_thread(
     assert discord.sent_messages == []
     assert spy.posts == [(
         THREAD_ID,
-        "⌛ 일정 조율 만료 취소 (draft abc123) — 확정 시간이 지나 취소되었습니다.",
+        EXPIRED_NOTICE,
     )]
 
 
@@ -324,7 +349,7 @@ def test_watcher_falls_back_to_owner_notice_when_the_thread_fails(
     assert commands.discarded == ["abc123"]
     assert spy.posts == []
     assert discord.sent_messages == [
-        "⛔ 일정 조율 취소 (draft abc123) — 소유자 ⛔ 리액션으로 취소되었습니다."
+        CANCELLED_NOTICE
     ]
     assert "NOTIFY-THREAD-FAIL" in capsys.readouterr().err
 

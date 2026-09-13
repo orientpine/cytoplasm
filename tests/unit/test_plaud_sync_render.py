@@ -10,13 +10,14 @@ from automation.plaud_sync.render import (
     MAX_MESSAGE_CHARS,
     RENDER_VERSION,
     PlaudRenderError,
-    render_plaud_approval as render_current,
+    render_plaud_approval as render_latest,
     summary_preview as preview_current,
 )
 
 
-# Existing v3 fixtures remain frozen and explicitly reachable.
-render_plaud_approval = partial(render_current, render_version="plaud-sync-render-v3")
+# Existing v3/v4 fixtures remain frozen and explicitly reachable.
+render_current = partial(render_latest, render_version="plaud-sync-render-v4")
+render_plaud_approval = partial(render_latest, render_version="plaud-sync-render-v3")
 summary_preview = partial(preview_current, render_version="plaud-sync-render-v3")
 
 
@@ -180,7 +181,7 @@ def test_card_label_no_longer_promises_summary_lines_only() -> None:
 # v4: test selection, budgets, binding and Markdown structure; review copy on
 # the real surface rather than pinning the owner's prose in snapshots.
 def test_current_version_and_summary_budget() -> None:
-    assert RENDER_VERSION == "plaud-sync-render-v4"
+    assert RENDER_VERSION == "plaud-sync-render-v5"
     assert preview_current(_SEVEN_LINE_BODY).splitlines() == [
         "- 첫째 줄", "- 둘째 줄", "- 셋째 줄", "- 넷째 줄", "- 다섯째 줄", "- 여섯째 줄", "- 일곱째 줄",
     ]
@@ -267,7 +268,7 @@ def test_current_card_fails_closed_for_oversized_metadata_or_raw_preview() -> No
         render_current(_record(), preview="x" * MAX_MESSAGE_CHARS)
 
 
-@pytest.mark.parametrize("version", ["plaud-sync-render-v2", "plaud-sync-render-v5", ""])
+@pytest.mark.parametrize("version", ["plaud-sync-render-v2", "plaud-sync-render-v6", ""])
 def test_unknown_render_versions_fail_closed(version: str) -> None:
     with pytest.raises(PlaudRenderError):
         preview_current(_V2_BODY, render_version=version)

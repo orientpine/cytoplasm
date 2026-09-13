@@ -17,6 +17,8 @@ from urllib.parse import unquote
 
 import pytest
 
+from automation.interop.approval_surface import ApprovalKind, RequestThread, request_thread_notice
+
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "skills" / "wiki" / "scripts"))
 sys.path.insert(0, str(_REPO / "skills" / "patent-prep"))
@@ -42,13 +44,13 @@ DRAFT_FIELDS = [
 POSTED_FIELDS = sorted([*DRAFT_FIELDS, "confirm_message_id"])
 STORED_POSTED_FIELDS = sorted([
     # 요청별 승인 스레드: 레코드가 자기 승인이 사는 스레드를 함께 기록한다.
-    *POSTED_FIELDS, "approval_thread_id", "kind", "policy_version", "surface",
+    *POSTED_FIELDS, "approval_thread_id", "kind", "policy_version", "surface", "render_version",
 ])
 MANIFEST_FIELDS = sorted([
     "approval_ts", "created_ts", "dest_folder_id", "expiry_ts", "message_id",
-    "mode", "nonce", "plaintext_sha256", "slug", "state",
+    "mode", "nonce", "plaintext_sha256", "slug", "state", "render_version",
     # AS-1.6: the manifest is now the durable record of WHERE its approval lives.
-    "kind", "surface", "channel_id", "policy_version", "approval_thread_id",
+    "kind", "surface", "channel_id", "policy_version", "approval_thread_id", "approval_guild_id",
 ])
 
 
@@ -170,14 +172,15 @@ def test_post_confirm_message_adds_confirm_message_id(wiki_env: FakeDiscordRest,
     assert sorted(stored.keys()) == STORED_POSTED_FIELDS
     assert posted["confirm_message_id"] == "wiki-msg-1"
     assert stored["confirm_message_id"] == "wiki-msg-1"
+    assert f"sha256:{NOTE_SHA256}" in wiki_env.contents["wiki-msg-1"]
+    assert stored["render_version"] == 2
     assert wiki_env.notices == [
-        f"🔔 승인 대기 · 위키 · {draft['id']}\n이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
+        request_thread_notice(ApprovalKind.WIKI, RequestThread(draft['id']))
     ]
     assert wiki_env.request_thread_calls == [(
         f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/wiki-notice-1/threads",
         {"name": f"위키 · {draft['id']}", "auto_archive_duration": 10080},
     )]
-    assert wiki_env.contents["wiki-msg-1"] == f"저장 {draft['id']} sha256:{NOTE_SHA256}"
 
 
 def test_second_confirm_message_never_replaces_the_stored_id(wiki_env: FakeDiscordRest, tmp_path: Path) -> None:
@@ -350,10 +353,7 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
         if method == "POST" and path == f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages":
             assert payload is not None
             assert payload == {
-                "content": (
-                    f"🔔 승인 대기 · 특허 반출 · {SLUG}\n"
-                    "이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
-                )
+                "content": request_thread_notice(ApprovalKind.PATENT_EXPORT, RequestThread(SLUG))
             }
             notices.append(str(payload["content"]))
             return {"id": f"patent-notice-{len(notices)}"}
@@ -411,7 +411,7 @@ def test_second_prepare_for_the_same_slug_never_replaces_the_message_id(
     assert first.message_id == "msg-1"
     assert second.message_id == first.message_id
     assert notices == [
-        f"🔔 승인 대기 · 특허 반출 · {SLUG}\n이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
+        request_thread_notice(ApprovalKind.PATENT_EXPORT, RequestThread(SLUG))
     ]
     assert request_thread_calls == [(
         f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/patent-notice-1/threads",

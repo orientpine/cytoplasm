@@ -229,7 +229,7 @@ def _review(args: argparse.Namespace) -> int:
     document = assembled.read_text(encoding="utf-8")
     review = Path(args.response_file).read_text(encoding="utf-8") if args.response_file else proposal_llm.run_final_review(_review_prompt(document))
     path = proposal_assembly.append_final_review(paths, args.slug, review)
-    proposal_dm.send_review(target, f"제안서 최종 검토 완료\n경로: {path}\n\n{review.strip()}")
+    proposal_dm.send_review(target, f"제안서 최종 검토 완료\n경로: {path}\n\n{review.strip()}", path)
     print(f"PROPOSAL-REVIEWED path={path} provider=openai-codex model=gpt-5.4")
     return 0
 

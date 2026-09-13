@@ -135,6 +135,7 @@ class TodoApprovalStore:
             origin_channel_id=spec.origin_channel_id,
             origin_message_id=spec.origin_message_id,
             approval_thread_id=spec.approval_thread_id,
+            approval_guild_id=spec.approval_guild_id,
             tasklist=spec.tasklist,
             title=spec.title,
             notes=spec.notes,
@@ -143,7 +144,7 @@ class TodoApprovalStore:
         _io.atomic_write(self.pending_path(spec.key), record)
         return record
 
-    def bind_message(self, record: TodoApprovalRecord, message_id: str) -> TodoApprovalRecord:
+    def bind_message(self, record: TodoApprovalRecord, message_id: str, *, render_version: str | None = None) -> TodoApprovalRecord:
         if not message_id:
             raise TodoApprovalStoreError("message id is empty")
         current = self.active(record.key)
@@ -153,7 +154,7 @@ class TodoApprovalStore:
             if current.message_id == message_id:
                 return current
             raise TodoApprovalStoreError("pending message id is already bound")
-        bound = replace(current, message_id=message_id)
+        bound = replace(current, message_id=message_id, render_version=render_version)
         _io.atomic_write(self.pending_path(record.key), bound)
         return bound
 

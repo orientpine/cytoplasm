@@ -21,9 +21,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from automation import owner_notice
 from automation.owner_notice import notify_owner
 from automation.selfskill_audit.report import _governed_root, resolve_owner_id
 from automation.selfskill_audit.scan import shadowed_skill_names
+from automation.supply_chain_shadow_notice import shadow_message
 
 Notify = Callable[[str], bool]
 
@@ -91,7 +93,16 @@ def run_shadow_check(
         owner_id = resolve_owner_id(account_home)
         if owner_id and not os.environ.get("AUTOPHAGY_OWNER_ID", "").strip():
             os.environ["AUTOPHAGY_OWNER_ID"] = owner_id
-        if not notify(plan.notice):
+        content = plan.notice
+        if notify is notify_owner:
+            message = shadow_message(content, current, account_home)
+            if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+                ok = notify_owner(content, message=message)
+            else:
+                ok = notify_owner(content)
+        else:
+            ok = notify(content)
+        if not ok:
             return current  # 상태 미전진 — 다음 틱이 같은 통지를 재시도한다
     _save_notified(path, plan.state)
     return current

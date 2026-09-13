@@ -117,9 +117,7 @@ def _pending_drafts() -> tuple[tuple[Path, dict, str], ...]:
     return tuple(records)
 
 
-def _bound_message_id(record: dict) -> str:
-    message_id = record.get("confirm_message_id")
-    return message_id if isinstance(message_id, str) else ""
+_bound_message_id = wiki_binding.bound_message_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +126,7 @@ class WikiApprovalGate:
 
     draft: dict
     binding: wiki_binding.ApprovalBindingLike | None = None
+    content: str | None = None
 
     def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
         request_type = lifecycle().ApprovalRequest
@@ -230,7 +229,7 @@ class WikiApprovalGate:
         message = wiki_gate._api(
             "POST",
             f"/channels/{channel_id}/messages",
-            {"content": wiki_gate.confirm_text(self.draft, surface=surface)},
+            {"content": self.content if self.content is not None else wiki_gate.confirm_text(self.draft, surface=surface)},
         )
         if not isinstance(message, dict) or not isinstance(message.get("id"), str):
             raise wiki_gate.GateError("승인 메시지 게시 응답이 유효하지 않음 — 거부", 3)
@@ -249,6 +248,7 @@ class WikiApprovalGate:
             # 승인 요청이 사는 스레드 — 결과 통지가 스레드를 새로 열지 않게 레코드에 남긴다.
             # 승인 해시(sha256)와 무관한 필드이므로 바인딩 검증 내용은 그대로다.
             "approval_thread_id": binding.channel_id,
+            **({"approval_guild_id": binding.guild_id} if binding.guild_id is not None else {}),
             "channel_id": binding.channel_id,
             "confirm_message_id": posted.message_id,
             "kind": str(binding.kind),

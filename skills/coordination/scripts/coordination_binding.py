@@ -29,6 +29,9 @@ class ApprovalBindingLike(Protocol):
     @property
     def policy_version(self) -> int: ...
 
+    @property
+    def guild_id(self) -> str | None: ...
+
 
 class PendingApproval(Protocol):
     kind: str | None
@@ -36,6 +39,7 @@ class PendingApproval(Protocol):
     channel_id: str
     dm_channel_id: str
     policy_version: int | None
+    approval_guild_id: str | None
 
 
 class OwnerDmDirectory(Protocol):
@@ -49,6 +53,12 @@ class RequestPayload(Protocol):
     draft: Mapping[str, object]
     origin_channel_id: str
     origin_message_id: str
+
+
+def approval_key(slot: str) -> str:
+    if not slot:
+        raise io.CoordinationError("조율 slot 누락 — 승인 키 생성 거부", 3)
+    return f"coord:{slot}"
 
 
 def repo_root() -> Path:
@@ -168,6 +178,7 @@ def stored_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLik
                     surface.ApprovalSurface(record_surface),
                     channel_id,
                     version,
+                    record.get("approval_guild_id"),
                 ),
                 directory,
                 io.interop_config()["owner_id"],
@@ -215,6 +226,7 @@ def binding_for_entry(entry: PendingApproval) -> ApprovalBindingLike:
             "kind": entry.kind,
             "policy_version": entry.policy_version,
             "surface": entry.surface,
+            "approval_guild_id": entry.approval_guild_id,
         }
     )
 

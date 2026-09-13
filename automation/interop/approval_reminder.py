@@ -9,13 +9,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, assert_never
 from urllib.parse import urlsplit
 
 from automation.interop.approval_lease import ApprovalLease, ReminderJournal
 from automation.interop.approval_reminder_config import ApprovalReminderConfig
 from .approval_types import ApprovalRequest, Probe
 from automation.interop.approval_surface import ApprovalKind
+from .owner_message import LinkResult as LinkResult, LinkStatus as LinkStatus, Space, discord_link
 
 
 class ReminderStatus(StrEnum):
@@ -158,13 +159,6 @@ class ReminderBoundaryError(ValueError):
     """Reminder metadata cannot be rendered without crossing the boundary."""
 
 
-class LinkStatus(StrEnum):
-    AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
-    INVALID = "invalid"
-    DELETED = "deleted"
-
-
 class SourceLifecycle(StrEnum):
     ACTIVE = "active"
     DELETED = "deleted"
@@ -177,16 +171,16 @@ class DeliveryRoute(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class DiscordSource:
-    """Content-free coordinates for one Discord message.
+    """채널/스레드 또는 메시지 좌표. DM은 space로 명시한다.
 
-    ``channel_id`` may be a guild channel or a thread id.  A missing
-    ``guild_id`` means the message is in a DM and therefore uses Discord's
-    supported ``@me`` route.
+    space=None은 생략 표식: guild_id가 있으면 guild, 없으면 unknown.
+    명시한 space는 guild_id보다 우선하며 링크 생성은 공용 정의에 위임한다.
     """
 
     channel_id: str
-    message_id: str
+    message_id: str | None = None
     guild_id: str | None = None
+    space: Space | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,17 +192,10 @@ class SourceReference:
 
 
 @dataclass(frozen=True, slots=True)
-class LinkResult:
-    status: LinkStatus
-    url: str | None = None
-    detail: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class ApprovalReminder:
     request_type: ApprovalKind
     elapsed: timedelta
-    source_url: str
+    source_url: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,17 +228,12 @@ def _safe_https_url(value: str) -> bool:
 
 
 def discord_message_link(source: DiscordSource) -> LinkResult:
-    """Build a canonical Discord client link without inspecting message data."""
-    identifiers = (source.channel_id, source.message_id)
-    if source.guild_id is not None:
-        identifiers += (source.guild_id,)
-    if not all(_snowflake(identifier) for identifier in identifiers):
-        return LinkResult(LinkStatus.INVALID, detail="source coordinates are invalid")
-    location = source.guild_id if source.guild_id is not None else "@me"
-    return LinkResult(
-        LinkStatus.AVAILABLE,
-        f"https://discord.com/channels/{location}/{source.channel_id}/{source.message_id}",
-    )
+    """공용 링크 정의의 소비자. 길드 미상은 DM으로 추측하지 않는다."""
+    space = source.space
+    if space is None:
+        space = "guild" if source.guild_id is not None else "unknown"
+    return discord_link(space=space, guild_id=source.guild_id,
+                        channel_id=source.channel_id, message_id=source.message_id)
 
 
 def resolve_source_link(source: SourceReference) -> LinkResult:
@@ -299,15 +281,16 @@ def _elapsed_text(elapsed: timedelta) -> str:
 
 
 def compose_reminder(reminder: ApprovalReminder) -> str:
-    """Render only request type, elapsed time and the original-message link."""
+    """기존 문구를 유지하되 좌표 미상일 때는 원문 링크 줄만 생략한다."""
     request_type = _request_type_text(reminder.request_type)
-    source_url = _validate_source_url(reminder.source_url)
+    link_line = ""
+    if reminder.source_url is not None:
+        link_line = f"\n원문 링크: {_validate_source_url(reminder.source_url)}"
     elapsed = _elapsed_text(reminder.elapsed)
     return (
         "승인 리마인더\n"
         f"요청 유형: {request_type}\n"
-        f"경과시간: {elapsed}\n"
-        f"원문 링크: {source_url}"
+        f"경과시간: {elapsed}{link_line}"
     )
 
 
@@ -330,13 +313,18 @@ class ApprovalProbe(Protocol):
     def probe(self, request: ApprovalRequest) -> Probe: ...
 
 
+def stored_reminder_space(surface: object) -> Space:
+    """Only an explicit persisted DM surface permits the DM link namespace."""
+    return "dm" if surface == "owner-dm" else "unknown"
+
+
 def channel_guild_resolver(
     fetch_channel: Callable[[str], object],
 ) -> Callable[[str], str | None]:
     """Cache channel guild ids so server/thread links open inside their guild.
 
-    Each resolver fetches a channel at most once. DMs have no guild: None preserves
-    the supported @me link. Fetch failures propagate rather than inventing a DM link.
+    Each resolver fetches a channel at most once. No guild means unknown unless the
+    stored surface explicitly identifies a DM. Fetch failures propagate, never guess.
     """
     cache: dict[str, str | None] = {}
 
@@ -366,6 +354,7 @@ class ReminderContext:
     guild_id: str | None = None
     guild_id_for: Callable[[str], str | None] | None = None
     source_channel_id_for: Callable[[ApprovalRequest], str] | None = None
+    space_for: Callable[[str], Space] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,16 +384,22 @@ class _PointerSender:
             if self.context.source_channel_id_for is not None
             else request.channel_id
         )
-        guild_id = (
-            self.context.guild_id_for(source_channel_id)
-            if self.context.guild_id_for is not None
-            else self.context.guild_id
-        )
+        guild_id = self.context.guild_id
+        if guild_id is None and self.context.guild_id_for is not None:
+            guild_id = self.context.guild_id_for(source_channel_id)
+        space: Space = "guild" if guild_id is not None else "unknown"
+        if guild_id is None and self.context.space_for is not None:
+            space = self.context.space_for(source_channel_id)
         link = discord_message_link(
-            DiscordSource(source_channel_id, request.message_id, guild_id)
+            DiscordSource(source_channel_id, request.message_id, guild_id, space=space)
         )
-        if link.status is not LinkStatus.AVAILABLE or link.url is None:
-            raise ReminderBoundaryError("original approval link is unavailable")
+        match link.status:
+            case LinkStatus.AVAILABLE | LinkStatus.UNAVAILABLE:
+                pass
+            case LinkStatus.INVALID | LinkStatus.DELETED:
+                raise ReminderBoundaryError("original approval link is unavailable")
+            case _:
+                assert_never(link.status)
         target = DeliveryTarget(source_channel_id, DeliveryRoute.ORIGINAL)
         scope = DeliveryScope(source_channel_id, source_channel_id)
         if not authorize_delivery(scope, target):

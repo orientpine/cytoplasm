@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from automation import group_roster
 from automation.interop.discord_transport import DiscordTransport
 from automation.interop.coordination import CORRELATION_PREFIX, TEAM_NOTICE_PREFIX
-from automation.interop.delegation import format_envelope, parse_envelope, response_for
+from automation.interop.delegation import InteropEnvelope, format_envelope, parse_envelope, response_for, result_message
 from automation.interop.external_effect_gate import ApprovalContext, DenylistConfigurationError, ToolCall, evaluate_tool_call, load_denylist
 from automation.interop.injection_adapter import InboundEvent, accept_test_event
 from automation.interop.killswitch import PauseStore
@@ -126,7 +126,7 @@ def pre_gateway_dispatch(event, gateway, session_store, **kwargs):
             if envelope.correlation_id.startswith(CORRELATION_PREFIX):
                 LOGGER.warning("interop coordination response observed correlation=%s", envelope.correlation_id)
                 return {"action": "skip", "reason": "interop_coordination_response"}
-            _send_direct_result(envelope.correlation_id)
+            _send_direct_result(envelope.correlation_id, envelope, str(source.thread_id or source.chat_id))
             LOGGER.warning("interop delegation delivered correlation=%s", envelope.correlation_id)
             return {"action": "skip", "reason": "interop_delegation_delivered"}
 
@@ -215,11 +215,20 @@ def _send_to_channel(*, channel_id: str, content: str) -> None:
     _transport(channel_id).send(content)
 
 
-def _send_direct_result(correlation_id: str) -> None:
-    """Deliver the delegation result marker through the owner-notice facade (ON-2)."""
+def _send_direct_result(
+    correlation_id: str, envelope: InteropEnvelope | None = None, channel_id: str | None = None,
+) -> None:
+    """Deliver the delegation receipt through the owner-notice facade (ON-2)."""
+    from automation import owner_notice
     from automation.owner_notice import notify_owner
 
-    if not notify_owner(f"Interop delegation result: {correlation_id}"):
+    content = f"Interop delegation result: {correlation_id}"
+    message = result_message(correlation_id, envelope, channel_id)
+    if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        ok = notify_owner(content, message=message)
+    else:
+        ok = notify_owner(content)
+    if not ok:
         raise RuntimeError("delegation result notice delivery failed")
 
 

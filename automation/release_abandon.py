@@ -33,7 +33,7 @@ from typing import Final
 from automation import skill_gate, skill_gate_retire
 from automation.interop.approval_lifecycle import ApprovalRecordsError, ApprovalSurfaceError
 from automation.interop.approval_types import Probe
-from automation.release_retire import archive_bytes, retire_released_record
+from automation.release_retire import abandoned_message, archive_bytes, retire_released_record
 from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_record
 from automation.skill_gate_approval import SkillApprovalGate
 from automation.skill_gate_request import lease
@@ -169,8 +169,14 @@ def abandon(
             return _refused(ReleaseAbandon.ARCHIVE_FAILED)
         # 승인 본문 수정은 바이트 바인딩을 깨므로 원 메시지를 참조하는 회신만 더한다.
         try:
+            content = f"⛔ 만료 — {' '.join(order.reason.split())[:1000]}"
+            message = abandoned_message(found, order.reason)
+            if message is not None:
+                from automation.interop.owner_message import Ref, render
+
+                content = render(message, destination=Ref(scope="channel", channel_id=found["channel_id"]))
             skill_gate._api("POST", f"/channels/{found['channel_id']}/messages", {
-                "content": f"⛔ 만료 — {' '.join(order.reason.split())[:1000]}",
+                "content": content,
                 "message_reference": {"message_id": order.message_id, "fail_if_not_exists": True},
                 "allowed_mentions": {"parse": [], "replied_user": False},
             })

@@ -31,6 +31,9 @@ from dataclasses import dataclass, replace
 from typing import Final, TypeAlias
 
 from automation.deploy_reconcile_backlog import release_backlog_notice as _release_backlog_notice
+from automation.deploy_reconcile_notice import (
+    drift_notice as _drift_notice, recovery_notice as _recovery_notice, send_notice,
+)
 
 Converge: TypeAlias = Callable[[], int]
 """Runs the privileged helper. 0 converged · 5 someone else holds the lock · else failed."""
@@ -78,21 +81,6 @@ class Backlog:
     mirror_state: str = "unknown"
 
 
-def _drift_notice(*, origin_sha: str, current_sha: str, failures: int, elapsed: float) -> str:
-    return (
-        "prod has not converged to origin/main.\n"
-        f"  origin/main : {origin_sha}\n"
-        f"  runtime     : {current_sha}\n"
-        f"  실패 {failures}회 · 미수렴 {int(elapsed // 60)}분\n"
-        "자동 재시도는 계속됩니다. 반복되면 노드에서 원인을 확인하세요 "
-        "(재시작·포인터 수정은 하지 마세요)."
-    )
-
-
-def _recovery_notice(*, current_sha: str) -> str:
-    return f"prod가 origin/main에 다시 도달했습니다: {current_sha}"
-
-
 #: 머지=축적, 릴리스=배포(VA-3, §10-1). 서명 없는 origin/main 은 릴리스 사이의 정상
 #: 상태라 사고 통지 대상이 아니다 — 백로그가 이 시간 이상 묵으면 다이제스트 1건을 보내고,
 #: 같은 간격마다 반복하며, 릴리스가 착지하면 reconcile_tick 의 clean reset 이 리셋한다.
@@ -118,7 +106,7 @@ def reconcile_unsigned_head(
     landed release (reconcile_tick's clean reset) starts a new episode.
     """
     if state.pending_notice is not None:
-        if not deliver(state.pending_notice):
+        if not send_notice(deliver, state.pending_notice):
             return state
         state = replace(state, pending_notice=None)
 
@@ -148,7 +136,7 @@ def reconcile_unsigned_head(
         elapsed=elapsed,
         mirror_state=mirror_state,
     )
-    delivered = deliver(notice)
+    delivered = send_notice(deliver, notice, (backlog_since, now))
     return replace(
         state,
         notified_target=incident_key,
@@ -165,7 +153,7 @@ def reconcile_skip(
     deliver: Deliver,
 ) -> ReconcileState:
     """Count one structurally blocked tick and reuse the drift-notice lifecycle."""
-    if state.pending_notice is not None and deliver(state.pending_notice):
+    if state.pending_notice is not None and send_notice(deliver, state.pending_notice):
         state = replace(state, pending_notice=None)
 
     same_reason = state.skip_reason == reason
@@ -189,7 +177,7 @@ def reconcile_skip(
         failures=failures,
         elapsed=now - drift_since,
     )
-    delivered = deliver(notice)
+    delivered = send_notice(deliver, notice, (drift_since, now))
     return replace(
         state,
         notified_target=incident_key,
@@ -216,13 +204,13 @@ def reconcile_tick(
     """
     # A queued notice is delivered before anything else: the incident it describes is
     # older than whatever this tick finds, and dropping it would lose the only signal.
-    if state.pending_notice is not None and deliver(state.pending_notice):
+    if state.pending_notice is not None and send_notice(deliver, state.pending_notice):
         state = replace(state, pending_notice=None)
 
     if origin_sha == current_sha:
         if state.incident_open:
             recovery = _recovery_notice(current_sha=current_sha)
-            if not deliver(recovery):
+            if not send_notice(deliver, recovery):
                 return replace(state, pending_notice=recovery, incident_open=False)
             state = ReconcileState()
         if backlog is not None and backlog.head and backlog.head != origin_sha:
@@ -269,7 +257,7 @@ def reconcile_tick(
             failures=failures,
             elapsed=now - rollback_since,
         )
-        delivered = deliver(notice)
+        delivered = send_notice(deliver, notice, (rollback_since, now))
         return replace(
             state,
             notified_target=incident_key,
@@ -302,7 +290,7 @@ def reconcile_tick(
     notice = _drift_notice(
         origin_sha=origin_sha, current_sha=current_sha, failures=failures, elapsed=elapsed
     )
-    delivered = deliver(notice)
+    delivered = send_notice(deliver, notice, (drift_since, now))
     # `notified_target` advances either way: the incident is now known, and rebuilding
     # the same notice next tick would page the owner once per tick instead of once.
     return replace(

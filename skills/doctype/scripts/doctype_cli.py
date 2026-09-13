@@ -187,7 +187,7 @@ def _review(result: doctype_generate.DraftResult, entry: doctype_store.StoredDoc
         f"file={result.path.name} sha256={result.sha256}\n"
         "검토·승인은 cha가 직접 수행합니다. 이 스킬은 제출하지 않습니다."
     )
-    doctype_review.send_review(target, message)
+    doctype_review.send_review(target, message, result.path)
     return "skipped" if not target else "sent"
 
 

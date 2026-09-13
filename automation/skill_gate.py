@@ -560,27 +560,15 @@ def cmd_check(args: argparse.Namespace) -> int:
     if evidence is None:
         print("REJECTED: valid peer attestation absent", file=sys.stderr)
         return 1
-    if mode == "signed":
+    if mode == "signed" and not {"render_version", "content_sha256"}.intersection(gate.stored() or {}):
+        # 판본 없는 승격 카드만 재생한다. digest가 있는 fallback v1도 저장 본문으로 검증한다.
         peer_status = f"- peer verdict: PASS (key fp {evidence.key_fingerprint})"
         verified_gate = _deploy_gate(args, peer_status=peer_status, peer_mode=mode)
-        expected_content = verified_gate.spec.render()
-        if evidence.request_content != expected_content:
-            if evidence.request_content != gate.spec.render():
-                print("REJECTED: signed peer verdict message binding invalid", file=sys.stderr)
-                return 1
-            try:
-                updated = _api(
-                    "PATCH",
-                    f"/channels/{channel_id}/messages/{args.message_id}",
-                    {"content": expected_content},
-                )
-            except (HTTPError, OSError, ValueError):
-                print("REJECTED: signed peer verdict could not be bound to approval message", file=sys.stderr)
-                return 1
-            if not isinstance(updated, dict) or updated.get("id") != args.message_id:
-                print("REJECTED: signed peer verdict update was not acknowledged", file=sys.stderr)
-                return 1
-        gate = verified_gate
+        if evidence.request_content == verified_gate.spec.render():
+            gate = verified_gate
+        elif evidence.request_content != gate.spec.render():
+            print("REJECTED: signed peer verdict message binding invalid", file=sys.stderr)
+            return 1
         execution = _approval_execution(gate, args)
     bindings = GateBindings(
         owner_id,

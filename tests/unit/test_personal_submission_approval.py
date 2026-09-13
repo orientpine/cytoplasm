@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,12 +10,14 @@ from pathlib import Path
 import pytest
 
 from automation.interop.approval_lifecycle import Outcome
+from automation.interop.approval_types import Probe
 from automation.interop.approval_surface import (
     ApprovalKind,
     ChannelFacts,
 )
 from automation.managed_skills.release_metadata import ReleaseMetadata
 from automation.managed_skills.submission_approval import (
+    PersonalSubmissionGate,
     SubmissionApprovalConfig,
     request_submission_approval,
 )
@@ -22,13 +26,14 @@ from automation.managed_skills.submission_artifact import (
     package_personal_skill,
 )
 from automation.managed_skills.submission_errors import SubmissionArtifactError
-from automation.managed_skills.submission_message import parse_submission_message
+from automation.managed_skills.submission_message import _JSON_LOADS, parse_submission_message
 from automation.managed_skills.submission_transport import (
     DiscordSubmissionMessage,
     DiscordUser,
     SubmissionAttachment,
 )
 from automation.skill_gate_surface import SupplyChainSurface
+from tests.unit.test_submission_message import stored_v1
 
 
 class _Directory:
@@ -94,6 +99,8 @@ def _git(repo: Path, *args: str) -> None:
         check=True,
         capture_output=True,
         text=True,
+        env={**os.environ, "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
+             "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00"},
     )
 
 
@@ -185,6 +192,36 @@ def test_submit_when_artifact_changes_after_packaging_then_rejects_before_discor
     with pytest.raises(SubmissionArtifactError, match="tarball sha256"):
         _ = request_submission_approval(config)
     assert transport.posts == []
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_probe_when_v1_is_stored_then_preserves_review(
+    tmp_path: Path, approved: bool,
+) -> None:
+    # Given: the same posted record and transport contain a legacy v1 body.
+    transport = _Transport()
+    config = _config(tmp_path, transport)
+    verdict = request_submission_approval(config)
+    assert verdict.posted is not None
+    message_id = verdict.posted.message_id
+    envelope = parse_submission_message(transport.messages[message_id].content)
+    legacy = stored_v1(envelope)
+    transport.messages[message_id] = DiscordSubmissionMessage(legacy, envelope.attachment_names)
+    gate = PersonalSubmissionGate(config, envelope)
+    record = _JSON_LOADS(gate.path().read_text(encoding="utf-8"))
+    assert isinstance(record, dict)
+    record["content"] = legacy
+    _ = gate.path().write_text(json.dumps(record), encoding="utf-8")
+    if approved:
+        transport.reactions[(message_id, "✅")] = (DiscordUser(config.reviewer_id, False),)
+    request, = gate.outstanding(gate.key())
+
+    # When: the real live probe verifies the stored request.
+    probe = gate.probe(request)
+
+    # Then: neither pending nor approved legacy decisions require a replacement card.
+    assert probe is (Probe.APPROVED if approved else Probe.BOUND_PENDING)
+    assert transport.deleted == []
 
 
 def test_submission_producer_has_no_publication_or_mount_capability() -> None:

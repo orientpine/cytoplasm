@@ -19,18 +19,14 @@ automation/skill_gate_approval.py | Approval record transition adapter; legacy a
 automation/skill_store.py | Skill installation and managed-skill routing share the reserved-prefix and collision checks.
 automation/update_trust.py | Update trust verifier and its CLI; provision-deploy-converge.sh installs this module BY VALUE as one root-owned file that the privileged helper executes, so splitting the CLI out would add a second file to the privileged install set — a change to that surface should not ride along with a security fix to it.
 skills/budget/scripts/budget_cli.py | Budget CLI crossed the ceiling by the best-effort result-notice wrappers (_notify_sent/_notify_cancelled) that share the watch tick's never-break contract (2026-08-23 origin-thread routing); splitting the deployed CLI touches the mounted-skill ABI and is a separate cycle.
-skills/budget/scripts/budget_gate.py | Budget mutation gate; owner confirmation, hash binding, and fail-closed effect checks are one decision boundary.
 skills/budget/scripts/budget_confirm.py | Budget owner-approval transport; owner identity, bound-channel reaction validation, and signed E2E injection acceptance form one fail-closed decision boundary.
-skills/calendar/scripts/calendar_confirm.py | Calendar confirmation workflow; reaction resolution and owner-bound execution remain one gate contract.
 skills/calendar/scripts/confirm_reaction_watch.py | Existing calendar watcher now invokes the shared reminder facade in the same tick; extracting that small bridge would create the parallel watcher shape the approval rules forbid.
 skills/coordination/scripts/confirm_reaction_watch.py | Coordination reaction watcher crossed the ceiling by the origin-thread result routing (2026-08-23); its notice bridge rides the same tick as reaction resolution and extracting it would create the parallel watcher shape the approval rules forbid.
 skills/meeting/plugin/__init__.py | Gateway plugin crossed the ceiling by the anchored-thread ACK path; the plugin process is import-isolated (no INTEROP_RUNTIME guarantee) and ships as one unit under plugin.yaml, so the small thread-anchor helper stays in place.
 skills/meeting/scripts/meeting_cli.py | Meeting ingest CLI crossed the ceiling by the thread-anchored notice path (2026-08-23); ingest pipeline and its result notice are one no-agent contract and the split is a separate cycle.
 skills/todo/scripts/todo_cli.py | Todo CLI crossed the ceiling by the post-write result notice wired right after the verified receipt (2026-08-23); create_task is the single write path the preflight guard wraps, so it is not split without re-validating that wrap.
 skills/mail/scripts/scenario.sh | Shell operator script; the 250 pure-LOC ceiling is a code-module (.py/.rs/.ts/.go) standard.
-skills/mail/scripts/triage_approval.py | Mail triage approval state machine; draft binding and reaction resolution must stay aligned.
 skills/mail/scripts/triage_cli.py | Mail triage CLI; mode routing, persistence, and result rendering share the user-facing command contract.
-skills/mail/scripts/triage_core.py | Mail triage pipeline core; classification and fail-open item handling are coupled by the digest contract.
 skills/mail/scripts/triage_digest.py | Mail digest builder; grouping, failure annotations, and output formatting form one stable report boundary.
 skills/mail/vendor/mailon/browser.py | byte-identical vendoring policy forbids modification
 skills/mail/vendor/mailon/main.py | byte-identical vendoring policy forbids modification
@@ -39,7 +35,6 @@ skills/mail/vendor/mailon/send.py | byte-identical vendoring policy forbids modi
 skills/mail/vendor/mailon/send_trigger.py | byte-identical vendoring policy forbids modification
 skills/mail/vendor/tests/test_offline.py | byte-identical vendoring policy forbids modification
 skills/wiki/scripts/scenario.sh | Shell scenario harness; scenario setup and teardown are intentionally kept as one executable fixture.
-skills/wiki/scripts/wiki_gate.py | Wiki write gate; schema validation, draft hashing, and owner approval form one fail-closed boundary.
 skills/wiki/scripts/wiki_store.py | Wiki persistence; five-field schema validation and atomic upsert behavior share one storage contract.
 skills/wiki/scripts/wiki_cli.py | Deployed skill CLI; build_parser wires every subcommand handler through set_defaults, so the v2 draft flags that put it 2 lines over cannot be extracted without moving the command dispatch across a module boundary inside the same owner-approved deploy cycle.
 skills/proposal/scripts/proposal_cli.py | Proposal v2 command surface; parser wiring and stage dispatch form one user-facing CLI contract.

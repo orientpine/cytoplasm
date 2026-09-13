@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 from urllib.error import HTTPError
 
 import pytest
@@ -724,6 +725,20 @@ def _unbound_draft() -> dict:
     return record
 
 
+def test_stored_binding_declares_read_only_field_types() -> None:
+    contract = get_type_hints(triage_binding.stored_binding)["return"]
+    assert contract is not object
+    for name, expected in {
+        "surface": str, "channel_id": str, "policy_version": int, "guild_id": str | None,
+    }.items():
+        field = getattr(contract, name)
+        assert isinstance(field, property)
+        assert field.fset is None
+        assert field.fget is not None
+        assert get_type_hints(field.fget)["return"] == expected
+    assert get_type_hints(triage_binding.approval_thread_id)["binding"] is contract
+
+
 def test_new_binding_opens_a_thread_for_this_request(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given: an unposted reply draft carrying the owner's instruction origin
     monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
@@ -771,6 +786,10 @@ def test_confirm_intent_persists_the_request_thread_outside_the_action_hash(
     [stored] = triage_gate.list_drafts()
     assert intent.channel_id == REQUEST_THREAD
     assert stored["approval_thread_id"] == REQUEST_THREAD
+    # Unknown guild coordinates stay absent through intent persistence and reload.
+    assert "approval_guild_id" not in draft
+    assert "approval_guild_id" not in stored
+    assert triage_binding.stored_binding(stored).guild_id is None
     # ...and that memory is outside the approval action hash.
     assert stored["sha256"] == draft["sha256"] == triage_core.draft_sha256(stored)
     assert intent.action_hash == draft["sha256"]
@@ -788,6 +807,89 @@ def _thread_draft() -> dict:
     }
     record["sha256"] = triage_core.draft_sha256(record)
     return record
+
+
+@pytest.mark.parametrize(("metadata", "expected"), [
+    pytest.param({"approval_guild_id": 123}, "123", id="json-number-123"),
+    pytest.param({}, None, id="absent"),
+    pytest.param({"approval_guild_id": None}, None, id="null"),
+    pytest.param({"approval_guild_id": "111"}, "111", id="string"),
+    pytest.param({"approval_guild_id": False}, "False", id="boolean"),
+    pytest.param({"approval_guild_id": 123.5}, "123.5", id="float"),
+    pytest.param({"approval_guild_id": []}, "[]", id="array"),
+    pytest.param({"approval_guild_id": {}}, "{}", id="object"),
+])
+def test_json_loaded_stored_binding_preserves_contract_and_existing_card(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    metadata: dict[str, object], expected: str | None,
+) -> None:
+    from automation.interop.owner_message import LinkStatus, discord_link
+
+    monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
+    monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "gate"))
+    monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
+    monkeypatch.setattr(triage_confirm, "owner_id", lambda: OWNER_ID)
+    interop = tmp_path / "interop.json"
+    interop.write_text(json.dumps({"agent_chat_channel_id": AGENT_CHAT_CHANNEL}), encoding="utf-8")
+    monkeypatch.setenv("INTEROP_CONFIG", str(interop))
+    record = {**_thread_draft(), "created": triage_core.utc_now(), **metadata}
+    path = triage_gate._public_drafts_dir() / f"{record['id']}.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    before = path.read_bytes()
+    draft = triage_gate.load_draft(str(record["id"]))
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(triage_confirm, "_api", _thread_api(draft, {}, calls))
+
+    def forbid_render(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("an existing card must not be rendered again")
+
+    monkeypatch.setattr(triage_core, "render_approvals_message", forbid_render)
+    binding = triage_binding.stored_binding(draft)
+    assert binding.guild_id == expected
+    assert binding.guild_id is None or isinstance(binding.guild_id, str)
+    assert isinstance(binding.surface, str)
+    assert isinstance(binding.channel_id, str)
+    assert isinstance(binding.policy_version, int)
+    assert (binding.surface, binding.channel_id, binding.policy_version) == (
+        ApprovalSurface.AGENT_CHAT_THREAD, REQUEST_THREAD, 8,
+    )
+    link = discord_link(
+        space="unknown" if expected is None else "guild",
+        guild_id=binding.guild_id, channel_id=binding.channel_id, message_id="888",
+    )
+    if expected is not None and expected.isdigit():
+        assert link.url == f"https://discord.com/channels/{expected}/{REQUEST_THREAD}/888"
+    else:
+        assert link.url is None
+        assert link.status is (LinkStatus.UNAVAILABLE if expected is None else LinkStatus.INVALID)
+    assert triage_approval.post_for_approval(draft) == MESSAGE_ID
+    assert path.read_bytes() == before
+    assert draft == json.loads(before)
+    assert all(call[0] == "GET" for call in calls)
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("channel_id", 123), ("channel_id", None),
+    ("surface", 123), ("surface", None),
+    ("policy_version", "8"), ("policy_version", 8.0), ("policy_version", None),
+])
+def test_json_loaded_stored_binding_rejects_other_member_type_mismatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, field: str, value: object,
+) -> None:
+    monkeypatch.setenv("AUTOPHAGY_REPO_ROOT", str(_REPO))
+    monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "gate"))
+    monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
+    directory = _RequestThreadDirectory()
+    monkeypatch.setattr(triage_binding, "approval_directory", lambda: directory)
+    record = {**_thread_draft(), field: value}
+    path = triage_gate._public_drafts_dir() / f"{record['id']}.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    before = path.read_bytes()
+    with pytest.raises(triage_gate.GateError) as caught:
+        triage_binding.stored_binding(triage_gate.load_draft(str(record["id"])))
+    assert caught.value.exit_code == 3
+    assert path.read_bytes() == before
+    assert directory.requests == []
 
 
 def _thread_api(draft: dict, users_by_emoji: dict[str, list[dict]], calls: list[tuple]):

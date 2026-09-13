@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Final, Protocol, TypeAlias, final
 
@@ -88,17 +89,7 @@ class _Record:
     surface: str
 
     def mapping(self) -> dict[str, str]:
-        return {
-            "action_hash": self.action_hash,
-            "channel_id": self.channel_id,
-            "content": self.content,
-            "created_at": self.created_at,
-            "kind": self.kind,
-            "message_id": self.message_id,
-            "policy_version": self.policy_version,
-            "reviewer_id": self.reviewer_id,
-            "surface": self.surface,
-        }
+        return asdict(self)
 
 
 def _parse_record(path: Path) -> _Record | None:
@@ -137,6 +128,11 @@ class PersonalSubmissionGate:
         self.config: Final = config
         self.envelope: Final = envelope
         self.binding: Final = config.surface.new()
+
+    @cached_property
+    def content(self) -> str:
+        """Pin the selected wire version once, before posting; commit the same bytes."""
+        return render_submission_message(self.envelope)
 
     def path(self) -> Path:
         digest = self.envelope.action_hash.removeprefix("sha256:")
@@ -220,7 +216,7 @@ class PersonalSubmissionGate:
         try:
             message_id = self.config.transport.post_submission(
                 intent.channel_id,
-                render_submission_message(self.envelope),
+                self.content,
                 attachments,
             )
             self.config.transport.add_reaction(intent.channel_id, message_id, APPROVE_EMOJI)
@@ -234,7 +230,7 @@ class PersonalSubmissionGate:
             raise ApprovalRecordsError("submission action hash changed before commit")
         values = {
             "action_hash": intent.action_hash,
-            "content": render_submission_message(self.envelope),
+            "content": self.content,
             "created_at": created_at,
             "message_id": posted.message_id,
             "reviewer_id": self.config.reviewer_id,

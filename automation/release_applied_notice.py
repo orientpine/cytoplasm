@@ -266,9 +266,14 @@ def send(version: str, head: str) -> int:
             file=sys.stderr,
         )
         return 4
-    delivered = owner_notice.notify_owner(
-        f"릴리스 {version} 가 적용되었습니다. (HEAD {head[:12]})"
-    )
+    from automation.release_applied_message import applied_message
+
+    content = f"릴리스 {version} 가 적용되었습니다. (HEAD {head[:12]})"
+    message = applied_message(version, head, content)
+    if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        delivered = owner_notice.notify_owner(content, message=message)
+    else:
+        delivered = owner_notice.notify_owner(content)
     return 0 if delivered else 3
 
 

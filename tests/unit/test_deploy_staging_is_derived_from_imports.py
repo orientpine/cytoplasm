@@ -19,6 +19,9 @@ from __future__ import annotations
 import ast
 import re
 import sys
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Final
 
@@ -63,6 +66,7 @@ def _automation_imports(path: Path) -> set[str]:
         if isinstance(node, ast.ImportFrom):
             if node.level == 0 and node.module:
                 names.append(node.module)
+                names.extend(f"{node.module}.{alias.name}" for alias in node.names)
             elif node.level >= 1:
                 package = path.parent
                 for _ in range(node.level - 1):
@@ -73,6 +77,11 @@ def _automation_imports(path: Path) -> set[str]:
                     candidates.extend(package / f"{alias.name}.py" for alias in node.names)
         elif isinstance(node, ast.Import):
             names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.Call) and node.args:
+            function = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            argument = node.args[0]
+            if function in {"repo_module", "_repo_module"} and isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                names.append(f"automation.interop.{argument.value}")
         for dotted in names:
             if dotted != "automation" and dotted.startswith("automation."):
                 candidates.append(ROOT / (dotted.replace(".", "/") + ".py"))
@@ -83,9 +92,18 @@ def _automation_imports(path: Path) -> set[str]:
 
 
 def _required() -> frozenset[str]:
-    """Transitive closure of automation imports reachable from the staged modules."""
+    """Gate closure includes skill-owned approval dependency roots, not just the array.
+
+    Other skill facilities use the full runtime checkout; notice staging has its
+    own closure guard. Every imported approval-family module belongs to this gate
+    runtime, including imports resolved through the skills' repo_module convention.
+    """
     seen: set[str] = set()
     queue = list(_staged())
+    for skill in (ROOT / "skills").glob("*/scripts"):
+        for path in skill.glob("*.py"):
+            queue.extend(name for name in _automation_imports(path)
+                         if name.startswith("automation/interop/approval_"))
     while queue:
         current = queue.pop()
         if current in seen:
@@ -183,3 +201,49 @@ def test_deploy_runs_import_coverage_check_before_copying_gate_modules() -> None
     assert checker < invocation < first_copy
     assert "ast.parse" in script[checker:invocation]
     assert "STAGE-BLOCK: imported gate module is not staged" in script[checker:invocation]
+
+
+def test_skill_dependency_survives_removal_from_declared_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    staged = _staged() - {"automation/interop/approval_card.py"}
+    monkeypatch.setattr(sys.modules[__name__], "_staged", lambda: staged)
+    assert "automation/interop/approval_card.py" in _required() - staged
+    with pytest.raises(AssertionError, match="approval_card.py"):
+        test_staging_covers_every_automation_import_of_the_staged_chain()
+
+
+@pytest.mark.parametrize("selector_present", [False, True])
+def test_actual_deploy_checker_includes_skill_dependencies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                          selector_present: bool) -> None:
+    script = DEPLOY.read_text()
+    if not selector_present:
+        script = script.replace(" interop/approval_card.py", "")
+    scratch = tmp_path / "deploy-skill.sh"
+    scratch.write_text(script)
+    monkeypatch.setattr(sys.modules[__name__], "DEPLOY", scratch)
+    checker = script.split("validate_gate_staging_imports() {", 1)[1].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+    result = subprocess.run([sys.executable, "-", str(ROOT), "automation/skill_gate_publish.py", *sorted(_staged())],
+                            input=checker, text=True, capture_output=True, timeout=30)
+    assert result.returncode == (0 if selector_present else 1), result.stderr
+    if not selector_present:
+        assert "STAGE-BLOCK: imported gate module is not staged: automation/interop/approval_card.py" in result.stderr
+
+
+@pytest.mark.parametrize("selector_present", [False, True])
+def test_mounted_mail_resolves_selector_from_runtime_not_peer_copy(tmp_path: Path, selector_present: bool) -> None:
+    scripts = tmp_path / "mounted/mail/scripts"
+    shutil.copytree(ROOT / "skills/mail/scripts", scripts)
+    runtime = tmp_path / "runtime"
+    for name in _staged():
+        if not selector_present and name == "automation/interop/approval_card.py":
+            continue
+        target = runtime / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, target)
+    program = "import sys; sys.path[:0] = sys.argv[1:]; import triage_approval; triage_approval._repo_module('approval_card')"
+    result = subprocess.run([sys.executable, "-I", "-c", program, str(scripts), str(runtime)],
+                            cwd=tmp_path, env={**os.environ, "AUTOPHAGY_REPO_ROOT": str(runtime)},
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == (0 if selector_present else 1), result.stderr
+    if not selector_present:
+        assert "triage_gate.GateError" in result.stderr
+    assert not (scripts.parent / "automation").exists()

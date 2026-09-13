@@ -146,6 +146,7 @@ def stored_binding(entry: Manifest) -> ApprovalBinding:
             policy.ApprovalSurface(entry.surface),
             entry.channel_id,
             entry.policy_version,
+            entry.approval_guild_id,
         )
         return policy.validate_stored_binding(binding, directory, owner)
     except (policy.ApprovalSurfaceError, ValueError) as error:

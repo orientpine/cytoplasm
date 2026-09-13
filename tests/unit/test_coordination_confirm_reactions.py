@@ -12,6 +12,19 @@ sys.path.insert(0, str(_REPO / "skills" / "coordination" / "scripts"))
 import confirm_reaction_watch as watch  # noqa: E402
 from coordination_pending import PendingConfirm, PendingConfirmStore  # noqa: E402
 
+CANCELLED_NOTICE = (
+    "대상: abc123 (abc123)\n"
+    "사실: ⛔ 일정 조율 취소 (draft abc123) — 소유자 ⛔ 리액션으로 취소되었습니다. (취소됨)\n"
+    "위치: 링크 없음 (공간 미상); 검색: Discord 검색 / abc123\n"
+    "인계: 소유자: 조치 없음; 다음: 추가 실행 없음\n되돌리기: 해당 없음"
+)
+EXPIRED_NOTICE = (
+    "대상: abc123 (abc123)\n"
+    "사실: ⌛ 일정 조율 만료 취소 (draft abc123) — 확정 시간이 지나 취소되었습니다. (만료됨)\n"
+    "위치: 링크 없음 (공간 미상); 검색: Discord 검색 / abc123\n"
+    "인계: 소유자: 조치 없음; 다음: 추가 실행 없음\n되돌리기: 해당 없음"
+)
+
 
 @dataclass
 class FakeDiscord:
@@ -99,7 +112,7 @@ def test_discard_without_finalize_when_owner_has_cancel_reaction(tmp_path: Path)
     assert commands.finalized == []
     assert commands.discarded == ["abc123"]
     assert discord.sent_messages == [
-        "⛔ 일정 조율 취소 (draft abc123) — 소유자 ⛔ 리액션으로 취소되었습니다."
+        CANCELLED_NOTICE
     ]
     assert store.load() == ()
 
@@ -146,7 +159,7 @@ def test_expired_entry_is_discarded_and_removed(tmp_path: Path) -> None:
     assert commands.finalized == []
     assert commands.discarded == ["abc123"]
     assert discord.sent_messages == [
-        "⌛ 일정 조율 만료 취소 (draft abc123) — 확정 시간이 지나 취소되었습니다."
+        EXPIRED_NOTICE
     ]
     assert store.load() == ()
 

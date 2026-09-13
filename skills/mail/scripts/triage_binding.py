@@ -7,9 +7,26 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType
+from typing import Protocol
 
 import triage_confirm
 import triage_gate
+
+
+class ApprovalBindingLike(Protocol):
+    """Read-only fields consumed from the lazily loaded, frozen ApprovalBinding."""
+
+    @property
+    def surface(self) -> str: ...
+
+    @property
+    def channel_id(self) -> str: ...
+
+    @property
+    def policy_version(self) -> int: ...
+
+    @property
+    def guild_id(self) -> str | None: ...
 
 
 def repo_root() -> Path:
@@ -86,7 +103,7 @@ def request_thread(draft: dict) -> object:
     )
 
 
-def approval_thread_id(binding: object) -> str:
+def approval_thread_id(binding: ApprovalBindingLike) -> str:
     """The thread a result notice returns to — empty unless the binding IS a thread."""
     surface_module = _repo_module("approval_surface")
     if binding.surface is surface_module.ApprovalSurface.AGENT_CHAT_THREAD:
@@ -116,7 +133,7 @@ def _request_binding(
     directory: object,
     draft: dict,
     outstanding: Iterable[object],
-) -> object:
+) -> ApprovalBindingLike:
     """This request's own thread — the one a LIVE request of the same key already opened.
 
     파사드는 스레드가 열린 뒤에야 PENDING(같은 해시)·supersede(내용 변경)를 판정하므로,
@@ -136,7 +153,7 @@ def _request_binding(
     )
 
 
-def stored_binding(draft: dict, *, outstanding: Iterable[object] = ()) -> object:
+def stored_binding(draft: dict, *, outstanding: Iterable[object] = ()) -> ApprovalBindingLike:
     surface_module = _repo_module("approval_surface")
     kind = approval_kind(draft)
     channel_id = draft.get("channel_id")
@@ -151,11 +168,14 @@ def stored_binding(draft: dict, *, outstanding: Iterable[object] = ()) -> object
                 or not isinstance(policy_version, int)
             ):
                 raise triage_gate.GateError("저장된 승인 바인딩이 불완전함 — 승인 거부", 3)
+            # Normalize JSON coordinates in the projection only; never infer an absent guild.
+            guild_id = draft.get("approval_guild_id")
             binding = surface_module.ApprovalBinding(
                 kind,
                 surface_module.ApprovalSurface(surface),
                 channel_id,
                 policy_version,
+                None if guild_id is None else str(guild_id),
             )
             return surface_module.validate_stored_binding(
                 binding,

@@ -36,7 +36,12 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import OwnerMessage
 
 SSH_IDENTITY = Path.home() / ".ssh" / "autophagy-spend-ro"
 ENV_SECRETS = Path.home() / ".env.secrets"
@@ -158,15 +163,46 @@ def _release_runtime_root() -> Path:
     return release if release.is_dir() else Path("/srv/autophagy-agents")
 
 
-def send_dm(body: str) -> None:
+def periodic_message(body: str, kst_now: str) -> OwnerMessage | None:
+    """오늘 집계 구간만 복원한다. 누락된 시각을 현재 시각으로 대신하지 않는다."""
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, Periodic, Ref, Result
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        return None
+    detail: Periodic | Result
+    try:
+        end = datetime.strptime(kst_now, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone(timedelta(hours=9)),
+        )
+    except ValueError:
+        detail = Result(outcome="executed")
+        fact = f"{body} · 관측 구간 없음: KST 집계 시각 누락 또는 형식 오류"
+    else:
+        detail = Periodic(start=end.replace(hour=0, minute=0, second=0), end=end)
+        fact = f"{body} · 관측은 오늘 지출 기준; 월·전체 누적은 별도"
+    return OwnerMessage(
+        subject_key="cost-report", subject="일일 지출", fact=fact,
+        location=Ref(scope="resource", search=("소유자용 원장 조회 화면 없음", "Discord 에이전트 DM에 '일일 지출 근거 확인' 요청")),
+        owner=Action(verb="none"), agent_next="다음 정기 보고", recovery="not_applicable",
+        detail=detail,
+    )
+
+
+def send_dm(body: str, *, kst_now: str = "") -> None:
     """목적지(지정 채널/DM)는 owner_notice 파사드가 정한다(ON-2) — 마스킹은 여기 그대로."""
     os.environ.setdefault("DISCORD_BOT_TOKEN", bot_token())
     root = str(_release_runtime_root())
     if root not in sys.path:
         sys.path.insert(0, root)
+    from automation import owner_notice
     from automation.owner_notice import notify_owner
 
-    if not notify_owner(body):
+    message = periodic_message(body, kst_now)
+    if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        ok = notify_owner(body, message=message)
+    else:
+        ok = notify_owner(body)
+    if not ok:
         raise RuntimeError("owner notice delivery failed")
 
 
@@ -177,7 +213,7 @@ def main() -> int:
     if os.environ.get("COST_REPORT_DRY_RUN", "") == "1":
         print(body)
         return 0
-    send_dm(body)
+    send_dm(body, kst_now=str(snapshot.get("kst_now", "")))
     # Success: stay silent (no_agent silent tick).
     return 0
 

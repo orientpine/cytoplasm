@@ -151,7 +151,7 @@ def test_publish_request_when_posted_then_message_binds_all_release_fields(
     assert f"- manifest_sha256: `{_MANIFEST_DIGEST}`\n" in content
     assert f"- tag: `{_TAG}`\n" in content
     assert re.search(r"- publish_nonce: `[0-9a-f]{32}`\n", content) is not None
-    assert _APPROVE_LINE in content
+    assert "반응 ✅ 승인 또는 ⛔ 취소 (소유자 전용)" in content
 
 
 def test_publish_request_when_posted_then_pending_record_written(
@@ -177,6 +177,8 @@ def test_publish_request_when_posted_then_pending_record_written(
         "message_id": "message-1",
         "policy_version": str(POLICY_VERSION),
         "publish_nonce": match.group("nonce"),
+        "render_version": "2",
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "surface": "skill-approvals",
         "tag": _TAG,
     }
@@ -426,13 +428,13 @@ def test_request_when_provenance_file_given_then_lines_follow_binding_and_bindin
     assert skill_gate.cmd_request(args) == 0
     content = posted[0]
 
-    # Then: masked provenance lines trail the request and the prefix binding still matches.
+    # Then: the fact field carries masked provenance after the unchanged binding prefix.
     expected = (
         f"- provenance: publisher …-bot / tag `{_TAG}` / sequence 1"
         f" / manifest-sha256 `{_MANIFEST_DIGEST}`"
     )
     assert expected in content
-    assert content.index(_APPROVE_LINE) < content.index("- provenance:")
+    assert content.index("사실:") < content.index("- provenance:") < content.index("위치:")
     match = skill_gate._REQUEST_BINDING.match(content)
     assert match is not None
     assert match.group("skill") == "calendar"
@@ -521,7 +523,7 @@ def test_cmd_request_appends_provenance_after_binding(tmp_path: Path, monkeypatc
     assert skill_gate.cmd_request(args) == 0
     content = posted[0]
     assert content.startswith("[skill-deploy] managed-x 배포 승인 요청\n")
-    assert "\n- provenance:" in content
+    assert "- provenance:" in content
     assert content.index("- provenance:") > content.index("- deploy_nonce:")
 
 def test_new_publish_record_persists_every_binding_field() -> None:

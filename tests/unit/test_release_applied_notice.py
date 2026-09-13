@@ -463,7 +463,7 @@ class TestSendAtTheNode:
         monkeypatch.setenv("NODE_RELEASE_CURRENT", str(self._pointer(tmp_path, _SHA)))
         sent: list[str] = []
         monkeypatch.setattr(
-            owner_notice, "notify_owner", lambda notice: sent.append(notice) or True
+            owner_notice, "notify_owner", lambda notice, *, message=None: sent.append(notice) or True
         )
 
         # When
@@ -504,15 +504,20 @@ class TestSendAtTheNode:
 
         # Then
         assert exit_code == 0
-        assert sent == [
-            ("1500000000000000002", f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {_SHA[:12]})")
-        ]
+        assert len(sent) == 1
+        channel, body = sent[0]
+        assert channel == "1500000000000000002"
+        from automation.release_applied_message import applied_message
+        from automation.interop.owner_message import Ref, render
+        message = applied_message("v1.2.4", _SHA, f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {_SHA[:12]})")
+        assert message is not None
+        assert body == render(message, destination=Ref(scope="channel", channel_id=channel))
 
     def test_b_undelivered_notice_is_a_nonzero_exit_so_the_sweep_retries(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("NODE_RELEASE_CURRENT", str(self._pointer(tmp_path, _SHA)))
-        monkeypatch.setattr(owner_notice, "notify_owner", lambda notice: False)
+        monkeypatch.setattr(owner_notice, "notify_owner", lambda notice, *, message=None: False)
 
         assert release_applied_notice.main(["send", "--version", "v1.2.4", "--head", _SHA]) == 3
 

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from automation.interop import owner_message
 from automation.interop.approval_reminder_config import ApprovalReminderConfig
 from automation.interop.approval_surface import ApprovalBinding, ApprovalKind, ApprovalSurface, ChannelFacts, RequestThread
 from automation.repair.repair_ops_approval import repair_action_hash
@@ -88,13 +89,25 @@ def test_repair_watcher_reminder_links_original_card_with_guild_id(
 
     monkeypatch.setattr(RepairDiscordApi, "_api", fake_api)
 
+    captured = []
+    render = owner_message.render
+
+    def capture(message, *, destination):
+        captured.append(message)
+        return render(message, destination=destination)
+
+    monkeypatch.setattr(owner_message, "render", capture)
     # When: the real repair watcher processes the pending approval.
     RepairApprovalWatcher(
         store, api, _Commands(), OWNER_ID, tmp_path / "audit.jsonl", lambda: NOW,
         ApprovalReminderConfig(initial_delay=timedelta(minutes=1), repeat_interval=timedelta(hours=1)),
     ).run_once()
 
-    # Then: the reminder POST contains the guild-scoped original card link.
-    assert posts
-    assert "https://discord.com/channels/1500000000000000009/1500000000000000001/1500000000000000003" in posts[0][1]
+    # Main's resolved guild survives in the envelope, without a redundant local URL.
+    assert len(posts) == 1
+    assert posts[0][0] == f"/channels/{CHANNEL_ID}/messages"
+    assert "https://" not in posts[0][1]
     assert "@me" not in posts[0][1]
+    assert captured[-1].location.guild_id == GUILD_ID
+    elsewhere = render(captured[-1], destination=owner_message.Ref(scope="channel", channel_id="999"))
+    assert f"https://discord.com/channels/{GUILD_ID}/{CHANNEL_ID}/{MESSAGE_ID}" in elsewhere

@@ -5,7 +5,11 @@ import re
 import urllib.parse
 import xml.etree.ElementTree as element_tree
 from dataclasses import dataclass
-from typing import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import OwnerMessage
 
 ARXIV_ENDPOINT = "http://export.arxiv.org/api/query"
 SEMSCHOLAR_ENDPOINT = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
@@ -212,6 +216,22 @@ def run_topics(
             continue
         outcomes.append(TopicOutcome(topic, papers, korean_summary.strip(), None))
     return tuple(outcomes)
+
+
+def report_message(report: str, report_path: Path | None = None) -> OwnerMessage | None:
+    """검색에는 날짜 필터가 없다. 주간 발송 주기를 관측 구간으로 둔갑시키지 않는다."""
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, Ref, Result
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        return None
+    location = (Ref(scope="none") if report_path is None else
+                Ref(scope="resource", search=("연구동향 보고서", report_path.name)))
+    return OwnerMessage(
+        subject_key="research-trends", subject="주간 연구 동향",
+        fact=f"{report} · 관측 구간 없음: 날짜 필터 없는 최신 검색",
+        location=location, owner=Action(verb="none"), agent_next="다음 주 정기 보고",
+        recovery="not_applicable", detail=Result(outcome="executed"),
+    )
 
 
 def assemble_report(

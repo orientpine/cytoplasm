@@ -85,6 +85,7 @@ class TestClaimsReportFailure:
 
         monkeypatch.setattr(report, "find_approval_claims", explode)
         monkeypatch.setattr(report, "_governed_root", lambda: None)
+        monkeypatch.delattr("automation.owner_notice.ACCEPTS_OWNER_MESSAGE")
         monkeypatch.setattr(report, "notify_owner", notify)
 
         # When

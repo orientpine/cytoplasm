@@ -34,6 +34,7 @@ import meeting_gate
 import meeting_llm
 import meeting_knowledge
 import meeting_reference
+import meeting_result_notice
 import meeting_project
 import meeting_slides
 import meeting_terms
@@ -159,7 +160,8 @@ def _origin_notice():
 
 
 def _notify(
-    channel_id: str | None, message: str, *, offline_dir: Path | None, message_id: str = ""
+    channel_id: str | None, content: str, *, offline_dir: Path | None, message_id: str = "",
+    completed: meeting_result_notice.CompletedMeeting | None = None,
 ) -> None:
     """Result notice: the thread anchored on the `!meeting` message when known, else the channel.
 
@@ -171,24 +173,34 @@ def _notify(
     if offline_dir is not None:
         anchor = f"thread-anchor={message_id}\n" if message_id else ""
         (offline_dir / "notify.txt").write_text(
-            f"{channel_id}\n{message}\n{anchor}", encoding="utf-8"
+            f"{channel_id}\n{content}\n{anchor}", encoding="utf-8"
         )
         return
     if not message_id:
-        _transport(channel_id).send(message)
+        _transport(channel_id).send(content)
         return
     try:
         origin_notice = _origin_notice()
     except ImportError as error:  # 낡은 interop 런타임/샌드박스 — 결과는 그래도 채널에 닿아야 한다
         print(f"NOTIFY-HELPER-MISSING anchor={message_id} err={type(error).__name__}", file=sys.stderr)
-        _transport(channel_id).send(message)
+        _transport(channel_id).send(content)
+        return
+    record = {"id": completed.ref if completed else message_id,
+              "origin_channel_id": channel_id, "origin_message_id": message_id}
+    message = meeting_result_notice.result_message(record, content, completed)
+    if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        origin_notice.deliver(
+            api=_discord_api, transport_factory=_transport, record=record,
+            thread_name="회의록 처리", content=content, message=message,
+            fallback=lambda body: _transport(channel_id).send(body), fallback_destination=None,
+        )
         return
     origin_notice.deliver(
         api=_discord_api,
         transport_factory=_transport,
-        record={"id": message_id, "origin_channel_id": channel_id, "origin_message_id": message_id},
+        record=record,
         thread_name="회의록 처리",
-        content=message,
+        content=content,
         fallback=lambda content: _transport(channel_id).send(content),
     )
 
@@ -521,6 +533,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     _notify(
         args.notify_channel, notice, offline_dir=offline_dir,
         message_id=str(getattr(args, "notify_message_id", "") or ""),
+        completed=meeting_result_notice.CompletedMeeting(ref, "민감 문서" if gate.sensitive else label),
     )
 
     record.update(

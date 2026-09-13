@@ -1,13 +1,7 @@
-"""What each skill gate binds the owner's ✅ to: message text, record shape, action hash.
-
-One spec per gate — ``skill-deploy``/``skill-publish`` (``ReleaseSpec``: ``release_spec.py``). The ``action_hash`` is a
-pure function of every authorizing field the request message DISPLAYS and excludes
-the random nonce, so an unchanged request reuses its live message instead of
-orphaning it. The nonce is supplied per run and persisted only on a real post.
-"""
+"""Deploy/publish binding: frozen v1 and new-card v2; ReleaseSpec lives separately.
+Nonce and render metadata never enter the action hash."""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -16,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from automation.interop.approval_surface import ApprovalBinding
+from automation.stored_content import content_matches, hash_parts as _hash
 
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -43,10 +38,6 @@ class ProvenanceError(ValueError):
 
 def mask(snowflake: str) -> str:
     return f"…{snowflake[-4:]}" if len(snowflake) > 4 else "<short>"
-
-
-def _hash(*parts: str) -> str:
-    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 def binding_fields(binding: ApprovalBinding) -> dict[str, str]:
@@ -109,11 +100,8 @@ def provenance_of(value: str) -> Provenance:
     row = _load_provenance(path)
     personal_head = row.get("personal_head_sha")
     if personal_head is not None:
-        if (
-            not isinstance(personal_head, str)
-            or _PERSONAL_HEAD.fullmatch(personal_head) is None
-            or set(row) != {"personal_head_sha"}
-        ):
+        if (not isinstance(personal_head, str) or _PERSONAL_HEAD.fullmatch(personal_head) is None
+                or set(row) != {"personal_head_sha"}):
             raise ProvenanceError("personal provenance must contain only a committed HEAD sha")
         return Provenance(provenance_lines(path), "", "", personal_head)
     return Provenance(provenance_lines(path), str(row["tag"]), str(row["manifest_sha256"]))
@@ -131,6 +119,8 @@ class DeploySpec:
     binding: re.Pattern[str]
     peer_attest_mode: str = "discord"
     peer_status: str = ""
+    render_version: int = 1
+    posted_text: str = ""
 
     def key(self) -> str:
         return f"skill-deploy:{self.skill}"
@@ -151,8 +141,7 @@ class DeploySpec:
 
     def stored(self, record: Mapping[str, str]) -> StoredBinding | None:
         digest, message_id = record.get("hash", ""), record.get("message_id", "")
-        nonce = record.get("deploy_nonce", "")
-        action_hash = record.get("action_hash", "")
+        nonce, action_hash = record.get("deploy_nonce", ""), record.get("action_hash", "")
         if not digest or not message_id or (action_hash and not nonce):
             return None
         return StoredBinding(action_hash, message_id, nonce)
@@ -164,6 +153,9 @@ class DeploySpec:
         return f"[skill-deploy] {self.skill} 배포 승인 요청\n"
 
     def render(self) -> str:
+        return self.posted_text or (_render_v2(self) if self.render_version == 2 else self.render_v1())
+
+    def render_v1(self) -> str:
         peer_status = f"{self.peer_status}\n" if self.peer_status else ""
         return self.header() + (
             f"- skill: `{self.skill}`\n"
@@ -180,20 +172,13 @@ class DeploySpec:
         # HEAD (already the binding) or, for a release, the rendered provenance suffix —
         # the next release renders a different tag/sequence, and re-rendering with THAT
         # would never equal the message the owner is looking at.
-        provenance_fields = (
-            {"personal_head_sha": self.provenance.personal_head_sha}
-            if self.provenance.personal_head_sha
-            else {"provenance_lines": self.provenance.lines} if self.provenance.lines else {}
-        )
+        provenance_fields = ({"personal_head_sha": self.provenance.personal_head_sha} if self.provenance.personal_head_sha
+                             else {"provenance_lines": self.provenance.lines} if self.provenance.lines else {})
         return {
-            "deploy_nonce": self.deploy_nonce,
-            "hash": self.digest,
-            "message_id": message_id,
-            "action_hash": self.action_hash(),
-            "approval_action": DEPLOY_ACTION,
-            "approval_destination": f"skill:{self.skill}",
-            **provenance_fields,
-            **binding_fields(binding),
+            "deploy_nonce": self.deploy_nonce, "hash": self.digest,
+            "message_id": message_id, "action_hash": self.action_hash(),
+            "approval_action": DEPLOY_ACTION, "approval_destination": f"skill:{self.skill}",
+            **provenance_fields, **binding_fields(binding), **_render_fields(self),
         }
 
     def serialize(self, record: Mapping[str, str]) -> str:
@@ -202,6 +187,8 @@ class DeploySpec:
     def bound(self, content: str, record: Mapping[str, str]) -> bool:
         if record.get("personal_head_sha", "") != self.provenance.personal_head_sha:
             return False
+        if "render_version" in record or "content_sha256" in record:
+            return _bound_stored(self, content, record)
         # Replay what THIS record posted, not what this run would post: the record's
         # digest + nonce, its own provenance suffix (a release that moved on renders a
         # different one), and either header form — requests posted before #199 open with
@@ -210,11 +197,9 @@ class DeploySpec:
         # (2026-08-21: 13 live requests, 0 of them resolvable).
         lines = record.get("provenance_lines", self.provenance.lines)
         expected = replace(
-            self,
-            digest=record.get("hash", ""),
-            deploy_nonce=record.get("deploy_nonce", ""),
+            self, digest=record.get("hash", ""), deploy_nonce=record.get("deploy_nonce", ""),
             provenance=replace(self.provenance, lines=lines),
-        ).render()
+        ).render_v1()
         legacy = _LEGACY_DEPLOY_HEADER + expected.removeprefix(self.header())
         if content not in (expected, legacy):
             return False
@@ -222,10 +207,7 @@ class DeploySpec:
         if matched is None:
             return False
         return (matched.group("skill"), matched.group("digest"), matched.group("nonce")) == (
-            self.skill,
-            record.get("hash", ""),
-            record.get("deploy_nonce", ""),
-        )
+            self.skill, record.get("hash", ""), record.get("deploy_nonce", ""))
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +220,8 @@ class PublishSpec:
     tag: str
     publish_nonce: str
     binding: re.Pattern[str]
+    render_version: int = 1
+    posted_text: str = ""
 
     def key(self) -> str:
         return f"skill-publish:{self.skill}"
@@ -251,15 +235,15 @@ class PublishSpec:
     def stored(self, record: Mapping[str, str]) -> StoredBinding | None:
         digest, manifest = record.get("hash", ""), record.get("manifest_hash", "")
         tag, message_id = record.get("tag", ""), record.get("message_id", "")
-        nonce = record.get("publish_nonce", "")
-        action_hash = record.get("action_hash", "")
-        if not digest or not message_id:
-            return None
-        if action_hash and (not manifest or not tag or not nonce):
+        nonce, action_hash = record.get("publish_nonce", ""), record.get("action_hash", "")
+        if not digest or not message_id or (action_hash and (not manifest or not tag or not nonce)):
             return None
         return StoredBinding(action_hash, message_id, nonce)
 
     def render(self) -> str:
+        return self.posted_text or (_render_v2(self) if self.render_version == 2 else self.render_v1())
+
+    def render_v1(self) -> str:
         return (
             "[skill-publish] 발행 승인 요청\n"
             f"- skill: `{self.skill}`\n"
@@ -272,46 +256,67 @@ class PublishSpec:
 
     def new_record(self, message_id: str, binding: ApprovalBinding) -> dict[str, str]:
         return {
-            "hash": self.digest,
-            "manifest_hash": self.manifest_hash,
-            "message_id": message_id,
-            "publish_nonce": self.publish_nonce,
-            "tag": self.tag,
-            "action_hash": self.action_hash(),
-            "approval_action": PUBLISH_ACTION,
-            "approval_destination": f"skill:{self.skill}",
-            **binding_fields(binding),
+            "hash": self.digest, "manifest_hash": self.manifest_hash,
+            "message_id": message_id, "publish_nonce": self.publish_nonce,
+            "tag": self.tag, "action_hash": self.action_hash(),
+            "approval_action": PUBLISH_ACTION, "approval_destination": f"skill:{self.skill}",
+            **binding_fields(binding), **_render_fields(self),
         }
 
     def serialize(self, record: Mapping[str, str]) -> str:
         return json.dumps(dict(record), sort_keys=True)
 
     def bound(self, content: str, record: Mapping[str, str]) -> bool:
+        if "render_version" in record or "content_sha256" in record:
+            return _bound_stored(self, content, record)
         expected = replace(
-            self,
-            digest=record.get("hash", ""),
-            manifest_hash=record.get("manifest_hash", ""),
-            tag=record.get("tag", ""),
-            publish_nonce=record.get("publish_nonce", ""),
-        ).render()
+            self, digest=record.get("hash", ""), manifest_hash=record.get("manifest_hash", ""),
+            tag=record.get("tag", ""), publish_nonce=record.get("publish_nonce", ""),
+        ).render_v1()
         if content != expected:
             return False
         matched = self.binding.match(content)
         if matched is None:
             return False
-        return (
-            matched.group("skill"),
-            matched.group("digest"),
-            matched.group("manifest"),
-            matched.group("tag"),
-            matched.group("nonce"),
-        ) == (
-            self.skill,
-            record.get("hash", ""),
-            record.get("manifest_hash", ""),
-            record.get("tag", ""),
-            record.get("publish_nonce", ""),
-        )
+        return (matched.group("skill"), matched.group("digest"), matched.group("manifest"),
+                matched.group("tag"), matched.group("nonce")) == (
+            self.skill, record.get("hash", ""), record.get("manifest_hash", ""),
+            record.get("tag", ""), record.get("publish_nonce", ""))
+
+
+def _render_fields(spec: DeploySpec | PublishSpec) -> dict[str, str]:
+    return {"render_version": str(spec.render_version), "content_sha256": _hash(spec.posted_text)} if spec.posted_text else {}
+
+
+def _bound_stored(spec: DeploySpec | PublishSpec, content: str, record: Mapping[str, str]) -> bool:
+    matched = spec.binding.match(content)
+    fields = {"skill": spec.skill, "digest": record.get("hash", "")}
+    if isinstance(spec, DeploySpec):
+        fields["nonce"] = record.get("deploy_nonce", "")
+    else:
+        fields.update(manifest=record.get("manifest_hash", ""), tag=record.get("tag", ""), nonce=record.get("publish_nonce", ""))
+    return (record.get("render_version") in ("1", "2") and content_matches(content, record.get("content_sha256"))
+            and matched is not None and matched.groupdict() == fields)
+
+
+def _render_v2(spec: DeploySpec | PublishSpec) -> str:
+    # 새 전체 본문. 기존 prefix 는 peer/check 파서의 wire 로 유지한다.
+    try:
+        from automation.interop.owner_message import Action, Approval, OwnerMessage, Ref, render
+    except ImportError:
+        raise
+    legacy = spec.render_v1().splitlines()
+    deploy = isinstance(spec, DeploySpec)
+    wire_count, verb = (4, "배포") if deploy else (6, "발행")
+    fact = " ".join(line for line in legacy[wire_count:] if line != _APPROVAL_LINE) if deploy else f"tag: `{spec.tag}`"
+    here = Ref(scope="self")
+    message = OwnerMessage(
+        subject_key=spec.key(), subject=f"{spec.skill} {verb} 승인", fact=fact,
+        location=here, owner=Action("react", here, "✅ 승인 또는 ⛔ 취소 (소유자 전용)"),
+        agent_next=f"승인된 스킬만 {verb}", recovery="not_applicable",
+        detail=Approval(None, f"스킬 {verb} 안 함"),
+    )
+    return "\n".join((*legacy[:wire_count], render(message, destination=here)))
 
 
 if TYPE_CHECKING:

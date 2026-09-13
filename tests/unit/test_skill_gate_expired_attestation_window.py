@@ -566,9 +566,15 @@ _LEGACY_HEADER = "[skill-deploy] 승인 요청\n"
 
 def _relabel_with_legacy_header(fake: FakeDiscord, gate: skill_gate_approval.SkillApprovalGate) -> None:
     """Rewrite the live message into the pre-#199 form: same body, old first line."""
-    content = fake.contents["message-1"]
+    assert isinstance(gate.spec, skill_gate_specs.DeploySpec)
+    content = gate.spec.render_v1()
     assert content.startswith(gate.spec.header())
     fake.contents["message-1"] = _LEGACY_HEADER + content.removeprefix(gate.spec.header())
+    record = gate.stored()
+    assert record is not None
+    _ = record.pop("render_version", None)
+    _ = record.pop("content_sha256", None)
+    _ = gate.path().write_text(json.dumps(record), encoding="utf-8")
 
 
 def test_legacy_header_request_when_owner_approved_then_approval_is_still_valid(

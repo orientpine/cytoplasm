@@ -255,11 +255,31 @@ def _posted_state(tmp_path: Path, *, summary: str, with_link: bool = True) -> ob
     )
     drafts = tmp_path / "drafts"
     drafts.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, object] = {"summary": summary, "confirm_message_id": "222"}
+    payload: dict[str, object] = {"surface": "owner-dm", "summary": summary, "confirm_message_id": "222"}
     if with_link:
         payload["channel_id"] = "111"
     _ = (drafts / "ab12cd.json").write_text(json.dumps(payload), encoding="utf-8")
     return CuratorState(3, {"user:" + "a" * 64: record}, AlertState(None, None, None, None), {})
+
+
+def test_pending_link_is_preserved_when_draft_coordinates_are_valid(tmp_path: Path) -> None:
+    # Given a real posted draft on the curator's DM surface.
+    state = _posted_state(tmp_path, summary="fixture")
+    # When pending approvals are loaded from disk.
+    pending = effects.pending_approvals(state, tmp_path)
+    # Then the original approval remains reachable without a second card.
+    assert "https://discord.com/channels/@me/111/222" in effects.reminder.render(pending)
+
+
+def test_pending_link_is_omitted_when_draft_coordinates_are_invalid(tmp_path: Path) -> None:
+    # Given a persisted draft with a malformed channel coordinate.
+    state = _posted_state(tmp_path, summary="fixture")
+    draft = tmp_path / "drafts" / "ab12cd.json"
+    draft.write_text(json.dumps({"channel_id": "bad", "confirm_message_id": "222"}), encoding="utf-8")
+    # When the curator loads pending reminders.
+    pending = effects.pending_approvals(state, tmp_path)
+    # Then it cannot advertise an invalid jump URL.
+    assert pending == ()
 
 
 def test_the_reminder_goes_out_once_and_then_holds_for_three_hours(tmp_path: Path) -> None:

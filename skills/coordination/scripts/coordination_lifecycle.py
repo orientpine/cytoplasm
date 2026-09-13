@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any
 
 import coordinate_io as io
-from confirm_reaction_watch import APPROVE_EMOJI, CANCEL_EMOJI, DiscordApi, reaction_action
+from confirm_reaction_watch import APPROVE_EMOJI as APPROVE_EMOJI, CANCEL_EMOJI, DiscordApi, reaction_action
 from coordination_pending import PendingConfirm, PendingConfirmError, PendingConfirmStore
+from coordination_card import OwnerCardDraft
+from coordination_finalize import finalize as finalize, _finalize_reaction as _finalize_reaction
 
 E2E_DM_PREFIX = "[E2E] "
 #: Terminal states a result notice may close its request thread with (origin_notice 소유).
@@ -32,40 +34,54 @@ def owner_leg(args: argparse.Namespace, config: dict[str, str], correlation: str
     request = calendar_core.ParsedRequest(
         summary=args.summary, start=start, end=start + timedelta(minutes=args.duration_min)
     )
-    draft = calendar_gate.create_draft(
+    draft: OwnerCardDraft = calendar_gate.build_draft(
         action="create", argv=calendar_core.build_create_argv(args.calendar, request),
         calendar_id=args.calendar, event_id="", summary=args.summary,
         start=request.start.isoformat(), end=request.end.isoformat(), channel_id="dm",
     )
-    io.obs(step="draft", draft_id=draft["id"], slot=slot_iso)
     label = io.kst_label(slot_iso, args.duration_min)
     if not args.e2e_confirm:
         import coordination_approval
-        import coordination_binding
+        from coordination_card import legacy
+        from automation.interop.approval_card import CardRenderError, prepare
 
-        _ = coordination_approval.request_confirmation(
-            coordination_approval.CoordinationApprovalPayload(
-                draft=draft,
+        def prepare_payload() -> coordination_approval.CoordinationApprovalPayload:
+            def render(version: str) -> str:
+                selected = draft.copy()
+                selected["render_version"] = version
+                return render_owner_card(selected, legacy(draft, args, correlation))
+
+            try:
+                card = prepare(render, draft.get("render_version"))
+            except CardRenderError as error:
+                raise io.CoordinationError(str(error), 3) from error
+            prepared = draft.copy()
+            prepared["render_version"] = card.render_version
+            calendar_gate.persist_draft(prepared)
+            io.obs(step="draft", draft_id=draft["id"], slot=slot_iso)
+            return coordination_approval.CoordinationApprovalPayload(
+                draft=prepared,
                 slot=slot_iso,
                 summary=args.summary,
                 correlation=correlation,
                 duration_min=args.duration_min,
-                content=(
-                    f"📅 일정 조율 ({correlation}): 상대 에이전트({args.peer})가 "
-                    f"{label} 슬롯을 승인했습니다.\n제목: {args.summary}\n"
-                    f"{coordination_binding.reaction_instruction()} — 또는 "
-                    f"`실행 {draft['id']}`/`취소 {draft['id']}` 텍스트도 가능\n"
-                    f"sha256:{draft['sha256']}"
-                ),
+                content=card.content,
                 origin_channel_id=args.origin_channel_id,
                 origin_message_id=args.origin_message_id,
-            ),
-            config["owner_id"],
+            )
+
+        entry = coordination_approval.request_confirmation(
+            coordination_approval.CoordinationApprovalPayload(
+                draft, slot_iso, args.summary, correlation, args.duration_min, "",
+                args.origin_channel_id, args.origin_message_id,
+            ), config["owner_id"], prepare=prepare_payload,
         )
         print(
-            f"PENDING-OWNER draft={draft['id']} slot={slot_iso} correlation={correlation}"
+            f"PENDING-OWNER draft={entry.draft_id} slot={slot_iso} correlation={correlation}"
         )
         return 7
+    calendar_gate.persist_draft(draft)
+    io.obs(step="draft", draft_id=draft["id"], slot=slot_iso)
     with tempfile.TemporaryDirectory() as tmp:
         injection = Path(tmp) / "confirm.json"
         signed = io.run_calendar_cli(["sign", "--draft", draft["id"], "--out", str(injection)])
@@ -93,35 +109,32 @@ def owner_leg(args: argparse.Namespace, config: dict[str, str], correlation: str
     )
 
 
-def finalize(args: argparse.Namespace) -> int:
-    """Finalize a text confirmation, or independently re-check its owner reaction."""
-    io.ensure_runtime()
-    io.calendar_scripts()
-    config = io.interop_config()
-    _reject_cancel_reaction(args.draft, config["owner_id"])
-    confirmed = io.run_calendar_cli(["confirm", "--draft", args.draft])
-    if confirmed.returncode == 0:
-        event_id = executed_event_id(confirmed.stdout)
-    elif confirmed.returncode == 1:
-        event_id = _finalize_reaction(args.draft, config["owner_id"])
-    else:
-        print(confirmed.stderr.strip(), file=sys.stderr)
-        return confirmed.returncode
-    from automation.interop import coordination
-
-    state, _ = coordination.on_owner_confirm(
-        coordination.CoordinationState(
-            phase=coordination.Phase.AWAIT_OWNER_CONFIRM, candidates=(args.slot,)
-        ),
-        True,
+def render_owner_card(draft: OwnerCardDraft, legacy: str) -> str:
+    """Replay v1 or render v2 using only already-public coordination facts."""
+    version = draft.get("render_version", "1")
+    if version == "1":
+        return legacy
+    from automation.interop.approval_card import CardRenderError
+    if version != "2":
+        raise CardRenderError("unknown coordination card render version")
+    from automation.interop import owner_message
+    from coordination_binding import reaction_instruction
+    from confirm_reaction_watch import EXPIRY
+    if not callable(getattr(owner_message, "render", None)):
+        raise CardRenderError("owner envelope unavailable")
+    here = owner_message.Ref(scope="self")
+    envelope = owner_message.OwnerMessage(
+        subject_key=str(draft["id"]), subject="일정 조율",
+        fact=" · ".join(legacy.splitlines()[:2]), location=here,
+        owner=owner_message.Action("react", here, reaction_instruction()),
+        agent_next="승인된 일정을 캘린더에 등록", recovery="not_applicable",
+        detail=owner_message.Approval(datetime.fromisoformat(draft["created"]) + EXPIRY, "일정을 등록하지 않음"),
     )
-    _, commands = coordination.on_executed(state)
-    entry = _pending_entry(args.draft, required=False)
-    return finish(
-        config, args.correlation, commands, io.kst_label(args.slot, args.duration_min),
-        args.summary, event_id,
-        record=entry.origin_record() if entry is not None else {"id": args.draft},
-    )
+    try:
+        body = owner_message.render(envelope, destination=here)
+    except owner_message.OwnerMessageError as error:
+        raise CardRenderError("coordination envelope cannot render") from error
+    return f"{body}\nsha256:{draft['sha256']}"
 
 
 def finish(
@@ -149,7 +162,7 @@ def _notify_completion(
     """Best-effort result notice — the calendar write is already committed."""
     try:
         notify_result(
-            record,
+            {**record, "summary": summary},
             f"✅ 일정 조율 완료 ({correlation}): {summary} — {label}. 캘린더에 등록되었습니다.",
             fallback=lambda content: send_owner_dm(config["owner_id"], content),
             outcome=OUTCOME_DONE,
@@ -181,13 +194,12 @@ def notify_result(
 ) -> object:
     """Route a coordination result: this request's approval thread, else the fallback.
 
-    라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
-    ``automation.interop.origin_notice.deliver``가 소유한다(2026-08-23 전 스킬
-    공통화). 폴백은 호출자가 넘긴다: CLI는 소유자 통지를, 워처는 자기 Discord
-    표면을 쓰기 때문이다. 스레드 이름에는 일정 제목을 싣지 않는다(SKILL.md 규칙 3).
-    ``outcome``(OUTCOME_DONE/CANCELLED/EXPIRED)이 있으면 게시가 성공한 뒤 그 스레드를
-    종결 표시한다 — 활성 스레드 목록이 곧 진행 중인 조율 목록이 된다.
+    공유 deliver가 목적지별 렌더·폴백·종결 표시·실패 마커를 소유한다.
+    제목 없는 스레드 이름과 호출자의 폴백 표면은 그대로 유지한다.
+    옛 런타임은 문자열 경로로 내린다. 공개 주입 인자는 호출부 호환 계약이다.
     """
+    from coordination_result_notice import result_message
+
     try:
         origin_notice = _origin_notice()
     except ImportError as error:  # 낡은 interop 런타임/샌드박스 — 결과는 그래도 소유자에게 닿아야 한다
@@ -196,6 +208,15 @@ def notify_result(
             file=sys.stderr,
         )
         return fallback(content)
+    message = result_message(pending_or_draft, content, outcome)
+    if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        return origin_notice.deliver(
+            api=io.api, transport_factory=_thread_transport, record=pending_or_draft,
+            thread_name=f"일정 조율 결과 (draft {pending_or_draft.get('id', '')})",
+            content=content, fallback=fallback,
+            outcome=origin_notice.ThreadOutcome[outcome.upper()] if outcome else None,
+            message=message, fallback_destination=None,
+        )
     return origin_notice.deliver(
         api=io.api,
         transport_factory=_thread_transport,
@@ -232,29 +253,6 @@ def executed_event_id(stdout: str) -> str:
                 if token.startswith("event="):
                     return token.removeprefix("event=")
     return ""
-
-
-def _finalize_reaction(draft_id: str, owner_id: str) -> str:
-    import calendar_gate
-
-    entry = _pending_entry(draft_id)
-    if entry is None:
-        raise io.CoordinationError("반응 확인용 pending confirm이 없습니다", 1)
-    draft = calendar_gate.load_draft(draft_id)
-    if draft.get("sha256") != entry.sha256:
-        raise io.CoordinationError("pending confirm 드래프트 해시 불일치", 1)
-    discord = DiscordApi(owner_id)
-    if f"sha256:{entry.sha256}" not in discord.message_content(entry):
-        raise io.CoordinationError("확정 DM 드래프트 해시 불일치", 1)
-    action = reaction_action(entry, owner_id, discord)
-    if action == CANCEL_EMOJI:
-        raise io.CoordinationError("취소 반응이 있어 실행하지 않습니다", 1)
-    if action != APPROVE_EMOJI:
-        raise io.CoordinationError("소유자 확정 반응이 없습니다", 1)
-    approval = calendar_gate.Approval(
-        ref=f"reaction:{entry.dm_message_id}", method="owner_dm_reaction", owner=owner_id
-    )
-    return calendar_gate.execute_draft(draft, approval)
 
 
 def _reject_cancel_reaction(draft_id: str, owner_id: str) -> None:

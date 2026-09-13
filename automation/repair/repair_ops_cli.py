@@ -15,7 +15,7 @@ from automation.regression_bank.bank_state import DEFAULT_STATE_PATH
 from automation.repair.repair_ops_adapters import CodexPlanner, PeerSandbox, StaticPlanner, private_log
 from automation.repair.repair_ops_approval import ApprovalReaction, ManualOwnerApproval, SignedOwnerApproval, manual_approval_text
 from automation.repair.repair_ops_core import Approval, RepairAgent, RepairOutcome, RepairPhase
-from automation.repair.repair_ops_discord import RepairDiscordError, configured_discord
+from automation.repair.repair_ops_discord import RepairDiscordError, configured_discord, configured_setup
 from automation.repair.repair_ops_git import GitRepository, RepairOpsError
 from automation.repair.repair_ops_pending import PendingApprovalError, PendingRepairApproval, PendingRepairApprovalStore
 from automation.repair.repair_ops_posting import PostingOwnerApproval
@@ -93,15 +93,14 @@ def _approval(config: RepairOpsConfig) -> Approval | None:
         return None
     store = PendingRepairApprovalStore(_pending_root())
     try:
-        discord = configured_discord(config.ticket_id, _live_requests(store, config.ticket_id))
+        setup = configured_setup()
     except RepairDiscordError:
         return None
     return PostingOwnerApproval(
-        discord.owner_id,
+        setup.owner_id,
         store,
-        discord,
+        lambda: setup.resolve(config.ticket_id, _live_requests(store, config.ticket_id)),
         lambda: datetime.now(UTC),
-        binding=discord.binding,
     )
 
 

@@ -27,6 +27,7 @@ class PendingConfirm:
     dm_channel_id: str
     dm_message_id: str
     created: datetime
+    render_version: str | None = field(default=None, compare=False, kw_only=True)
     key: str = field(default="", compare=False)
     kind: str | None = field(default=None, compare=False)
     surface: str | None = field(default=None, compare=False)
@@ -51,6 +52,8 @@ class PendingConfirm:
             "key": self.key,
             "sha256": self.sha256,
         }
+        if self.render_version is not None:
+            record["render_version"] = self.render_version
         if self.kind is not None and self.surface is not None and self.policy_version is not None:
             record.update(
                 {
@@ -167,12 +170,14 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
     kind, surface = raw.get("kind"), raw.get("surface")
     channel_id = raw.get("channel_id", raw["dm_channel_id"])
     policy_version = raw.get("policy_version")
+    render_version = raw.get("render_version")
     if (
         not isinstance(draft_id, str)
         or not isinstance(kind, str | None)
         or not isinstance(surface, str | None)
         or not isinstance(channel_id, str)
         or not isinstance(policy_version, int | None)
+        or render_version not in (None, "1", "2")
     ):
         raise ValueError("pending confirm binding is invalid")
     key = raw.get("key") or _legacy_key(draft_id)
@@ -180,6 +185,7 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
         draft_id=draft_id, sha256=raw["sha256"], dm_channel_id=raw["dm_channel_id"],
         dm_message_id=raw["dm_message_id"], created=created.astimezone(UTC), key=key,
         kind=kind, surface=surface, channel_id=channel_id, policy_version=policy_version,
+        render_version=render_version,
     )
 
 

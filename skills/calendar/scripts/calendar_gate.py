@@ -25,6 +25,7 @@ import calendar_core
 
 if TYPE_CHECKING:
     from automation.entity_preflight.contracts import JsonValue
+    from calendar_confirm_input import DraftRecord
 
 GWS_TIMEOUT_S = 120
 
@@ -84,7 +85,7 @@ def _draft_path(draft_id: str) -> Path:
     return _drafts_dir() / f"{draft_id}.json"
 
 
-def create_draft(
+def build_draft(
     *, action: str, argv: tuple[str, ...], calendar_id: str, event_id: str,
     summary: str, start: str, end: str, channel_id: str,
     origin_channel_id: str = "", origin_message_id: str = "",
@@ -118,17 +119,36 @@ def create_draft(
         "summary": summary,
     }
     record["sha256"] = calendar_core.draft_sha256(record)
-    write_json(_draft_path(draft_id), record)
     return record
 
 
-def bind_approval_thread(draft: dict, thread_id: str) -> dict:
+def persist_draft(record: dict[str, JsonValue]) -> None:
+    write_json(_draft_path(str(record["id"])), record)
+
+
+def create_draft(
+    *, action: str, argv: tuple[str, ...], calendar_id: str, event_id: str,
+    summary: str, start: str, end: str, channel_id: str,
+    origin_channel_id: str = "", origin_message_id: str = "",
+) -> dict[str, JsonValue]:
+    record = build_draft(
+        action=action, argv=argv, calendar_id=calendar_id, event_id=event_id,
+        summary=summary, start=start, end=end, channel_id=channel_id,
+        origin_channel_id=origin_channel_id, origin_message_id=origin_message_id,
+    )
+    persist_draft(record)
+    return record
+
+
+def bind_approval_thread(draft: DraftRecord, thread_id: str, guild_id: str | None = None) -> DraftRecord:
     """Stamp this request's approval thread on the draft and return the new record.
 
     ``origin_*`` 와 같은 이유로 ``draft_sha256`` 밖이다 — 해시는 실행할 변경만 묶는다.
     워처가 결과를 승인 스레드로 되돌리려면 초안에서 이 값을 읽어야 한다.
     """
-    record = {**draft, "approval_thread_id": thread_id}
+    record: DraftRecord = {**draft, "approval_thread_id": thread_id}
+    if guild_id is not None:
+        record["approval_guild_id"] = guild_id
     write_json(_draft_path(str(draft["id"])), record)
     return record
 
@@ -236,7 +256,7 @@ def _append_record(record: dict) -> None:
     path.chmod(0o600)
 
 
-def write_json(path: Path, record: dict) -> None:
+def write_json(path: Path, record: dict[str, JsonValue] | DraftRecord) -> None:
     """임시 파일에 쓴 뒤 이름을 갈아끼운다 — 독자가 잘린 레코드를 보지 않게.
 
     제자리 truncate(`write_text`)는 쓰는 동안 읽는 쪽에게 **빈 파일**을 보여준다.

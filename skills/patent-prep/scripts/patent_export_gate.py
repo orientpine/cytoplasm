@@ -120,9 +120,24 @@ def delete_approval_request(channel_id: str, message_id: str) -> None:
 
 
 def dm_owner(channel_id: str, content: str) -> str:
-    """Send a completion notice to an already-resolved direct-message channel."""
-    message = _api("POST", f"/channels/{channel_id}/messages", {"content": content})
-    return str(message["id"])
+    """기존 DM·메시지 영수증 계약을 유지한다. 새 봉투에는 반출 위치를 싣지 않는다."""
+    body = content
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, OwnerMessageError, Ref, Result, render
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        message = None
+    else:
+        message = OwnerMessage(
+            subject_key="patent-export", subject="특허 반출", fact="반출 완료",
+            location=Ref(scope="none"), owner=Action("none"),
+            agent_next="추가 반출 없음", recovery="not_applicable", detail=Result("executed"),
+        )
+        try:
+            body = render(message, destination=Ref(scope="channel", space="dm", channel_id=channel_id))
+        except OwnerMessageError:
+            body = content
+    posted = _api("POST", f"/channels/{channel_id}/messages", {"content": body})
+    return str(posted["id"])
 
 
 def _owner_reacted(users: list[dict], owner: str) -> bool:

@@ -163,15 +163,33 @@ def configured_discord(
     already opened instead of opening an empty one. A reader passes nothing and
     rebinds to the stored record, because resolving a request thread opens one.
     """
+    return configured_setup().resolve(ticket_id, outstanding)
+
+
+@dataclass(frozen=True, slots=True)
+class RepairDiscordSetup:
+    """자격증명만 보관한다. 표면 해석은 카드 preflight 뒤에 실행한다."""
+
+    token: str
+    owner_id: str
+
+    def resolve(
+        self, ticket_id: str | None = None, outstanding: Iterable[LiveRequest] = (),
+    ) -> RepairDiscordApi:
+        try:
+            directory = directory_for_ops(self.token, self.owner_id)
+            binding = new_binding(directory, self.owner_id, ticket_id, outstanding)
+        except ApprovalSurfaceError as error:
+            raise RepairDiscordError("repair approval surface cannot be resolved") from error
+        discord = RepairDiscordApi(self.token, binding, directory, self.owner_id)
+        discord.assert_surface(binding)
+        return discord
+
+
+def configured_setup() -> RepairDiscordSetup:
+    """네트워크 없이 기존 필수 자격증명을 읽고 누락을 거부한다."""
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     owner_id = os.environ.get("AUTOPHAGY_OWNER_ID", "")
     if not token or not owner_id:
         raise RepairDiscordError("repair approval Discord credential or owner identity is missing")
-    try:
-        directory = directory_for_ops(token, owner_id)
-        binding = new_binding(directory, owner_id, ticket_id, outstanding)
-    except ApprovalSurfaceError as error:
-        raise RepairDiscordError("repair approval surface cannot be resolved") from error
-    discord = RepairDiscordApi(token, binding, directory, owner_id)
-    discord.assert_surface(binding)
-    return discord
+    return RepairDiscordSetup(token, owner_id)

@@ -24,7 +24,10 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import OwnerMessage
 
 DEFAULT_STATE_PATH: Final = Path("/srv/autophagy-private/healthcheck-notify/state.json")
 
@@ -74,6 +77,27 @@ def plan_notice(
     if not opened and not closed:
         return following, None
     return following, _render(opened, closed)
+
+
+def notice_message(state: NotifyState, following: NotifyState) -> OwnerMessage | None:
+    """시각 없는 스윕 전이 결과. 원인 확인과 다음 스윕 관측을 구분한다."""
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, Ref, Result
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        return None
+    opened = tuple(name for name in following.open_incidents if name not in state.open_incidents)
+    closed = tuple(name for name in state.open_incidents if name not in following.open_incidents)
+    key = ", ".join(sorted((*opened, *closed)))
+    location = Ref(scope="resource", search=("헬스체크", key))
+    owner = Action("none")
+    if opened:
+        owner = Action("open", location, "원인 확인; 확인 전 재시작·설정변경·키 재발급 금지")
+    return OwnerMessage(
+        subject_key=key, subject="헬스체크 관측",
+        fact=f"신규 실패: {', '.join(opened) or '없음'}; 회복: {', '.join(closed) or '없음'}",
+        location=location, owner=owner, agent_next="다음 스윕에서 상태 관측",
+        recovery="not_applicable", detail=Result("executed"),
+    )
 
 
 def load_state(path: Path = DEFAULT_STATE_PATH) -> NotifyState:
@@ -133,6 +157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     **매 스윈 호출된다** — 실패한 스윈에서만 부르면 회복을 영영 알리지 못하고
     사건이 열린 채로 남는다."""
+    from automation import owner_notice
     from automation.owner_notice import notify_owner
 
     given = list(argv if argv is not None else sys.argv[1:])
@@ -143,7 +168,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if notice is None:
         save_state(destination, following)
         return 0
-    if not notify_owner(notice):
+    message = notice_message(state, following)
+    if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        ok = notify_owner(notice, message=message)
+    else:
+        ok = notify_owner(notice)
+    if not ok:
         # 전달 실패는 사건을 연 것으로 치지 않는다 — 다음 스윕이 다시 시도해야 한다.
         print("[healthcheck-notify] NOTIFY-FAILED: 다음 스윕에서 재시도", file=sys.stderr)
         return 0

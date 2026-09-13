@@ -7,7 +7,7 @@ import re
 import secrets
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, Iterator
@@ -53,6 +53,8 @@ class Manifest:
     #: binds (sha256/dest/mode/expiry), so adding it cannot change a stored decision;
     #: it sits before the binding so the record still ENDS in the whole binding.
     approval_thread_id: str | None
+    approval_guild_id: str | None = field(default=None, kw_only=True)
+    render_version: int = field(default=1, kw_only=True)
     kind: str
     surface: str | None
     channel_id: str | None
@@ -88,6 +90,8 @@ def write_manifest(m: Manifest) -> None:
         "surface": m.surface,
         "channel_id": m.channel_id,
         "policy_version": m.policy_version,
+        "approval_guild_id": m.approval_guild_id,
+        "render_version": m.render_version,
     }
     tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     tmp.chmod(0o600)
@@ -159,10 +163,12 @@ def load_manifest(slug: str) -> Manifest:
             created_ts=_valid_int(payload["created_ts"]),
             approval_ts=_valid_opt_int(payload.get("approval_ts")),
             approval_thread_id=_valid_opt_str(payload.get("approval_thread_id")),
+            approval_guild_id=_valid_opt_str(payload.get("approval_guild_id")),
             kind=_valid_str(payload.get("kind", _KIND)),
             surface=_valid_opt_str(payload.get("surface")),
             channel_id=_valid_opt_str(payload.get("channel_id")),
             policy_version=_valid_int(payload.get("policy_version", 0)),
+            render_version=_valid_int(payload.get("render_version", 1)),
         )
     except (KeyError, ValueError, TypeError) as e:
         raise ManifestError(f"Invalid manifest structure for {slug}") from e
@@ -193,26 +199,7 @@ def transition(slug: str, *, allowed_from: frozenset[State], to: State, **fields
     if m.state not in allowed_from:
         raise ManifestError(f"Cannot transition from {m.state} to {to}")
     
-    new_fields = {
-        "slug": m.slug,
-        "plaintext_sha256": m.plaintext_sha256,
-        "dest_folder_id": m.dest_folder_id,
-        "mode": m.mode,
-        "expiry_ts": m.expiry_ts,
-        "nonce": m.nonce,
-        "state": to,
-        "message_id": m.message_id,
-        "created_ts": m.created_ts,
-        "approval_ts": m.approval_ts,
-        "approval_thread_id": m.approval_thread_id,
-        "kind": m.kind,
-        "surface": m.surface,
-        "channel_id": m.channel_id,
-        "policy_version": m.policy_version,
-    }
-    new_fields.update(fields)
-    
-    new_m = Manifest(**new_fields)
+    new_m = replace(m, **{"state": to, **fields})
     write_manifest(new_m)
     return new_m
 

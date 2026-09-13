@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import OwnerMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +20,29 @@ class InteropEnvelope:
     recipient_id: str
     intent: str
     payload: dict[str, int | list[str] | str]
+
+
+def result_message(
+    correlation_id: str, envelope: InteropEnvelope | None, channel_id: str | None,
+) -> OwnerMessage | None:
+    """응답 수신만 보고한다. 일정 확정·실행을 추정하거나 원문 payload를 복사하지 않는다."""
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, Ref, Result
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        return None
+    intent = envelope.intent if envelope is not None else ""
+    subject = {
+        "response_availability": "에이전트 가용 시간 조회",
+        "response_confirm_slot": "에이전트 일정 확인",
+    }.get(intent, "에이전트 위임 응답")
+    return OwnerMessage(
+        subject_key=correlation_id, subject=subject,
+        fact=f"{envelope.sender_id} 응답 수신 · {intent}" if envelope is not None else "위임 응답 수신",
+        location=Ref(scope="channel", space="unknown", channel_id=channel_id,
+                     search=("Discord 검색", correlation_id)),
+        owner=Action(verb="none"), agent_next="추가 실행 없음",
+        recovery="not_applicable", detail=Result(outcome="executed"),
+    )
 
 
 def format_envelope(envelope: InteropEnvelope) -> str:

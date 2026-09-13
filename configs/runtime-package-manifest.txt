@@ -15,8 +15,8 @@
 # cache directories are always excluded. `deployed-python-files` is a comma-separated,
 # deployer-derived list relative to the release subpath: it narrows the release snapshot
 # only, so a stale extra runtime file still fails. Only verified layouts belong here.
-# interop_runtime: reason=deploy-skill.sh stages only its GATE_HELPERS and GATE_INTEROP_HELPERS into automation/ without pruning retained files, so a recursive source snapshot reports intentional omissions and extras; alternative=hash each helper named by those two deploy-skill.sh allowlists after staging.
-# reminder_poller_runtime: reason=no automation deployer declares its payload and poll_reminders.py loads only flat fallback modules while the wrapper is separately deployed, so a recursive source snapshot has no verified boundary and miscounts the wrapper; alternative=judge the two flat imports poller_core.py and reminder_store.py with an isolated runtime import smoke until a deployer adds per-file read-back.
+# interop_runtime: reason=deploy-skill.sh stages GATE_HELPERS, GATE_INTEROP_HELPERS and the separate OWNER_NOTICE_HELPERS facade import closure into agent automation/ without pruning retained files, so a recursive source snapshot reports intentional omissions and extras; alternative=hash each helper named by those three deploy-skill.sh allowlists after staging.
+# reminder_poller_runtime: reason=the flat poller_core.py and reminder_store.py imports are deployed before the wrapper by automation/reminder_poller/deploy.sh; alternative=the package deploy-manifest.txt declares both runtime files for per-file watcher drift checks, avoiding a recursive source snapshot that miscounts the separately deployed wrapper.
 agent|automation/rag_ingest|.hermes/rag_ingest_runtime/rag_ingest|required
 agent|automation/memory_curator|.hermes/memory_curator_runtime/memory_curator|required
 agent|automation/regression_bank|.hermes/regression_bank_runtime|required|default|python|bank_state.py,weekly_bank.py

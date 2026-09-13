@@ -59,7 +59,7 @@ def _stub_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Runs:
 
     monkeypatch.setattr(research_trends.core, "run_topics", _run_topics)
     monkeypatch.setattr(research_trends, "_write_report", lambda report, _day: tmp_path / "r.md")
-    monkeypatch.setattr(research_trends, "_send_dm", lambda report: runs.sent.append(report))
+    monkeypatch.setattr(research_trends, "_send_dm", lambda report, **kwargs: runs.sent.append(report))
 
     def _ingest() -> None:
         runs.ingested += 1
@@ -112,7 +112,7 @@ def test_failed_delivery_leaves_the_week_open_for_a_retry(
     # Given: 규약 (f) — 상태 마킹은 성공 이후. DM 이 실패한 주는 소진되지 않는다.
     runs = _stub_pipeline(tmp_path, monkeypatch)
 
-    def _fail(_report: str) -> None:
+    def _fail(_report: str, *, report_path: Path) -> None:
         raise OwnerDmDeliveryError("owner DM channel is missing")
 
     monkeypatch.setattr(research_trends, "_send_dm", _fail)
@@ -121,7 +121,7 @@ def test_failed_delivery_leaves_the_week_open_for_a_retry(
         _ = research_trends.run()
 
     # When: 같은 주에 재시도하면
-    monkeypatch.setattr(research_trends, "_send_dm", lambda report: runs.sent.append(report))
+    monkeypatch.setattr(research_trends, "_send_dm", lambda report, **kwargs: runs.sent.append(report))
     _at(datetime.fromisoformat("2026-08-17T22:49:00+09:00"), monkeypatch)
     return_code = research_trends.run()
 

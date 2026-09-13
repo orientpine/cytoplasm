@@ -117,10 +117,26 @@ def request_thread_notice(kind: ApprovalKind, request: RequestThread) -> str:
     puts the request itself in the channel. It repeats only what the thread name already
     shows — the producer-masked title — so it widens no disclosure.
     """
-    return (
-        f"🔔 승인 대기 · {KIND_LABELS[kind]} · {_request_title(request)}\n"
-        "이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
-    )
+    try:
+        from automation.interop.owner_message import Action, Approval, OwnerMessage, Ref, render
+
+        # This message becomes the thread anchor; its id does not exist until after POST.
+        # Name that native relationship, never guess a link or invite reactions here.
+        anchor = Ref(scope="self")
+        message = OwnerMessage(
+            subject_key=_request_title(request), subject=KIND_LABELS[kind],
+            fact="🔔 승인 대기 — 이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요.",
+            location=anchor, owner=Action(verb="open", target=anchor),
+            agent_next="이 메시지에 승인 스레드를 열고 그 안에 승인 카드를 게시합니다",
+            recovery="not_applicable", detail=Approval(expires_at=None, cancel_effect="실행 안 함"),
+        )
+        return render(message, destination=anchor)
+    except (ImportError, ValueError):
+        # Optional/older envelope runtimes must not prevent a valid approval post.
+        return (
+            f"🔔 승인 대기 · {KIND_LABELS[kind]} · {_request_title(request)}\n"
+            "이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
+        )
 
 
 def kind_thread_name(kind: ApprovalKind) -> str:
@@ -248,6 +264,7 @@ class ChannelFacts:
     name: str
     recipient_ids: tuple[str, ...]
     parent_id: str | None = None
+    guild_id: str | None = None
 
 
 class ChannelDirectory(Protocol):
@@ -270,6 +287,7 @@ class ApprovalBinding:
     surface: ApprovalSurface
     channel_id: str
     policy_version: int
+    guild_id: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -311,6 +329,8 @@ def _validate_channel(
     binding: ApprovalBinding,
     directory: ChannelDirectory,
     owner_id: str,
+    *,
+    resolve_guild: bool = False,
 ) -> ApprovalBinding:
     try:
         facts = directory.describe(binding.channel_id)
@@ -331,6 +351,11 @@ def _validate_channel(
         raise ApprovalSurfaceError(
             f"channel {binding.channel_id} does not match surface {binding.surface}",
         )
+    if resolve_guild:
+        return ApprovalBinding(
+            binding.kind, binding.surface, binding.channel_id, binding.policy_version,
+            facts.guild_id,
+        )
     return binding
 
 
@@ -346,7 +371,7 @@ def resolve_new_binding(
     surface = required_surface(kind)
     channel_id = _resolved_channel_id(kind, surface, directory, skill_channel_id, request)
     binding = ApprovalBinding(kind, surface, channel_id, POLICY_VERSION)
-    return _validate_channel(binding, directory, owner_id)
+    return _validate_channel(binding, directory, owner_id, resolve_guild=True)
 
 
 def reuse_request_thread(
@@ -381,7 +406,13 @@ def reuse_request_thread(
             and facts.parent_id == parent
             and facts.name != kind_thread_name(kind)
         ):
-            return ApprovalBinding(kind, ApprovalSurface.AGENT_CHAT_THREAD, channel_id, POLICY_VERSION)
+            # Lifecycle requests may carry only a channel; producer records also carry guild metadata.
+            prior_guild = getattr(request, "approval_guild_id", None)
+            guild_id = prior_guild if isinstance(prior_guild, str) else facts.guild_id
+            return ApprovalBinding(
+                kind, ApprovalSurface.AGENT_CHAT_THREAD, channel_id, POLICY_VERSION,
+                guild_id,
+            )
     return None
 
 

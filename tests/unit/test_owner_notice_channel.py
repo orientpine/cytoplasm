@@ -9,15 +9,26 @@
 * 설정을 읽을 수 없어도(EACCES 포함) 답은 ""(=DM) 이다 — ProtectHome 유닛에서
   홈을 찌르는 코드는 답해야지 던지면 안 된다(2026-08-21 repair 워처 5일 정지).
 * 「절대 예외를 던지지 않는다」 계약 불변.
+* 선택 통지 모듈 초기화 실패도 기존 문자열 배달·실패 마커를 유지한다.
 """
 from __future__ import annotations
 
+import builtins
+import importlib
 import json
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
+from typing import cast
+from unittest.mock import patch
 
 import pytest
 
 from automation import owner_notice
+from automation.selfskill_audit import report
+from automation.repair.repair_ops_reaction_watch import RepairApprovalWatcher
+from tests.unit.test_repair_owner_message import GUILD_FALLBACK, LEGACY_FALLBACK, Wire, runtime as runtime
 
 
 @pytest.fixture(autouse=True)
@@ -170,3 +181,155 @@ class TestNotifyOwnerDm:
         # Then: 호출자가 다음 틱에 재시도할 수 있도록 False 로 답한다
         assert delivered is False
         assert "NOTIFY-FAILED: RuntimeError" in capsys.readouterr().err
+
+
+# Import these producers before injecting failure into only the optional module.
+_BUILDERS = (
+    ("automation.selfskill_audit.notice", "audit_message", ("body", "fixture")),
+    ("automation.supply_chain_shadow_notice", "shadow_message", ("body", ("skill",), Path("home"))),
+    ("automation.release_applied_message", "applied_message", ("version", "head", "body")),
+    ("automation.plaud_sync.result_message", "result_notice_message", (None, "body", "written")),
+    ("automation.deploy_reconcile_notice", "build_notice", ("body",)),
+    ("automation.deploy_reconcile_backlog", "backlog_message", ("body", None)),
+    ("automation.release_retire", "stale_message", ({}, "tip")),
+    ("automation.release_retire", "abandoned_message", ({}, "reason")),
+    ("automation.interop.delegation", "result_message", ("key", None, None)),
+    ("automation.memory_curator.notice", "build_notice", ("body",)),
+    ("automation.reminder_poller.poller_core", "reminder_message", ("body", None)),
+    ("automation.research_trends.research_trends_core", "report_message", ("body",)),
+    ("automation.managed_sync.cron.managed_sync_watch", "staged_message", ("body",)),
+    ("automation.healthcheck_notify", "notice_message", (None, None)),
+    ("automation.cost-report.send_cost_report", "periodic_message", ("body", "")),
+    ("skills.todo.scripts.todo_result_message", "result_message", ({}, "body", "DONE")),
+    ("skills.budget.scripts.budget_result_message", "result_message", ({}, "body", "DONE")),
+    ("skills.coordination.scripts.coordination_result_notice", "result_message", ({}, "body", "done")),
+    ("skills.calendar.scripts.calendar_result_message", "build", ({}, "body", "done")),
+    ("skills.mail.scripts.triage_result_notice", "result_message", ({}, "body", "DONE")),
+    ("skills.meeting.scripts.meeting_result_notice", "result_message", ({}, "body", object())),
+)
+
+
+def _reject_optional_import(error: type[Exception]) -> Callable[..., ModuleType]:
+    original = builtins.__import__
+
+    def importing(
+        name: str, globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None, fromlist: tuple[str, ...] = (), level: int = 0,
+    ) -> ModuleType:
+        if name == "automation.interop.owner_message":
+            raise error("optional initialization failed")
+        return original(name, globals, locals, fromlist, level)
+
+    return importing
+
+
+@pytest.mark.parametrize("error", [ImportError, RuntimeError, ValueError, OSError])
+@pytest.mark.parametrize("module_name,function_name,arguments", _BUILDERS)
+def test_builder_declines_unavailable_optional_module(
+    module_name: str, function_name: str, arguments: tuple[object, ...], error: type[Exception],
+) -> None:
+    module = importlib.import_module(module_name)
+    builder = cast(Callable[..., object], getattr(module, function_name))
+    with patch("builtins.__import__", _reject_optional_import(error)):
+        assert builder(*arguments) is None
+
+
+@pytest.mark.parametrize("error", [ImportError, RuntimeError])
+@pytest.mark.parametrize("delivery", ["sent", "failed", "unconfigured"])
+def test_audit_import_failure_preserves_delivery_and_markers(
+    error: type[Exception], delivery: str, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "fixture" if delivery != "unconfigured" else "")
+    monkeypatch.setenv("OWNER_NOTICE_CHANNEL_ID", "111")
+    content = report.render_summary((), account_label="fixture")
+    failure = OSError("delivery unavailable") if delivery == "failed" else None
+    with patch.object(owner_notice, "send_notice", side_effect=failure) as sender:
+        with patch("builtins.__import__", _reject_optional_import(error)):
+            assert report.send_report((), account_label="fixture") is (delivery == "sent")
+    if delivery == "unconfigured":
+        sender.assert_not_called()
+        assert "NOTIFY-UNCONFIGURED:" in capsys.readouterr().err
+    else:
+        sender.assert_called_once_with("fixture", "111", content)
+        stderr = capsys.readouterr().err
+        assert stderr == ("[owner-notice] NOTIFY-FAILED: OSError\n" if delivery == "failed" else "")
+
+
+@pytest.mark.parametrize("error", [ImportError, RuntimeError])
+@pytest.mark.parametrize("module_name", [
+    "skills.doctype.scripts.doctype_review", "skills.proposal.scripts.proposal_dm",
+])
+def test_review_import_failure_still_sends(
+    module_name: str, error: type[Exception],
+) -> None:
+    module = importlib.import_module(module_name)
+    send = cast(Callable[[str, str, Path], None], module.send_review)
+    body = "  body\t\n"
+    with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as transport:
+        with patch("builtins.__import__", _reject_optional_import(error)):
+            send("fixture", body, Path("fixture.md"))
+    transport.assert_called_once()
+    assert transport.call_args.args[0][-1] == body
+
+
+@pytest.mark.parametrize("error", [ImportError, RuntimeError])
+def test_procurement_import_failure_still_sends(
+    error: type[Exception], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(root / "skills" / "procurement" / "scripts"))
+    module = importlib.import_module("skills.procurement.scripts.procure_review")
+    file = tmp_path / "fixture.md"
+    _ = file.write_text("body", encoding="utf-8")
+    monkeypatch.setenv("PROCURE_DISCORD_STUB", str(tmp_path))
+    monkeypatch.setenv("PROCURE_DM_MAX_BYTES", "1000000")
+    send = cast(Callable[[Path, str], str], module.send_review)
+    with patch("builtins.__import__", _reject_optional_import(error)):
+        result = send(file, "review")
+    assert result.startswith("REVIEW-DM-SENT ")
+    receipts = list(tmp_path.glob("dm-*.json"))
+    assert len(receipts) == 1
+    expected = module.review_note(file, "attach", "review", "")
+    assert json.loads(receipts[0].read_text(encoding="utf-8"))["content"] == expected
+
+
+@pytest.mark.parametrize("error", [ImportError, RuntimeError])
+def test_patent_import_failure_still_sends(error: type[Exception]) -> None:
+    module = importlib.import_module("skills.patent-prep.scripts.patent_export_gate")
+    send = cast(Callable[[str, str], str], module.dm_owner)
+    with patch.object(module, "_api", return_value={"id": "222"}) as transport:
+        with patch("builtins.__import__", _reject_optional_import(error)):
+            assert send("111", "body") == "222"
+    transport.assert_called_once_with("POST", "/channels/111/messages", {"content": "body"})
+
+
+@pytest.mark.parametrize("error", [ImportError, RuntimeError])
+def test_calendar_watch_existing_outer_guard_preserves_marker(
+    error: type[Exception], capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from automation import owner_notice
+    from tests.unit.test_calendar_confirm_reactions import FakeDiscord, watch
+
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "unit-token")
+    monkeypatch.setenv("OWNER_NOTICE_CHANNEL_ID", "222")
+    sent = []
+    monkeypatch.setattr(owner_notice, "send_notice", lambda token, channel, body: sent.append(body))
+    discord = FakeDiscord({})
+    with patch("builtins.__import__", _reject_optional_import(error)):
+        watch._notify_owner(discord, "body", {"id": "fixture"}, "done")
+    assert discord.sent_messages == []
+    # Builder initialization failure is an optional-runtime fallback, not a failed send.
+    assert sent == ["body"]
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("error", [ImportError, RuntimeError])
+def test_repair_reminder_import_failure_still_sends(
+    runtime: tuple[RepairApprovalWatcher, Wire], error: type[Exception],
+) -> None:
+    watcher, wire = runtime
+    expected = GUILD_FALLBACK if wire.pending.approval_guild_id else LEGACY_FALLBACK
+    with patch("builtins.__import__", _reject_optional_import(error)):
+        watcher.run_once()
+    assert wire.posts == [("/channels/222/messages", expected)]

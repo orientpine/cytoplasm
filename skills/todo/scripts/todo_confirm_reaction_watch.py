@@ -150,7 +150,10 @@ def run_once(
                         channel_id, content
                     ),
                     clock=lambda: moment,
+                    guild_id=(record.approval_guild_id or None)
+                    if isinstance(record.approval_guild_id, str) else None,
                     guild_id_for=reminder.channel_guild_resolver(transport.fetch_channel),
+                    space_for=lambda _channel: reminder.stored_reminder_space(record.surface),
                 )
                 lifecycle().remind_owner_approval(request, decision, lease, context)
             lifecycle().resolve_owner_decision(request, decision, lease)
@@ -213,6 +216,8 @@ def _notify_cancelled(
             "origin_channel_id": record.origin_channel_id,
             "origin_message_id": record.origin_message_id,
             "approval_thread_id": record.approval_thread_id,
+            "approval_guild_id": record.approval_guild_id or "",
+            "message_id": record.message_id or "",
         },
         f"⛔ 할일 등록 취소 (승인 {record.action_hash[:19]}) — 소유자 ⛔ 리액션으로 취소되어 "
         "Google Tasks에 등록되지 않았습니다.",

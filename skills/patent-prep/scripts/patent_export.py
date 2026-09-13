@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 from typing import assert_never
 
@@ -15,6 +16,7 @@ from . import patent_export_binding
 from . import patent_export_gate
 from . import patent_export_manifest
 from .patent_storage import PatentPaths, workspace
+from .patent_export_render import render_approval as render_approval
 
 
 class PatentExportError(RuntimeError):
@@ -130,18 +132,6 @@ def drive_upload_into(file: Path, folder_id: str) -> tuple[str, str]:
     return file_id, link
 
 
-def render_approval(m: patent_export_manifest.Manifest) -> str:
-    return (
-        f"PATENT EXPORT APPROVAL REQUEST\n"
-        f"slug: {m.slug}\n"
-        f"sha256: {m.plaintext_sha256}\n"
-        f"dest_folder_id: {m.dest_folder_id}\n"
-        f"expiry_ts: {m.expiry_ts}\n"
-        f"mode={m.mode}\n"
-        f"{patent_export_binding.reaction_instruction(m)}\n"
-    )
-
-
 def prepare_export(paths: PatentPaths, slug: str, *, mode: str) -> str:
     if mode not in ("enc", "plaintext"):
         raise PatentExportError(f"unsupported export mode: {mode}")
@@ -159,11 +149,19 @@ def prepare_export(paths: PatentPaths, slug: str, *, mode: str) -> str:
         mode=mode,
         expiry_ts=now + 3600,
         created_ts=now,
+        render_version=2,
     )
+    content = None
+    if not patent_export_binding.live_requests(slug):
+        try:
+            content = render_approval(payload)
+        except patent_export_gate.ExportGateError:
+            payload = replace(payload, render_version=1)
+            content = render_approval(payload)
     facade = patent_export_approval.lifecycle()
     binding = patent_export_binding.new_binding(slug)
     channel_id = binding.channel_id
-    adapter = patent_export_approval.PatentApprovalGate(payload, binding)
+    adapter = patent_export_approval.PatentApprovalGate(payload, binding, content=content)
     intent = facade.ApprovalIntent(
         key=patent_export_approval.approval_key(slug),
         action_hash=patent_export_approval.semantic_action_hash(payload),

@@ -329,6 +329,8 @@ def test_legacy_record_without_execution_binding_when_fresh_requested_then_is_su
         "approval_action",
         "approval_destination",
         "channel_id",
+        "content_sha256",
+        "render_version",
         "deploy_nonce",
         "hash",
         "kind",

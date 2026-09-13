@@ -20,7 +20,7 @@ from automation.interop.approval_lifecycle import (
     remind_owner_approval,
     resolve_owner_decision,
 )
-from automation.interop.approval_reminder import ReminderContext, channel_guild_resolver
+from automation.interop.approval_reminder import ReminderContext, channel_guild_resolver, stored_reminder_space
 from automation.interop.approval_reminder_config import (
     ApprovalReminderConfig,
     load_approval_reminder_config,
@@ -33,8 +33,9 @@ from automation.repair.repair_ops_approval_gate import (
     repair_approval_key,
     request_of,
 )
+from automation.repair.repair_approval_content import approval_content_matches
 from automation.repair.repair_ops_discord import RepairDiscordApi
-from automation.repair.repair_ops_pending import CANCEL_EMOJI, APPROVE_EMOJI, PendingRepairApproval, PendingRepairApprovalStore, approval_request_content
+from automation.repair.repair_ops_pending import CANCEL_EMOJI, APPROVE_EMOJI, PendingRepairApproval, PendingRepairApprovalStore
 
 
 APPROVAL_TTL = timedelta(hours=24)
@@ -97,7 +98,7 @@ class CliRepairApprovalCommands:
 
 def reaction_decision(pending: PendingRepairApproval, owner_id: str, discord: ApprovalPollTransport) -> ReactionDecision:
     """Return an owner-only, content-bound verdict with cancellation precedence."""
-    if discord.content(pending.message_id) != approval_request_content(pending):
+    if not approval_content_matches(pending, discord.content(pending.message_id)):
         return ReactionDecision.INVALID
     if owner_reacted(discord.reaction_users(pending.message_id, CANCEL_EMOJI), owner_id):
         return ReactionDecision.CANCELLED
@@ -135,8 +136,36 @@ class RepairApprovalWatcher:
         if self.reminder_config is not None:
             if not isinstance(discord, RepairDiscordApi):
                 raise RuntimeError("repair reminder transport lacks a validated binding")
+            guild_id = (pending.approval_guild_id or None) if isinstance(pending.approval_guild_id, str) else None
+            resolver = channel_guild_resolver(discord.fetch_channel)
+
+            def resolve_guild(channel_id: str) -> str | None:
+                nonlocal guild_id
+                guild_id = resolver(channel_id)
+                return guild_id
+
             def deliver(channel_id: str, content: str) -> None:
-                _ = discord.post_message(channel_id, content)
+                try:
+                    from automation.interop.owner_message import Action, Approval, OwnerMessage, OwnerMessageError, Ref, render
+                except Exception:  # noqa: BLE001 - optional initialization must preserve the reminder
+                    body = content  # 구런타임도 기존 리마인더를 그대로 보낸다.
+                else:
+                    try:
+                        location = Ref(
+                            scope="message", channel_id=channel_id,
+                            message_id=pending.message_id, guild_id=guild_id,
+                            space="guild" if guild_id is not None else stored_reminder_space(pending.surface),
+                        )
+                        body = render(OwnerMessage(
+                            subject_key=pending.ticket_id, subject="수리", fact="승인 대기",
+                            location=location,
+                            owner=Action("react", location, "✅ / ⛔"),
+                            agent_next="승인 후 실행", recovery="not_applicable",
+                            detail=Approval(pending.created_at + APPROVAL_TTL, "실행 안 함"),
+                        ), destination=Ref(scope="channel", channel_id=channel_id))
+                    except OwnerMessageError:
+                        body = content  # 봉투 거부는 기존 통지를 막지 않는다.
+                _ = discord.post_message(channel_id, body)
 
             context = ReminderContext(
                 config=self.reminder_config,
@@ -144,7 +173,9 @@ class RepairApprovalWatcher:
                 request_type=pending.kind or ApprovalKind.REPAIR,
                 deliver=deliver,
                 clock=self.now,
-                guild_id_for=channel_guild_resolver(discord.fetch_channel),
+                guild_id=guild_id,
+                guild_id_for=resolve_guild,
+                space_for=lambda _channel: stored_reminder_space(pending.surface),
             )
             _ = remind_owner_approval(request, decision, lease, context)
         _ = resolve_owner_decision(request, decision, lease)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Protocol
 from urllib.error import HTTPError
 
@@ -19,7 +19,7 @@ from automation.interop.approval_lifecycle import (
 from automation.interop.approval_surface import ApprovalBinding
 
 from .model import PlaudSyncRecord
-from .render import render_plaud_approval
+from .render import prepare_approval_card
 
 APPROVE_EMOJI: Final = "\u2705"
 CANCEL_EMOJI: Final = "\u26d4"
@@ -65,6 +65,7 @@ class PlaudApprovalGate:
     transport: DiscordTransportLike
     journal: PostingJournal | None = None
     preview: str = ""
+    card: tuple[str, str] | None = None
 
     def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
         return tuple(
@@ -125,14 +126,14 @@ class PlaudApprovalGate:
         self.store.clear_message_id(request.key, request.action_hash, request.message_id)
 
     def post(self, intent: ApprovalIntent) -> PostedApproval:
-        content = render_plaud_approval(self.record, preview=self.preview)
+        version, content = self.card or prepare_approval_card(self.record, self.preview)
         try:
             message_id = self.transport.post_message(intent.channel_id, content)
             if self.journal is not None:
                 self.journal.enrich(
                     intent.key, intent.action_hash, message_id, intent.channel_id
                 )
-                self.store.set_message_id(self.record, message_id, intent.channel_id)
+                self.store.set_message_id(replace(self.record, render_version=version), message_id, intent.channel_id)
                 self.journal.clear(intent.key)
         except _TRANSPORT_ERRORS as error:
             raise ApprovalSurfaceError(str(error)) from error
@@ -152,15 +153,17 @@ def request_approval(
     record: PlaudSyncRecord,
     *,
     preview: str = "",
+    card: tuple[str, str] | None = None,
     store: PlaudStoreLike,
     transport: DiscordTransportLike,
     binding: ApprovalBinding,
     lease: ApprovalLease,
     journal: PostingJournal,
 ) -> Verdict:
-    gate = PlaudApprovalGate(
-        record=record, store=store, transport=transport, journal=journal, preview=preview
-    )
+    gate = PlaudApprovalGate(record, store, transport, journal, preview, card)
+    if not gate.outstanding(record.recording_id):
+        selected = card or prepare_approval_card(record, preview)
+        gate = replace(gate, record=replace(record, render_version=selected[0]), card=selected)
     intent = ApprovalIntent(
         key=record.recording_id,
         action_hash=record.action_hash,

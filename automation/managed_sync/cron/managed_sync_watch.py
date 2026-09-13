@@ -33,6 +33,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import OwnerMessage
 
 
 # Runtime root order (DG-4): AUTOPHAGY_REPO_ROOT override, else the release
@@ -53,6 +57,7 @@ LEASE_KEY = "managed-sync-tick"
 
 sys.path.insert(0, str(REPO_ROOT))
 
+from automation import owner_notice  # noqa: E402
 from automation.interop.approval_lease import FileKeyLease  # noqa: E402
 from automation.owner_notice import notify_owner  # noqa: E402
 
@@ -120,6 +125,20 @@ def staged_notice(stdout: str) -> str | None:
     return "\n".join(lines)
 
 
+def staged_message(content: str) -> OwnerMessage | None:
+    """격리 도착 결과. 관측 구간·승인 카드 좌표는 이 틱에 없다."""
+    try:
+        from automation.interop.owner_message import Action, OwnerMessage, Ref, Result
+    except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
+        return None
+    return OwnerMessage(
+        subject_key="managed-sync", subject="관리형 스킬 격리 도착", fact=content,
+        location=Ref(scope="resource", search=("관리형 릴리스", " ".join(content.splitlines()[1:-1]))),
+        owner=Action(verb="none"), agent_next="격리 유지; 자동 마운트 없음",
+        recovery="not_applicable", detail=Result(outcome="executed"),
+    )
+
+
 def run_sync_once() -> tuple[int, str]:
     """Run exactly one fetch/verify/quarantine pass; return its rc and stdout.
 
@@ -165,7 +184,11 @@ def run_tick() -> int:
         notice = staged_notice(stdout)
         if notice is not None:
             # (i) best-effort: a failed DM must not undo an already-quarantined release.
-            _ = notify_owner(notice)
+            message = staged_message(notice)
+            if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+                _ = notify_owner(notice, message=message)
+            else:
+                _ = notify_owner(notice)
         return code
 
 

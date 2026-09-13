@@ -21,27 +21,37 @@ import stat
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from automation.interop.owner_message import Ref
 
 from . import reminder, reporting
 from .binding import PromotionReceipt
+from .notice import build_notice
 from .promotion import PromotionProposal
 
 #: Injected owner-notice sender — ``(message) -> delivered`` (ON-2: 파사드가 목적지 소유).
 NotifyOwner = Callable[[str], bool]
 
 
-def alert_owner(message: str, *, notify: NotifyOwner | None = None) -> bool:
-    """Best-effort near-cap notice to cha; swallow every failure (never crash the tick)."""
+def alert_owner(content: str, *, notify: NotifyOwner | None = None) -> bool:
+    """Best-effort state-check notice; never crash the tick."""
     if os.environ.get("MEMORY_CURATOR_DRY_RUN") == "1":
-        print(f"DRY-RUN alert: {message}")
+        print(f"DRY-RUN alert: {content}")
         return False
     try:
-        sender = notify
-        if sender is None:
-            from automation.owner_notice import notify_owner
+        if notify is not None:
+            return bool(notify(content))
+        from automation import owner_notice
+        from automation.owner_notice import notify_owner
 
-            sender = notify_owner
-        return bool(sender(message))
+        message = build_notice(content)
+        if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+            ok = notify_owner(content, message=message)
+        else:
+            ok = notify_owner(content)
+        return bool(ok)
     except Exception:  # noqa: BLE001 — best-effort notification, must not crash the cron
         return False
 
@@ -193,21 +203,38 @@ def _read_marker(path: Path) -> datetime | None:
         return None
 
 
-def _draft_link(gate_dir: Path, draft_id: str) -> tuple[str, str] | None:
-    """(채널, 메시지) — 소유자가 스크롤로 찾지 못한 것이 문제였으므로 링크가 본문이다."""
+def _draft_link(gate_dir: Path, draft_id: str) -> Ref | None:
+    """저장된 승인 좌표만 읽는다 — 공간 미상은 DM 으로 추측하지 않는다."""
+    from automation.interop.owner_message import Ref, Space
     try:
         record = json.loads((gate_dir / "drafts" / f"{draft_id}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     channel = record.get("channel_id")
-    message = record.get("confirm_message_id") or record.get("message_id")
-    if not isinstance(channel, str) or not isinstance(message, str) or not channel or not message:
+    message = record.get("confirm_message_id")
+    message = record.get("message_id") if message in (None, "") else message
+    if any(value not in (None, "") and (not isinstance(value, str) or not
+           (value.isascii() and value.isdecimal() and value.strip("0"))) for value in (channel, message)):
         return None
-    return channel, message
+    if not channel or not message:
+        return Ref(scope="resource", url=None, search=("Discord 검색", draft_id))
+    guild = record.get("approval_guild_id")
+    space: Space
+    match record.get("surface"):
+        case "owner-dm" | "dm":
+            space = "dm"
+        case "agent-chat-thread":
+            space = "guild"
+        case _:
+            space = "unknown"
+    return Ref(scope="message", space=space, channel_id=channel, message_id=message,
+               guild_id=guild if isinstance(guild, str) else None, search=("Discord 검색", draft_id))
 
 
 def pending_approvals(state: object, gate_dir: Path) -> tuple[reminder.PendingApproval, ...]:
-    """아직 소유자를 기다리는 승격 확인들 — 링크를 만들 수 있는 것만."""
+    """대기 중인 승격 확인 — 좌표 오류는 제외하고 좌표·공간 부재는 검색으로 안내한다."""
+    from automation.interop.owner_message import LinkStatus, discord_link
+
     promotions = getattr(state, "promotions", {})
     items: list[reminder.PendingApproval] = []
     for record in sorted(promotions.values(), key=lambda item: item.draft_id or ""):
@@ -216,12 +243,16 @@ def pending_approvals(state: object, gate_dir: Path) -> tuple[reminder.PendingAp
         link = _draft_link(gate_dir, record.draft_id)
         if link is None:
             continue  # 초안이 없으면 리마인드할 대상도 없다(거절됐거나 이미 소비됨)
+        jump = discord_link(space=link.space, channel_id=link.channel_id,
+                            message_id=link.message_id, guild_id=link.guild_id)
+        if jump.status is LinkStatus.INVALID:
+            continue  # 저장된 좌표 오류는 잘못된 링크로 알리지 않는다.
         items.append(
             reminder.PendingApproval(
                 draft_id=record.draft_id,
                 source_file=reporting.source_filename(record.source_kind),
                 preview=reporting.preview(_draft_entry_preview(gate_dir, record.draft_id)),
-                jump_url=f"https://discord.com/channels/@me/{link[0]}/{link[1]}",
+                ref=link,
             )
         )
     return tuple(items)

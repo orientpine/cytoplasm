@@ -27,6 +27,7 @@ class RepairBindingRecord(Protocol):
     surface: ApprovalSurface | None
     channel_id: str | None
     policy_version: int | None
+    approval_guild_id: str | None
 
 
 def directory_for_ops(token: str, owner_id: str) -> DiscordChannelDirectory:
@@ -79,7 +80,10 @@ def stored_binding(
         case None, None, None, None:
             return legacy_binding(ApprovalKind.REPAIR, None, directory, owner_id)
         case ApprovalKind.REPAIR, ApprovalSurface() as surface, str() as channel_id, int() as policy_version:
-            binding = ApprovalBinding(ApprovalKind.REPAIR, surface, channel_id, policy_version)
+            binding = ApprovalBinding(
+                ApprovalKind.REPAIR, surface, channel_id, policy_version,
+                record.approval_guild_id,
+            )
             return validate_stored_binding(binding, directory, owner_id)
         case _:
             raise ApprovalSurfaceError("stored repair approval binding is incomplete")

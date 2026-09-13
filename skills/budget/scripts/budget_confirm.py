@@ -19,15 +19,16 @@ import json
 import os
 import sys
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, TypeVar
 import time
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import budget_gate
+from budget_core import BUDGET_APPROVAL_TTL as BUDGET_APPROVAL_TTL
 from budget_gate import GateError, write_json
 
 API = "https://discord.com/api/v10"
@@ -35,6 +36,7 @@ USER_AGENT = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
 APPROVE_EMOJI = "\u2705"  # ✅
 CANCEL_EMOJI = "\u26d4"
 ENV_SECRETS = Path.home() / ".env.secrets"
+_DraftValue = TypeVar("_DraftValue")
 
 
 def confirm_text(draft: dict) -> str:
@@ -169,8 +171,6 @@ def _thread_transport(channel_id: str):
 OUTCOME_DONE = "DONE"
 OUTCOME_CANCELLED = "CANCELLED"
 OUTCOME_EXPIRED = "EXPIRED"
-#: todo의 TODO_APPROVAL_TTL과 같은 24시간 — budget 초안도 그 뒤에는 재게시하지 않는다.
-BUDGET_APPROVAL_TTL: Final = timedelta(hours=24)
 
 
 def _thread_outcome(origin_notice, outcome: str):
@@ -180,7 +180,7 @@ def _thread_outcome(origin_notice, outcome: str):
     return getattr(getattr(origin_notice, "ThreadOutcome", None), outcome, None)
 
 
-def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
+def notify_result(draft: dict[str, _DraftValue], content: str, *, outcome: str = "") -> str:
     """Route a send/cancel result: the request's approval thread first, owner fallback.
 
     라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
@@ -196,7 +196,17 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
             file=sys.stderr,
         )
         return dm_owner(content)
+    from budget_result_message import result_message
+
     marker = _thread_outcome(origin_notice, outcome)
+    message = result_message(draft, content, outcome)
+    if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        return str(origin_notice.deliver(
+            api=_api, transport_factory=_thread_transport, record=draft,
+            thread_name=f"과제비: {draft['subject']} (draft {draft['id']})",
+            content=content, fallback=dm_owner, message=message, fallback_destination=None,
+            **({} if marker is None else {"outcome": marker}),
+        ))
     delivered = origin_notice.deliver(
         api=_api,
         transport_factory=_thread_transport,

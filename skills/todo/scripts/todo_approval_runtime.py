@@ -15,6 +15,7 @@ from todo_approval import (
     TodoApprovalIntent,
     _repo_module,
     lifecycle,
+    prepare_request_card,
     request_approval,
     surface_module,
 )
@@ -69,6 +70,11 @@ def request_cli_approval(intent: TodoApprovalIntent, owner: str) -> Verdict:
         origin_message_id=intent.origin_message_id,
     )
     store = TodoApprovalStore(root)
+    now = datetime.now(UTC)
+    try:
+        card = prepare_request_card(intent, store, now)
+    except TodoApprovalStoreError as error:
+        raise TodoApprovalError("todo approval store is unreadable") from error
     # 파사드가 PENDING/supersede 를 판정하기 전에 스레드가 열리므로, 같은 키의 살아 있는
     # 요청이 이미 연 스레드를 먼저 재사용한다.
     binding = _live_request_binding(
@@ -85,7 +91,9 @@ def request_cli_approval(intent: TodoApprovalIntent, owner: str) -> Verdict:
         binding,
         lease_module.FileKeyLease(root / "approval-leases"),
         lease_module.PostingJournal(root / "posting-journal"),
-        lambda: datetime.now(UTC),
+        lambda: now,
+        render_version=None if card is None else card[0],
+        card=card,
     )
     verdict = request_approval(intent, runtime)
     if verdict.outcome not in {lifecycle().Outcome.POSTED, lifecycle().Outcome.PENDING}:
@@ -109,6 +117,9 @@ def origin_record(action_hash: str) -> dict[str, str] | None:
         "origin_channel_id": latest.origin_channel_id,
         "origin_message_id": latest.origin_message_id,
         "approval_thread_id": latest.approval_thread_id,
+        "approval_guild_id": latest.approval_guild_id or "",
+        "message_id": latest.message_id or "",
+        "title": latest.title,
     }
 
 
@@ -127,6 +138,9 @@ def notify_expired(record: TodoApprovalRecord) -> object:
             "origin_channel_id": record.origin_channel_id,
             "origin_message_id": record.origin_message_id,
             "approval_thread_id": record.approval_thread_id,
+            "approval_guild_id": record.approval_guild_id or "",
+            "message_id": record.message_id or "",
+            "title": record.title,
         },
         f"⌛ 할일 등록 승인 만료: {record.title} (key {record.key})\\n"
         f"승인 TTL {int(approval_ttl().total_seconds())}초가 지나 Google Tasks에 등록되지 않았습니다.",
@@ -180,13 +194,22 @@ def notify_result(
             file=sys.stderr,
         )
         return transport.post_message(fallback_channel, content)  # type: ignore[attr-defined]
+    from todo_result_message import result_message
+
     marker = _thread_outcome(origin_notice, outcome)
-    return origin_notice.deliver(
+    delivery = dict(
         api=transport.api,  # type: ignore[attr-defined]
         transport_factory=transport_factory,  # type: ignore[arg-type]
         record=record_like,
         thread_name=thread_name,
-        content=content,
         fallback=lambda body: transport.post_message(fallback_channel, body),  # type: ignore[attr-defined]
         **({} if marker is None else {"outcome": marker}),
     )
+    message = result_message(record_like, content, outcome)
+    if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
+        return origin_notice.deliver(
+            **delivery, content=content, message=message,
+            fallback_destination=(message.location
+                                  if fallback_channel == record_like.get("approval_thread_id") else None),
+        )
+    return origin_notice.deliver(**delivery, content=content)

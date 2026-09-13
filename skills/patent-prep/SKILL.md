@@ -87,6 +87,12 @@ and automatic `patent-sensitive` attachment.
    정책이 결정하고, 매니페스트가 그 바인딩(`approval_thread_id`/`kind`/`surface`/
    `channel_id`/`policy_version`)을 기록한다. 정책 v4 이전에 저장된 요청은 원래 메시지가
    있는 채널에서 그대로 소비된다(재조준 없음).
+   신규 카드의 봉투는 5필드이며 제목·본문·URL을 싣지 않는다. 기존 sha256·dest_folder_id·
+   expiry_ts·mode 네 줄은 같은 위치·순서의 독립된 wire로 유지한다. `render_version`은
+   해시와 독립적으로 저장하며 누락/1은 동결된 기존 문자열, 2는 봉투다. 봉투 import·렌더
+   불가 시 신규 카드만 판본 1로 내려가 저장한다. 렌더 불가는 스레드 생성 전에 거부한다.
+   만료는 이미 결정된 `expiry_ts`이며 렌더가 시계를 읽지 않는다. 형식 이관을 위해 prepare를
+   재실행하지 않는다(prepare의 기존 1시간 만료 계산은 새 의미 해시를 만들 수 있다).
    commit에서만 0600 매니페스트
    `{slug, plaintext_sha256, dest_folder_id, mode(enc|plaintext), expiry_ts, nonce, state=PENDING,
    message_id}`를 쓴다. 같은 승인 내용의 PENDING은 기존 message id와 nonce를 재사용하고,
@@ -101,7 +107,9 @@ and automatic `patent-sensitive` attachment.
    없이 중단**(업로드 후 검사·삭제는 조기 공개=신규성 상실이므로 금지). `mode==enc`이면
    `age -R ~/.ssh/id_ed25519.pub`로 임시 `draft.md.age` 생성 후 그 파일만 업로드. `dest_folder_id`로
    업로드 → 매니페스트 원자적 **CONSUMED**(nonce 소멸) → 감사 레코드 append(평문/암호문
-   SHA-256·file_id·method=manual_reaction·result=approved, 본문 없음) → cha에게 webViewLink DM.
+   SHA-256·file_id·method=manual_reaction·result=approved, 본문 없음) → cha에게 위치 없는 완료 DM.
+   완료 봉투에는 링크·제목·매니페스트 내용을 싣지 않는다. 구형 런타임에서는 기존 완료 문자열을
+   그대로 보내며, 결과를 원 채널 스레드로 내보내지 않는 면제와 메시지 영수증 계약은 유지한다.
    출력: `PATENT-EXPORTED slug=… file=…`. 임시 암호문 정리.
 
 상태 기계: `PENDING —(owner ✅)→ APPROVED —(execute 성공)→ CONSUMED`;

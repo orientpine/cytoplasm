@@ -97,6 +97,7 @@ class DiscordChannelDirectory:
     api: DiscordApi = field(default=_unbound_api, repr=False, compare=False)
     cache_path: Path | None = None
     _owner_dm_channel_id: str | None = field(default=None, init=False, repr=False, compare=False)
+    _approval_guild_id: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.owner_id:
@@ -105,6 +106,7 @@ class DiscordChannelDirectory:
             if not self.token:
                 raise ApprovalSurfaceError("Discord directory requires a bot token or injected API")
             object.__setattr__(self, "api", _stdlib_api(self.token))
+        object.__setattr__(self, "_approval_guild_id", self._cached_guild())
 
     def owner_dm(self) -> str:
         """Open and memoise this bot's owner DM without writing it to disk."""
@@ -151,6 +153,7 @@ class DiscordChannelDirectory:
             "guild_id",
             "agent-chat channel",
         )
+        self._remember_guild(guild_id)
         active = _matching_thread(
             self._request("GET", f"/guilds/{guild_id}/threads/active"), channel_id, name,
         )
@@ -198,9 +201,13 @@ class DiscordChannelDirectory:
             )
         except ApprovalSurfaceError as error:
             if _http_status(error) == 400:
+                object.__setattr__(self, "_approval_guild_id", self._cached_guild())
                 return anchor
             raise
-        return _required_string(_json_object(created, "request thread"), "id", "request thread")
+        body = _json_object(created, "request thread")
+        thread_id = _required_string(body, "id", "request thread")
+        self._remember_guild(body.get("guild_id"))
+        return thread_id
 
     def _announce_request(
         self, channel_id: str, kind: ApprovalKind, request: RequestThread
@@ -241,7 +248,11 @@ class DiscordChannelDirectory:
         parent = body.get("parent_id")
         if parent is not None and not isinstance(parent, str):
             raise ApprovalSurfaceError("channel description has an invalid parent")
-        return ChannelFacts(channel_type, channel_name, recipient_ids, parent)
+        guild_id = _optional_guild_id(body.get("guild_id"))
+        if channel_type in (11, 12) and parent == _configured_agent_chat_channel():
+            # 좌표는 생성 응답 또는 계정 캐시에서만 온다. 검증 GET은 표면만 검증한다.
+            guild_id = self._approval_guild_id
+        return ChannelFacts(channel_type, channel_name, recipient_ids, parent, guild_id)
 
     def _request(
         self,
@@ -268,12 +279,21 @@ class DiscordChannelDirectory:
             ) from error
 
     def _cached_approvals_channel(self) -> str | None:
-        if self.cache_path is None or self.token is None:
+        cache = self._read_cache()
+        if not cache or (
+            "approvals_channel_id" not in cache
+            and _optional_guild_id(cache.get("approval_guild_id")) is not None
+        ):
             return None
+        return _required_string(cache, "approvals_channel_id", "approval cache")
+
+    def _read_cache(self) -> dict[str, JsonValue]:
+        if self.cache_path is None or self.token is None:
+            return {}
         try:
             text = self.cache_path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return None
+            return {}
         except OSError as error:
             raise ApprovalSurfaceError(f"approval cache is unreadable: {self.cache_path}") from error
         try:
@@ -282,8 +302,8 @@ class DiscordChannelDirectory:
             raise ApprovalSurfaceError(f"approval cache is malformed: {self.cache_path}") from error
         fingerprint = cache.get("token_fingerprint")
         if fingerprint != self._token_fingerprint():
-            return None
-        return _required_string(cache, "approvals_channel_id", "approval cache")
+            return {}
+        return cache
 
     def _scan_for_approvals(self) -> str:
         guilds = self._request("GET", "/users/@me/guilds")
@@ -303,15 +323,35 @@ class DiscordChannelDirectory:
             raise ApprovalSurfaceError("approvals channel is absent or ambiguous across guilds")
         return matches[0]
 
-    def _write_cache(self, channel_id: str) -> None:
+    def _cached_guild(self) -> str | None:
+        try:
+            return _optional_guild_id(self._read_cache().get("approval_guild_id"))
+        except (ApprovalSurfaceError, UnicodeError):
+            return None  # 선택 좌표의 캐시 실패는 승인 표면 실패가 아니다.
+
+    def _remember_guild(self, raw: JsonValue) -> None:
+        guild_id = _optional_guild_id(raw)
+        try:
+            if guild_id is not None:
+                self._write_cache(guild_id=guild_id)
+        except (ApprovalSurfaceError, UnicodeError):
+            guild_id = None  # 캐시 실패는 미상으로 남기고 승인 게시를 계속한다.
+        object.__setattr__(self, "_approval_guild_id", guild_id)
+
+    def _write_cache(self, channel_id: str | None = None, *, guild_id: str | None = None) -> None:
         if self.cache_path is None or self.token is None:
             return
-        payload = {
-            "token_fingerprint": self._token_fingerprint(),
-            "approvals_channel_id": channel_id,
-        }
+        payload = {**self._read_cache(), "token_fingerprint": self._token_fingerprint()}
+        if channel_id is not None:
+            payload["approvals_channel_id"] = channel_id
+        if guild_id is not None:
+            if "approval_guild_id" in payload and _optional_guild_id(payload["approval_guild_id"]) is None:
+                raise ApprovalSurfaceError("approval guild cache has invalid metadata")
+            payload["approval_guild_id"] = guild_id
         try:
             self.cache_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if guild_id is not None:
+                self.cache_path.parent.chmod(0o700)
             self.cache_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
             self.cache_path.chmod(0o600)
         except OSError as error:
@@ -375,6 +415,15 @@ def _json_object(value: JsonValue, context: str) -> dict[str, JsonValue]:
     if not isinstance(value, dict):
         raise ApprovalSurfaceError(f"{context} response is not an object")
     return value
+
+
+def _optional_guild_id(value: JsonValue) -> str | None:
+    """Optional Discord coordinates degrade to unknown, never to a DM guess."""
+    match value:
+        case str() as guild_id if guild_id.isascii() and guild_id.isdigit():
+            return guild_id
+        case _:
+            return None
 
 
 def _required_string(payload: dict[str, JsonValue], key: str, context: str) -> str:

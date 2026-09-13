@@ -45,7 +45,7 @@ def _lease_module() -> ModuleType:
     return budget_gate.repo_module("approval_lease")
 
 
-def approval_key(draft: dict) -> str:
+def approval_key(draft: budget_core.JsonObject | budget_core.BudgetCardDraft) -> str:
     """The logical key one live request message belongs to.
 
     A registry draft carries its project/year so sibling sheets never supersede
@@ -60,7 +60,7 @@ def approval_key(draft: dict) -> str:
     return f"budget:{recipient}"
 
 
-def confirm_intent(draft: dict, binding: budget_gate.ApprovalBindingLike) -> ApprovalIntent:
+def confirm_intent(draft: budget_core.BudgetCardDraft, binding: budget_gate.ApprovalBindingLike) -> ApprovalIntent:
     """The intent one approval post is bound to — key, draft digest, resolved surface."""
     digest = draft.get("sha256")
     if not isinstance(digest, str) or not digest:
@@ -132,12 +132,13 @@ def _live_requests(key: str) -> tuple[ApprovalRequest, ...]:
 class BudgetApprovalGate:
     """``approval_lifecycle.ApprovalGate`` over the budget draft store + Discord REST."""
 
-    draft: dict
-    binding: budget_gate.ApprovalBindingLike
+    draft: budget_core.BudgetCardDraft
+    binding: budget_gate.ApprovalBindingLike | None
+    content: str = ""
 
     @property
     def channel_id(self) -> str:
-        return self.binding.channel_id
+        return self.binding.channel_id if self.binding is not None else ""
 
     def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
         return _outstanding(key)
@@ -204,7 +205,7 @@ class BudgetApprovalGate:
             return
 
     def post(self, intent: ApprovalIntent) -> PostedApproval:
-        content = budget_core.render_approvals_message(
+        content = self.content or budget_core.render_approvals_message(
             self.draft,
             instruction=budget_binding.reaction_instruction(self.draft),
         )
@@ -220,15 +221,33 @@ class BudgetApprovalGate:
         budget_gate.set_message_id(self.draft, posted.message_id, self.binding)
 
 
-def request_approval(draft: dict) -> Verdict:
-    """Run the shared lifecycle for one draft while holding its key's lease."""
-    binding = budget_binding.binding_for(draft, _live_requests(approval_key(draft)))
-    intent = confirm_intent(draft, binding)
+def _prepare_request(draft: budget_core.BudgetCardDraft) -> tuple[ApprovalIntent, BudgetApprovalGate]:
+    """Prepare final bytes before resolving a new surface."""
+    cards = budget_gate.repo_module("approval_card")
+    version = draft.get("render_version", "1" if draft.get("message_id") else None)
+    try:
+        card = cards.prepare(lambda selected: budget_core.render_approvals_message(
+            {**draft, "render_version": selected}, instruction=budget_binding.reaction_instruction(draft),
+        ), version)
+    except cards.CardRenderError as error:
+        raise budget_gate.GateError(str(error), 3) from error
+    prepared: budget_core.BudgetCardDraft = {**draft, "render_version": card.render_version}
+    binding = budget_binding.binding_for(prepared, _live_requests(approval_key(prepared)))
+    intent = confirm_intent(prepared, binding)
+    return intent, BudgetApprovalGate(prepared, binding, card.content)
+
+
+def request_approval(draft: budget_core.BudgetCardDraft) -> Verdict:
+    """Resolve existing bindings under the lease before any card preparation."""
+    key = approval_key(draft)
+    live = _live_requests(key)
+    journal = posting_journal()
+    channel = live[0].channel_id if live else (journal.outstanding(key) or {}).get("channel_id", "")
+    intent = lifecycle().ApprovalIntent(key, str(draft["sha256"]), channel)
+    binding = budget_binding.stored_binding(draft) if draft.get("message_id") else None
     return lifecycle().request_owner_approval(
-        intent,
-        BudgetApprovalGate(draft, binding),
-        confirm_lease(),
-        posting_journal(),
+        intent, BudgetApprovalGate(draft, binding), confirm_lease(), journal,
+        prepare=lambda: _prepare_request(draft),
     )
 
 
@@ -241,7 +260,7 @@ def _refusal(verdict: Verdict) -> budget_gate.GateError:
     )
 
 
-def _owns(request: ApprovalRequest, draft: dict) -> bool:
+def _owns(request: ApprovalRequest, draft: budget_core.BudgetCardDraft) -> bool:
     """True iff the live request is bound to THIS draft record, never a sibling."""
     binding = (request.action_hash, request.message_id)
     try:
@@ -255,7 +274,7 @@ def _owns(request: ApprovalRequest, draft: dict) -> bool:
     )
 
 
-def bound_message_id(verdict: Verdict, draft: dict) -> str:
+def bound_message_id(verdict: Verdict, draft: budget_core.BudgetCardDraft) -> str:
     """Map one lifecycle verdict onto the legacy ``_post_draft_for_approval`` contract."""
     outcome = lifecycle().Outcome
     match verdict.outcome:
@@ -277,6 +296,6 @@ def bound_message_id(verdict: Verdict, draft: dict) -> str:
             raise AssertionError(f"unreachable outcome: {unreachable}")
 
 
-def post_for_approval(draft: dict) -> str:
+def post_for_approval(draft: budget_core.BudgetCardDraft) -> str:
     """Producer entry point — one guarded post/reaction/bind sequence per key."""
     return bound_message_id(request_approval(draft), draft)

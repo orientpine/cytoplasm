@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from automation import owner_notice
-from automation.interop.approval_surface import POLICY_VERSION
+from automation.interop.approval_surface import POLICY_VERSION, ApprovalKind, RequestThread, request_thread_notice
 
 _REPO = Path(__file__).resolve().parents[2]
 _SCRIPTS = _REPO / "skills" / "calendar" / "scripts"
@@ -143,7 +143,7 @@ def notices(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """
     delivered: list[str] = []
     monkeypatch.setattr(
-        owner_notice, "notify_owner", lambda notice: delivered.append(notice) is None
+        owner_notice, "notify_owner", lambda notice, *, message=None: delivered.append(notice) is None
     )
     return delivered
 
@@ -310,10 +310,7 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
         if call[1].startswith(f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages")
     ] == [
         ("POST", f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages", {
-            "content": (
-                f"🔔 승인 대기 · 캘린더 · {draft['id']}\n"
-                "이 메시지의 스레드에서 ✅ 실행 / ⛔ 취소로 결정해 주세요."
-            ),
+            "content": request_thread_notice(ApprovalKind.CALENDAR, RequestThread(draft['id'])),
         }),
         ("POST", f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/{REQUEST_NOTICE_MESSAGE_ID}/threads", {
             "name": f"캘린더 · {draft['id']}", "auto_archive_duration": 10080,

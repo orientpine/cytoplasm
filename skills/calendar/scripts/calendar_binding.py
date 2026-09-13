@@ -27,6 +27,9 @@ class ApprovalBindingLike(Protocol):
     @property
     def policy_version(self) -> int: ...
 
+    @property
+    def guild_id(self) -> str | None: ...
+
 
 class PendingApproval(Protocol):
     kind: str | None
@@ -38,6 +41,18 @@ class PendingApproval(Protocol):
 
 class OwnerDmDirectory(Protocol):
     def owner_dm(self) -> str: ...
+
+
+def approval_key(draft: Mapping[str, object]) -> str:
+    calendar_id = draft.get("calendar_id")
+    event_id = draft.get("event_id")
+    start = draft.get("start")
+    if not isinstance(calendar_id, str) or not calendar_id:
+        raise calendar_gate.GateError("드래프트 calendar_id 누락 — 승인 키 생성 거부", 3)
+    subject = event_id if isinstance(event_id, str) and event_id else start
+    if not isinstance(subject, str) or not subject:
+        raise calendar_gate.GateError("드래프트 event_id/start 누락 — 승인 키 생성 거부", 3)
+    return f"calendar:{calendar_id}:{subject}"
 
 
 def repo_root() -> Path:
@@ -134,6 +149,7 @@ def stored_binding(record: Mapping[str, str | int | None]) -> ApprovalBindingLik
                     surface.ApprovalSurface(record_surface),
                     channel_id,
                     version,
+                    record.get("approval_guild_id"),
                 ),
                 directory,
                 calendar_confirm.owner_id(),

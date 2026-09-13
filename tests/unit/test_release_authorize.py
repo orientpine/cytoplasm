@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import quote
 
@@ -48,6 +50,7 @@ def _env(
     reactions: dict[str, list[dict[str, object]]],
     api_log: list[str] | None = None,
     write_record: bool = True,
+    render_version: int = 4,
 ) -> None:
     gate_dir = tmp_path / "skill-gate"
     (gate_dir / "pending").mkdir(parents=True)
@@ -60,7 +63,7 @@ def _env(
     monkeypatch.setattr(skill_gate, "INTEROP_CONFIG", interop)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "DUMMY-release-authorize")
 
-    spec = _spec()
+    spec = replace(_spec(), render_version=render_version)
     if write_record:
         binding = ApprovalBinding(
             ApprovalKind.RELEASE, ApprovalSurface.SKILL_APPROVALS, _CHANNEL, POLICY_VERSION
@@ -208,3 +211,35 @@ def test_a_non_owner_reaction_never_authorizes(
     )
 
     assert _run() == 1
+
+
+@pytest.mark.parametrize("version", (1, 2, 3, 4))
+def test_a_clicked_digest_record_authorizes_without_rendering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    version: int,
+) -> None:
+    _env(
+        tmp_path, monkeypatch, render_version=version,
+        reactions={_APPROVE: [{"id": _OWNER, "bot": False}], _CANCEL: []},
+    )
+    path = skill_gate.GATE_DIR / "pending" / "release.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    posted = replace(_spec(), render_version=version).render()
+    record["content_sha256"] = sha256(posted.encode("utf-8")).hexdigest()
+    _ = path.write_text(json.dumps(record), encoding="utf-8")
+    calls: list[int] = []
+
+    def forbidden(spec: ReleaseSpec) -> str:
+        calls.append(spec.render_version)
+        raise AssertionError(f"clicked v{spec.render_version} must not render")
+
+    monkeypatch.setattr(ReleaseSpec, "render", forbidden)
+
+    assert _run() == 0
+    assert calls == []
+    for digest in ("", "0" * 64):
+        record["content_sha256"] = digest
+        _ = path.write_text(json.dumps(record), encoding="utf-8")
+        assert _run() == 1
+        assert calls == []

@@ -166,6 +166,8 @@ def test_owner_request_when_deploy_pending_predates_binding_schema_then_supersed
         "approval_action",
         "approval_destination",
         "channel_id",
+        "content_sha256",
+        "render_version",
         "deploy_nonce",
         "hash",
         "kind",

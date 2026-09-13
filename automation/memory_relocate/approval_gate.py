@@ -5,14 +5,14 @@ from __future__ import annotations
 import importlib
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Final, Protocol, TypeGuard
 from urllib.error import HTTPError
 
 from .model import RelocationRecord, record_key
-from .render import render_relocation_approval
+from .render import prepare_approval_card
 
 if TYPE_CHECKING:
     from automation.interop.approval_lease import ApprovalLease, PostingJournal
@@ -128,6 +128,7 @@ class RelocateApprovalGate:
     store: RelocationStoreLike
     transport: DiscordTransportLike
     journal: PostingJournal | None = None
+    card: tuple[str, str] | None = None
 
     def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
         request_type = lifecycle().ApprovalRequest
@@ -208,7 +209,7 @@ class RelocateApprovalGate:
         )
 
     def post(self, intent: ApprovalIntent) -> PostedApproval:
-        content = render_relocation_approval(self.record, entry_text=self.entry_text)
+        version, content = self.card or prepare_approval_card(self.record, self.entry_text)
         try:
             message_id = self.transport.post_message(intent.channel_id, content)
             if self.journal is not None:
@@ -219,7 +220,7 @@ class RelocateApprovalGate:
                     intent.channel_id,
                 )
                 self.store.set_message_id(
-                    self.record,
+                    replace(self.record, render_version=version),
                     message_id,
                     intent.channel_id,
                 )
@@ -253,8 +254,13 @@ def request_approval(
     binding: ApprovalBinding,
     lease: ApprovalLease,
     journal: PostingJournal,
+    card: tuple[str, str] | None = None,
 ) -> Verdict:
     """Request one lifecycle-managed owner approval on the injected binding."""
+    gate = RelocateApprovalGate(record, entry_text, store, transport, journal, card)
+    if not gate.outstanding(record_key(record.source_kind, record.entry_sha256)):
+        selected = card or prepare_approval_card(record, entry_text)
+        gate = replace(gate, record=replace(record, render_version=selected[0]), card=selected)
     shared = lifecycle()
     intent = shared.ApprovalIntent(
         key=record_key(record.source_kind, record.entry_sha256),
@@ -263,7 +269,7 @@ def request_approval(
     )
     return shared.request_owner_approval(
         intent,
-        RelocateApprovalGate(record, entry_text, store, transport, journal),
+        gate,
         lease,
         journal,
     )

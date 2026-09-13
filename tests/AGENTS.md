@@ -16,7 +16,7 @@ tests/
 ## e2e 규약
 - scenario YAML(`scenarios/*.yaml`)은 `cases`/`expect` 스키마. driver/actor가 `OBS-JSON` 한 줄을 출력하고 `drivers/judge_expectations.py`가 exact-equality로 판정.
 - fixture는 `e2e/fixtures/<시나리오>/`에 시나리오 전용 자산(입력 md + 기록된 LLM 응답 JSON 등).
-- `tests/unit/conftest.py`는 수집 전 HOME·XDG 홈 디렉터리를 일회용 경로로 돌려 unit이 개발자 실홈에 쓰지 못하게 하는 한 가지 일만 한다. 그 밖에는 unit이 `tmp_path`/`monkeypatch`/stub 실행파일/env override 패턴을 직접 사용한다.
+- `tests/unit/conftest.py`는 수집 전 **두 가지 격리만** 한다 — HOME·XDG 홈 디렉터리를 일회용 경로로 돌리고(개발자 실홈 보호), 거부 스텁 `gws` 를 PATH 앞에 놓는다(소유자 실 Google 계정 보호). 둘 다 import 시점이어야 하는 이유는 프로덕션 모듈이 자기 import 중에 `Path.home()`·`shutil.which("gws")` 를 이미 해석하기 때문이다. 그 밖에는 unit이 `tmp_path`/`monkeypatch`/stub 실행파일/env override 패턴을 직접 사용한다.
 
 ## 규칙
 - **unit 테스트는 개발자 실홈의 상태(`~/.hermes` 등)를 읽거나 쓰지 않는다.** `conftest.py`가 HOME 을 바꾸고 `test_unit_home_isolation.py`가 그것을 고정한다. 그 교체는 `os.environ` 을 물려받는 자식에게만 닿으므로 **env 를 새로 만들어 자식을 띄우는 테스트는 `HOME` 도 넘긴다**(보통 `tmp_path`) — 빠지면 자식이 passwd 의 실제 홈으로 되돌아간다(2026-09-11 strace 실측: `test_recall_skill.py` 의 자식이 실제 `~/.hermes/config.yaml` 을 열었다).
@@ -30,6 +30,12 @@ tests/
   `shutil.which("gws")` 로 바이너리를 찾는 스킬(todo·calendar·budget·reminder_poller)의 승인 워처는 ✅ 뒤 쓰기까지
   같은 틱에서 실행하므로, ✅ 픽스처를 주고 runner/`run_gws` 를 주입하지 않으면 단위 테스트가 **실제 Google API 에 쓴다**.
   2026-09-11 실측: `test_todo_watch.py` 두 테스트가 2026-08-25(63f5456aa) 이후 전량 스위트마다 "합성 워처 과제"·"만료 직전"
-  2건을 소유자 Google Tasks 에 등록해 1,387건이 쌓였다. 가드는 파일 단위 autouse 픽스처로 `run_gws` 를 `pytest.fail` 로
-  바꾼다(선례 `test_todo_watch.py::_no_real_gws`) — `AssertionError` 는 워처의 `except Exception` 이 `failed:` 결과로 삼키므로
-  `BaseException` 파생인 `pytest.fail` 이어야 한다.
+  2건을 소유자 Google Tasks 에 등록해 1,387건이 쌓였다.
+  **가드는 파일이 아니라 PATH 에 있다** — `conftest.py` 가 수집 전 거부 스텁 `gws` 를 PATH 앞에 놓고
+  `test_gws_path_guard.py` 가 그것을 고정한다(네 스킬의 `gws_bin()` 이 전부 스텁으로 해석되는지까지). 파일 단위 autouse
+  픽스처로는 **다른 파일·다른 스킬·자식 프로세스를 하나도 덮지 못한다**: 2026-09-12 실측으로 패치된 체크아웃이 깨끗한
+  동안 형제 워크트리의 pre-patch 사본(`acc45485b`)이 전량 스위트를 돌려 같은 2건을 실제로 등록했다 — 노드가 "미적용
+  상태와 동일" 로 본 것이 이것이다. 스텁은 argv 와 `PYTEST_CURRENT_TEST` 를 남기고 exit 97 로 거부하므로 어느 테스트가
+  실 자격증명을 부르려 했는지 그 로그(`AUTOPHAGY_UNIT_GWS_GUARD_LOG`)로 특정된다.
+  기존 `test_todo_watch.py::_no_real_gws` 는 **소리를 키우는 층**으로 남긴다 — `AssertionError` 는 워처의
+  `except Exception` 이 `failed:` 결과로 삼키므로 `BaseException` 파생인 `pytest.fail` 이어야 한다.

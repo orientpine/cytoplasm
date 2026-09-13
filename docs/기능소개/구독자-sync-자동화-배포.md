@@ -25,7 +25,11 @@ python3 -m automation.install --update-trust-key <key> --with-component managed-
 provenance 가드 → `~/.hermes/scripts/managed_sync_watch.py`로 래퍼 전송 → 30분 cron 멱등 등록.
 
 **happy path** — 관리자가 발행하면 30분 안에 한 틱이 릴리스를 검증해 **격리(quarantine)** 에 두고
-소유자에게 알림 1건을 보낸다. 알림에는 스킬 이름·시퀀스·digest 앞 12자만 담기고,
+소유자에게 알림 1건을 보낸다. 알림은 스킬 이름·시퀀스·digest 앞 12자를 검색 키로 담는
+5필드 결과 봉투다. 관측 구간 없는 격리 도착은 일회성 `Result`이고 추가 조치는 요구하지 않는다.
+다음 동작은 격리 유지이며, 봉투 import나 파사드 지원 플래그가 없으면 기존 본문을 그대로 보낸다.
+전송 실패가 이미 끝난 격리를 되돌리거나 새 재시도 큐를 만들지는 않는다.
+
 **활성화는 자동이 아니다**(D3): `readlink live/managed-<name>`은 그대로이며,
 `activate-instructions`가 알려주는 owner-gated 명령에 본인이 ✅를 눌러야 마운트된다.
 
@@ -42,4 +46,5 @@ provenance 가드 → `~/.hermes/scripts/managed_sync_watch.py`로 래퍼 전송
 - opt-in 레지스트리: `automation/install/components.py` (다음 컴포넌트는 여기 두 줄)
 - 승인: 이 웨이브는 **승인 표면을 만들지 않는다.** 알림은 게이트가 아니라 통지이며,
   마운트 승인은 기존 `deploy-skill.sh --activate-managed` 4단계 게이트가 그대로 소유한다.
+- 봉투 회귀: `tests/unit/test_managed_sync_owner_message.py` (구세대 본문·격리 결과·저널 전용 거부)
 - 증적: `docs/qa/W-F3-B/summary.txt` (증명된 것과 실호스트에서만 가능한 것을 나누어 기록)

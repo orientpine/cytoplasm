@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .model import RelocationRecord
 
-RENDER_VERSION = "mc-reloc-render-v1"
+RENDER_VERSION = "mc-reloc-render-v2"
 MAX_MESSAGE_CHARS = 1900
 
 
@@ -10,9 +10,58 @@ class RenderError(ValueError):
     pass
 
 
-def render_relocation_approval(record: RelocationRecord, *, entry_text: str) -> str:
-    content = (
-        f"[memory→Obsidian 재배치 승인 | {RENDER_VERSION}]\n"
+def render_relocation_approval(
+    record: RelocationRecord, *, entry_text: str, render_version: str = RENDER_VERSION,
+) -> str:
+    match render_version:
+        case "mc-reloc-render-v1":
+            content = _render_v1(record, entry_text)
+        case "mc-reloc-render-v2":
+            content = _render_v2(record, entry_text)
+        case _:
+            raise RenderError(f"unsupported relocation render version: {render_version}")
+    if len(content) > MAX_MESSAGE_CHARS:
+        raise RenderError("memory relocation approval exceeds the postable length")
+    return content
+
+
+def prepare_approval_card(record: RelocationRecord, entry_text: str) -> tuple[str, str]:
+    """Choose a new card before opening a thread; never rewrite a stored version."""
+    if record.render_version is not None:
+        return record.render_version, render_relocation_approval(record, entry_text=entry_text, render_version=record.render_version)
+    try:
+        return RENDER_VERSION, render_relocation_approval(record, entry_text=entry_text)
+    except RenderError:
+        version = "mc-reloc-render-v1"
+        return version, render_relocation_approval(record, entry_text=entry_text, render_version=version)
+
+
+def _render_v2(record: RelocationRecord, entry_text: str) -> str:
+    try:
+        from automation.interop import owner_message as om
+    except ImportError as error:
+        raise RenderError("owner envelope unavailable") from error
+    if not callable(getattr(om, "render", None)):
+        raise RenderError("owner envelope renderer unavailable")
+    here = om.Ref(scope="self")
+    message = om.OwnerMessage(
+        subject_key=record.note_relpath, subject="memory→Obsidian 재배치",
+        fact=f"{entry_text}; 회수 예상 문자 수: {record.reclaimable_chars}; mc-reloc-render-v2",
+        location=here, owner=om.Action("react", here, "✅ 승인 / ⛔ 취소"),
+        agent_next="저장·인제스트 확인 후 자체 메모리(ambient) 삭제; 이후 recall(검색)로만 조회",
+        recovery="not_applicable", detail=om.Approval(None, "원본 유지"),
+    )
+    try:
+        lines = om.render(message, destination=here).splitlines()
+        return "\n".join((*lines[:3], f"- action_hash: `{record.action_hash}`", *lines[3:]))
+    except om.OwnerMessageError as error:
+        raise RenderError("owner envelope cannot render") from error
+
+
+def _render_v1(record: RelocationRecord, entry_text: str) -> str:
+    """Frozen pre-envelope card, including its original marker."""
+    return (
+        "[memory→Obsidian 재배치 승인 | mc-reloc-render-v1]\n"
         "원본 메모리 항목\n"
         "───\n"
         f"{entry_text}\n"
@@ -23,6 +72,3 @@ def render_relocation_approval(record: RelocationRecord, *, entry_text: str) -> 
         "승인(✅) 시 이 항목은 자체 메모리(ambient)에서 **삭제**되고 이후에는 "
         "**recall(검색)로만** 찾을 수 있게 됩니다 — 취소는 ⛔."
     )
-    if len(content) > MAX_MESSAGE_CHARS:
-        raise RenderError("memory relocation approval exceeds the postable length")
-    return content

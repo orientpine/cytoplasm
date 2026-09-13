@@ -158,12 +158,15 @@ def _merge_effect_bindings(
             continue
         initial_binding = initial.message_id, initial.channel_id
         current_binding = current.message_id, current.channel_id
-        if current_binding != initial_binding:
+        if current_binding != initial_binding or current.approval_guild_id != initial.approval_guild_id:
             relocations[key] = replace(
                 resolved,
                 message_id=current.message_id,
                 channel_id=current.channel_id,
+                approval_guild_id=current.approval_guild_id,
             )
+        if current.render_version != initial.render_version:
+            relocations[key] = replace(relocations[key], render_version=current.render_version)
     return replace(
         result,
         state=RelocationState(result.state.version, relocations),

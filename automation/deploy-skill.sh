@@ -737,12 +737,20 @@ push_skill peer "$SRC_DIR" "$SKILL"
 # __init__.py needs staging.
 GATE_HELPERS=(skill_gate.py skill_gate_refresh.py skill_gate_review.py
               typing_compat.py git_tag_signature.py peer_attestation.py peer_signed_attestation.py peer_attest_runtime.py skill_gate_e2e.py
-              skill_gate_specs.py release_spec.py skill_gate_approval.py skill_gate_request.py
+              skill_gate_specs.py stored_content.py release_spec.py release_spec_message.py skill_gate_approval.py skill_gate_request.py
               skill_gate_retire.py skill_gate_surface.py)
-GATE_INTEROP_HELPERS=(interop/approval_lease.py interop/approval_lifecycle.py
+GATE_INTEROP_HELPERS=(interop/approval_lease.py interop/approval_lifecycle.py interop/approval_card.py
                       interop/approval_reminder.py interop/approval_reminder_config.py
                       interop/approval_types.py interop/approval_surface.py
+                      interop/owner_message.py interop/owner_message_text.py
                       interop/approval_directory.py interop/injection_adapter.py)
+
+# Notice facade import closure: separate from the gate and peer skill payload.
+# tests/unit/test_deploy_staging_owner_notice.py derives coverage from imports.
+OWNER_NOTICE_HELPERS=(owner_notice.py interop/origin_notice.py
+                      interop/owner_message.py interop/owner_message_text.py
+                      interop/discord_transport.py interop/chunker.py
+                      interop/approval_directory.py interop/approval_surface.py)
 
 validate_gate_staging_imports() {
   if ! python3 - "$REPO_ROOT" "automation/skill_gate_publish.py" \
@@ -756,16 +764,8 @@ from pathlib import Path
 root = Path(sys.argv[1])
 optional = {sys.argv[2]}
 staged = set(sys.argv[3:])
-required = set()
-seen = set()
-queue = list(staged)
-
-while queue:
-    relative = queue.pop()
-    if relative in seen:
-        continue
-    seen.add(relative)
-    path = root / relative
+def imports(path):
+    found = set()
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         dotted_names = []
@@ -774,16 +774,43 @@ while queue:
             dotted_names.extend(f"{node.module}.{alias.name}" for alias in node.names)
         elif isinstance(node, ast.Import):
             dotted_names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level:
+            package = path.parent
+            for _ in range(node.level - 1):
+                package = package.parent
+            modules = [node.module] if node.module else [alias.name for alias in node.names]
+            for module in modules:
+                candidate = package / (module.replace(".", "/") + ".py")
+                if candidate.is_file() and candidate.is_relative_to(root):
+                    found.add(str(candidate.relative_to(root)))
+        elif isinstance(node, ast.Call) and node.args:
+            function = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            argument = node.args[0]
+            if function in {"repo_module", "_repo_module"} and isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                dotted_names.append(f"automation.interop.{argument.value}")
         for dotted in dotted_names:
             if not dotted.startswith("automation."):
                 continue
             candidate = root / (dotted.replace(".", "/") + ".py")
             if not candidate.is_file():
                 continue
-            imported = str(candidate.relative_to(root))
-            if imported not in required:
-                required.add(imported)
-                queue.append(imported)
+            found.add(str(candidate.relative_to(root)))
+    return found
+
+# Skill-owned approval imports are roots even if an array member was forgotten.
+# Non-gate skill facilities use the full runtime; notices have a separate list.
+queue = list(staged)
+for scripts in (root / "skills").glob("*/scripts"):
+    for path in scripts.glob("*.py"):
+        queue.extend(name for name in imports(path)
+                     if name.startswith("automation/interop/approval_"))
+required = set()
+while queue:
+    relative = queue.pop()
+    if relative in required:
+        continue
+    required.add(relative)
+    queue.extend(imports(root / relative))
 
 missing = sorted(required - staged - optional)
 for module in missing:
@@ -800,6 +827,10 @@ PY
 for src in skill_gate.py "${GATE_HELPERS[@]}" "${GATE_INTEROP_HELPERS[@]}"; do
   [[ -f "$REPO_ROOT/automation/$src" ]] \
     || die "STAGE-BLOCK: gate module missing from checkout: automation/$src"
+done
+for src in "${OWNER_NOTICE_HELPERS[@]}"; do
+  [[ -f "$REPO_ROOT/automation/$src" ]] \
+    || die "STAGE-BLOCK: owner notice module missing from checkout: automation/$src"
 done
 validate_gate_staging_imports
 
@@ -908,6 +939,12 @@ for helper in "${GATE_HELPERS[@]}" "${GATE_INTEROP_HELPERS[@]}"; do
   GATE_STAGED_PATHS+=" \"\$HOME/.hermes/interop_runtime/automation/$helper\""
 done
 run_as "$NODE_AGENT_ACCOUNT" "chmod 600 $GATE_STAGED_PATHS"
+
+# Refresh notices only on the agent; peer attestation still hashes the skill tree.
+for helper in "${OWNER_NOTICE_HELPERS[@]}"; do
+  run_as "$NODE_AGENT_ACCOUNT" "umask 077; mkdir -p \"\$HOME/.hermes/interop_runtime/automation/interop\" && cat > \"\$HOME/.hermes/interop_runtime/automation/$helper\" && chmod 600 \"\$HOME/.hermes/interop_runtime/automation/$helper\"" \
+    < "$REPO_ROOT/automation/$helper"
+done
 
 if [[ -n "$PROVENANCE_FILE" ]]; then
   PROVENANCE_REMOTE="\$HOME/.hermes/skill-gate/deploy-provenance-$SKILL-$DIGEST.json"

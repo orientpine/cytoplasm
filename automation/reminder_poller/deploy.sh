@@ -19,5 +19,8 @@ run_account() {
 }
 
 # 알림 폴러는 cron sandbox가 찾는 계정 홈에만 복사해야 다른 계정의 상태를 읽지 않는다.
+# 새 래퍼를 쓰기 전에 플랫 import 동반 파일을 먼저 갱신한다.
+tar -C "$repo_root/automation/reminder_poller" -czf - poller_core.py reminder_store.py \
+  | run_account "$NODE_AGENT_ACCOUNT" 'umask 077; mkdir -p "$HOME/.hermes/reminder_poller_runtime"; tar -xzf - -C "$HOME/.hermes/reminder_poller_runtime"; chmod 600 "$HOME/.hermes/reminder_poller_runtime/"{poller_core,reminder_store}.py; sha256sum "$HOME/.hermes/reminder_poller_runtime/"{poller_core,reminder_store}.py'
 tar -C "$repo_root/automation/reminder_poller" -czf - poll_reminders.py \
   | run_account "$NODE_AGENT_ACCOUNT" 'umask 077; mkdir -p "$HOME/.hermes/scripts"; tar -xzf - -C "$HOME/.hermes/scripts"; chmod 600 "$HOME/.hermes/scripts/poll_reminders.py"; sha256sum "$HOME/.hermes/scripts/poll_reminders.py"'

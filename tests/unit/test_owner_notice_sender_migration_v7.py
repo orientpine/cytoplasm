@@ -99,7 +99,8 @@ def test_cost_report_uses_facade_transport(
 
     cost_report.send_dm("masked cost report")
 
-    assert notice_attempts == [(expected_target, "masked cost report")]
+    assert [target for target, _body in notice_attempts] == [expected_target]
+    assert "masked cost report" in notice_attempts[0][1]
 
 
 @pytest.mark.parametrize(

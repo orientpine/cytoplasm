@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from automation.interop.approval_lease import FileKeyLease, ReminderJournal
 from automation.interop.approval_lifecycle import ApprovalRequest, Probe, remind_owner_approval
-from automation.interop.approval_reminder import ReminderContext, ReminderOutcome
+from automation.interop.approval_reminder import (
+    ApprovalReminder, ReminderBoundaryError, ReminderContext, ReminderOutcome, compose_reminder,
+)
+from automation.interop.owner_message import Space
 from automation.interop.approval_reminder_config import ApprovalReminderConfig
 from automation.interop.approval_surface import ApprovalKind
 
@@ -65,8 +71,7 @@ def test_shared_facade_sends_minimum_information_pointer_at_three_hours(tmp_path
             "222",
             "승인 리마인더\n"
             "요청 유형: mail-compose\n"
-            "경과시간: 3시간\n"
-            "원문 링크: https://discord.com/channels/@me/222/333",
+            "경과시간: 3시간",
         )
     ]
 
@@ -100,6 +105,59 @@ def test_disabled_surface_creates_no_journal_probe_or_send(tmp_path: Path) -> No
     assert delivery.messages == []
     assert not (tmp_path / "reminders").exists()
     assert not (tmp_path / "leases").exists()
+
+
+def test_dm_link_is_delivered_when_caller_explicitly_classifies_resolved_channel(tmp_path: Path) -> None:
+    # Given a known DM record whose source channel is resolved at send time.
+    delivery = Delivery()
+    seen: list[str] = []
+
+    def space_for(channel_id: str) -> Space:
+        seen.append(channel_id)
+        return "dm"
+
+    context = replace(_context(tmp_path, delivery, _POSTED + timedelta(hours=3)),
+                      source_channel_id_for=lambda _request: "444", space_for=space_for)
+    # When the real lifecycle facade dispatches the due reminder.
+    verdict = remind_owner_approval(_REQUEST, Observer(), FileKeyLease(tmp_path / "leases"), context)
+    # Then the original rendered bytes and the resolved DM destination are preserved.
+    expected = compose_reminder(ApprovalReminder(ApprovalKind.MAIL_COMPOSE, timedelta(hours=3),
+                                                "https://discord.com/channels/@me/444/333"))
+    assert verdict.outcome is ReminderOutcome.SENT
+    assert delivery.messages == [("444", expected)]
+    assert seen == ["444"]
+
+
+@pytest.mark.parametrize("use_resolver", [False, True])
+def test_guild_link_wins_when_context_also_has_a_space_callback(tmp_path: Path, use_resolver: bool) -> None:
+    # Given known guild metadata and a callback that must not override it.
+    delivery = Delivery()
+
+    def forbidden_space(_channel_id: str) -> Space:
+        pytest.fail("known guild must not consult the fallback space callback")
+
+    context = replace(_context(tmp_path, delivery, _POSTED + timedelta(hours=3)), guild_id="111",
+                      guild_id_for=(lambda _channel: "555") if use_resolver else None,
+                      space_for=forbidden_space)
+    # When the facade renders through the existing guild resolution path.
+    verdict = remind_owner_approval(_REQUEST, Observer(), FileKeyLease(tmp_path / "leases"), context)
+    # Stored coordinates win without a lookup; the resolver fills only legacy gaps.
+    guild = "111"
+    expected = compose_reminder(ApprovalReminder(ApprovalKind.MAIL_COMPOSE, timedelta(hours=3),
+                                                f"https://discord.com/channels/{guild}/222/333"))
+    assert verdict.outcome is ReminderOutcome.SENT
+    assert delivery.messages == [("222", expected)]
+
+
+def test_reminder_refuses_when_known_guild_coordinate_is_malformed(tmp_path: Path) -> None:
+    # Given a due request with a malformed known guild coordinate.
+    delivery = Delivery()
+    context = replace(_context(tmp_path, delivery, _POSTED + timedelta(hours=3)), guild_id="bad")
+    # When the real facade tries to send the pointer.
+    with pytest.raises(ReminderBoundaryError):
+        remind_owner_approval(_REQUEST, Observer(), FileKeyLease(tmp_path / "leases"), context)
+    # Then the existing refusal cannot be misreported as a delivered reminder.
+    assert delivery.messages == []
 
 
 def test_existing_approval_watchers_call_the_shared_facade() -> None:

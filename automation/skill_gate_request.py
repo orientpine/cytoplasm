@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, assert_never
 
@@ -27,6 +27,7 @@ from automation.interop.approval_lifecycle import (
     request_owner_approval,
 )
 from automation.skill_gate_approval import SkillApprovalGate
+from automation.skill_gate_specs import DeploySpec, PublishSpec
 
 LIFECYCLE_REFUSAL_EXIT: Final = 6
 LEASE_DIRNAME: Final = "approval-leases"
@@ -135,8 +136,32 @@ def reuse(gate: SkillApprovalGate) -> Requested | None:
     return Requested(record, 0) if found.action_hash == gate.spec.action_hash() else None
 
 
+def _prepare_card(gate: SkillApprovalGate) -> SkillApprovalGate | Requested:
+    """재사용 뒤, 저널·삭제·게시 전 최종 본문을 한 번만 확정한다."""
+    if not isinstance(gate.spec, DeploySpec | PublishSpec):
+        return gate
+    spec = replace(gate.spec, render_version=2)
+    try:
+        content = spec.render()
+    except Exception as error:
+        print(f"APPROVAL-RENDER-FALLBACK: {type(error).__name__}", file=sys.stderr)
+        spec = replace(spec, render_version=1)
+        try:
+            content = spec.render_v1()
+        except Exception as error:
+            print(f"APPROVAL-RENDER-REFUSED: {type(error).__name__}", file=sys.stderr)
+            return _refused(Reason.UNVERIFIABLE)
+    if len(content) > 1900:
+        return _refused(Reason.UNVERIFIABLE)
+    return replace(gate, spec=replace(spec, posted_text=content))
+
+
 def post_request(gate: SkillApprovalGate, *, fresh: bool) -> Requested:
     """One guarded post: the optional ``--fresh`` supersede, then the shared lifecycle."""
+    prepared = _prepare_card(gate)
+    if isinstance(prepared, Requested):
+        return prepared
+    gate = prepared
     key = gate.spec.key()
     held = lease(gate.surface.gate_dir)
     if fresh:

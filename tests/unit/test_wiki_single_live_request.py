@@ -251,7 +251,8 @@ def test_posting_persists_the_approval_thread_id_beside_the_unchanged_hash(
     # And: the digest the reaction watcher binds against is untouched by the new field
     assert stored["sha256"] == draft["sha256"]
     content = fake.contents[str(posted["confirm_message_id"])]
-    assert content == f"저장 {draft['id']} sha256:{draft['sha256']}"
+    assert f"sha256:{draft['sha256']}" in content
+    assert stored["render_version"] == 2
     assert stored["approval_thread_id"] not in content
 
 

@@ -17,6 +17,8 @@ from typing import Final
 
 import pytest
 
+from automation.interop.owner_message import Space, discord_link
+
 _REPO: Final = Path(__file__).resolve().parents[2]
 _CLI: Final = _REPO / "skills" / "plaud" / "scripts" / "plaud_cli.py"
 
@@ -154,3 +156,153 @@ def test_status_lists_approved_records_with_their_write_failure_reason(
     out = capsys.readouterr().out
     assert "저장 대기(approved) 1건" in out
     assert "rec-a · 사유 write: ObsidianWriteError: fetch before upsert failed" in out
+
+
+_LEGACY_HUMAN: Final = """PLAUD-STATUS state=present
+- 마지막 Plaud 폴: 2026-09-02T08:38:52Z (2026-09-02 17:38 KST)
+- 레코드 1건: transcribing 0 · planned 0 · posted 1 · approved 0 · written 0 · abandoned 0
+- 승인 대기(posted) 1건:
+  - rec-x · 스레드 111 · 2026-09-02-x--abcdef123456.md"""
+_LEGACY_JSON: Final = """{
+  "state": "present", "last_poll_at": "2026-09-02T08:38:52Z", "total": 1,
+  "counts": {"transcribing": 0, "planned": 0, "posted": 1, "approved": 0,
+             "written": 0, "abandoned": 0},
+  "approved": [], "transcribing": [], "transcripts_dir": null, "transcripts": [],
+  "pending": [{"recording_id": "rec-x", "thread_id": "111",
+               "note_name": "2026-09-02-x--abcdef123456.md",
+               "recorded_at": "2026-09-02T04:00:00Z"}]
+}"""
+
+
+def test_legacy_status_bytes_and_json_keys_are_preserved() -> None:
+    cli = _load()
+    summary = cli.summarize(_state(a=_record("posted")))
+    assert cli.render(summary) == _LEGACY_HUMAN
+    payload = cli._payload(summary)
+    for pending in payload["pending"]:
+        pending.pop("thread_url", None)
+    assert payload == json.loads(_LEGACY_JSON)
+
+
+def test_legacy_thread_id_falls_back_to_the_stored_channel() -> None:
+    cli = _load()
+    summary = cli.summarize(_state(a=_record("posted", approval_thread_id=None)))
+    assert summary.pending[0].thread_id == "111"
+    assert cli.render(summary) == _LEGACY_HUMAN
+
+
+def test_status_cli_reports_clickable_thread_without_changing_existing_json_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    cli = _load()
+    path = Path("state.json")
+    state = json.dumps(_state(a=_record(
+        "posted", approval_guild_id="111", approval_thread_id="222",
+    )))
+    _ = path.write_text(state, encoding="utf-8")
+    assert cli.main(["status", "--state", "state.json", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "state": "present", "last_poll_at": "2026-09-02T08:38:52Z", "total": 1,
+        "counts": {"transcribing": 0, "planned": 0, "posted": 1, "approved": 0,
+                   "written": 0, "abandoned": 0},
+        "approved": [], "transcribing": [], "transcripts_dir": "transcripts",
+        "transcripts": [],
+        "pending": [{"recording_id": "rec-x", "thread_id": "222",
+                     "note_name": "2026-09-02-x--abcdef123456.md",
+                     "recorded_at": "2026-09-02T04:00:00Z",
+                     "thread_url": "https://discord.com/channels/111/222"}],
+    }
+    assert cli.main(["status", "--state", "state.json"]) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == "PLAUD-STATUS state=present"
+    assert out.splitlines()[-1] == (
+        "  - rec-x · 스레드 https://discord.com/channels/111/222 · 2026-09-02-x--abcdef123456.md"
+    )
+    assert path.read_text(encoding="utf-8") == state
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["state.json"]
+
+
+@pytest.mark.parametrize(("guild_id", "thread_id", "expected"), [
+    ("111", "222", "https://discord.com/channels/111/222"),
+    ("333", "444", "https://discord.com/channels/333/444"),
+    ("00111", "00222", "https://discord.com/channels/00111/00222"),
+    ("1", "1", "https://discord.com/channels/1/1"),
+])
+def test_thread_url_matches_the_shared_definition(
+    guild_id: str, thread_id: str, expected: str,
+) -> None:
+    cli = _load()
+    summary = cli.summarize(_state(a=_record(
+        "posted", approval_guild_id=guild_id, approval_thread_id=thread_id, message_id=None,
+    )))
+    pending = summary.pending[0]
+    assert getattr(pending, "guild_id", None) == guild_id
+    assert getattr(pending, "thread_url", None) == expected
+    assert pending.thread_url == discord_link(
+        space="guild", guild_id=guild_id, channel_id=thread_id, message_id=None,
+    ).url
+
+
+@pytest.mark.parametrize("key", ["approval_guild_id", "approval_thread_id"])
+@pytest.mark.parametrize(("invalid", "coordinate"), [
+    (None, ""), ("", ""), ("0", "0"), ("000", "000"), ("bad", "bad"),
+    ("1/2", "1/2"), ("-1", "-1"), ("+1", "+1"), ("1.0", "1.0"),
+    (" 111", " 111"), ("111 ", "111 "), ("١١١", "١١١"), ("１１１", "１１１"),
+    (111, ""), (True, ""),
+])
+def test_missing_or_malformed_coordinates_never_guess_a_link(
+    key: str, invalid: str | int | None, coordinate: str,
+) -> None:
+    cli = _load()
+    record = _record("posted", approval_guild_id="111", approval_thread_id="222")
+    record[key] = invalid
+    summary = cli.summarize(_state(a=record))
+    payload = cli._payload(summary)
+    assert "thread_url" in payload["pending"][0]
+    assert payload["pending"][0]["thread_url"] is None
+    # Explicit fixture coordinates pin the boundary conversion, not a production helper.
+    assert payload["pending"][0]["thread_url"] == discord_link(
+        space="guild", guild_id=coordinate if key == "approval_guild_id" else "111",
+        channel_id=coordinate if key == "approval_thread_id" else "222",
+    ).url
+    out = cli.render(summary)
+    assert "discord.com/channels" not in out
+    assert "@me" not in out + json.dumps(payload)
+    assert "rec-x" in out and "2026-09-02-x--abcdef123456.md" in out
+
+
+@pytest.mark.parametrize(("space", "guild_id", "thread_id"), [
+    ("unknown", None, "222"), ("guild", None, "222"),
+    ("guild", "111", None), ("guild", None, None),
+])
+def test_missing_coordinates_match_shared_unavailable_branches(
+    space: Space, guild_id: str | None, thread_id: str | None,
+) -> None:
+    # Plaud stores guild/thread coordinates, not a space discriminator or message target.
+    cli = _load()
+    summary = cli.summarize(_state(a=_record(
+        "posted", approval_guild_id=guild_id, approval_thread_id=thread_id, message_id=None,
+    )))
+    assert summary.pending[0].thread_url is None
+    assert summary.pending[0].thread_url == discord_link(
+        space=space, guild_id=guild_id, channel_id=thread_id, message_id=None,
+    ).url
+
+
+def test_legacy_json_explicitly_reports_no_thread_url(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli = _load()
+    path = tmp_path / "state.json"
+    _ = path.write_text(json.dumps(_state(a=_record("posted"))), encoding="utf-8")
+    assert cli.main(["status", "--state", str(path), "--json"]) == 0
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert payload["pending"] == [{
+        "recording_id": "rec-x", "thread_id": "111",
+        "note_name": "2026-09-02-x--abcdef123456.md",
+        "recorded_at": "2026-09-02T04:00:00Z", "thread_url": None,
+    }]
+    assert "@me" not in out

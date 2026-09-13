@@ -17,7 +17,45 @@ ff-pull 이 막혔을 때 healthcheck 는 그것을 **52번 FAIL 로 정확히 �
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+from typing import Final
+
+import pytest
+
+from automation import healthcheck_notify as healthcheck, owner_notice
 from automation.healthcheck_notify import NotifyState, plan_notice
+from automation.interop.owner_message import Action, OwnerMessage, Ref, Result
+
+HEALTH_OPEN: Final = 'healthcheck 실패가 새로 발생했습니다:\n  - cache\n노드에서 원인을 먼저 확인하세요 — 원인 확인 전 재시작·설정변경·키 재발급은 하지 않습니다.'
+HEALTH_CLOSED: Final = 'healthcheck 가 회복됐습니다:\n  - db'
+HEALTH_MIXED: Final = 'healthcheck 실패가 새로 발생했습니다:\n  - cache\nhealthcheck 가 회복됐습니다:\n  - db\n노드에서 원인을 먼저 확인하세요 — 원인 확인 전 재시작·설정변경·키 재발급은 하지 않습니다.'
+
+
+CACHE_REF: Final = Ref(scope="resource", space="unknown", guild_id=None,
+    channel_id=None, message_id=None, url=None, search=("헬스체크", "cache"))
+MIXED_REF: Final = Ref(scope="resource", space="unknown", guild_id=None,
+    channel_id=None, message_id=None, url=None, search=("헬스체크", "cache, db"))
+OPEN_MESSAGE: Final = OwnerMessage(
+    subject_key="cache", subject="헬스체크 관측", fact="신규 실패: cache; 회복: 없음",
+    location=CACHE_REF, owner=Action("open", CACHE_REF, "원인 확인; 확인 전 재시작·설정변경·키 재발급 금지"),
+    agent_next="다음 스윕에서 상태 관측", recovery="not_applicable", detail=Result("executed"))
+CLOSED_MESSAGE: Final = OwnerMessage(
+    subject_key="cache", subject="헬스체크 관측", fact="신규 실패: 없음; 회복: cache",
+    location=CACHE_REF, owner=Action("none", None, None),
+    agent_next="다음 스윕에서 상태 관측", recovery="not_applicable", detail=Result("executed"))
+MIXED_MESSAGE: Final = OwnerMessage(
+    subject_key="cache, db", subject="헬스체크 관측", fact="신규 실패: cache; 회복: db",
+    location=MIXED_REF, owner=Action("open", MIXED_REF, "원인 확인; 확인 전 재시작·설정변경·키 재발급 금지"),
+    agent_next="다음 스윕에서 상태 관측", recovery="not_applicable", detail=Result("executed"))
+OPEN_WIRE: Final = '대상: 헬스체크 관측 (cache)\n사실: 신규 실패: cache; 회복: 없음 (실행 완료)\n위치: 링크 없음 (주소 없음); 검색: 헬스체크 / cache\n인계: 소유자: 위 위치 · 열기 원인 확인; 확인 전 재시작·설정변경·키 재발급 금지; 다음: 다음 스윕에서 상태 관측\n되돌리기: 해당 없음'
+CLOSED_WIRE: Final = '대상: 헬스체크 관측 (cache)\n사실: 신규 실패: 없음; 회복: cache (실행 완료)\n위치: 링크 없음 (주소 없음); 검색: 헬스체크 / cache\n인계: 소유자: 조치 없음; 다음: 다음 스윕에서 상태 관측\n되돌리기: 해당 없음'
+MIXED_WIRE: Final = '대상: 헬스체크 관측 (cache, db)\n사실: 신규 실패: cache; 회복: db (실행 완료)\n위치: 링크 없음 (주소 없음); 검색: 헬스체크 / cache, db\n인계: 소유자: 위 위치 · 열기 원인 확인; 확인 전 재시작·설정변경·키 재발급 금지; 다음: 다음 스윕에서 상태 관측\n되돌리기: 해당 없음'
+TRANSITIONS: Final = {
+    "open": ((), ("cache|http_200|node|ops|resource",), OPEN_MESSAGE, OPEN_WIRE),
+    "closed": (("cache",), (), CLOSED_MESSAGE, CLOSED_WIRE),
+    "mixed": (("db",), ("cache|http_200|node|ops|resource",), MIXED_MESSAGE, MIXED_WIRE),
+}
 
 
 def test_a_healthy_sweep_says_nothing() -> None:
@@ -108,3 +146,82 @@ def test_check_names_keeps_a_bare_name_and_drops_empties() -> None:
     from automation.healthcheck_notify import check_names
 
     assert check_names(("plain", "", "a|b")) == ("plain", "a")
+
+
+@pytest.mark.parametrize(("prior", "failing", "expected"), [
+    ((), ("cache",), HEALTH_OPEN), (("db",), (), HEALTH_CLOSED),
+    (("db",), ("cache",), HEALTH_MIXED),
+])
+def test_legacy_bytes_when_sweep_changes(
+    prior: tuple[str, ...], failing: tuple[str, ...], expected: str,
+) -> None:
+    # Given: literal wire bytes captured from the base.
+    state = NotifyState(prior)
+    # When: a sweep changes the incident set.
+    _, notice = plan_notice(state, failing=failing)
+    # Then: the legacy payload is byte-identical.
+    assert notice == expected
+
+
+@pytest.fixture
+def health_wire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str]:
+    sent: list[str] = []
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "synthetic-credential")
+    monkeypatch.setenv("OWNER_NOTICE_CHANNEL_ID", "111")
+    monkeypatch.setenv("HEALTHCHECK_NOTIFY_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(owner_notice, "send_notice", lambda token, channel, body: sent.append(body))
+    return sent
+
+
+@pytest.mark.parametrize("old_runtime", ("import", "capability"))
+def test_legacy_bytes_when_runtime_is_old(
+    monkeypatch: pytest.MonkeyPatch, health_wire: list[str], old_runtime: str,
+) -> None:
+    # Given: either the envelope leaf or the facade capability is unavailable.
+    if old_runtime == "import":
+        monkeypatch.setitem(sys.modules, "automation.interop.owner_message", None)
+    else:
+        monkeypatch.delattr(owner_notice, "ACCEPTS_OWNER_MESSAGE")
+    # When: the real CLI entrypoint handles a failed check.
+    result = healthcheck.main(["cache|http_200|node|ops|resource"])
+    # Then: the existing bytes and exit status reach the surface.
+    assert result == 0
+    assert health_wire == [HEALTH_OPEN]
+
+
+@pytest.mark.parametrize("transition", ("open", "closed", "mixed"))
+def test_envelope_when_cli_reports_a_transition(
+    monkeypatch: pytest.MonkeyPatch, health_wire: list[str], transition: str,
+) -> None:
+    # Given: fixed incident coordinates, literal oracles, and the actual saved state.
+    prior, argv, expected, expected_wire = TRANSITIONS[transition]
+    healthcheck.save_state(healthcheck.state_path(), NotifyState(prior))
+    captured: list[OwnerMessage | None] = []
+    original = owner_notice.notify_owner
+
+    def capture(content: str, *, message: OwnerMessage | None = None) -> bool:
+        captured.append(message)
+        return original(content, message=message)
+
+    monkeypatch.setattr(owner_notice, "notify_owner", capture)
+    # When: the CLI handles the sweep.
+    result = healthcheck.main(argv)
+    # Then: every envelope field and the complete delivered copy match independent literals.
+    assert result == 0
+    assert captured == [expected]
+    assert health_wire == [expected_wire]
+
+
+def test_incident_state_when_envelope_transport_fails(
+    monkeypatch: pytest.MonkeyPatch, health_wire: list[str],
+) -> None:
+    # Given: a transport failure inside the real never-raise facade.
+    def fail(token: str, channel: str, body: str) -> None:
+        raise OSError("injected transport failure")
+
+    monkeypatch.setattr(owner_notice, "send_notice", fail)
+    # When: the CLI attempts to report a new incident.
+    assert healthcheck.main(["cache"]) == 0
+    # Then: the incident remains unreported and can be retried by the next sweep.
+    assert healthcheck.load_state(healthcheck.state_path()) == NotifyState()
+    assert health_wire == []

@@ -219,9 +219,10 @@ def test_push_approval_record_lets_the_external_effect_gate_accept_the_owner_wri
 
 @dataclass(frozen=True, slots=True)
 class _StubBinding:
-    """The one field ``post`` reads off a resolved approval binding."""
+    """The routing metadata ``post`` reads off a resolved approval binding."""
 
     channel_id: str
+    guild_id: str | None = None
 
 
 def _effects_with_verdict(
@@ -261,8 +262,9 @@ def _effects_with_verdict(
         binding: object,
         lease: object,
         journal: object,
+        card: tuple[str, str],
     ) -> Verdict:
-        del record, entry_text, store, transport, binding, lease, journal
+        del record, entry_text, store, transport, binding, lease, journal, card
         return verdict
 
     monkeypatch.setattr(f"{module}.load_config", fake_load_config)

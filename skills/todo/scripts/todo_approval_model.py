@@ -12,6 +12,23 @@ class ApprovalState(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class TodoApprovalIntent:
+    action_hash: str
+    target_id: str
+    argv_summary: str
+    title: str
+    due: str | None
+    origin_channel_id: str = ""
+    origin_message_id: str = ""
+    tasklist: str = ""
+    notes: str | None = None
+
+    @property
+    def key(self) -> str:
+        return f"todo:{self.action_hash}"
+
+
+@dataclass(frozen=True, slots=True)
 class TodoApprovalSpec:
     key: str
     action_hash: str
@@ -25,6 +42,7 @@ class TodoApprovalSpec:
     origin_message_id: str = ""
     #: 이 요청 전용 승인 스레드 — 결과 통지가 되돌아갈 곳. action hash 밖의 라우팅 값이다.
     approval_thread_id: str = ""
+    approval_guild_id: str | None = None
     tasklist: str = ""
     title: str = ""
     notes: str | None = None
@@ -49,7 +67,9 @@ class TodoApprovalRecord:
     origin_channel_id: str = ""
     origin_message_id: str = ""
     approval_thread_id: str = ""
+    approval_guild_id: str | None = None
     tasklist: str = ""
     title: str = ""
     notes: str | None = None
     due: str | None = None
+    render_version: str | None = None

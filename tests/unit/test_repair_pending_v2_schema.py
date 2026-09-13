@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,7 +41,7 @@ def _legacy() -> PendingRepairApproval:
         NOW,
         kind=ApprovalKind.REPAIR,
         surface=ApprovalSurface.OWNER_DM,
-        channel_id="1528936606856122423",
+        channel_id="222",
         policy_version=POLICY_VERSION,
     )
 
@@ -55,7 +56,7 @@ def _v2() -> PendingRepairApproval:
         NOW,
         kind=ApprovalKind.REPAIR,
         surface=ApprovalSurface.OWNER_DM,
-        channel_id="1528936606856122423",
+        channel_id="222",
         policy_version=POLICY_VERSION,
         content_binding_version=2,
         patch_sha256=DIGEST,
@@ -66,6 +67,72 @@ def _v2() -> PendingRepairApproval:
 
 def _record_path(root: Path) -> Path:
     return root / f"{hashlib.sha256(TICKET.encode()).hexdigest()}.json"
+
+
+# Captured on 2886f0a5c: these bytes are machine-consumed by the live exact-text probe.
+V1_POSTED = (
+    "[repair] 승인 요청\n"
+    "- ticket: `t_repair01`\n"
+    "- sha256: `0945ce0d76d45dd5a6b8e0de612c8f093d2eb7385ff4bfb471998001cf6f2b3f`\n"
+    "- repair_nonce: `nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn`\n"
+    "- sandbox: PASS (offline-subset bank + repro GREEN)\n"
+    "- cha가 이 메시지에 ✅ 승인 또는 ⛔ 취소 리액션"
+)
+V2_POSTED = (
+    "[repair] 승인 요청\n"
+    "- ticket: `t_repair01`\n"
+    "- action_hash: `sha256:56779ce0cd3bca72865dda8c74484922b3c7f625ca1ec2e0bc9b5909d7f34081`\n"
+    "- patch_sha256: `e083147ea804136e3187aa29377f44f83015175b18593c387b267b95123c0ff5`\n"
+    "- changed_files: 2 total, +6/-3\n"
+    "  - (신규) docs/새 폴더/기능 소개.md (+4/-0)\n"
+    "  - automation/old mod.py → automation/new mod.py (+2/-3)\n"
+    "- repair_nonce: `nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn`\n"
+    "- sandbox: PASS (offline-subset bank + repro GREEN)\n"
+    "- patch_body: 비노출 — ops 호스트의 `/srv/autophagy-private/repair-plans/t_repair01/patch.diff` 에서 확인\n"
+    "- cha가 이 메시지에 ✅ 승인 또는 ⛔ 취소 리액션"
+)
+
+
+V3_POSTED = (
+    "대상: 수리 승인 (t_repair01)\n"
+    "사실: action_hash: sha256:56779ce0cd3bca72865dda8c74484922b3c7f625ca1ec2e0bc9b5909d7f34081; "
+    "patch_sha256: e083147ea804136e3187aa29377f44f83015175b18593c387b267b95123c0ff5; "
+    "2 files +6/-3; - (신규) docs/새 폴더/기능 소개.md (+4/-0); "
+    "- automation/old mod.py → automation/new mod.py (+2/-3); "
+    "nonce: nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn; sandbox: PASS; "
+    "패치 본문 비노출: `/srv/autophagy-private/repair-plans/t_repair01/patch.diff` "
+    "(승인 요청; 만료: 2026-07-30T09:00:00+00:00)\n"
+    "위치: 이 메시지\n"
+    "인계: 소유자: 위 위치 · 반응 ✅ 승인 또는 ⛔ 취소; 다음: 승인된 패치만 반영\n"
+    "되돌리기: 해당 없음; 취소 시: 패치 미반영, 티켓 재개"
+)
+
+
+def test_stored_v3_replays_fixed_wire_bytes_when_loaded(tmp_path: Path) -> None:
+    # Given: an independently fixed v3 record, persisted before replay.
+    store = PendingRepairApprovalStore(tmp_path / "pending")
+    store.save(replace(_v2(), render_version=3))
+    stored = store.get(TICKET)
+    assert stored is not None
+    # When: the binding gate reconstructs the wire bytes from the stored record.
+    actual = approval_request_content(stored).encode("utf-8")
+    # Then: shared-renderer drift must not silently invalidate a published card.
+    assert actual == V3_POSTED.encode("utf-8")
+
+
+@pytest.mark.parametrize("record,posted", [(_legacy(), V1_POSTED), (_v2(), V2_POSTED)], ids=["v1", "v2"])
+def test_stored_record_replays_base_bytes_when_render_version_is_absent(
+    tmp_path: Path, record: PendingRepairApproval, posted: str,
+) -> None:
+    # Given: a stored record from before envelope cards existed.
+    store = PendingRepairApprovalStore(tmp_path / "pending")
+    store.save(record)
+    stored = store.get(TICKET)
+    assert stored is not None
+    # When: the exact-text probe reconstructs its expected message from disk alone.
+    actual = approval_request_content(stored).encode("utf-8")
+    # Then: the bytes equal the independently captured base output.
+    assert actual == posted.encode("utf-8")
 
 
 def test_v2_record_round_trips_and_reproduces_the_posted_message(tmp_path: Path) -> None:

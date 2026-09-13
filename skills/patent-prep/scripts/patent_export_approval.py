@@ -6,7 +6,6 @@ import json
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
-from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Protocol, assert_never
 from urllib.error import HTTPError, URLError
@@ -54,6 +53,7 @@ class PatentApprovalPayload:
     mode: str
     expiry_ts: int
     created_ts: int
+    render_version: int = 1
 
     def pending(self, nonce: str, binding: ApprovalBinding) -> manifest.Manifest:
         return manifest.Manifest(
@@ -68,27 +68,21 @@ class PatentApprovalPayload:
             created_ts=self.created_ts,
             approval_ts=None,
             approval_thread_id=binding.channel_id,
+            approval_guild_id=binding.guild_id,
             kind=str(binding.kind),
             surface=str(binding.surface),
             channel_id=binding.channel_id,
             policy_version=binding.policy_version,
+            render_version=self.render_version,
         )
 
 
-def repo_root() -> Path:
-    return export_binding.repo_root()
-
-
-def _repo_module(name: str) -> ModuleType:
-    return export_binding.repo_module(name)
+repo_root = export_binding.repo_root
+_repo_module = export_binding.repo_module
 
 
 def lifecycle() -> ModuleType:
     return _repo_module("approval_lifecycle")
-
-
-def _lease_module() -> ModuleType:
-    return _repo_module("approval_lease")
 
 
 def approval_key(slug: str) -> str:
@@ -138,7 +132,7 @@ def confirm_lease() -> ApprovalLease:
 
 
 def posting_journal() -> PostingJournal:
-    return _lease_module().PostingJournal(manifest._export_root() / "posting-journal")
+    return _repo_module("approval_lease").PostingJournal(manifest._export_root() / "posting-journal")
 
 
 def supersede(slug: str, nonce: str, plaintext_sha256: str) -> bool:
@@ -156,9 +150,10 @@ def supersede(slug: str, nonce: str, plaintext_sha256: str) -> bool:
 class PatentApprovalGate:
     """Stateful per-call adapter retaining exact manifest bindings while its lease is held."""
 
-    __slots__ = ("payload", "binding", "channel_id", "_fresh", "_observed")
+    __slots__ = ("payload", "binding", "channel_id", "_fresh", "_observed", "content")
 
-    def __init__(self, payload: PatentApprovalPayload, binding: ApprovalBinding) -> None:
+    def __init__(self, payload: PatentApprovalPayload, binding: ApprovalBinding, *, content: str | None = None) -> None:
+        self.content = content
         self.payload = payload
         self.binding = binding
         self.channel_id = binding.channel_id
@@ -257,7 +252,9 @@ class PatentApprovalGate:
         fresh = self.payload.pending(manifest.mint_nonce(), self.binding)
         self._fresh = fresh
         try:
-            message_id = export_gate.post_approval_request(self.channel_id, render_approval(fresh))
+            message_id = export_gate.post_approval_request(
+                self.channel_id, self.content if self.content is not None else render_approval(fresh)
+            )
             export_gate.add_reaction(self.channel_id, message_id, export_gate.APPROVE_EMOJI)
             export_gate.add_reaction(self.channel_id, message_id, export_gate.CANCEL_EMOJI)
         except _TRANSPORT_ERRORS as error:
