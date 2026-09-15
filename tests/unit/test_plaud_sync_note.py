@@ -51,45 +51,58 @@ def test_render_lifelog_body_places_summary_before_transcript() -> None:
     assert not body.endswith("\n")
 
 
-def test_plan_lifelog_note_uses_a_stable_id_digest_path() -> None:
+def test_plan_lifelog_note_names_the_file_date_time_title_and_the_title_is_the_stem() -> None:
+    """소유자 결정(2026-09-15, A안): 파일명 stem = `YYYY-MM-DD HHMM <제목>`, frontmatter title 과
+    H1 도 그 stem 이다. 해시 접미도 괄호 날짜도 없다 — 같은 날 녹음이 시각순으로 서고, 사이드바에
+    보이는 이름이 곧 제목이다.
+    """
     # Given
     first_recording = LifelogRecording(
         id="recording-1",
         name="일일 기록",
         created_at="2026-09-02T10:00:00+09:00",
-        start_at="2026-09-02T09:00:00+09:00",
+        start_at="2026-09-02T09:07:00+09:00",
         duration_ms=60_000,
         summary_markdown="요약",
         transcript_text="전문",
     )
-    second_recording = replace(first_recording, id="recording-2")
+    later_recording = replace(first_recording, id="recording-2", start_at="2026-09-02T14:30:00+09:00")
 
     # When
     first = plan_lifelog_note(first_recording, extraction=_SKIPPED)
     repeated = plan_lifelog_note(first_recording, extraction=_SKIPPED)
-    second = plan_lifelog_note(second_recording, extraction=_SKIPPED)
+    later = plan_lifelog_note(later_recording, extraction=_SKIPPED)
 
     # Then
     assert first.relpath == repeated.relpath
     assert first.relpath.parent.parts == ("000_PARA", "Area", "Lifelog", "2026")
-    assert first.relpath.suffix == ".md"
-    assert first.relpath.name != second.relpath.name
-    assert re.fullmatch(r"2026-09-02-.+--[0-9a-f]{12}\.md", first.relpath.name)
+    assert first.relpath.name == "2026-09-02_0907_일일_기록.md"
+    assert later.relpath.name == "2026-09-02_1430_일일_기록.md"
+    assert first.title == first.relpath.stem
+    assert f"\ntitle: {first.title}\n" in first.body
+    assert not re.search(r"--[0-9a-f]{12}", first.relpath.name)
 
 
 @pytest.mark.parametrize(
-    ("name", "expected_slug"),
+    ("name", "expected_title"),
     [
-        ("2026-09-02", "recording"),
+        ("2026-09-02", "녹음"),
         ("2026-09-02 meeting", "meeting"),
-        ("20260902T130522", "130522"),
-        ("2026_09_02-13-05-22", "13-05-22"),
+        ("2026-09-02 09:02 직장 동료들의 일상 대화", "직장_동료들의_일상_대화"),
+        ("2026-09-02 09:02:00", "녹음"),
+        ("20260902T130522", "녹음"),
+        ("2026_09_02-13-05-22", "녹음"),
+        ("09-02 점심", "점심"),
         ("meeting", "meeting"),
     ],
 )
-def test_plan_lifelog_note_strips_recording_date_from_filename(
-    name: str, expected_slug: str
+def test_plan_lifelog_note_strips_a_leading_recording_stamp_from_the_name(
+    name: str, expected_title: str
 ) -> None:
+    """Plaud 이름 앞의 날짜·시각은 파일명이 이미 말하므로 제목 자리에 두 번 적지 않는다.
+
+    시각만 남는 이름은 이름이 아니라 "녹음" 으로 앉는다(2026-09-07 실측: `113911`).
+    """
     recording = LifelogRecording(
         id="date-prefixed",
         name=name,
@@ -102,8 +115,37 @@ def test_plan_lifelog_note_strips_recording_date_from_filename(
 
     plan = plan_lifelog_note(recording, extraction=_SKIPPED)
 
-    assert plan.relpath.name.startswith(f"2026-09-02-{expected_slug}--")
-    assert plan.title == f"{name} (2026-09-02)"
+    assert plan.relpath.name == f"2026-09-02_0900_{expected_title}.md"
+    assert plan.title == f"2026-09-02_0900_{expected_title}"
+
+
+def test_plan_lifelog_note_takes_a_suffix_when_the_same_minute_is_already_taken() -> None:
+    """같은 분에 시작한 다른 녹음이 이미 그 경로를 가졌으면 ` (2)`, ` (3)` 으로 비킨다 — 해시 없이
+    유일성을 지키는 유일한 자리이고, 결정적이라 재계산해도 같은 답이 나온다.
+    """
+    from pathlib import PurePosixPath
+
+    recording = LifelogRecording(
+        id="second",
+        name="회의",
+        created_at="2026-09-02T10:00:00+09:00",
+        start_at="2026-09-02T09:00:00+09:00",
+        duration_ms=0,
+        summary_markdown="",
+        transcript_text="",
+    )
+    base = PurePosixPath("000_PARA/Area/Lifelog/2026/2026-09-02_0900_회의.md")
+
+    free = plan_lifelog_note(recording, extraction=_SKIPPED, taken=frozenset())
+    second = plan_lifelog_note(recording, extraction=_SKIPPED, taken=frozenset({base}))
+    third = plan_lifelog_note(
+        recording, extraction=_SKIPPED, taken=frozenset({base, base.with_name("2026-09-02_0900_회의_(2).md")})
+    )
+
+    assert free.relpath == base
+    assert second.relpath.name == "2026-09-02_0900_회의_(2).md"
+    assert second.title == "2026-09-02_0900_회의_(2)"
+    assert third.relpath.name == "2026-09-02_0900_회의_(3).md"
 
 
 def test_plan_lifelog_note_falls_back_to_created_at_and_rejects_bad_dates() -> None:
@@ -132,7 +174,7 @@ def test_plan_lifelog_note_falls_back_to_created_at_and_rejects_bad_dates() -> N
 
     # Then
     assert fallback_plan.relpath.parent.name == "2026"
-    assert fallback_plan.relpath.name.startswith("2026-09-03-")
+    assert fallback_plan.relpath.name == "2026-09-03_1000_기록.md"
     with pytest.raises(PlaudNoteError):
         _ = plan_lifelog_note(malformed_recording, extraction=_SKIPPED)
 
@@ -153,8 +195,8 @@ def test_plan_lifelog_note_uses_empty_content_and_name_fallbacks() -> None:
     plan = plan_lifelog_note(recording, extraction=_SKIPPED)
 
     # Then
-    assert plan.title == "녹음 (2026-09-02)"
-    assert plan.relpath.name.startswith("2026-09-02-recording--")
+    assert plan.title == "2026-09-02_1000_녹음"
+    assert plan.relpath.name == "2026-09-02_1000_녹음.md"
     assert "- (요약 없음)" in plan.body
     assert "- (전사 없음)" in plan.body
 
@@ -184,11 +226,12 @@ def test_plan_lifelog_note_makes_korean_punctuation_names_filename_safe() -> Non
     safe_plan = plan_lifelog_note(recording, extraction=_SKIPPED)
     long_plan = plan_lifelog_note(long_name_recording, extraction=_SKIPPED)
 
-    # Then
-    assert all(character not in safe_plan.relpath.name for character in ':\\/()')
-    assert safe_plan.relpath.name.startswith("2026-09-02-")
-    long_slug = long_plan.relpath.name.removeprefix("2026-09-02-").split("--", 1)[0]
-    assert len(long_slug) <= 60
+    # Then — Obsidian 이 파일명에 허용하지 않는 글자만 공백으로 바꾸고 나머지(괄호·한글·가운뎃점)는 둔다.
+    assert all(character not in safe_plan.relpath.name for character in '*"\\/<>:|?#^[]')
+    assert safe_plan.relpath.name == "2026-09-02_1000_주간_회의_9_2_(화).md"
+    assert safe_plan.title == safe_plan.relpath.stem
+    long_title = long_plan.relpath.stem.removeprefix("2026-09-02_1000_")
+    assert len(long_title) <= 60
 
 
 @pytest.mark.parametrize(
@@ -317,7 +360,7 @@ def _real_shape_recording() -> LifelogRecording:
 _V2_GOLDEN = (
     "---\n"
     "tags: [lifelog, lifelog/일상-잡담, lifelog/업무]\n"
-    'title: "2026-09-02 09:02 직장 동료들의 일상 대화: 업무, 진로, 취미 (2026-09-02)"\n'
+    "title: 2026-09-02_0902_직장_동료들의_일상_대화_업무,_진로,_취미\n"
     "source: PLAUD 녹음 mem_clRcZZ53qx\n"
     "created: 2026-09-02T09:02:00\n"
     "modified: 2026-09-02T09:02:00\n"
@@ -369,17 +412,20 @@ def test_render_lifelog_body_v2_matches_the_golden_note() -> None:
 def test_plan_lifelog_note_v2_title_and_path_follow_the_local_date() -> None:
     plan = plan_lifelog_note(_real_shape_recording(), extraction=_EXTRACTION, tz=_SEOUL)
 
-    assert plan.title == "2026-09-02 09:02 직장 동료들의 일상 대화: 업무, 진로, 취미 (2026-09-02)"
-    assert plan.relpath.name.startswith("2026-09-02-0902-")
+    assert plan.title == "2026-09-02_0902_직장_동료들의_일상_대화_업무,_진로,_취미"
+    assert plan.relpath.name == "2026-09-02_0902_직장_동료들의_일상_대화_업무,_진로,_취미.md"
     assert plan.body == _V2_GOLDEN
 
 
 def test_render_lifelog_body_quotes_the_title_only_when_yaml_needs_it() -> None:
     plain = replace(_real_shape_recording(), name="평범한 제목")
-    colon = replace(_real_shape_recording(), name="제목: 부제")
+    hash_sign = replace(_real_shape_recording(), name="제목 #태그")
+    dash = replace(_real_shape_recording(), name="- 대시로 시작")
 
-    assert "\ntitle: 평범한 제목 (2026-09-02)\n" in render_lifelog_body(plain, extraction=_SKIPPED, tz=_SEOUL)
-    assert '\ntitle: "제목: 부제 (2026-09-02)"\n' in render_lifelog_body(colon, extraction=_SKIPPED, tz=_SEOUL)
+    assert "\ntitle: 2026-09-02_0902_평범한_제목\n" in render_lifelog_body(plain, extraction=_SKIPPED, tz=_SEOUL)
+    # 파일명 금지문자는 제목에서도 빠진다(제목 = stem) — YAML 이 따옴표를 요구할 글자가 거의 남지 않는다.
+    assert "\ntitle: 2026-09-02_0902_제목_태그\n" in render_lifelog_body(hash_sign, extraction=_SKIPPED, tz=_SEOUL)
+    assert "\ntitle: 2026-09-02_0902_-_대시로_시작\n" in render_lifelog_body(dash, extraction=_SKIPPED, tz=_SEOUL)
 
 
 def test_render_lifelog_body_marks_a_skipped_extraction_without_people_or_places() -> None:
@@ -423,7 +469,7 @@ def test_render_lifelog_body_converts_start_at_into_the_note_timezone() -> None:
 
     assert "\ncreated: 2026-09-02T08:30:00\nmodified: 2026-09-02T08:30:00\n" in plan.body
     assert "- 녹음:: 2026-09-02 (수) 08:30 · " in plan.body
-    assert plan.relpath.name.startswith("2026-09-02-")
+    assert plan.relpath.name.startswith("2026-09-02_0830_")
     assert plan.relpath.parent.name == "2026"
 
 
@@ -497,25 +543,30 @@ def test_corrected_lifelog_note_fixes_the_extracted_fields_and_reports_every_wor
     assert changed.count(("항정기술", "한전기술", term_correction.FUZZY)) == 4
 
 
-def test_the_note_title_is_corrected_while_the_path_keeps_its_identity() -> None:
-    """제목은 사람이 읽는 첫 줄이라 고치고, 파일 이름은 그 노트의 신원이라 고정한다.
+def test_the_note_name_is_corrected_once_and_a_fixed_path_keeps_its_identity() -> None:
+    """제목 = stem 이므로 교정은 이름을 처음 정할 때 경로와 제목에 함께 걸린다.
 
-    Plaud 가 붙이는 녹음 이름도 음성에서 나오므로 같은 오인식을 안고 온다. 그러나 경로는
-    슬러그에서 오고, 경로가 참고 문서에 따라 움직이면 용어집을 한 줄 고친 날 같은 녹음이
-    노트 둘로 갈라진다.
+    Plaud 가 붙이는 녹음 이름도 음성에서 나오므로 같은 오인식을 안고 온다. 경로가 참고 문서에
+    따라 움직이면 용어집을 한 줄 고친 날 같은 녹음이 노트 둘로 갈라지므로, 한 번 쓰인 노트는
+    ``relpath`` 를 넘겨 고정하고 그때는 제목도 그 stem 을 따른다(교정 0건).
     """
     from automation.plaud_sync.note import corrected_lifelog_note
 
     recording = replace(_real_shape_recording(), name="항정기술 미팅")
+    glossary = (("한전기술", "한전기술"),)
 
-    fixed = corrected_lifelog_note(
-        recording, extraction=_SKIPPED, tz=_SEOUL, glossary=(("한전기술", "한전기술"),)
+    fresh = corrected_lifelog_note(recording, extraction=_SKIPPED, tz=_SEOUL, glossary=glossary)
+    pinned = corrected_lifelog_note(
+        recording, extraction=_SKIPPED, tz=_SEOUL, glossary=glossary, relpath=fresh.plan.relpath
     )
-    plain = corrected_lifelog_note(recording, extraction=_SKIPPED, tz=_SEOUL)
 
-    assert fixed.plan.title.startswith("한전기술 미팅")
-    assert "title: 한전기술 미팅" in fixed.plan.body
-    assert fixed.plan.relpath == plain.plan.relpath
+    assert fresh.plan.title == "2026-09-02_0902_한전기술_미팅"
+    assert fresh.plan.relpath.stem == fresh.plan.title
+    assert "title: 2026-09-02_0902_한전기술_미팅" in fresh.plan.body
+    assert [c.before for c in fresh.corrections] == ["항정기술"]
+    assert pinned.plan.relpath == fresh.plan.relpath
+    assert pinned.plan.title == fresh.plan.title
+    assert pinned.corrections == ()
 
 
 def test_plan_lifelog_note_without_a_glossary_changes_nothing() -> None:
@@ -584,12 +635,28 @@ def test_a_timestamp_only_plaud_name_takes_the_generated_title() -> None:
         recording, extraction=LifelogExtraction(title="직장 동료들의 일상 대화")
     )
 
-    assert plan.relpath.name.startswith("2026-09-07-직장-동료들의-일상-대화--")
+    assert plan.relpath.name == "2026-09-07_1139_직장_동료들의_일상_대화.md"
     assert "113911" not in plan.relpath.name
-    assert plan.title == "직장 동료들의 일상 대화 (2026-09-07)"
-    # 지문은 녹음 id 에서만 나온다 — 제목이 달라져도 같은 녹음은 같은 파일이다.
-    assert (plan.relpath.name.split("--")[-1]
-            == plan_lifelog_note(recording, extraction=_SKIPPED).relpath.name.split("--")[-1])
+    assert plan.title == "2026-09-07_1139_직장_동료들의_일상_대화"
+    # 제목이 아직 없을 때(발견 시점) 같은 녹음은 자리표시 이름으로 앉는다 — finalize 가 다시 정한다.
+    assert plan_lifelog_note(recording, extraction=_SKIPPED).relpath.name == "2026-09-07_1139_녹음.md"
+
+
+def test_plan_lifelog_note_keeps_a_fixed_relpath_and_titles_from_its_stem() -> None:
+    """이미 vault 에 쓴 노트는 경로가 고정이다 — 재처리가 새 제목을 만들어도 같은 파일을 덮어쓰고,
+    제목은 그 경로의 stem 을 따른다(제목 = stem 불변식).
+    """
+    from pathlib import PurePosixPath
+
+    fixed = PurePosixPath("000_PARA/Area/Lifelog/2026/2026-09-07_1139_첫_제목.md")
+
+    plan = plan_lifelog_note(
+        _real_shape_recording(), extraction=LifelogExtraction(title="다른 제목"), tz=_SEOUL, relpath=fixed
+    )
+
+    assert plan.relpath == fixed
+    assert plan.title == "2026-09-07_1139_첫_제목"
+    assert "\ntitle: 2026-09-07_1139_첫_제목\n" in plan.body
 
 
 def test_a_plaud_name_with_letters_ignores_the_generated_title() -> None:
@@ -606,8 +673,8 @@ def test_a_plaud_name_with_letters_ignores_the_generated_title() -> None:
 
     plan = plan_lifelog_note(recording, extraction=LifelogExtraction(title="다른 제목"))
 
-    assert plan.relpath.name.startswith("2026-09-02-09-02-직장-동료들의-일상-대화-업무-진로-취미--")
-    assert "다른-제목" not in plan.relpath.name
+    assert plan.relpath.name == "2026-09-02_0900_직장_동료들의_일상_대화_업무,_진로,_취미.md"
+    assert "다른 제목" not in plan.relpath.name
 
 
 def test_glance_carries_only_the_recording_line_and_diagnostics() -> None:

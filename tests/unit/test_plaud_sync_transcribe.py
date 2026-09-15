@@ -197,10 +197,64 @@ def test_process_when_cli_succeeds_then_record_is_planned_with_the_local_transcr
     assert body.rstrip().endswith(" · 전사: 로컬 전사 local:ggml-large-v3-turbo-q5_0 · 화자 분리")
     assert after.body_sha256 == hashlib.sha256(body.encode("utf-8")).hexdigest()
     assert after.action_hash != _RECORD.action_hash
-    assert after.note_relpath == _RECORD.note_relpath
+    # 발견 때의 자리표시 경로는 vault 에 쓰이지 않았으므로(remote_ref=None) finalize 가 제목으로
+    # 이름을 다시 짓는다 — 소유자 결정 2026-09-15 A안: `YYYY-MM-DD HHMM <제목>`, 제목 = stem.
+    assert after.note_relpath == "000_PARA/Area/Lifelog/2026/2026-09-01_1700_standup.md"
+    assert after.note_title == "2026-09-01_1700_standup"
+    assert "\ntitle: 2026-09-01_1700_standup\n" in body
     assert effects.labels == ["2026-09-01-standup--08008c284627"]
-    assert effects.stored == [("2026-09-01-standup--08008c284627", _TRANSCRIPT_MD)]
+    assert effects.stored == [("2026-09-01_1700_standup", _TRANSCRIPT_MD)]
     assert effects.discarded == [Path("/tmp/plaud-audio/rec-001.mp3")]
+
+
+def test_process_names_the_note_from_the_generated_title_when_plaud_gave_only_a_stamp() -> None:
+    """로컬 전사 녹음은 발견 때 제목이 없어 `… 녹음.md` 자리에 앉는다 — finalize 가 추출 제목으로
+    파일명·제목을 함께 정한다(2026-09-07 실측 `180427` 이 영원히 남던 결함의 반대편).
+    """
+    record = replace(
+        _RECORD,
+        note_relpath="000_PARA/Area/Lifelog/2026/2026-09-01_1700_녹음.md",
+        note_title="2026-09-01_1700_녹음",
+    )
+    source = replace(_SOURCE, name="2026-09-01 08:00:00")
+    effects = FakeEffects(
+        results=[_ok()],
+        source=source,
+        extraction=LifelogExtraction(title="출시 일정 점검"),
+    )
+
+    assert process(record, effects=effects, max_attempts=2) == "planned"
+
+    (_before, after, body) = effects.commits[0]
+    assert body is not None
+    assert after.note_relpath == "000_PARA/Area/Lifelog/2026/2026-09-01_1700_출시_일정_점검.md"
+    assert after.note_title == "2026-09-01_1700_출시_일정_점검"
+    assert "\ntitle: 2026-09-01_1700_출시_일정_점검\n" in body
+    assert effects.stored == [("2026-09-01_1700_출시_일정_점검", _TRANSCRIPT_MD)]
+
+
+def test_process_keeps_the_relpath_of_a_note_already_written_to_the_vault() -> None:
+    """재처리(`repost.reset_for_reprocess`)는 remote_ref 를 남긴다 — 그 노트는 vault 에 있으므로
+    새 제목이 나와도 같은 파일을 덮어쓰고, 제목은 그 경로의 stem 을 따른다(옛 노트가 고아가 되지 않는다).
+    """
+    written = replace(
+        _RECORD,
+        note_relpath="000_PARA/Area/Lifelog/2026/2026-09-01_0800_첫_제목.md",
+        note_title="2026-09-01_0800_첫_제목",
+        remote_ref="refs/remotes/origin/main",
+    )
+    effects = FakeEffects(
+        results=[_ok()], extraction=LifelogExtraction(title="다른 제목")
+    )
+
+    assert process(written, effects=effects, max_attempts=2) == "planned"
+
+    (_before, after, body) = effects.commits[0]
+    assert body is not None
+    assert after.note_relpath == written.note_relpath
+    assert after.note_title == "2026-09-01_0800_첫_제목"
+    assert "\ntitle: 2026-09-01_0800_첫_제목\n" in body
+    assert after.remote_ref == written.remote_ref
 
 
 def test_process_when_diarization_was_unavailable_then_source_line_does_not_claim_speakers() -> None:

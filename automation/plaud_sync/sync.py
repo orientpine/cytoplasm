@@ -13,6 +13,7 @@ import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
+from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Final
 
@@ -121,7 +122,10 @@ def plan_new_records(
             except LifelogExtractError:
                 deferred.append(recording.id)
                 continue
-        note = corrected_lifelog_note(recording, extraction=extraction, tz=tz, glossary=glossary)
+        taken = frozenset(PurePosixPath(existing.note_relpath) for existing in records.values())
+        note = corrected_lifelog_note(
+            recording, extraction=extraction, tz=tz, glossary=glossary, taken=taken
+        )
         plan = note.plan
         if note.corrections:
             corrections.append((recording.name or recording.id, note.corrections))

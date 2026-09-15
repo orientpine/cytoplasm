@@ -2126,3 +2126,16 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   「요청별 승인 스레드 규칙」은 리마인더가 **그 요청의 스레드**에서 완결되기를 요구하므로 목적지가
   `#notifications` 인지 스레드인지는 소유자 판단이 필요하다 — 고르기 전에는 고치지 않는다.
   **영향: 리마인더가 스레드가 아닌 DM 으로 감 · 동작은 정상 · 심각도 낮음**. [해소 2026-09-11: 새 소유자 결정은 필요 없었다. 목적지는 기존 「요청별 승인 스레드 규칙」이 이미 정해 두었고(리마인더는 그 요청의 `#agent-chat` 스레드에서 완결), calendar 워처의 deliver 가 넘겨받은 `channel_id` 로 `DiscordApi.post_message` 를 부르도록 바꿔 그 규칙을 따르게 했다. 스레드 링크의 guild id 는 새 공용 헬퍼 `automation/interop/approval_reminder.py::channel_guild_resolver` 가 채우고(DM 승인은 `@me` 유지) todo·mail·repair 워처도 같은 리졸버를 쓴다(그쪽 스레드 카드 링크가 `@me` 였다). 증적: `docs/qa/REM-THREAD-0911/01-calendar-reminder-thread.txt` (전: DM open + `@me` 링크 / 후: 스레드로 POST 1건 `https://discord.com/channels/<guild>/<thread>/<card>`, DM open 0).]
+
+## 워킹트리 전량 커밋 착지 후 남긴 것 (2026-09-14)
+
+> [이관 2026-09-14 · 해소] 같은 날 소유자 지시(「gitignore 에 넣으면 좋을 것들 점검하고 넣어줘」)로 닫혔다. 아래 원문은 그때의 관측·제안이고 `↳ 처리` 줄이 실제로 병합된 동작을 말한다.
+
+- **`.omo/senpi-task/` 는 하네스가 매 턴 다시 쓰는 세션 장부인데 git 에 추적된다** → `00c4815b1` 이 기능 커밋과 함께
+  21개 파일을 실은 뒤로 세션마다 워킹트리가 더러워진다(이번 사이클: 삭제 18 · 추가 95). `local_ci.sh` 는 이 경로를 dirty
+  검사에서 빼두었지만, mass-ulw DAG 의 `runKey` 슬러그가 gitleaks `generic-api-key` 문턱을 넘어 `.gitleaksignore`
+  fingerprint 3줄이 필요했고 긴 슬러그의 DAG 실행이 생길 때마다 같은 일이 반복된다.
+  ↳ **조치**: `.gitignore` 에 `.omo/senpi-task/` 를 더하고 `git rm -r --cached` 로 추적을 끊을지(그때 `local_ci.sh` 의
+  예외와 `.gitleaksignore` 3줄도 함께 걷어낸다), 아니면 지금처럼 이력으로 남길지는 설계 판단이라 소유자 결정 뒤 한
+  커밋으로 처리한다. **영향: 동작 결함 아님 · 워킹트리 소음과 시크릿 스캔 오탐만 · 심각도 낮음**.
+  ↳ 처리(2026-09-14): 해소 — `.gitignore` 에 `.omo/senpi-task/` 를 더하고 `git rm -r --cached` 로 98개 파일을 인덱스에서만 내렸다(디스크 사본 불변). 같은 점검에서 `.omo/run-continuation/` 도 2026-07-18 무시 규칙 이전에 추적된 89개가 인덱스에 남아 있어 함께 내렸고, 비어 있어 아직 보이지 않는 `.omo/thread-tools/`(팀 메일박스·영수증·lock) 와 도구가 만든 `*` .gitignore 에만 기대던 `.pytest_cache/`·`.ruff_cache/` 를 미리 올렸다. 제안과 달리 `local_ci.sh`·`release.sh` 의 exclude pathspec 은 **남긴다** — 무시된 뒤에는 중복이지만 해가 없고 `tests/unit/test_local_ci_push_gate.py` 가 그 예외를 고정한다. `.gitleaksignore` 3줄도 **남긴다** — `e0856361b` 가 그 blob 을 여전히 들고 있고 `public_export.sh` 는 `--all --full-history` 를 스캔하므로 지우면 다음 반출이 그 커밋에서 선다.

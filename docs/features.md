@@ -202,6 +202,7 @@
 완료 기능: [로컬 전사 노트 본문의 시각 정규화 — 오프셋 없는 `get_file` UTC 를 현지 시각으로](기능소개/plaud-녹음-로컬-전사.md) (스윕 6 · PR #424 · 기존 노트 3건 보정은 OWNER)
 완료 기능: [peer 읽기 sudoers 를 설치 자산으로 — 새 노드는 자동, 기존 노드는 소유자 sudo 한 번](기능소개/peer-게이트웨이-승인채널-차단-프로브.md) (스윕 6 · PR #425 · 노드 설치는 아직 OWNER)
 완료 기능: [라이프로그 노트의 요약이 비지 않게 하기 — 배열 응답 수용·요약 전용 복구 호출·부재 사유 명시](기능소개/plaud-lifelog-요약-누락-차단.md) (automation/plaud_sync · prompts/lifelog-summary-v1.md · 소유자 지시 2026-09-06)
+완료 기능: [Plaud lifelog 노트 이름 양식 — `YYYY-MM-DD_HHMM_제목`(공백 없음), 파일명 = title = H1, 이름은 finalize 때·쓰인 뒤 고정, 옛 노트 15건 이관](기능소개/plaud-lifelog-노트-이름-양식.md) (automation/plaud_sync `note_paths`·`rename_legacy` · 소유자 결정 2026-09-15 A안)
 완료 기능: [전사본 낱말 조립과 화자 분리 교정 — 가짜 공백 198개 제거·과분할을 상한 재클러스터링으로 복구](기능소개/전사-낱말-조립과-화자-분리-교정.md) (speechtotext `stt_blocks`·`stt_split`·`stt_diarize` · 소유자 지시 2026-09-06)
 완료 기능: [전사 정확도 사용 중 개선 루프 — 단어별 화자 배정·오디오 보관·교정 정답 수집·후보 비교](기능소개/전사-정확도-사용중-개선-루프.md) (speechtotext 1.3.0 · plaud 1.2.0 · 자동 기본값 변경 없음)
 완료 기능: [라이프로그 화자 분리 정정 — 임계값 1.35→1.0·재귀 병합 가드 해제·잔여 군집 프룬·단일 화자 문단](기능소개/라이프로그-화자-분리-정정.md) (speechtotext `stt_diarize`·`stt_blocks` · 소유자 지시 2026-09-07 · 증적 docs/qa/PLD1)

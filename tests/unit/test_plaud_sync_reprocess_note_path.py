@@ -49,11 +49,11 @@ def test_plan_lifelog_note_when_first_transcription_generates_a_title_then_uses_
     plan = plan_lifelog_note(_TITLELESS_RECORDING, extraction=extraction)
 
     # Then
-    assert plan.relpath.name.startswith("2026-09-01-생성된-제목--")
+    assert plan.relpath.name == "2026-09-01_1700_생성된_제목.md"
 
 
-def test_finalize_when_reprocessing_a_titleless_recording_then_keeps_its_first_note_path() -> None:
-    # Given
+def test_finalize_when_reprocessing_a_written_titleless_recording_then_keeps_its_first_note_path() -> None:
+    # Given: the placeholder note already reached the vault (remote_ref is the receipt).
     first_plan = plan_lifelog_note(_TITLELESS_RECORDING, extraction=_SKIPPED)
     regenerated_plan = plan_lifelog_note(
         _TITLELESS_RECORDING, extraction=LifelogExtraction(title="생성된 제목")
@@ -62,18 +62,39 @@ def test_finalize_when_reprocessing_a_titleless_recording_then_keeps_its_first_n
         _RECORD,
         note_relpath=first_plan.relpath.as_posix(),
         note_title=first_plan.title,
+        remote_ref="refs/remotes/origin/main",
     )
     assert first_plan.relpath != regenerated_plan.relpath
 
     # When
-    after, _body, _corrections = finalize(
+    after, body, _corrections = finalize(
         reprocessing,
         _TITLELESS_RECORDING,
         extraction=LifelogExtraction(title="생성된 제목"),
         tz=DEFAULT_TIMEZONE,
     )
 
-    # Then
+    # Then: the file is upserted in place and the title follows its stem.
     assert after.note_relpath == first_plan.relpath.as_posix()
     assert after.note_relpath != regenerated_plan.relpath.as_posix()
-    assert after.note_title == "생성된 제목 (2026-09-01)"
+    assert after.note_title == first_plan.title == "2026-09-01_1700_녹음"
+    assert "\ntitle: 2026-09-01_1700_녹음\n" in body
+
+
+def test_finalize_when_the_placeholder_was_never_written_then_the_generated_title_names_the_note() -> None:
+    # Given: discovery parked the record under the placeholder name; nothing reached the vault.
+    first_plan = plan_lifelog_note(_TITLELESS_RECORDING, extraction=_SKIPPED)
+    parked = replace(_RECORD, note_relpath=first_plan.relpath.as_posix(), note_title=first_plan.title)
+
+    # When
+    after, body, _corrections = finalize(
+        parked,
+        _TITLELESS_RECORDING,
+        extraction=LifelogExtraction(title="생성된 제목"),
+        tz=DEFAULT_TIMEZONE,
+    )
+
+    # Then
+    assert after.note_relpath == "000_PARA/Area/Lifelog/2026/2026-09-01_1700_생성된_제목.md"
+    assert after.note_title == "2026-09-01_1700_생성된_제목"
+    assert "\ntitle: 2026-09-01_1700_생성된_제목\n" in body

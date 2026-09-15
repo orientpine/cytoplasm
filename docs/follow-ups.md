@@ -267,3 +267,7 @@ doctype·proposal 검토 호출 시점에는 Drive URL이 전달되지 않으므
   읽는 경로(에이전트 포함)에서는 진짜 오류와 섞인다.
   ↳ **조치**: `tests/unit` executionEnvironment 를 더하고, 선언 목록을 고정하는 `tests/unit/test_pyright_config.py` 를
   같은 커밋에서 갱신한다(PR #420 이 `skills/*/scripts` 19개를 더한 것과 같은 형태). **영향: 동작 결함 아님 · 심각도 낮음**.
+
+## 워킹트리 전량 커밋 착지 후 남긴 것 (2026-09-14)
+
+> ↳ 2026-09-14 같은 날 해소(소유자 지시 「gitignore 에 넣으면 좋을 것들 점검」) — `.omo/senpi-task/` 를 무시하고 인덱스에서 내렸다. 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.

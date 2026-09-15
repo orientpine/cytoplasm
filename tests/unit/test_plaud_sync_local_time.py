@@ -42,7 +42,7 @@ def test_note_when_get_file_timestamp_is_naive_utc_then_body_uses_the_kst_title_
     plan = plan_lifelog_note(recording, extraction=_SKIPPED, tz=_SEOUL)
 
     # Then
-    assert plan.title.startswith("2026-04-03 18:04:27")
+    assert plan.title == "2026-04-03_1804_local_transcription"
     assert "created: 2026-04-03T18:04:27" in plan.body
     assert "- 녹음:: 2026-04-03 (금) 18:04 · 64분 0초" in plan.body
     assert "· 2026-04-03T18:04:27 · 64분 0초" in plan.body

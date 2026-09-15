@@ -8,10 +8,23 @@ __pycache__/
 .venv/
 node_modules/
 
-# Agent run-state — ephemeral session continuation files and boulder state.
-# Plans / evidence / notepads under .omo/ are tracked explicitly for history.
+# pytest / ruff caches (root and configs/rag/*). Each tool drops its own `*` .gitignore
+# inside the directory; listing them here makes the exclusion ours, not the tool's courtesy.
+.pytest_cache/
+.ruff_cache/
+
+# Agent run-state — ephemeral harness files, rewritten every turn and read by no check.
+# Plans / evidence / notepads / ulw-* ledgers under .omo/ are tracked explicitly for history.
+#   run-continuation/  session continuation files (rule since 2026-07-18; the 89 entries
+#                      committed before it stayed in the index until 2026-09-14)
+#   senpi-task/        child-task transcripts + mass-ulw DAG state — local_ci.sh and
+#                      release.sh already exclude it from the dirty-tree check; 98 entries
+#                      untracked 2026-09-14
+#   thread-tools/      team mailbox / receipts / locks
 .omo/run-continuation/
 .omo/boulder.json
+.omo/senpi-task/
+.omo/thread-tools/
 
 # Browser-tool residue — Playwright MCP drops page snapshots / console logs here
 # while reviewing local pages. Machine dumps of files already tracked, not source.

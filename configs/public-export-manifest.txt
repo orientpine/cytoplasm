@@ -11,6 +11,10 @@
 .omo/
 docs/qa/
 
+# gitleaks fingerprint allowlist: its entries name .omo/ paths that never leave the
+# private tree, so publishing it would only advertise files the public tree lacks.
+.gitleaksignore
+
 # FS3 sweep-internal orchestration assets whose only inputs are private trees.
 automation/fs3_accounting.py
 automation/fs3_normalization.py

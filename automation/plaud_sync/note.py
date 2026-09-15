@@ -8,8 +8,10 @@ so the frontmatter is approved with everything else.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, replace
 from datetime import datetime, tzinfo
+from pathlib import PurePosixPath
 from typing import assert_never
 
 from automation import term_correction
@@ -34,7 +36,7 @@ from .lifelog_fields import (
     unquote_transcript,
 )
 from .lifelog_model import ExtractionOutcome, ExtractionSkipped, LifelogExtraction, LifelogRecording
-from .note_paths import PlaudNoteError, corrected_title, lifelog_relpath, note_title, recording_stamp
+from .note_paths import PlaudNoteError, note_destination, note_title, recording_stamp
 
 __all__ = [
     "SOURCE_RULE",
@@ -65,9 +67,13 @@ def plan_lifelog_note(
     extraction: ExtractionOutcome,
     tz: tzinfo = DEFAULT_TIMEZONE,
     glossary: term_correction.Glossary = (),
+    taken: Collection[PurePosixPath] = frozenset(),
+    relpath: PurePosixPath | None = None,
 ) -> NotePlan:
     """Build the deterministic PARA destination and content for one recording."""
-    return corrected_lifelog_note(recording, extraction=extraction, tz=tz, glossary=glossary).plan
+    return corrected_lifelog_note(
+        recording, extraction=extraction, tz=tz, glossary=glossary, taken=taken, relpath=relpath
+    ).plan
 
 
 def corrected_lifelog_note(
@@ -76,24 +82,29 @@ def corrected_lifelog_note(
     extraction: ExtractionOutcome,
     tz: tzinfo = DEFAULT_TIMEZONE,
     glossary: term_correction.Glossary = (),
+    taken: Collection[PurePosixPath] = frozenset(),
+    relpath: PurePosixPath | None = None,
 ) -> CorrectedNote:
     """계획한 노트와 그 노트를 만들며 고친 낱말들.
 
     교정은 노트를 **얼리는 이 자리**에서 끝난다 — 승인 카드와 push 가 언 본문의 sha 를 묶으므로
     나중 교정은 존재할 수 없다. 무엇이 바뀌었는지는 돌려만 주고, 로그로 남기는 것은 참고 문서를
     읽어 온 효과 경계의 일이다(순수 함수는 파일을 쓰지 않는다).
+
+    ``relpath`` 를 주면 그 경로가 목적지이고 제목은 그 stem 이다 — 이미 vault 에 쓰인 노트의
+    재처리는 이름을 새로 짓지 않고 같은 파일을 덮어쓴다.
     """
     stamp = recording_stamp(recording, tz)
-    generated = _generated_title(extraction)
-    body, corrections = _render(recording, extraction, stamp, glossary)
+    title_corrections: tuple[term_correction.Correction, ...] = ()
+    destination = relpath
+    if destination is None:
+        destination, title_corrections = note_destination(
+            recording, stamp, glossary, generated=_generated_title(extraction), taken=taken
+        )
+    body, corrections = _render(recording, extraction, stamp, glossary, title=destination.stem)
     return CorrectedNote(
-        plan=NotePlan(
-            relpath=lifelog_relpath(recording, stamp, generated=generated),
-            # 본문이 이미 같은 제목을 실었으므로 교정 내역은 거기서 한 번만 센다.
-            title=corrected_title(recording, stamp, glossary, generated=generated)[0],
-            body=body,
-        ),
-        corrections=corrections,
+        plan=NotePlan(relpath=destination, title=destination.stem, body=body),
+        corrections=(*title_corrections, *corrections),
     )
 
 
@@ -105,7 +116,7 @@ def render_lifelog_body(
     glossary: term_correction.Glossary = (),
 ) -> str:
     """Render the v2 Markdown body (frontmatter first) for one recording."""
-    return _render(recording, extraction, recording_stamp(recording, tz), glossary)[0]
+    return corrected_lifelog_note(recording, extraction=extraction, tz=tz, glossary=glossary).plan.body
 
 
 def _corrected_fields(
@@ -142,7 +153,9 @@ def _render(
     recording: LifelogRecording,
     extraction: ExtractionOutcome,
     stamp: datetime,
-    glossary: term_correction.Glossary = (),
+    glossary: term_correction.Glossary,
+    *,
+    title: str,
 ) -> tuple[str, tuple[term_correction.Correction, ...]]:
     summary_source = recording.summary_markdown
     if not summary_source.strip():
@@ -155,9 +168,6 @@ def _render(
                 assert_never(unreachable)
     summary, corrections = term_correction.apply(
         strip_unresolvable_images(summary_source), glossary
-    )
-    title, title_corrections = corrected_title(
-        recording, stamp, glossary, generated=_generated_title(extraction)
     )
     extraction, field_corrections = _corrected_fields(extraction, glossary)
     topics = topic_tags(summary)
@@ -187,7 +197,7 @@ def _render(
     if recording.transcript_source:
         source_line += f" · 전사: {recording.transcript_source}"
     parts += [TRANSCRIPT_HEADING, transcript_block(recording.transcript_text), SOURCE_RULE, source_line]
-    return "\n\n".join(parts), (*title_corrections, *corrections, *field_corrections)
+    return "\n\n".join(parts), (*corrections, *field_corrections)
 
 
 def _generated_title(extraction: ExtractionOutcome) -> str:

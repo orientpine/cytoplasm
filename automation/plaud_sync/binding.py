@@ -11,6 +11,7 @@ import hashlib
 import json
 from dataclasses import dataclass, replace
 from datetime import tzinfo
+from pathlib import PurePosixPath
 from typing import Final
 
 from automation import term_correction
@@ -61,10 +62,15 @@ def finalize(
     직전이기 때문이다. 무엇이 바뀌었는지는 돌려주기만 한다 — 로그는 참고 문서를 읽어 온
     효과 경계의 일이다.
     """
-    note = corrected_lifelog_note(recording, extraction=extraction, tz=tz, glossary=glossary)
+    # 이름은 제목이 확정되는 지금 짓는다(발견 때는 로컬 전사 녹음에 제목이 없다). 단 vault 에 이미
+    # 쓰인 노트(remote_ref)는 경로를 고정해 재처리가 같은 파일을 덮어쓰게 한다 — 옛 노트를 고아로
+    # 남기지 않는다(소유자 결정 2026-09-15).
+    pinned = PurePosixPath(record.note_relpath) if record.remote_ref is not None else None
+    note = corrected_lifelog_note(
+        recording, extraction=extraction, tz=tz, glossary=glossary, relpath=pinned
+    )
     plan = note.plan
-    # Discovery fixed this vault destination before local transcription can supply a title.
-    relpath = record.note_relpath
+    relpath = plan.relpath.as_posix()
     body_sha256 = hashlib.sha256(plan.body.encode("utf-8")).hexdigest()
     promoted = replace(
         record,
