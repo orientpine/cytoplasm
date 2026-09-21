@@ -72,8 +72,20 @@ def _digest(path: Path) -> str:
 
 
 def _component(value: str) -> str:
-    path = Path(value).expanduser()
-    return _digest(path) if value and path.is_file() else value
+    """파일이면 내용 지문, 아니면 값 그대로 — **탐침은 절대 던지지 않는다**.
+
+    설정 값에는 경로가 아닌 것이 섞여 있고(`sherpa`·`none`), `Path.is_file()` 은 EACCES 를
+    삼키지 않는다(CPython `_IGNORED_ERRNOS` 에 ENOENT·ENOTDIR·EBADF·ELOOP 만 있다). 읽을 수
+    없는 cwd 에서 그 값을 상대 경로로 stat 하면 예외가 올라가고, 부르는 쪽이 OSError 를
+    fail-soft 로 삼켜 **평가 스냅샷이 통째로 조용히 사라진다**(2026-09-18 노드 실측).
+    같은 함정이 2026-08-26 `approval_reminder_config` 수리의 원인이었다 — 보이지 않는
+    파일은 없는 파일과 같게 답해야지 던지면 안 된다.
+    """
+    try:
+        path = Path(value).expanduser()
+        return _digest(path) if value and path.is_file() else value
+    except OSError:
+        return value
 
 
 def config_fingerprint(env: Mapping[str, str], toolchain: LocalToolchain) -> str:

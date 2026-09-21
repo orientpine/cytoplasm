@@ -12,11 +12,10 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TextIO
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -29,10 +28,47 @@ def slug(key: str) -> str:
 class ApprovalLease(Protocol):
     """Mutual exclusion for one logical approval key."""
 
-    @contextmanager
-    def hold(self, key: str) -> Iterator[bool]:
+    def hold(self, key: str) -> AbstractContextManager[bool]:
         """Yield True iff this process owns the key; False means someone else does."""
         ...
+
+
+class _FileKeyHold:
+    # Not @contextlib.contextmanager: generator re-raise assigns __traceback__
+    # and frozen slots exceptions (SubmissionArtifactError) become TypeError.
+    __slots__: tuple[str, ...] = ("_handle", "_owned", "_path")
+
+    def __init__(self, path: Path) -> None:
+        self._handle: TextIO | None = None
+        self._owned: bool = False
+        self._path: Path = path
+
+    def __enter__(self) -> bool:
+        self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        handle = self._path.open("a", encoding="utf-8")
+        try:
+            self._path.chmod(0o600)
+        except OSError:
+            handle.close()
+            raise
+        self._handle = handle
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False          # held elsewhere — caller must change NOTHING
+        self._owned = True
+        return True
+
+    def __exit__(self, *_exception: object) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        try:
+            if self._owned:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()        # never unlink — the kernel drops the flock on crash
+            self._handle = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,24 +77,8 @@ class FileKeyLease:
 
     root: Path
 
-    @contextmanager
-    def hold(self, key: str) -> Iterator[bool]:
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = self.root / f"{slug(key)}.lease"
-        handle = path.open("a", encoding="utf-8")
-        try:
-            path.chmod(0o600)
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                yield False          # held elsewhere — caller must change NOTHING
-                return
-            try:
-                yield True
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        finally:
-            handle.close()           # 파일은 절대 unlink 하지 않는다 — 크래시 시 커널이 해제
+    def hold(self, key: str) -> AbstractContextManager[bool]:
+        return _FileKeyHold(self.root / f"{slug(key)}.lease")
 
 
 @dataclass(frozen=True, slots=True)

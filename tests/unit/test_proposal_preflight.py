@@ -109,7 +109,7 @@ def test_absent_image_key_is_reported_but_only_blocks_images_stage(
         ("public", "drive", None, "content", True),
         ("patent-sensitive", "image-api", None, "content", False),
         ("patent-sensitive", "refine-host", "codex-oauth", "content", True),
-        ("patent-sensitive", "render", None, "content", False),
+        ("patent-sensitive", "render", None, "content", True),
         ("patent-sensitive", "drive", None, "content", True),
         ("owner-private", "image-api", None, "content", False),
         ("owner-private", "refine-host", "codex-oauth", "content", False),

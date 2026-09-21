@@ -50,7 +50,27 @@ def test_card_version_and_probe_when_request_posts(producer: str, available: boo
             bound = gate.outstanding(budget.budget_approval.approval_key(stored))[0]
             version = stored["render_version"]
         case "calendar":
-            entry = calendar._approval().request_confirmation(calendar._draft())
+            draft = calendar._draft()
+            if not available:
+                # New detailed cards must not degrade into blind approval requests.
+                root = request.getfixturevalue("tmp_path")
+                before = {
+                    path: path.read_bytes() for path in root.rglob("*")
+                    if path.suffix in {".json", ".jsonl"}
+                }
+                with pytest.raises(calendar.calendar_gate.GateError):
+                    calendar._approval().request_confirmation(draft)
+                assert fake.posts == 0
+                assert not fake.request_threads
+                assert not fake.notice_ids
+                assert not calendar._store().load()
+                assert {
+                    path: path.read_bytes() for path in root.rglob("*")
+                    if path.suffix in {".json", ".jsonl"}
+                } == before
+                assert not list(root.rglob("posting-journal/*.json"))
+                return
+            entry = calendar._approval().request_confirmation(draft)
             gate = calendar._approval().CalendarApprovalGate(None, calendar._store(), calendar.OWNER)
             bound = calendar._approval().request_of(entry)
             version = entry.render_version
@@ -66,11 +86,12 @@ def test_card_version_and_probe_when_request_posts(producer: str, available: boo
         fake.contents[bound.message_id] = fake.contents[bound.message_id].replace(bound.action_hash, "wrong-binding")
     probe = gate.probe(bound)
     # Then the actual consumer accepts only intact wire, including legacy fallback cards.
-    assert version == ("2" if available else "1")
+    expected_version = "4" if producer == "calendar" else ("3" if available else "1")
+    assert version == expected_version
     assert probe is (Probe.BOUND_PENDING if binding_intact else Probe.BINDING_MISMATCH)
     assert fake.posts == 1
     content = next(iter(fake.contents.values()))
-    assert content.startswith("대상: ") is available
+    assert content.startswith("**🔔 ") is available
 
 
 @pytest.mark.parametrize("producer", ["mail", "budget", "calendar", "coordination"])
@@ -125,6 +146,9 @@ def test_existing_card_is_preserved_when_envelope_runtime_changes(producer: str,
                 return budget.budget_approval.post_for_approval(budget.budget_gate.load_draft(draft["id"]))
         case "calendar":
             draft = calendar._draft()
+            # The old stored version is explicit; new requests now require v3.
+            draft["render_version"] = "1"
+            calendar.calendar_gate.persist_draft(draft)
             def post():
                 return calendar._approval().request_confirmation(calendar.calendar_gate.load_draft(draft["id"]))
         case "coordination":

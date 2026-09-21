@@ -16,7 +16,7 @@ from contextlib import suppress
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from calendar_confirm_input import DraftRecord as DraftRecord
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -43,6 +43,8 @@ CANCEL_EMOJI = "\u26d4"
 OUTCOME_DONE = "done"
 OUTCOME_CANCELLED = "cancelled"
 OUTCOME_EXPIRED = "expired"
+#: 재시도 가능한 실행 실패 — 종결이 아니므로 스레드를 닫지 않고 결과 봉투도 만들지 않는다.
+OUTCOME_FAILED = "failed"
 
 # Preserve the public transport injection seams while separating input validation.
 from calendar_confirm_input import (  # noqa: E402
@@ -93,7 +95,7 @@ def consume_watcher_authorization(draft: DraftRecord, authorization_path: Path) 
     )
 
 
-def _api(method: str, path: str, payload: dict[str, str] | None = None) -> Any:
+def _api(method: str, path: str, payload: Mapping[str, str | Mapping[str, str | bool]] | None = None) -> Any:
     token = bot_token()
     request = Request(
         f"{API}{path}",
@@ -124,27 +126,9 @@ def _render_v1(draft: DraftRecord) -> str:
 
 
 def render_confirmation(draft: DraftRecord) -> str:
-    version = draft.get("render_version", "1")
-    if version == "1":
+    if draft.get("render_version", "1") == "1":
         return _render_v1(draft)
-    from automation.interop.approval_card import CardRenderError
-    if version != "2":
-        raise CardRenderError("unknown calendar card render version")
-    from automation.interop import owner_message
-    if not callable(getattr(owner_message, "render", None)):
-        raise CardRenderError("owner envelope unavailable")
-    here = owner_message.Ref(scope="self")
-    envelope = owner_message.OwnerMessage(
-        subject_key=str(draft["id"]), subject="캘린더 변경", fact=str(draft["action"]),
-        location=here, owner=owner_message.Action("react", here, calendar_binding.reaction_instruction()),
-        agent_next="승인된 캘린더 변경만 실행", recovery="not_applicable",
-        detail=owner_message.Approval(None, "캘린더를 변경하지 않음"),
-    )
-    try:
-        body = owner_message.render(envelope, destination=here)
-    except owner_message.OwnerMessageError as error:
-        raise CardRenderError("calendar envelope cannot render") from error
-    return f"{body}\nsha256:{draft['sha256']}"
+    return import_module("calendar_card").render_envelope(draft)
 
 
 def post_confirmation_message(draft: DraftRecord, channel_id: str) -> tuple[str, str]:
@@ -164,9 +148,10 @@ def owner_approval_channel(owner: str) -> str:
     return calendar_binding.approval_directory().owner_dm()
 
 
-def post_message(channel_id: str, content: str) -> None:
-    """Post a minimum-information reminder without creating an approval card."""
-    _api("POST", f"/channels/{channel_id}/messages", {"content": content})
+def post_message(channel_id: str, content: str, *, reply_to: str = "") -> str:
+    """Post an already-rendered reminder/result — optionally as a reply to its own card — never an approval card."""
+    reference = {"message_reference": {"message_id": reply_to, "fail_if_not_exists": False}} if reply_to else {}
+    return _required_string(_api("POST", f"/channels/{channel_id}/messages", {"content": content, **reference}), "id", "메시지 id가 없습니다")
 
 
 def fetch_channel(channel_id: str) -> object:
@@ -198,7 +183,7 @@ def _thread_transport(channel_id: str):
     return DiscordTransport(token=bot_token(), channel_id=channel_id)
 
 
-def notify_result(draft: dict[str, str | list[str]], content: str, outcome: str = "") -> object:
+def notify_result(draft: dict[str, str | list[str]], content: str, outcome: str = "", *, transport=None) -> object:
     """Route a result to the request's own approval thread, else the owner fallback.
 
     라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
@@ -206,7 +191,8 @@ def notify_result(draft: dict[str, str | list[str]], content: str, outcome: str 
     캘린더 내용(제목·시각·이벤트/캘린더 id)은 문구에도 스레드 이름에도 싣지 않는다 —
     SKILL.md 반출 금지 규칙에 따라 호출자가 draft id 만 담은 문구를 넘긴다.
     ``outcome``(OUTCOME_DONE/CANCELLED/EXPIRED)이 있으면 게시가 성공한 뒤 그 스레드를
-    종결 표시한다. 비어 있으면 스레드는 열린 채로 남는다(고아 초안 정리 등).
+    종결 표시한다. 비어 있거나 OUTCOME_FAILED 면, 또 다이제스트 항목(`digest_day`: 같은
+    일별 스레드에 다른 카드가 남음)이면 열어 둔다. ``transport`` 는 호출자의 전송기 팩토리다.
     """
     try:
         origin_notice = _origin_notice()
@@ -217,22 +203,19 @@ def notify_result(draft: dict[str, str | list[str]], content: str, outcome: str 
         )
         return send_owner_dm(owner_id(), content)
     message = import_module("calendar_result_message").build(draft, content, outcome)
+    closing = "" if draft.get("digest_day") else outcome
+    terminal = getattr(origin_notice.ThreadOutcome, closing.upper(), None) if closing else None
     if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
         return origin_notice.deliver(
-            api=_api, transport_factory=_thread_transport, record=draft,
+            api=_api, transport_factory=transport or _thread_transport, record=draft,
             thread_name=f"캘린더 확정 (draft {draft['id']})", content=content,
-            fallback=lambda body: send_owner_dm(owner_id(), body),
-            outcome=origin_notice.ThreadOutcome[outcome.upper()] if outcome else None,
+            fallback=lambda body: send_owner_dm(owner_id(), body), outcome=terminal,
             message=message, fallback_destination=None,
         )
     return origin_notice.deliver(
-        api=_api,
-        transport_factory=_thread_transport,
-        record=draft,
-        thread_name=f"캘린더 확정 (draft {draft['id']})",
-        content=content,
-        fallback=lambda body: send_owner_dm(owner_id(), body),
-        outcome=origin_notice.ThreadOutcome[outcome.upper()] if outcome else None,
+        api=_api, transport_factory=transport or _thread_transport, record=draft,
+        thread_name=f"캘린더 확정 (draft {draft['id']})", content=content,
+        fallback=lambda body: send_owner_dm(owner_id(), body), outcome=terminal,
     )
 
 

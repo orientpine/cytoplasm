@@ -101,6 +101,35 @@ def test_config_is_deterministic_and_not_asr_fingerprint(tmp_path: Path) -> None
     assert digest != stt_eval_record.config_fingerprint({**env, "SPEECHTOTEXT_DIARIZE_THRESHOLD": "1.4"}, toolchain)
 
 
+def test_config_survives_a_path_probe_that_cannot_read_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """설정 값 중에는 경로가 아닌 것이 있고(`sherpa`), 그 탐침은 던지면 안 된다.
+
+    `Path.is_file()` 은 EACCES 를 삼키지 않는다 — CPython `_IGNORED_ERRNOS` 에 ENOENT·
+    ENOTDIR·EBADF·ELOOP 만 있다. 그래서 읽을 수 없는 cwd 에서 `sherpa` 를 상대 경로로
+    stat 하면 예외가 올라가고, 부르는 쪽(`stt_eval_build.snapshot_for`)이 OSError 를
+    fail-soft 로 삼켜 **평가 스냅샷이 통째로 조용히 사라진다**(2026-09-18 노드 실측:
+    `PermissionError: [Errno 13] Permission denied: 'sherpa'`). 같은 함정이 2026-08-26
+    `approval_reminder_config` 수리의 원인이었다.
+    """
+    toolchain = _toolchain(tmp_path)
+    real_is_file = Path.is_file
+
+    def refuse(self: Path) -> bool:
+        if not self.is_absolute():
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", refuse)
+
+    digest = stt_eval_record.config_fingerprint(
+        {"SPEECHTOTEXT_DIARIZE_BACKEND": "sherpa"}, toolchain
+    )
+
+    assert len(digest) == 64
+
+
 @pytest.mark.parametrize("key,value", [
     ("SPEECHTOTEXT_DIARIZE_BACKEND", "pyannote"),
     ("SPEECHTOTEXT_DIARIZE_MIN_SPEECH", "0.6"),

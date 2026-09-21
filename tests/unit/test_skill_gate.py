@@ -84,6 +84,9 @@ def _request_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     posted_messages: list[str] = []
 
     def discord_api(_method: str, _path: str, payload: dict[str, str] | None = None) -> dict[str, str]:
+        if _method == "PUT":
+            assert _path.endswith("/@me") and payload is None
+            return {}
         assert payload is not None
         posted_messages.append(payload["content"])
         return {"id": "message-1"}

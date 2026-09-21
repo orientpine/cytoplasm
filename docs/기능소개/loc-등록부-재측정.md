@@ -40,5 +40,5 @@ F2 품질 감사의 250 pure-LOC 예외 등록부(`automation/final/f2_loc_excep
 ## 관련
 
 - 등록부 `automation/final/f2_loc_exceptions.txt` · 게이트 `automation/final/f2_quality.sh:51-68` · 회귀 `tests/unit/test_f2_loc_exceptions.py`
-- 선행 정리: [F2 LOC 등록부 정리](loc-등록부-정리.md) · 작업 배분: `.omo/plans/parallel-followup-sweep.md` §5 G8
+- 선행 정리: [F2 LOC 등록부 정리](../done.md#후속-과제-병렬-스윕-2026-08-04) · 작업 배분: `.omo/plans/parallel-followup-sweep.md` §5 G8
 - 증적 `docs/qa/F2/module-loc.txt` · 승인·배포 대상 없음(감사 스크립트와 등록부만 바뀐다)

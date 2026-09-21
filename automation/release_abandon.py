@@ -249,16 +249,8 @@ def emit(result: ReleaseAbandoned) -> int:
     return result.exit_code
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="release-abandon",
-        description="⛔ 된 release 승인 레코드를 감사와 함께 archive 로 놓아준다(메시지는 그대로).",
-    )
-    parser.add_argument("--version", required=True, help="레코드에 저장된 릴리스 버전")
-    parser.add_argument("--head", required=True, help="레코드에 저장된 40자 HEAD sha")
-    parser.add_argument("--message-id", required=True, help="소유자가 결정한 승인 메시지 id")
-    parser.add_argument("--reason", required=True, help="감사에 남길 폐기 사유")
-    args = parser.parse_args(argv)
+def command(args: argparse.Namespace) -> int:
+    """Both CLIs share the same closure order, actor and audit destination."""
     order = ReleaseAbandonOrder(
         version=str(args.version),
         head_sha=str(args.head),
@@ -268,6 +260,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     audit_path = skill_gate_retire.abandon_log(skill_gate.APPROVAL_LOG)
     return emit(abandon(skill_gate.GATE_DIR, order, audit_path))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="release-abandon",
+        description="⛔ 된 release 승인 레코드를 감사와 함께 archive 로 놓아준다(메시지는 그대로).",
+    )
+    parser.add_argument("--version", required=True, help="레코드에 저장된 릴리스 버전")
+    parser.add_argument("--head", required=True, help="레코드에 저장된 40자 HEAD sha")
+    parser.add_argument("--message-id", required=True, help="소유자가 결정한 승인 메시지 id")
+    parser.add_argument("--reason", required=True, help="감사에 남길 폐기 사유")
+    return command(parser.parse_args(argv))
 
 
 if __name__ == "__main__":

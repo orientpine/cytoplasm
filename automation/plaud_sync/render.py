@@ -1,4 +1,4 @@
-"""Owner-facing approval card for one plaud lifelog note push (render v5).
+"""Owner-facing approval card for one plaud lifelog note push (render v6).
 
 v2 (2026-09-02, owner request): the card quotes the first five sentence-sized
 lines of the frozen note so the owner can tell what a recording contains before
@@ -11,6 +11,8 @@ wording of an already-posted version is never edited in place.
 v4 (2026-09-08): seven longer lines put the summary before glance metadata;
 transcript-only previews disclose their source. The note approval heading and
 separate approve / request changes / cancel lines make the review explicit.
+v5 adopts the frozen owner-ko-v1 envelope. v6 selects owner-ko-v2 so the
+metadata and preview remain separate quoted fact lines and the decision is bold.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from .lifelog_fields import (
 )
 from .model import PlaudSyncRecord
 
-RENDER_VERSION: Final = "plaud-sync-render-v5"
+RENDER_VERSION: Final = "plaud-sync-render-v6"
 MAX_MESSAGE_CHARS: Final = 1900
 # 1330 content characters + 21 quote/newline characters leave 549 for the card.
 # Longer metadata still fails closed; the binding is never clipped to make room.
@@ -69,7 +71,11 @@ def summary_preview(body: str, *, render_version: str = RENDER_VERSION) -> str:
     """
     if render_version == "plaud-sync-render-v3":
         return _summary_preview_v3(body)
-    if render_version not in {"plaud-sync-render-v4", "plaud-sync-render-v5"}:
+    if render_version not in {
+        "plaud-sync-render-v4",
+        "plaud-sync-render-v5",
+        "plaud-sync-render-v6",
+    }:
         raise PlaudRenderError(f"unsupported plaud render version: {render_version}")
     sections = lifelog_sections(body)
     units = _units(sections.get(SUMMARY_HEADING, "")) + _units(sections.get(GLANCE_HEADING, ""))
@@ -108,6 +114,8 @@ def render_plaud_approval(
             content = _render_v4(record, quoted)
         case "plaud-sync-render-v5":
             content = _render_v5(record, quoted)
+        case "plaud-sync-render-v6":
+            content = _render_v6(record, preview)
         case _:
             raise PlaudRenderError(f"unsupported plaud render version: {render_version}")
     if len(content) > MAX_MESSAGE_CHARS:
@@ -145,6 +153,43 @@ def _render_v5(record: PlaudSyncRecord, quoted: str) -> str:
         lines = om.render(message, destination=here).splitlines()
         # Binding stays before the preview and decisions, outside the five human fields.
         return "\n".join((*lines[:3], f"- action_hash: `{record.action_hash}`", "", quoted, "", *lines[3:]))
+    except om.OwnerMessageError as error:
+        raise PlaudRenderError("owner envelope cannot render") from error
+
+
+def _render_v6(record: PlaudSyncRecord, preview: str) -> str:
+    try:
+        from automation.interop import owner_message as om
+    except ImportError as error:
+        raise PlaudRenderError("owner envelope unavailable") from error
+    if not callable(getattr(om, "render", None)):
+        raise PlaudRenderError("owner envelope renderer unavailable")
+    here = om.Ref(scope="self")
+    fact = (
+        f"녹음 시각: {record.recorded_at}\n"
+        f"대상 노트: {record.note_relpath}\n"
+        "판본: plaud-sync-render-v6\n"
+        "내용 미리보기:\n"
+        f"{preview or '(미리보기 없음)'}"
+    )
+    message = om.OwnerMessage(
+        subject_key=record.recording_id,
+        subject=f"PLAUD 노트: {record.note_title}",
+        fact=fact,
+        location=here,
+        owner=om.Action("react", here, "✅ 승인 / ⛔ 취소"),
+        agent_next="Obsidian 저장·recall 인제스트; 수정은 이 스레드에 답글",
+        recovery="not_applicable",
+        detail=om.Approval(None, "저장 취소"),
+        render_version="owner-ko-v2",
+    )
+    try:
+        lines = om.render(message, destination=here).splitlines()
+        return "\n".join((
+            *lines[:-1],
+            f"- action_hash: `{record.action_hash}`",
+            lines[-1],
+        ))
     except om.OwnerMessageError as error:
         raise PlaudRenderError("owner envelope cannot render") from error
 

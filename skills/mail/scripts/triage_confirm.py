@@ -206,23 +206,9 @@ def _reaction_users(channel_id: str, message_id: str, emoji: str) -> list[dict]:
 
 def resolve_reaction(draft: dict) -> str | None:
     """Return the bound owner decision, with ⛔ taking precedence over ✅."""
-    import triage_approval
-    import triage_binding
+    from triage_approval_reaction import resolve_reaction as resolve
 
-    if not draft.get("message_id"):
-        raise GateError("드래프트가 아직 승인 메시지에 게시되지 않음 — 승인 불가", 1)
-    channel_id = triage_binding.persisted_channel_id(draft)
-    if channel_id is None:
-        channel_id = str(triage_approval.stored_binding(draft).channel_id)
-    message = _api("GET", f"/channels/{channel_id}/messages/{draft['message_id']}")
-    if not isinstance(message, dict) or draft["sha256"] not in str(message.get("content", "")):
-        raise GateError("승인 메시지가 이 드래프트 해시를 참조하지 않음 — 거부", 1)
-    owner = owner_id()
-    if _owner_reacted(_reaction_users(channel_id, draft["message_id"], CANCEL_EMOJI), owner):
-        return CANCEL_EMOJI
-    if _owner_reacted(_reaction_users(channel_id, draft["message_id"], APPROVE_EMOJI), owner):
-        return APPROVE_EMOJI
-    return None
+    return resolve(draft)
 
 
 def confirm_via_reaction(draft: dict) -> str:

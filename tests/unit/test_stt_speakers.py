@@ -136,3 +136,72 @@ def test_merge_keeps_rule_and_records_conflicting_llm_suggestion() -> None:
             "화자1", "김민수", "자기소개 00:03:12 · LLM 제안: 박철수"
         ),
     )
+
+def test_kind_puts_the_catalogue_between_the_owner_and_a_self_introduction() -> None:
+    ordered = (
+        stt_speakers.SpeakerName("화자1", "가", "LLM"),
+        stt_speakers.SpeakerName("화자1", "나", "자기소개 00:00:01"),
+        stt_speakers.SpeakerName("화자1", "다", "카탈로그 0.86"),
+        stt_speakers.SpeakerName("화자1", "라", "소유자"),
+    )
+
+    assert stt_speakers.merge(ordered)[0].name == "라"
+    assert stt_speakers.merge(ordered[:3])[0].name == "다"
+    assert stt_speakers.merge(ordered[:2])[0].name == "나"
+
+
+def test_merge_records_a_self_introduction_that_disagrees_with_the_catalogue() -> None:
+    assert stt_speakers.merge(
+        (stt_speakers.SpeakerName("화자1", "김민수", "자기소개 00:03:12"),),
+        (stt_speakers.SpeakerName("화자1", "이영희", "카탈로그 0.86"),),
+    ) == (
+        stt_speakers.SpeakerName("화자1", "이영희", "카탈로그 0.86 · 자기소개 제안: 김민수"),
+    )
+
+
+def test_merge_notes_agreement_between_the_catalogue_and_a_self_introduction() -> None:
+    assert stt_speakers.merge(
+        (stt_speakers.SpeakerName("화자1", "김민수", "자기소개 00:03:12"),),
+        (stt_speakers.SpeakerName("화자1", "김민수", "카탈로그 0.86"),),
+    ) == (stt_speakers.SpeakerName("화자1", "김민수", "카탈로그 0.86 · 자기소개"),)
+
+
+def test_merge_hangs_a_catalogue_suggestion_on_the_self_introduction_that_won() -> None:
+    assert stt_speakers.merge(
+        (stt_speakers.SpeakerName("화자1", "박철수", "LLM"),),
+        (stt_speakers.SpeakerName("화자1", "김민수", "자기소개 00:03:12"),),
+        (stt_speakers.SpeakerName("화자1", "", "카탈로그 제안: 이영희 0.52"),),
+    ) == (
+        stt_speakers.SpeakerName(
+            "화자1",
+            "김민수",
+            "자기소개 00:03:12 · 카탈로그 제안: 이영희 0.52 · LLM 제안: 박철수",
+        ),
+    )
+
+
+def test_merge_keeps_a_catalogue_suggestion_over_an_unnamed_llm_entry() -> None:
+    assert stt_speakers.merge(
+        (stt_speakers.SpeakerName("화자1", "", "LLM"),),
+        (stt_speakers.SpeakerName("화자1", "", "카탈로그 제안: 이영희 0.52"),),
+    ) == (stt_speakers.SpeakerName("화자1", "", "카탈로그 제안: 이영희 0.52"),)
+
+
+def test_legend_shows_why_an_unknown_speaker_has_a_candidate() -> None:
+    speakers = (
+        stt_speakers.SpeakerName("화자1", "김민수", "카탈로그 0.86 · 자기소개"),
+        stt_speakers.SpeakerName("화자2", "", "카탈로그 제안: 이영희 0.52"),
+        stt_speakers.SpeakerName("화자3", "", "LLM"),
+    )
+
+    legend = stt_speakers.render_legend(speakers)
+
+    assert legend == (
+        "- 화자: 화자1=김민수 [카탈로그 0.86 · 자기소개] · "
+        "화자2=미상 [카탈로그 제안: 이영희 0.52] · 화자3=미상"
+    )
+    assert stt_speakers.parse_legend(legend + "\n") == (
+        speakers[0],
+        speakers[1],
+        stt_speakers.SpeakerName("화자3", "", ""),
+    )

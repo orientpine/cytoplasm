@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .model import RelocationRecord
 
-RENDER_VERSION = "mc-reloc-render-v2"
+RENDER_VERSION = "mc-reloc-render-v3"
 MAX_MESSAGE_CHARS = 1900
 
 
@@ -18,6 +18,8 @@ def render_relocation_approval(
             content = _render_v1(record, entry_text)
         case "mc-reloc-render-v2":
             content = _render_v2(record, entry_text)
+        case "mc-reloc-render-v3":
+            content = _render_v3(record, entry_text)
         case _:
             raise RenderError(f"unsupported relocation render version: {render_version}")
     if len(content) > MAX_MESSAGE_CHARS:
@@ -54,6 +56,42 @@ def _render_v2(record: RelocationRecord, entry_text: str) -> str:
     try:
         lines = om.render(message, destination=here).splitlines()
         return "\n".join((*lines[:3], f"- action_hash: `{record.action_hash}`", *lines[3:]))
+    except om.OwnerMessageError as error:
+        raise RenderError("owner envelope cannot render") from error
+
+
+def _render_v3(record: RelocationRecord, entry_text: str) -> str:
+    try:
+        from automation.interop import owner_message as om
+    except ImportError as error:
+        raise RenderError("owner envelope unavailable") from error
+    if not callable(getattr(om, "render", None)):
+        raise RenderError("owner envelope renderer unavailable")
+    here = om.Ref(scope="self")
+    message = om.OwnerMessage(
+        subject_key=record.note_relpath,
+        subject="memory→Obsidian 재배치",
+        fact=(
+            "원본 메모리 항목:\n"
+            f"{entry_text}\n"
+            f"대상 노트: {record.note_relpath}\n"
+            f"회수 예상 문자 수: {record.reclaimable_chars}\n"
+            "판본: mc-reloc-render-v3"
+        ),
+        location=here,
+        owner=om.Action("react", here, "✅ 승인 / ⛔ 취소"),
+        agent_next="저장·인제스트 확인 후 자체 메모리(ambient) 삭제; 이후 recall(검색)로만 조회",
+        recovery="not_applicable",
+        detail=om.Approval(None, "원본 유지"),
+        render_version="owner-ko-v2",
+    )
+    try:
+        lines = om.render(message, destination=here).splitlines()
+        return "\n".join((
+            *lines[:-1],
+            f"- action_hash: `{record.action_hash}`",
+            lines[-1],
+        ))
     except om.OwnerMessageError as error:
         raise RenderError("owner envelope cannot render") from error
 

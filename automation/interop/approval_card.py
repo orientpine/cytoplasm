@@ -19,7 +19,7 @@ class PreparedCard:
 
 
 def prepare(renderer: Callable[[str], str], stored_version: str | None = None) -> PreparedCard:
-    """New cards try v2; stored versions replay strictly without silent downgrades."""
+    """New cards try v3; stored versions replay strictly without silent downgrades."""
     if stored_version is not None:
         try:
             content = renderer(stored_version)
@@ -28,8 +28,8 @@ def prepare(renderer: Callable[[str], str], stored_version: str | None = None) -
         version = stored_version
     else:
         try:
-            content = renderer("2")
-            version = "2"
+            content = renderer("3")
+            version = "3"
         except (ImportError, CardRenderError):
             content = renderer("1")
             version = "1"

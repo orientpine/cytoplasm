@@ -23,6 +23,7 @@ from urllib import error, request
 import stt_audio
 import stt_blocks
 import stt_coverage
+import stt_speakers
 
 DEFAULT_BASE_URL: Final = "https://api.openai.com/v1"
 DEFAULT_MODEL: Final = "gpt-4o-transcribe"
@@ -55,6 +56,9 @@ class Transcription:
     sentences: tuple[stt_blocks.TimedSentence, ...] = ()
     # API·옛 입력은 legacy, 로컬 화자 도구 부재·실패는 배정 자체가 없어 None이다.
     attribution_mode: AttributionMode | None = "legacy"
+    # 등록된 목소리와의 대조 결과. 카탈로그가 비었거나 식별이 꺼져 있으면 빈 튜플이고,
+    # 그때 범례·문서는 예전과 바이트 그대로다.
+    speakers: stt_speakers.SpeakerMap = ()
 
 
 def build_multipart(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from automation.repair import repair_ops_cli
+from automation.repair.repair_approval_content import approval_content_matches
+from automation.repair.repair_approval_render import approval_request_content
 from automation.repair.repair_ops_adapters import CodexPlanner, StaticPlanner
 from automation.repair.repair_ops_cli import RepairOpsConfig
 from automation.repair.repair_ops_pending import CANCEL_EMOJI, APPROVE_EMOJI, PendingRepairApproval, PendingRepairApprovalStore, PostingOwnerApproval
@@ -123,14 +125,16 @@ def test_post_when_sandbox_is_green_then_binds_hash_and_preadds_owner_reactions(
         "approval-message-1",
         NOW,
         content_binding_version=2,
-        render_version=3,
+        render_version=4,
         content_sha256=hash_parts(discord.posts[0]),
         patch_sha256=artifact.patch_sha256,
         changes=artifact.changes,
         patch_source_path="plans/t-repair-1/patch.diff",
     )
     assert pending == expected_record
-    assert discord.posts == [
+    assert pending is not None
+    assert len(discord.posts) == 1 and approval_content_matches(pending, discord.posts[0])
+    assert [approval_request_content(replace(pending, render_version=3))] == [
         """대상: 수리 승인 (t-repair-1)
 사실: action_hash: sha256:a27d45a2b2814af7930f1bf2dafcee22f55cd76f33111b49117bfc2379315465; patch_sha256: 260e4060e17b03469cc39ab00d442db269adef55e4c6528269c6f54f1a34b410; 1 files +1/-1; - automation/mod.py (+1/-1); nonce: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; sandbox: PASS; 패치 본문 비노출: `plans/t-repair-1/patch.diff` (승인 요청; 만료: 2026-07-20T12:00:00+00:00)
 위치: 이 메시지

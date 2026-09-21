@@ -4,9 +4,13 @@ from __future__ import annotations
 import ast
 from typing import Final, TypeAlias
 
+from tests.unit.owner_message_sender_iteration import EMPTY_SEEN, Seen, entries, selection, sequence
+
 Key: TypeAlias = tuple[str, str]
 SENDER: Final = "<owner-transport>"
 UNKNOWN: Final = "<unresolved-value>"
+# Payload label for unkeyed origins, which prohibit every subscript selection.
+UNKEYED: Final = "<unproven-key>"
 
 
 def parent(scope: str) -> str:
@@ -34,6 +38,7 @@ class Bindings:
         self.syntax: dict[Key, list[tuple[str, ast.expr]]] = {}
         self.changed: bool = False
         self.keys: dict[Key, dict[str, object]] = {}
+        self.unkeyed: set[Key] = set()
 
     def key(self, scope: str, path: str, value: object) -> None:
         self.keys.setdefault((scope, path), {})[repr(value)] = value
@@ -135,19 +140,34 @@ class Bindings:
                     self.bind((scope, f"{path}.[{index}]"), scope, element)
                 return {path}
             case ast.Dict(keys=keys, values=values):
-                path = symbol(value)
-                for key, element in zip(keys, values, strict=True):
-                    if key is not None:
-                        for name in self.values(scope, key):
-                            for literal in self.resolve(scope, name):
-                                if literal.startswith("#"):
-                                    self.key(scope, path, literal_value(literal))
-                                    self.bind((scope, f"{path}.[{literal[1:]}]"), scope, element)
-                return {path}
-            case ast.Call() | ast.Lambda():
+                return {self.slots(scope, value, [(key, element) for key, element
+                                                  in zip(keys, values, strict=True) if key is not None])}
+            case ast.Call():
+                # A finite construction keeps its payload addressable by value.
+                chosen = selection(self, scope, value)
+                if chosen is not None:
+                    return {name for item in chosen for name in self.values(scope, item)}
+                pairs = entries(self, scope, value)
+                return {symbol(value) if pairs is None else self.slots(scope, value, pairs)}
+            case ast.Lambda():
                 return {symbol(value)}
             case _:
                 return set()
+
+    def slots(self, scope: str, value: ast.expr, pairs: list[tuple[ast.expr, ast.expr]]) -> str:
+        """Bind literal-keyed slots of a container value; return its graph path."""
+        path = symbol(value)
+        for key, element in pairs:
+            names = {literal for name in self.values(scope, key) for literal in self.resolve(scope, name)}
+            if not names or not all(literal.startswith("#") for literal in names):
+                # Keep the payload visible, but certify no selection from an
+                # origin with an unprovable key, including through aliases.
+                self.unkeyed.add((scope, path))
+                names = {f"#{UNKEYED!r}"}
+            for literal in names:
+                self.key(scope, path, literal_value(literal))
+                self.bind((scope, f"{path}.[{literal[1:]}]"), scope, element)
+        return path
 
     def carries(self, scope: str, value: ast.expr) -> bool:
         return any(self._carries_path((scope, path)) for path in self.values(scope, value))
@@ -214,20 +234,8 @@ class Bindings:
             scope = parent(scope)
         return []
 
-    def sequence(self, scope: str, value: ast.expr) -> list[ast.expr] | None:
-        choices = self.expressions(scope, value)
-        if len(choices) == 1 and isinstance(choices[0], (ast.Tuple, ast.List)):
-            result: list[ast.expr] = []
-            for item in choices[0].elts:
-                if isinstance(item, ast.Starred):
-                    expanded = self.sequence(scope, item.value)
-                    if expanded is None:
-                        return None
-                    result.extend(expanded)
-                else:
-                    result.append(item)
-            return result
-        return None
+    def sequence(self, scope: str, value: ast.expr, seen: Seen = EMPTY_SEEN) -> list[ast.expr] | None:
+        return sequence(self, scope, value, seen)
 
     def arguments(self, scope: str, call: ast.Call) -> tuple[list[ast.expr], dict[str, ast.expr], bool]:
         positional: list[ast.expr] = []

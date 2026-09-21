@@ -62,7 +62,7 @@ class ApprovalRecordView(Protocol):
     def content_binding_version(self) -> int | None: ...
 
     @property
-    def render_version(self) -> Literal[2, 3] | None: ...
+    def render_version(self) -> Literal[2, 3, 4] | None: ...
 
     @property
     def created_at(self) -> datetime: ...
@@ -88,6 +88,8 @@ def approval_request_content(pending: ApprovalRecordView) -> str:
             content = _render_v2(pending)
         case 3:
             content = _render_v3(pending)
+        case 4:
+            content = _render_v4(pending)
         case unreachable:
             assert_never(unreachable)
     if len(content) > MAX_APPROVAL_CONTENT_CHARS:
@@ -162,6 +164,45 @@ def _render_v3(pending: ApprovalRecordView) -> str:
         location=here, owner=Action("react", here, "✅ 승인 또는 ⛔ 취소"),
         agent_next="승인된 패치만 반영", recovery="not_applicable",
         detail=Approval(pending.created_at.astimezone(UTC) + timedelta(hours=24), "패치 미반영, 티켓 재개"),
+    )
+    try:
+        return render(message, destination=here)
+    except OwnerMessageError as error:
+        raise ApprovalRenderError("repair owner envelope cannot render") from error
+
+
+def _render_v4(pending: ApprovalRecordView) -> str:
+    """New readable card; patch bodies and unredacted paths remain excluded."""
+    try:
+        from automation.interop.owner_message import Action, Approval, OwnerMessage, OwnerMessageError, Ref, render
+    except ImportError as error:
+        raise ApprovalRenderError("repair owner envelope is unavailable") from error
+    changes = pending.changes
+    if not changes or not pending.patch_sha256 or not pending.patch_source_path:
+        raise ApprovalRenderError("content-bound repair approval is missing its patch summary")
+    facts = [
+        f"수리 요청: {_field(pending.ticket_id)}",
+        f"변경 파일: {len(changes)}개, +{sum(c.insertions for c in changes)}/-{sum(c.deletions for c in changes)}",
+        *(_file_line(change).strip() for change in changes[:MAX_VISIBLE_FILES]),
+    ]
+    omitted = max(0, len(changes) - MAX_VISIBLE_FILES)
+    if omitted:
+        facts.append(f"외 {omitted}개 생략 (합계·해시는 전체)")
+    facts.extend((
+        f"승인 식별값: {pending.action_hash}",
+        f"패치 식별값: {pending.patch_sha256}",
+        f"요청 식별값: {pending.nonce}",
+        "샌드박스: PASS",
+        f"패치 본문 비노출: `{_field(pending.patch_source_path)}`",
+    ))
+    here = Ref(scope="self")
+    message = OwnerMessage(
+        subject_key=_field(pending.ticket_id), subject="수리 승인",
+        fact="\n".join(" ".join(line.split()) for line in facts),
+        location=here, owner=Action("react", here, "✅ 승인 또는 ⛔ 취소"),
+        agent_next="승인된 패치만 반영", recovery="not_applicable",
+        detail=Approval(pending.created_at.astimezone(UTC) + timedelta(hours=24), "패치 미반영, 티켓 재개"),
+        render_version="owner-ko-v2",
     )
     try:
         return render(message, destination=here)

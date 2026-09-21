@@ -90,13 +90,13 @@ def test_render_refuses_when_wire_exceeds_limit(envelope: wire.SubmissionEnvelop
         _ = wire.render_submission_message(oversized)
 
 
-def test_new_card_when_capability_exists_uses_v2(envelope: wire.SubmissionEnvelope) -> None:
+def test_new_card_when_capability_exists_uses_v3(envelope: wire.SubmissionEnvelope) -> None:
     # Given: a valid submission and the available envelope capability.
     # When: a new card is rendered.
     content = wire.render_submission_message(envelope)
     # Then: the new wire prefix dispatches to exact verification of five human fields.
-    assert content.startswith("[personal-skill-submission-v2] ")
-    assert len(content.splitlines()) == 6
+    assert content.splitlines()[-1].startswith("-# [personal-skill-submission-v3] ")
+    assert len(content.splitlines()) == 8
     assert len(content) <= 1900
     assert wire.parse_submission_message(content) == envelope
 
@@ -106,7 +106,8 @@ def test_v2_renderer_when_replayed_matches_complete_stored_wire(
 ) -> None:
     # Given: the fixed record represented by the independent complete v2 wire fixture.
     # When: the public render root replays that record.
-    content = wire.render_submission_message(envelope)
+    content = wire._render_v2(envelope)
+    assert content is not None
     # Then: every UTF-8 byte, including shared labels, stays compatible with stored cards.
     assert content.encode("utf-8") == _STORED_V2.encode("utf-8")
 
@@ -197,7 +198,7 @@ def test_new_card_when_altered_is_refused(
     # Given: a new-format card with one invalid boundary.
     content = wire.render_submission_message(envelope)
     mutations = {
-        "prefix": content.replace("submission-v2", "submission-v99"),
+        "prefix": content.replace("submission-v3", "submission-v99"),
         "truncated": content.splitlines()[0],
         "attachment": content.replace('"tarball_filename":"managed-x.tar.gz",', ""),
         "body": content[:-1] + "X",

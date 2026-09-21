@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
 
-from automation import release_approval, skill_gate, skill_gate_request
+from automation import release_approval, release_spec, skill_gate, skill_gate_request
 from automation.interop.approval_surface import (
     POLICY_VERSION,
     ApprovalBinding,
@@ -29,21 +29,21 @@ from automation.release_approval import (
 from automation.interop.approval_lifecycle import (
     ApprovalIntent,
     ApprovalRequest,
+    ApprovalSurfaceError,
     PostedApproval,
     Probe,
 )
-from automation.interop.discord_transport import SentMessage
 from automation.release_card import (
     CARD_REFUSED_PREFIX,
-    PREVIOUS_RENDER_VERSION,
     card_for_new_request,
 )
 from automation.release_spec import (
-    MESSAGE_LIMIT,
-    NEW_RENDER_VERSION,
     ReleaseSpec,
     ReleaseSpecError,
 )
+from automation.release_spec_message import MESSAGE_LIMIT
+from automation.skill_gate_approval import GateSurface, SkillApprovalGate
+from automation.skill_gate_surface import JsonValue
 
 
 def _spec() -> ReleaseSpec:
@@ -81,6 +81,7 @@ def _plan_file(
     tmp_path: Path,
     patch_notes: str = "",
     surface_digests: tuple[tuple[str, str], ...] = (),
+    major_note: str = "",
 ) -> str:
     spec = _spec()
     path = tmp_path / "plan.json"
@@ -93,6 +94,7 @@ def _plan_file(
                     list(row) for row in (surface_digests or spec.surface_digests)
                 ],
                 "patch_notes": patch_notes or spec.patch_notes,
+                "major_note": major_note,
             }
         ),
         encoding="utf-8",
@@ -162,56 +164,101 @@ _V3_POSTED = (
     "- 변경 상세: 아래 1개 메시지 (같은 릴리스 v1.2.3 · 기준 aaaaaaaaaaaa)\n"
     "- 승인 방법: 이 메시지에 cha가 ✅ 리액션 (소유자 전용 — 봇/타인 리액션은 거부됨)"
 )
+_V5_POSTED = (
+    "**🔔 릴리스 v1.2.3 배포 승인**\n"
+    "> 배포 기준: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\n"
+    "> 배포 묶음 (2): `home:skills/mail`, `skill:meeting`\n"
+    "> 승인 식별값: `980a7cea657cf3ff0328e212ae6b14a699fff8b5f6ba739cd9401be7994c2801`\n"
+    "> 변경 상세: 아래 1개 메시지 (같은 릴리스 v1.2.3 · 기준 aaaaaaaaaaaa)\n"
+    "\n"
+    "**결정:** 이 메시지에 ✅ 승인 또는 ⛔ 취소 (소유자 전용 — 봇/타인 리액션은 거부됨)"
+    " · 만료 없음\n"
+    "취소 시: 배포 미실행, 요청 폐기\n"
+    "다음: 승인된 릴리스만 태그·배포\n"
+    "-# 참조: `release:`"
+)
 
 
-class _RecordingTransport:
-    """Discord 대신 순서와 본문만 기록한다 — 테스트는 절대 망을 열지 않는다."""
+class _DetailWire:
+    """실제 producer가 쓰는 gate API 모양만 기록하는 오프라인 Discord."""
 
-    def __init__(self, fail_after: int | None = None) -> None:
-        self.sent: list[str] = []
-        self._fail_after = fail_after
+    def __init__(
+        self,
+        *,
+        guild_id: str | None = "111111111111111111",
+        fail_post_after: int | None = None,
+        first_post_id: str | None = None,
+    ) -> None:
+        self.guild_id = guild_id
+        self.fail_post_after = fail_post_after
+        self.first_post_id = first_post_id
+        self.posts: list[dict[str, JsonValue]] = []
+        self.patches: list[tuple[str, dict[str, JsonValue]]] = []
+        self.deletes: list[str] = []
 
-    def send(self, body: str) -> tuple[SentMessage, ...]:
-        if self._fail_after is not None and len(self.sent) >= self._fail_after:
-            raise OSError("discord is unreachable")
-        self.sent.append(body)
-        return (SentMessage(message_id=f"detail-{len(self.sent)}"),)
+    def api(
+        self, method: str, path: str, payload: dict[str, JsonValue] | None = None
+    ) -> JsonValue:
+        if method == "GET":
+            channel: dict[str, JsonValue] = {"id": "222"}
+            if self.guild_id is not None:
+                channel["guild_id"] = self.guild_id
+            return channel
+        if method == "POST":
+            assert payload is not None
+            if (
+                self.fail_post_after is not None
+                and len(self.posts) >= self.fail_post_after
+            ):
+                raise OSError("discord is unreachable")
+            self.posts.append(payload)
+            if len(self.posts) == 1 and self.first_post_id is not None:
+                return {"id": self.first_post_id}
+            return {"id": str(700000000000000000 + len(self.posts))}
+        if method == "PATCH":
+            assert payload is not None
+            self.patches.append((path, payload))
+            return {"id": path.rsplit("/", 1)[-1]}
+        if method == "DELETE":
+            self.deletes.append(path)
+            return None
+        if method == "PUT":
+            return None
+        raise AssertionError(f"unexpected wire call: {method} {path}")
+
+    def gate_api(
+        self, method: str, path: str, payload: dict[str, str] | None = None
+    ) -> object:
+        wire_payload: dict[str, JsonValue] | None = (
+            None if payload is None else dict(payload)
+        )
+        return self.api(method, path, wire_payload)
 
 
-class _PostingGate:
-    """카드가 이미 올라간 뒤의 게이트 — 채널과 레코드 경로만 답한다."""
+@dataclass(frozen=True, slots=True)
+class _Bindings:
+    kind: ApprovalKind = ApprovalKind.RELEASE
 
-    def __init__(self, gate_dir: Path) -> None:
-        self._path = gate_dir / "pending" / "release.json"
-        self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    def new(self) -> ApprovalBinding:
+        return ApprovalBinding(
+            ApprovalKind.RELEASE, ApprovalSurface.SKILL_APPROVALS, "222", POLICY_VERSION
+        )
 
-    def channel_id(self) -> str:
-        return "1528936606856122421"
-
-    def path(self) -> Path:
-        return self._path
+    def stored(self, record: Mapping[str, str]) -> ApprovalBinding:
+        del record
+        return self.new()
 
 
-def _posted(
-    monkeypatch: pytest.MonkeyPatch, gate: _PostingGate, transport: _RecordingTransport
-) -> list[str]:
-    """카드가 새로 게시된 경로를 세운다 — 반환값은 transport 가 받은 채널 목록이다."""
-    record = _spec().new_record(_MESSAGE_ID, _binding())
-    channels: list[str] = []
-    monkeypatch.setattr(release_approval, "_gate", lambda spec: gate)
-    monkeypatch.setattr(skill_gate_request, "reuse", lambda gate: None)
-    monkeypatch.setattr(
-        skill_gate_request,
-        "post_request",
-        lambda gate, *, fresh: skill_gate_request.Requested(record, 0, posted=True),
+def _actual_gate(
+    gate_dir: Path, wire: _DetailWire
+) -> Callable[[ReleaseSpec], SkillApprovalGate]:
+    surface = GateSurface(
+        wire.gate_api,
+        gate_dir,
+        lambda: "111111111111111111",
+        _Bindings,
     )
-
-    def transport_for(channel_id: str) -> _RecordingTransport:
-        channels.append(channel_id)
-        return transport
-
-    monkeypatch.setattr(release_approval, "detail_transport", transport_for)
-    return channels
+    return lambda spec: SkillApprovalGate(surface, spec)
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,7 +573,7 @@ def test_record_persists_every_authorizing_field_and_surface_binding() -> None:
     assert record["surface"] == "skill-approvals"
     assert record["channel_id"] == binding.channel_id
     assert record["policy_version"] == str(POLICY_VERSION)
-    assert record["render_version"] == "4"
+    assert record["render_version"] == "6"
     assert spec.bound(spec.render(), record)
 
 
@@ -546,16 +593,14 @@ def test_any_record_or_message_change_breaks_the_binding() -> None:
 
 def test_release_message_is_fail_closed_above_1900_characters() -> None:
     """카드 자체가 한도를 넘으면 게시하지 않는다 — 잘라내기는 어디에도 없다."""
-    crowded = tuple((f"skill:demo-{index:03d}", f"{index:064x}") for index in range(110))
-
     with pytest.raises(ReleaseSpecError, match="1900"):
-        _ = replace(_spec(), surface_digests=crowded).render()
+        _ = replace(_spec(), major_note="MAJOR: " + "가" * 2000).render()
 
 
 def test_the_card_points_at_the_detail_messages_instead_of_carrying_them() -> None:
     """Given a v3 release spec / When the card renders / Then it names the bundles,
     the binding and how many detail messages follow — and no patch-note line."""
-    spec = replace(_spec(), render_version=PREVIOUS_RENDER_VERSION)
+    spec = replace(_spec(), render_version=3)
 
     lines = spec.render().splitlines()
 
@@ -577,7 +622,7 @@ def test_a_major_release_card_carries_the_operator_line_before_the_detail_pointe
     """Given machine-contract signals / When the card renders /
     Then the operator line stands above the detail pointer."""
     spec = replace(
-        _spec(), render_version=PREVIOUS_RENDER_VERSION, major_note=_MAJOR_NOTE
+        _spec(), render_version=3, major_note=_MAJOR_NOTE
     )
 
     lines = spec.render().splitlines()
@@ -591,7 +636,7 @@ def test_the_card_counts_every_detail_message_it_points_at() -> None:
     Then its count equals the messages the same spec produces."""
     spec = replace(
         _spec(),
-        render_version=PREVIOUS_RENDER_VERSION,
+        render_version=3,
         patch_notes="\n".join(f"- 변경 {index} " + "가" * 60 for index in range(60)),
     )
 
@@ -600,13 +645,19 @@ def test_the_card_counts_every_detail_message_it_points_at() -> None:
     assert len(messages) > 1
     assert f"- 변경 상세: 아래 {len(messages)}개 메시지 " in spec.render()
     assert f"변경 상세 아래 {len(messages)}개 메시지 " in replace(
-        spec, render_version=NEW_RENDER_VERSION
+        spec, render_version=4
     ).render()
 
 
 @pytest.mark.parametrize(
     ("version", "posted"),
-    ((1, _V1_POSTED), (2, _V2_POSTED), (3, _V3_POSTED), (4, _V4_POSTED)),
+    (
+        (1, _V1_POSTED),
+        (2, _V2_POSTED),
+        (3, _V3_POSTED),
+        (4, _V4_POSTED),
+        (5, _V5_POSTED),
+    ),
 )
 def test_the_frozen_renders_stay_byte_identical(version: int, posted: str) -> None:
     """이미 게시된 승인은 그 바이트로만 재검증된다 — 옛 판본 문구는 영구 동결이다."""
@@ -615,7 +666,13 @@ def test_the_frozen_renders_stay_byte_identical(version: int, posted: str) -> No
 
 @pytest.mark.parametrize(
     ("version", "posted"),
-    ((1, _V1_POSTED), (2, _V2_POSTED), (3, _V3_POSTED), (4, _V4_POSTED)),
+    (
+        (1, _V1_POSTED),
+        (2, _V2_POSTED),
+        (3, _V3_POSTED),
+        (4, _V4_POSTED),
+        (5, _V5_POSTED),
+    ),
 )
 def test_a_stored_record_replays_its_own_version_and_stays_bound(
     version: int, posted: str
@@ -739,24 +796,27 @@ def test_the_detail_messages_follow_the_freshly_posted_card_in_order(
 ) -> None:
     """Given a card that was just posted / When the request command finishes /
     Then every detail message reaches the same channel, in order, and is recorded."""
-    transport = _RecordingTransport()
-    gate = _PostingGate(tmp_path)
-    channels = _posted(monkeypatch, gate, transport)
+    wire = _DetailWire()
+    monkeypatch.setattr(release_approval, "_gate", _actual_gate(tmp_path, wire))
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
     plan_file = _plan_file(tmp_path, _LONG_NOTES)
-    expected = spec_from_plan(json.loads(Path(plan_file).read_text("utf-8")), "0" * 32)
 
     exit_code = release_approval.main(["request", "--plan-file", plan_file])
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert len(transport.sent) > 1
-    assert tuple(transport.sent) == expected.detail_messages()
-    assert channels == ["1528936606856122421"]
     emitted = json.loads(captured.out)
-    posted_ids = [f"detail-{index}" for index in range(1, len(transport.sent) + 1)]
-    assert json.loads(emitted["detail_message_ids"]) == posted_ids
-    stored = json.loads(gate.path().read_text(encoding="utf-8"))
-    assert json.loads(stored["detail_message_ids"]) == posted_ids
+    stored = json.loads(
+        (tmp_path / "pending" / "release.json").read_text(encoding="utf-8")
+    )
+    detail_ids = json.loads(emitted["detail_message_ids"])
+    detail_posts = [post for post in wire.posts if "message_reference" not in post]
+    assert len(detail_posts) > 1
+    assert detail_ids == [
+        str(700000000000000000 + index)
+        for index in range(1, len(detail_posts) + 1)
+    ]
+    assert json.loads(stored["detail_message_ids"]) == detail_ids
     assert stored["action_hash"] == emitted["action_hash"]
 
 
@@ -767,15 +827,15 @@ def test_a_reused_request_posts_no_detail_messages_again(
 ) -> None:
     """Given a live request the owner has not answered / When the command re-runs /
     Then nothing is posted a second time."""
-    transport = _RecordingTransport()
+    wire = _DetailWire()
     record = _spec().new_record(_MESSAGE_ID, _binding())
     monkeypatch.setattr(
         skill_gate_request, "reuse", lambda gate: skill_gate_request.Requested(record, 0)
     )
-    monkeypatch.setattr(release_approval, "_gate", lambda spec: _PostingGate(tmp_path))
     monkeypatch.setattr(
-        release_approval, "detail_transport", lambda channel_id: transport
+        release_approval, "_gate", lambda spec: _LifecycleGate(tmp_path, spec)
     )
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
 
     exit_code = release_approval.main(
         ["request", "--plan-file", _plan_file(tmp_path, _LONG_NOTES)]
@@ -783,33 +843,33 @@ def test_a_reused_request_posts_no_detail_messages_again(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert transport.sent == []
+    assert wire.posts == []
     assert "detail_message_ids" not in json.loads(captured.out)
 
 
-def test_a_detail_post_failure_is_loud_and_leaves_the_card_binding_alone(
+def test_a_detail_post_failure_is_loud_and_cleans_up_without_a_card(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Given Discord fails midway through the detail messages / When the command ends /
-    Then the failure names how many landed and the exit code stays the card's."""
-    transport = _RecordingTransport(fail_after=1)
-    gate = _PostingGate(tmp_path)
-    _ = _posted(monkeypatch, gate, transport)
+    """Given Discord fails midway through details / When the request runs /
+    Then the partial detail is removed and no card or record survives."""
+    wire = _DetailWire(fail_post_after=1)
+    monkeypatch.setattr(release_approval, "_gate", _actual_gate(tmp_path, wire))
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
     plan_file = _plan_file(tmp_path, _LONG_NOTES)
     expected = spec_from_plan(json.loads(Path(plan_file).read_text("utf-8")), "0" * 32)
 
-    exit_code = release_approval.main(["request", "--plan-file", plan_file])
+    with pytest.raises(ApprovalSurfaceError):
+        _ = release_approval.main(["request", "--plan-file", plan_file])
 
     captured = capsys.readouterr()
-    assert exit_code == 0
     assert (
         f"RELEASE-DETAIL-POST-FAIL OSError posted=1/{len(expected.detail_messages())}"
         in captured.err.splitlines()
     )
-    stored = json.loads(gate.path().read_text(encoding="utf-8"))
-    assert json.loads(stored["detail_message_ids"]) == ["detail-1"]
+    assert wire.deletes == ["/channels/222/messages/700000000000000001"]
+    assert not (tmp_path / "pending" / "release.json").exists()
 
 
 def _recording_gates(
@@ -825,18 +885,14 @@ def _recording_gates(
     return build
 
 
-def _no_transport(channel_id: str) -> _RecordingTransport:
-    raise AssertionError(f"a refused card must post no detail message to {channel_id}")
-
-
-def test_a_new_release_card_is_the_owner_envelope_within_the_limit() -> None:
+def test_a_stored_v4_release_card_keeps_the_frozen_envelope() -> None:
     """Given a new release / When the card renders / Then five envelope fields carry
     every fact the frozen card carried, each on one line and inside the budget."""
-    spec = _spec()
+    spec = replace(_spec(), render_version=4)
 
     content = spec.render()
 
-    assert spec.render_version == NEW_RENDER_VERSION
+    assert spec.render_version == 4
     assert content == _V4_POSTED
     assert len(content.splitlines()) == 5
     assert len(content) <= MESSAGE_LIMIT
@@ -848,7 +904,7 @@ def test_a_new_release_card_is_the_owner_envelope_within_the_limit() -> None:
 def test_a_major_release_carries_the_operator_note_inside_the_envelope_fact() -> None:
     """Given a machine-contract signal / When the envelope card renders /
     Then the operator note rides the fact line instead of adding a sixth line."""
-    spec = replace(_spec(), major_note=_MAJOR_NOTE)
+    spec = replace(_spec(), render_version=4, major_note=_MAJOR_NOTE)
 
     content = spec.render()
 
@@ -859,15 +915,16 @@ def test_a_major_release_carries_the_operator_note_inside_the_envelope_fact() ->
 def test_the_render_version_never_enters_the_action_hash() -> None:
     """판본은 표현이지 승인 대상이 아니다 — 같은 입력이면 어느 판본이든 같은 해시다."""
     digests = {
-        replace(_spec(), render_version=version).action_hash() for version in (1, 2, 3, 4)
+        replace(_spec(), render_version=version).action_hash()
+        for version in (1, 2, 3, 4, 5, 6)
     }
 
     assert digests == {_ACTION_HASH}
 
 
 def test_an_unknown_stored_render_version_is_refused_and_never_binds() -> None:
-    """모르는 판본은 오늘과 똑같이 거절된다 — 넓히는 것은 4 하나뿐이다."""
-    record = {**_spec().new_record(_MESSAGE_ID, _binding()), "render_version": "5"}
+    """모르는 판본은 오늘과 똑같이 거절된다 — 넓히는 것은 6 하나뿐이다."""
+    record = {**_spec().new_record(_MESSAGE_ID, _binding()), "render_version": "7"}
 
     with pytest.raises(ReleaseSpecError):
         _ = spec_from_record(record)
@@ -884,7 +941,7 @@ def test_a_missing_envelope_falls_back_to_the_previous_version_and_records_it(
 
     assert refusal == ""
     assert card is not None
-    assert card.render_version == PREVIOUS_RENDER_VERSION
+    assert card.render_version == 3
     assert card.render() == _V3_POSTED
     record = card.new_record(_MESSAGE_ID, _binding())
     assert record["render_version"] == "3"
@@ -898,13 +955,17 @@ def test_a_card_over_the_limit_is_refused_before_the_post_record_or_journal(
 ) -> None:
     """Given a release whose card cannot fit / When the request runs / Then it is refused
     with the card unposted, no pending record and no journal reservation."""
-    crowded = tuple((f"skill:demo-{index:03d}", f"{index:064x}") for index in range(110))
     gates: list[_LifecycleGate] = []
+    wire = _DetailWire()
     monkeypatch.setattr(release_approval, "_gate", _recording_gates(gates, tmp_path))
-    monkeypatch.setattr(release_approval, "detail_transport", _no_transport)
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
 
     exit_code = release_approval.main(
-        ["request", "--plan-file", _plan_file(tmp_path, surface_digests=crowded)]
+        [
+            "request",
+            "--plan-file",
+            _plan_file(tmp_path, major_note="MAJOR: " + "가" * 2000),
+        ]
     )
 
     captured = capsys.readouterr()
@@ -912,6 +973,7 @@ def test_a_card_over_the_limit_is_refused_before_the_post_record_or_journal(
     assert not (tmp_path / "pending" / "release.json").exists(), "a pending record survived"
     assert not (tmp_path / "posting-journal").exists(), "a journal reservation survived"
     assert not (tmp_path / "approval-leases").exists(), "the request took the lease"
+    assert wire.posts == []
     assert exit_code == 6
     assert captured.err.startswith(CARD_REFUSED_PREFIX)
     assert "1900" in captured.err
@@ -925,29 +987,189 @@ def test_a_card_within_the_limit_is_posted_with_the_version_it_recorded(
 ) -> None:
     """Given a release that fits / When the request runs / Then the same seam posts it
     and the stored record replays the exact bytes the owner is looking at."""
-    gates: list[_LifecycleGate] = []
-    transport = _RecordingTransport()
-    def _transport(channel_id: str) -> _RecordingTransport:
-        assert channel_id == "222"
-        return transport
+    wire = _DetailWire()
 
-    monkeypatch.setattr(release_approval, "_gate", _recording_gates(gates, tmp_path))
-    monkeypatch.setattr(release_approval, "detail_transport", _transport)
+    monkeypatch.setattr(release_approval, "_gate", _actual_gate(tmp_path, wire))
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
 
     exit_code = release_approval.main(["request", "--plan-file", _plan_file(tmp_path)])
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert [gate.posted for gate in gates if gate.posted] == [[_ACTION_HASH]]
     stored = json.loads((tmp_path / "pending" / "release.json").read_text("utf-8"))
-    assert stored["render_version"] == "4"
-    assert spec_from_record(stored).render() == _V4_POSTED
-    assert json.loads(captured.out)["render_version"] == "4"
+    assert stored["render_version"] == "6"
+    replay = spec_from_record(stored)
+    rendered = replay.render()
+    detail_ids = json.loads(stored["detail_message_ids"])
+    assert detail_ids == ["700000000000000001"]
+    assert f"https://discord.com/channels/{wire.guild_id}/222/{detail_ids[0]}" in rendered
+    assert "-# 참조: 변경 상세 → https://discord.com/channels/" in rendered
+    assert "배포 묶음: 스킬 1 · 홈 패키지 1" in rendered
+    assert "`home:skills/mail`, `skill:meeting`" not in rendered
+    assert replay.bound(rendered, stored)
+    assert json.loads(captured.out)["render_version"] == "6"
+    assert any(
+        "### 배포 묶음 전체" in str(post["content"])
+        for post in wire.posts
+        if "message_reference" not in post
+    )
+    card_posts = [post for post in wire.posts if "message_reference" in post]
+    assert card_posts == [
+        {
+            "content": rendered,
+            "message_reference": {
+                "message_id": detail_ids[0],
+                "fail_if_not_exists": True,
+            },
+            "allowed_mentions": {"parse": [], "replied_user": False},
+        }
+    ]
+    # 상세마다 카드 URL 이 PATCH 로 되돌아가야 한다 — `all()` 만 쓰면 빈 patch 목록도
+    # 통과하므로 대상 경로를 먼저 못박는다.
+    assert [path for path, _payload in wire.patches] == [
+        f"/channels/222/messages/{detail_id}" for detail_id in detail_ids
+    ]
+    assert all(
+        f"https://discord.com/channels/{wire.guild_id}/222/{stored['message_id']}"
+        in str(payload["content"])
+        for _path, payload in wire.patches
+    )
+    assert all(
+        len(str(payload["content"])) <= MESSAGE_LIMIT
+        for _path, payload in wire.patches
+    )
+
+
+@pytest.mark.parametrize("guild_id", [None, "01"])
+def test_missing_guild_id_uses_a_search_reference_without_a_fake_link(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    guild_id: str | None,
+) -> None:
+    wire = _DetailWire(guild_id=guild_id)
+    monkeypatch.setattr(release_approval, "_gate", _actual_gate(tmp_path, wire))
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
+
+    assert release_approval.main(
+        ["request", "--plan-file", _plan_file(tmp_path)]
+    ) == 0
+
+    record = json.loads(capsys.readouterr().out)
+    rendered = spec_from_record(record).render()
+    assert "discord.com/channels" not in rendered
+    assert "검색: 변경 상세" in rendered
+    assert record.get("detail_guild_id", "") == ""
+
+
+def test_malformed_detail_id_is_cleaned_up_before_any_card_or_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wire = _DetailWire(first_post_id="01")
+    monkeypatch.setattr(release_approval, "_gate", _actual_gate(tmp_path, wire))
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
+
+    with pytest.raises(ApprovalSurfaceError):
+        _ = release_approval.main(
+            ["request", "--plan-file", _plan_file(tmp_path)]
+        )
+
+    assert wire.deletes == ["/channels/222/messages/01"]
+    assert not (tmp_path / "pending" / "release.json").exists()
+
+
+def test_v5_fallback_does_not_append_an_over_budget_backlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wire = _DetailWire()
+
+    def unavailable(spec: ReleaseSpec, *, bundle_summary: str) -> str:
+        del spec, bundle_summary
+        raise release_spec.EnvelopeUnavailable("synthetic old runtime")
+
+    monkeypatch.setattr(release_spec, "render_v6", unavailable)
+    monkeypatch.setattr(release_approval, "_gate", _actual_gate(tmp_path, wire))
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
+    long_notes = "\n".join(f"- 변경 {index} " + "가" * 300 for index in range(20))
+
+    assert release_approval.main(
+        ["request", "--plan-file", _plan_file(tmp_path, long_notes)]
+    ) == 0
+
+    stored = json.loads(
+        (tmp_path / "pending" / "release.json").read_text(encoding="utf-8")
+    )
+    assert stored["render_version"] == "5"
+    assert wire.patches == []
+    assert all(len(str(post["content"])) <= MESSAGE_LIMIT for post in wire.posts)
+
+
+def test_v6_compacts_many_bundles_and_moves_the_full_list_into_details() -> None:
+    surfaces = (
+        *((f"skill:demo-{index:02d}", f"{index:064x}") for index in range(19)),
+        *((f"home:package-{index:02d}", f"{index + 19:064x}") for index in range(23)),
+        ("repo", "e" * 64),
+        ("runtime", "f" * 64),
+    )
+    spec = replace(
+        _spec(),
+        surface_digests=surfaces,
+        render_version=6,
+        detail_message_ids=("700000000000000001",),
+        detail_channel_id="222",
+        detail_guild_id="111111111111111111",
+    )
+
+    card = spec.render()
+    details = "\n".join(spec.detail_messages())
+
+    assert "배포 묶음: 스킬 19 · 홈 패키지 23 · repo · runtime" in card
+    assert "skill:demo-00" not in card
+    assert "home:package-00" not in card
+    assert all(name in details for name, _digest in surfaces)
+    assert len(card) <= MESSAGE_LIMIT
+
+
+def test_lifecycle_refusal_posts_no_orphan_detail_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    wire = _DetailWire()
+
+    class RefusingGate(_LifecycleGate):
+        def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
+            return (ApprovalRequest(key, "other", "999", "222", ""),)
+
+        def probe(self, request: ApprovalRequest) -> Probe:
+            del request
+            return Probe.BINDING_MISMATCH
+
+    monkeypatch.setattr(
+        release_approval, "_gate", lambda spec: RefusingGate(tmp_path, spec)
+    )
+    monkeypatch.setattr(skill_gate, "_api", wire.api)
+
+    exit_code = release_approval.main(
+        ["request", "--plan-file", _plan_file(tmp_path)]
+    )
+
+    assert exit_code == skill_gate_request.LIFECYCLE_REFUSAL_EXIT
+    assert wire.posts == []
+    assert "reason=binding-mismatch" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
     ("version", "posted"),
-    ((1, _V1_POSTED), (2, _V2_POSTED), (3, _V3_POSTED), (4, _V4_POSTED)),
+    (
+        (1, _V1_POSTED),
+        (2, _V2_POSTED),
+        (3, _V3_POSTED),
+        (4, _V4_POSTED),
+        (5, _V5_POSTED),
+    ),
 )
 def test_the_record_persists_the_posted_digest(version: int, posted: str) -> None:
     from hashlib import sha256
@@ -958,25 +1180,33 @@ def test_the_record_persists_the_posted_digest(version: int, posted: str) -> Non
     assert record["content_sha256"] == sha256(posted.encode("utf-8")).hexdigest()
 
 
-def test_preflight_pins_the_posted_bytes_before_recording_their_digest(
+def test_card_finalization_pins_the_posted_bytes_before_recording_their_digest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from hashlib import sha256
 
     calls: list[int] = []
 
-    def once(spec: ReleaseSpec) -> str:
+    def observed(spec: ReleaseSpec, *, bundle_summary: str) -> str:
+        assert bundle_summary
         calls.append(spec.render_version)
-        assert len(calls) == 1, "posting and recording must use the preflight bytes"
-        return _V4_POSTED
+        return "posted-release-v6"
 
-    monkeypatch.setattr(ReleaseSpec, "_render_v4", once)
+    monkeypatch.setattr(release_spec, "render_v6", observed)
     card, refusal = card_for_new_request(_spec())
     assert card is not None and refusal == ""
-    assert card.render() == _V4_POSTED
+    assert card.render() == "posted-release-v6"
     record = card.new_record(_MESSAGE_ID, _binding())
-    assert record["content_sha256"] == sha256(_V4_POSTED.encode("utf-8")).hexdigest()
-    assert calls == [4]
+    assert record["content_sha256"] == sha256(b"posted-release-v6").hexdigest()
+    assert calls and all(version == 6 for version in calls)
+
+    def forbidden(spec: ReleaseSpec, *, bundle_summary: str) -> str:
+        del spec, bundle_summary
+        raise AssertionError("finalized card must not render again")
+
+    monkeypatch.setattr(release_spec, "render_v6", forbidden)
+    assert card.render() == "posted-release-v6"
+    assert spec_from_record(record).bound("posted-release-v6", record)
 
 
 @pytest.mark.parametrize(
@@ -992,7 +1222,7 @@ def test_pre_digest_records_keep_the_frozen_legacy_binding(version: int, posted:
 
 
 def test_a_v4_record_without_its_digest_fails_closed() -> None:
-    record = _spec().new_record(_MESSAGE_ID, _binding())
+    record = replace(_spec(), render_version=4).new_record(_MESSAGE_ID, _binding())
     del record["content_sha256"]
 
     assert not _spec().bound(_V4_POSTED, record)

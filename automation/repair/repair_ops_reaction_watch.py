@@ -35,6 +35,7 @@ from automation.repair.repair_ops_approval_gate import (
 )
 from automation.repair.repair_approval_content import approval_content_matches
 from automation.repair.repair_ops_discord import RepairDiscordApi
+from automation.repair.repair_redaction import redact
 from automation.repair.repair_ops_pending import CANCEL_EMOJI, APPROVE_EMOJI, PendingRepairApproval, PendingRepairApprovalStore
 
 
@@ -93,6 +94,10 @@ class CliRepairApprovalCommands:
             text=True,
             timeout=900,
         )
+        if result.stdout:
+            print(redact(result.stdout), end="", flush=True)
+        if result.stderr:
+            print(redact(result.stderr), end="", file=sys.stderr, flush=True)
         return result.returncode == 0
 
 

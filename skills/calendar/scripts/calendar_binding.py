@@ -44,6 +44,8 @@ class OwnerDmDirectory(Protocol):
 
 
 def approval_key(draft: Mapping[str, object]) -> str:
+    if draft.get("digest_key"):
+        return f"calendar:digest:{draft['digest_key']}"
     calendar_id = draft.get("calendar_id")
     event_id = draft.get("event_id")
     start = draft.get("start")
@@ -112,6 +114,8 @@ def new_binding(draft: Mapping[str, object]) -> ApprovalBindingLike:
     draft id 뿐이고 제목·시각·event/calendar id 는 어떤 경우에도 싣지 않는다. origin
     쌍은 지시 메시지에 스레드를 앵커하는 데만 쓰이며 확인 표면을 바꾸지 않는다.
     """
+    if draft.get("digest_day"):
+        return importlib.import_module("calendar_digest").daily_binding(draft)
     surface = _surface()
     request = surface.RequestThread(
         title=str(draft.get("id", "")),
@@ -175,6 +179,19 @@ def binding_for_entry(entry: PendingApproval) -> ApprovalBindingLike:
             "surface": entry.surface,
         }
     )
+
+
+def validate_post_binding(binding: ApprovalBindingLike) -> None:
+    """Recheck the existing calendar policy and live channel facts before content leaves.
+
+    The shared policy owns allowed destinations, including historical bindings.
+    Resolving another destination is not validation.
+    """
+    _ = stored_binding({
+        "kind": str(binding.kind), "surface": str(binding.surface),
+        "channel_id": binding.channel_id, "policy_version": binding.policy_version,
+        "approval_guild_id": binding.guild_id,
+    })
 
 
 def reusable_binding(store: PendingConfirmStore, key: str) -> ApprovalBindingLike | None:

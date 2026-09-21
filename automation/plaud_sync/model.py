@@ -38,7 +38,7 @@ _RECORD_KEYS: Final = frozenset(
         "last_block_reason",
     }
 )
-_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "approval_guild_id", "transcribe_attempts", "next_transcribe_at", "render_version"})
+_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "approval_guild_id", "transcribe_attempts", "next_transcribe_at", "render_version", "aliases", "last_recheck_error"})
 
 
 class PlaudSyncError(ValueError):
@@ -71,6 +71,8 @@ class PlaudSyncRecord:
     transcribe_attempts: int = 0
     next_transcribe_at: str | None = None
     render_version: str | None = None
+    aliases: tuple[str, ...] = ()
+    last_recheck_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +83,11 @@ class PlaudSyncState:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "records", MappingProxyType(dict(self.records)))
+
+
+def canonical_recording_id(raw: str) -> str:
+    """Folder moves can add ``of_``; the remaining recording identity is unchanged."""
+    return raw.removeprefix("of_")
 
 
 def empty_state() -> PlaudSyncState:
@@ -151,6 +158,9 @@ def parse_record(raw: object) -> PlaudSyncRecord:
             f"plaud-sync record shape mismatch: missing={sorted(missing)} unknown={sorted(unknown)}"
         )
     data = {str(key): value for key, value in payload.items()}
+    aliases = data.get("aliases", [])
+    if not isinstance(aliases, list):
+        raise PlaudSyncError("plaud-sync aliases must be a list of strings")
     return PlaudSyncRecord(
         version=_integer(data["version"], "version"),
         recording_id=_string(data["recording_id"], "recording_id"),
@@ -178,6 +188,8 @@ def parse_record(raw: object) -> PlaudSyncRecord:
         transcribe_attempts=_integer(data.get("transcribe_attempts", 0), "transcribe_attempts"),
         next_transcribe_at=_schedule(data.get("next_transcribe_at")),
         render_version=_string_or_none(data.get("render_version"), "render_version"),
+        aliases=tuple(_string(alias, "aliases entry") for alias in aliases),
+        last_recheck_error=_string_or_none(data.get("last_recheck_error"), "last_recheck_error"),
     )
 
 
@@ -230,6 +242,10 @@ def serialize_record(record: PlaudSyncRecord) -> dict[str, object]:
         row["next_transcribe_at"] = record.next_transcribe_at
     if record.render_version is not None:
         row["render_version"] = record.render_version
+    if record.aliases:
+        row["aliases"] = list(record.aliases)
+    if record.last_recheck_error is not None:
+        row["last_recheck_error"] = record.last_recheck_error
     return row
 
 

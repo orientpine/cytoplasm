@@ -68,21 +68,22 @@ def test_procurement_review_uses_facade_target(
     channel: str,
     expected_target: str,
 ) -> None:
-    """Attachment delivery still delegates target selection to owner_notice."""
+    """Attachment delivery stays inside owner_notice — target AND transport."""
     del notice_attempts
     target = tmp_path / "review.txt"
     _ = target.write_text("review", encoding="utf-8")
-    posted: list[tuple[str, str]] = []
+    posted: list[tuple[str, tuple[Path, ...]]] = []
     monkeypatch.setattr(owner_notice, "owner_notice_channel", lambda _home=None: channel)
     monkeypatch.setattr(
-        procure_review,
-        "_post_attachment",
-        lambda channel_id, _file, content: posted.append((channel_id, content)) or {"id": "1"},
+        owner_notice,
+        "send_notice_files",
+        lambda _token, channel_id, _body, attachments: posted.append((channel_id, tuple(attachments))),
+        raising=False,
     )
 
     procure_review.send_review(target, "검토")
 
-    assert [channel_id for channel_id, _content in posted] == [expected_target]
+    assert posted == [(expected_target, (target,))]
 
 
 @pytest.mark.parametrize(

@@ -36,6 +36,7 @@ class Renderer(Protocol):
         figures_path: Path | None,
         tables_path: Path | None,
         cover_overrides: Mapping[str, str] | None,
+        project: str,
     ) -> object: ...
 
 
@@ -282,6 +283,7 @@ def run_render(
             figures_path=figures_path,
             tables_path=version_path / "tables.json",
             cover_overrides=cover_overrides,
+            project=slug,
         )
     except (OSError, ValueError, RuntimeError) as error:
         raise RenderProcessError(f"HWPX render failed: {error}") from error

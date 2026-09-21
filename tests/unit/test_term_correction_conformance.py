@@ -29,18 +29,30 @@ _CORRECTING_CALLS: Final = ("term_correction.apply(", "term_correction.correct("
 _ADOPTED: Final[dict[str, str]] = {
     "meeting": "skills/meeting/scripts/meeting_terms.py",
     "lifelog": "automation/plaud_sync/note.py",
+    "proposal": "skills/proposal/engine/pipeline/orchestrator.py",
 }
+#: 공개 반출 매니페스트가 통째로 빼는 트리 — 없는 트리에서는 그 종류의 채택을 대조할 수 없다
+#: (선례 `test_proposal_engine_pin.py` 의 skipif). 트리가 있는데 파일만 없으면 그대로 실패다.
+_MANIFEST_EXCLUDED_TREES: Final[dict[str, str]] = {"proposal": "skills/proposal/engine"}
 #: 아직 붙이지 않은 문서 종류와 그 사유. 사유 없는 면제는 없다.
 _EXEMPT: Final[dict[str, str]] = {
     "transcript": "전사본은 원문이다 — 이 규칙이 교정을 금지하는 바로 그 문서",
     "audio": "녹음원본(audio)은 생성되는 산출 문서가 아니라 오디오 바이너리이므로 용어 교정 대상이 아니다 — 교정할 본문이 존재하지 않는다",
     "patent": "gate-only — 특허 산출물은 전용 게이트로만 나가고 Drive 트리에 폴더가 없다",
     "report": "주간동향은 수집한 원문을 인용만 한다 — 새로 쓰는 해석 본문이 생기면 채택한다",
-    "proposal": "제안서 본문은 소유자가 직접 쓴 원고를 편집한다 — 자동 교정 채택은 별도 결정",
     "budget": "예산 산출물은 숫자와 코드뿐이라 교정할 낱말이 없다",
     "procurement": "구매 산출물은 품명·규격을 원문 그대로 옮긴다",
     "doctype": "문서 저장은 소유자가 준 파일을 그대로 보관한다 — 새로 쓰는 본문이 없다",
 }
+
+
+def _shipped_adopted() -> dict[str, str]:
+    """이 트리에 실제로 실려 있는 채택 종류 — 공개 반출본은 엔진 트리 없이 온다."""
+    return {
+        kind: relpath
+        for kind, relpath in _ADOPTED.items()
+        if kind not in _MANIFEST_EXCLUDED_TREES or (_ROOT / _MANIFEST_EXCLUDED_TREES[kind]).is_dir()
+    }
 
 
 def _sources(tree: Path) -> list[Path]:
@@ -75,7 +87,7 @@ def test_the_transcript_stage_never_corrects() -> None:
 
 
 def test_every_adopted_document_kind_delegates_and_logs() -> None:
-    for kind, relpath in _ADOPTED.items():
+    for kind, relpath in _shipped_adopted().items():
         source = _ROOT / relpath
         assert source.is_file(), f"{kind}: {relpath} 이 없다"
         text = source.read_text(encoding="utf-8")
@@ -85,15 +97,16 @@ def test_every_adopted_document_kind_delegates_and_logs() -> None:
 
 def test_the_logged_document_kinds_are_the_adopted_ones() -> None:
     """교정한 문서 종류가 로그에 그대로 적혀야 사후에 오탐을 그 문서로 되짚을 수 있다."""
+    adopted = set(_shipped_adopted())
     recorded = {
         kind
-        for kind in _ADOPTED
+        for kind in adopted
         for path in (_ROOT / "skills", _ROOT / "automation")
         for source in _sources(path)
         if f'document="{kind}"' in source.read_text(encoding="utf-8")
     }
 
-    assert recorded == set(_ADOPTED), f"로그에 적히지 않는 종류: {set(_ADOPTED) - recorded}"
+    assert recorded == adopted, f"로그에 적히지 않는 종류: {adopted - recorded}"
 
 
 def test_every_document_kind_is_either_adopted_or_exempt_with_a_reason() -> None:

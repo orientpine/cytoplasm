@@ -233,7 +233,7 @@ def _parse_entry(raw: dict[str, str | int]) -> PendingConfirm:
         or not isinstance(surface, str | None)
         or not isinstance(channel_id, str)
         or not isinstance(policy_version, int | None)
-        or render_version not in (None, "1", "2")
+        or render_version not in (None, "1", "2", "3")
         or not isinstance(approval_thread_id, str)
         or not isinstance(approval_guild_id, str | None)
         or not isinstance(origin_channel_id, str)

@@ -61,7 +61,7 @@ def test_selected_version_persists_when_posted_and_the_real_probe_accepts(
         persisted = store.pending()[0]
         transport.content = transport.posted[0][1]
         gate = pg.PlaudApprovalGate(persisted, store, transport)
-        expected_version = "plaud-sync-render-v4" if fallback else "plaud-sync-render-v5"
+        expected_version = "plaud-sync-render-v4" if fallback else "plaud-sync-render-v6"
         key = record.recording_id
     else:
         record = memory_record()
@@ -74,7 +74,7 @@ def test_selected_version_persists_when_posted_and_the_real_probe_accepts(
                                       binding=binding, lease=lease, journal=journal)
         persisted = store.pending()[0]
         gate = mg.RelocateApprovalGate(persisted, ENTRY, store, transport)
-        expected_version = "mc-reloc-render-v1" if fallback else "mc-reloc-render-v2"
+        expected_version = "mc-reloc-render-v1" if fallback else "mc-reloc-render-v3"
     # Then persisted presentation is separate from binding; probe itself accepts the card.
     assert verdict.outcome is Outcome.POSTED
     assert persisted.render_version == expected_version
@@ -206,7 +206,7 @@ def test_todo_selected_card_is_bound_when_the_real_cli_requests_it(
     # Then the stored version names the posted bytes and the producer's probe binds them.
     assert result == 0
     record, = store.all_outstanding()
-    assert record.render_version == ("todo-render-v1" if fallback else "todo-render-v2")
+    assert record.render_version == ("todo-render-v1" if fallback else "todo-render-v3")
     binding = ApprovalBinding(ApprovalKind.TODO, ApprovalSurface.AGENT_CHAT_THREAD, record.channel_id, record.policy_version)
     runtime = replace(_runtime(import_module("todo_approval"), store, transport, directory,
                                [record.created_at + approval_ttl() / 2], tmp_path), binding=binding)
@@ -406,10 +406,10 @@ def test_todo_preflight_card_survives_thread_creation(
     assert module.request_cli_approval(intent, _OWNER).outcome is Outcome.POSTED
     record = store.active(intent.key)
     assert record.created_at == anchor
-    assert record.render_version == ("todo-render-v1" if fallback else "todo-render-v2")
+    assert record.render_version == ("todo-render-v1" if fallback else "todo-render-v3")
     assert transport.messages[record.message_id] == prepared[0][1]
     if not fallback:
-        assert (anchor + approval_ttl()).isoformat() in prepared[0][1]
+        assert (anchor + approval_ttl()).strftime("%Y-%m-%d %H:%M") in prepared[0][1]
 
 
 def test_todo_deadline_and_version_when_real_generation_is_prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -439,4 +439,4 @@ def test_todo_deadline_and_version_when_real_generation_is_prepared(tmp_path: Pa
     assert observed == [om.Approval(None, "등록 취소"), om.Approval(datetime(2026, 9, 11, 13, tzinfo=UTC), "등록 취소")]
     record = store.active(intent.key)
     assert record is not None
-    assert record.render_version == "todo-render-v2"
+    assert record.render_version == "todo-render-v3"

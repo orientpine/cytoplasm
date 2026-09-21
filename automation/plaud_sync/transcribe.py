@@ -18,6 +18,7 @@ note's source line says so, because a lifelog note stuck forever helps nobody.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 
 from .duration import DEFAULT_MIN_DURATION_MS, abandon_short
@@ -25,6 +26,7 @@ from .lifelog_model import LifelogExtractError
 from .model import PlaudSyncRecord, PlaudSyncState
 from .transcribe_policy import DEFAULT_GIVE_UP, RetryPolicy, utc_now
 from .transcribe_promote import (
+    REASON_LIMIT,
     NO_SUMMARY as _NO_SUMMARY,
     NO_TRANSCRIPT as _NO_TRANSCRIPT,
     abandon as abandon,
@@ -56,6 +58,9 @@ def recheck(record: PlaudSyncRecord, effects: TranscribeEffects, policy: RetryPo
         cloud = effects.fetch_transcript(record.recording_id)
         source = effects.fetch_source(record.recording_id)
     except TranscribeError as error:
+        if not error.counted:
+            after = replace(record, last_recheck_error=error.reason[:REASON_LIMIT])
+            return "retry" if effects.commit(record, after, None) else "stale"
         return _block(record, effects, error.reason)
     if source.duration_ms < policy.min_duration_ms:
         return abandon_short(record, effects, source.duration_ms)

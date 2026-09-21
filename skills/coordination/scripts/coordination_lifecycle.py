@@ -110,12 +110,12 @@ def owner_leg(args: argparse.Namespace, config: dict[str, str], correlation: str
 
 
 def render_owner_card(draft: OwnerCardDraft, legacy: str) -> str:
-    """Replay v1 or render v2 using only already-public coordination facts."""
+    """Replay v1/v2 bytes; v3 gives already-public facts to owner-ko-v2 on separate lines."""
     version = draft.get("render_version", "1")
     if version == "1":
         return legacy
     from automation.interop.approval_card import CardRenderError
-    if version != "2":
+    if version not in ("2", "3"):
         raise CardRenderError("unknown coordination card render version")
     from automation.interop import owner_message
     from coordination_binding import reaction_instruction
@@ -125,10 +125,11 @@ def render_owner_card(draft: OwnerCardDraft, legacy: str) -> str:
     here = owner_message.Ref(scope="self")
     envelope = owner_message.OwnerMessage(
         subject_key=str(draft["id"]), subject="일정 조율",
-        fact=" · ".join(legacy.splitlines()[:2]), location=here,
+        fact=("\n" if version == "3" else " · ").join(legacy.splitlines()[:2]), location=here,
         owner=owner_message.Action("react", here, reaction_instruction()),
         agent_next="승인된 일정을 캘린더에 등록", recovery="not_applicable",
         detail=owner_message.Approval(datetime.fromisoformat(draft["created"]) + EXPIRY, "일정을 등록하지 않음"),
+        render_version="owner-ko-v2" if version == "3" else "owner-ko-v1",
     )
     try:
         body = owner_message.render(envelope, destination=here)

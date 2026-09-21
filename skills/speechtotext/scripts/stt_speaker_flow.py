@@ -34,7 +34,8 @@ def tidy(
     sentences = transcription.sentences or stt_blocks.parse(transcription.text)
     polished = stt_polish.polish_sentences(sentences)
     rule = stt_speakers.infer(polished.timed)
-    speakers = stt_speakers.merge(override, rule)
+    # 등록된 목소리(카탈로그)는 소유자보다 아래, 자기소개보다 위다 — 신뢰 순서는 merge 가 안다.
+    speakers = stt_speakers.merge(override, getattr(transcription, "speakers", ()), rule)
     named = stt_polish.polish_sentences(
         polished.timed, names=stt_speakers.names(speakers)
     )

@@ -221,12 +221,12 @@ def _render_v1(draft: BudgetCardDraft, *, instruction: str = "") -> str:
 
 
 def render_approvals_message(draft: BudgetCardDraft, *, instruction: str = "") -> str:
-    """Missing versions replay frozen v1; only explicitly selected v2 uses the envelope."""
+    """Replay v1/v2 bytes; v3 selects multiline facts and the owner-ko-v2 envelope."""
     version = draft.get("render_version", "1")
     if version == "1":
         return _render_v1(draft, instruction=instruction)
     from automation.interop.approval_card import CardRenderError
-    if version != "2":
+    if version not in ("2", "3"):
         raise CardRenderError("unknown budget card render version")
     from automation.interop import owner_message
     from automation.interop.approval_surface import ApprovalKind, reaction_instruction, required_surface
@@ -238,10 +238,11 @@ def render_approvals_message(draft: BudgetCardDraft, *, instruction: str = "") -
     expiry = None if created is None else datetime.fromisoformat(created) + BUDGET_APPROVAL_TTL
     message = owner_message.OwnerMessage(
         subject_key=str(draft["id"]), subject="예산 변경 메일",
-        fact=" · ".join(_render_v1(draft).splitlines()[1:-2]), location=here,
+        fact=("\n" if version == "3" else " · ").join(_render_v1(draft).splitlines()[1:-2]), location=here,
         owner=owner_message.Action("react", here, reaction_instruction(kind, required_surface(kind))),
         agent_next="승인 시 다음 30분 tick에 발송", recovery="irreversible",
         detail=owner_message.Approval(expiry, "메일을 발송하지 않음"),
+        render_version="owner-ko-v2" if version == "3" else "owner-ko-v1",
     )
     try:
         body = owner_message.render(message, destination=here)

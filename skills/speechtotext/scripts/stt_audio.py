@@ -18,8 +18,11 @@ MAX_API_AUDIO_BYTES: Final = 25 * 1024 * 1024
 MAX_LOCAL_AUDIO_BYTES: Final = 8 * 1024 * 1024 * 1024
 MAX_AUDIO_BYTES: Final = MAX_API_AUDIO_BYTES
 
+# Mirrors the transcription API's accepted list. ``.ogg`` is what Plaud's get_file has
+# served since 2026-09-15 — the local path normalizes through ffmpeg anyway, so this gate
+# was the only thing between a downloaded recording and whisper.cpp.
 SUPPORTED_SUFFIXES: Final = frozenset(
-    {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm"}
+    {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"}
 )
 
 _MIME_BY_SUFFIX: Final[dict[str, str]] = {
@@ -29,6 +32,7 @@ _MIME_BY_SUFFIX: Final[dict[str, str]] = {
     ".mpeg": "audio/mpeg",
     ".mpga": "audio/mpeg",
     ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
     ".wav": "audio/wav",
     ".webm": "audio/webm",
 }
@@ -38,7 +42,7 @@ SIZE_EXCEEDED_NOTICE: Final = (
     "로컬 전사(whisper.cpp)를 설정하면 2시간이 넘는 녹취도 나누지 않고 그대로 처리합니다."
 )
 UNSUPPORTED_NOTICE: Final = (
-    "지원하지 않는 형식입니다. flac/mp3/mp4/mpeg/mpga/m4a/wav/webm 음성만 전사합니다."
+    "지원하지 않는 형식입니다. flac/mp3/mp4/mpeg/mpga/m4a/ogg/wav/webm 음성만 전사합니다."
 )
 MISSING_NOTICE: Final = "음성 파일을 찾을 수 없습니다. 경로를 확인해 주세요."
 EMPTY_TRANSCRIPT_NOTICE: Final = (

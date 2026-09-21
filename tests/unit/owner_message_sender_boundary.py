@@ -108,9 +108,10 @@ def _distinct_keys(keys: list[object]) -> bool:
 
 
 def _certified_projection(graph: Bindings, scope: str, node: ast.Subscript) -> bool:
-    origins = [keys for path in graph.values(scope, node.value)
+    receivers = graph.values(scope, node.value)
+    origins = [keys for path in receivers
                for keys in _key_origins(graph, (scope, path), frozenset())]
-    if not origins or any(not _distinct_keys(list(keys.values())) for keys in origins):
+    if not origins or any(not keys or not _distinct_keys(list(keys.values())) for keys in origins):
         return False
     for path in graph.values(scope, node.slice):
         for literal in graph.resolve(scope, path):
@@ -135,7 +136,8 @@ def _key_origins(graph: Bindings, key: Key, seen: frozenset[Key]) -> list[dict[s
         scope = graph.redirects.get((scope, parts[0]), scope)
         keys = graph.keys.get((scope, path))
         if keys:
-            found.append(keys)
+            # An empty origin preserves uncertainty through aliases and returns.
+            found.append({} if (scope, path) in graph.unkeyed else keys)
         for length in range(1, len(parts) + 1):
             prefix = (scope, ".".join(parts[:length]))
             if prefix in seen:

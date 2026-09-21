@@ -177,6 +177,10 @@ class Discord:
             assert payload is not None
             self.content = payload["content"]
             return {"id": "333"}
+        if method == "PUT":
+            assert "/reactions/" in path and path.endswith("/@me")
+            assert payload is None
+            return None
         assert method == "GET"
         if "/reactions/" in path:
             return [{"id": "111", "bot": False}] if "✅" in unquote(path) else []
@@ -226,23 +230,32 @@ def test_new_requests_store_version_and_probe_actual_card(tmp_path: Path, monkey
 
     monkeypatch.setattr(owner_message, "render", observe)
     assert request(args) == 0
-    assert messages == [(ENVELOPES[kind], owner_message.Ref("self"))]
-    assert fake.content == {"deploy": DEPLOY_V2, "publish": PUBLISH_V2, "managed": MANAGED_V2}[kind]
+    expected = replace(
+        ENVELOPES[kind], render_version="owner-ko-v2",
+        fact=("발행 태그: `managed-x/v1`" if kind == "publish"
+              else "- review: PASS\n- sandbox: PASS (peer 인스턴스, DUMMY 시크릿)"),
+    )
+    assert messages == [(expected, owner_message.Ref("self"))]
     gate = make_gate(args)
+    assert replace(gate.spec, render_version=2).render() == {
+        "deploy": DEPLOY_V2, "publish": PUBLISH_V2, "managed": MANAGED_V2,
+    }[kind]
     record = gate.stored()
     assert record is not None
-    assert record.get("render_version") == "2"
+    assert record.get("render_version") == "3"
     assert len(fake.content) <= 1900
     assert gate.probe(gate.outstanding(gate.spec.key())[0]) is Probe.APPROVED
 
 
 @pytest.mark.parametrize("kind", ["deploy", "publish", "managed"])
-@pytest.mark.parametrize("version", [1, 2], ids=["v1-fallback", "v2"])
+@pytest.mark.parametrize("version", [1, 2, 3], ids=["v1-fallback", "v2-fallback", "v3"])
 def test_bound_request_never_renders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, version: int) -> None:
     fake, args, request, make_gate = install(tmp_path, monkeypatch, kind)
     with pytest.MonkeyPatch.context() as missing:
         if version == 1:
             missing.setitem(sys.modules, "automation.interop.owner_message", None)
+        elif version == 2:
+            missing.setattr(skill_gate_specs, "_render_v3", _v3_unavailable)
         assert request(args) == 0
     gate = make_gate(args)
     record = gate.stored()
@@ -259,12 +272,14 @@ def test_bound_request_never_renders(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(type(gate.spec), "render", observable)
     monkeypatch.setattr(type(gate.spec), "render_v1", observable)
     monkeypatch.setattr(skill_gate_specs, "_render_v2", observable)
+    monkeypatch.setattr(skill_gate_specs, "_render_v3", observable)
     assert gate.probe(gate.outstanding(gate.spec.key())[0]) is Probe.APPROVED
     assert request(args) == (0 if kind == "publish" else 6)
     assert calls == []
     assert fake.content == posted
     assert gate.path().read_bytes() == before
-    assert all(method == "GET" for method, _ in fake.calls[1:])
+    assert [method for method, _ in fake.calls[:3]] == ["POST", "PUT", "PUT"]
+    assert all(method == "GET" for method, _ in fake.calls[3:])
 
 
 @pytest.mark.parametrize("kind", ["deploy", "publish"])
@@ -323,7 +338,7 @@ def test_unversioned_records_probe_legacy_bytes(tmp_path: Path, monkeypatch: pyt
 
 @pytest.mark.parametrize("kind", ["deploy", "publish"])
 @pytest.mark.parametrize("damage", ["version", "text", "wire", "digest", "nonce", "content-digest", "missing-content-digest"])
-@pytest.mark.parametrize("version", [1, 2], ids=["v1-fallback", "v2"])
+@pytest.mark.parametrize("version", [1, 2, 3], ids=["v1-fallback", "v2-fallback", "v3"])
 def test_unknown_version_or_binding_damage_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, damage: str, version: int,
 ) -> None:
@@ -331,6 +346,8 @@ def test_unknown_version_or_binding_damage_refuses(
     with pytest.MonkeyPatch.context() as missing:
         if version == 1:
             missing.setitem(sys.modules, "automation.interop.owner_message", None)
+        elif version == 2:
+            missing.setattr(skill_gate_specs, "_render_v3", _v3_unavailable)
         assert request(args) == 0
     gate = make_gate(args)
     record = gate.stored()
@@ -355,7 +372,8 @@ def test_unknown_version_or_binding_damage_refuses(
     args.hash = "c" * 64
     assert request(args) == 6
     assert gate.path().read_bytes() == before
-    assert all(method == "GET" for method, _ in fake.calls[1:])
+    assert [method for method, _ in fake.calls[:3]] == ["POST", "PUT", "PUT"]
+    assert all(method == "GET" for method, _ in fake.calls[3:])
 
 
 SIGNED_V2 = (
@@ -372,13 +390,15 @@ SIGNED_V2 = (
 )
 
 
-@pytest.mark.parametrize("version", [1, 2], ids=["v1-fallback", "v2"])
+@pytest.mark.parametrize("version", [1, 2, 3], ids=["v1-fallback", "v2-fallback", "v3"])
 def test_signed_check_never_renders_or_patches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: int) -> None:
     fake, args, request, make_gate = install(tmp_path, monkeypatch, "deploy")
     args.peer_attest_mode = "signed"
     with pytest.MonkeyPatch.context() as missing:
         if version == 1:
             missing.setitem(sys.modules, "automation.interop.owner_message", None)
+        elif version == 2:
+            missing.setattr(skill_gate_specs, "_render_v3", _v3_unavailable)
         assert request(args) == 0
     gate = make_gate(args)
     record = gate.stored()
@@ -403,10 +423,16 @@ def test_signed_check_never_renders_or_patches(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(skill_gate_specs.DeploySpec, "render", observable)
     monkeypatch.setattr(skill_gate_specs.DeploySpec, "render_v1", observable)
     monkeypatch.setattr(skill_gate_specs, "_render_v2", observable)
+    monkeypatch.setattr(skill_gate_specs, "_render_v3", observable)
     monkeypatch.setattr(owner_message, "render", observable)
     assert skill_gate.cmd_check(args) == 0
     assert calls == []
     assert fake.content == posted
     assert gate.path().read_bytes() == before
-    assert all(method == "GET" for method, _ in fake.calls[1:])
+    assert [method for method, _ in fake.calls[:3]] == ["POST", "PUT", "PUT"]
+    assert all(method == "GET" for method, _ in fake.calls[3:])
     assert (tmp_path / "approvals.jsonl").exists()
+
+
+def _v3_unavailable(spec: skill_gate_specs.DeploySpec | skill_gate_specs.PublishSpec) -> str:
+    raise ImportError("synthetic pre-v3 runtime")

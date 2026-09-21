@@ -68,16 +68,16 @@ def scenario(tmp_path: Path) -> Scenario:
     return Scenario(approval, patch, transport)
 
 
-def test_new_card_uses_five_fields_when_content_bound(scenario: Scenario) -> None:
+def test_new_card_uses_readable_envelope_when_content_bound(scenario: Scenario) -> None:
     # Given: a new content-bound repair that passed its sandbox.
     # When: the real posting adapter persists its approval card.
     scenario.approval.permits(TICKET, scenario.patch)
     # Then: one envelope is posted, replayed and accepted by the live exact-text probe.
     content, = scenario.transport.posts
-    assert len(content.splitlines()) == 5
+    assert len(content) <= 1900
     record = scenario.approval.store.get(TICKET)
     assert record is not None
-    assert record.render_version == 3
+    assert record.render_version == 4
     assert probe_pending(record, "111", scenario.transport) is Probe.BOUND_PENDING
     assert "PATCH_BODY_SENTINEL_9F3A" not in content
     assert record.action_hash in content
@@ -214,7 +214,7 @@ def test_v3_instruction_is_direct_when_legacy_formatter_is_unusable(
     assert message.subject_key == TICKET
 
 
-@pytest.mark.parametrize("version", [0, 1, 4, True, "3", 3.0, [], {}])
+@pytest.mark.parametrize("version", [0, 1, 5, True, "4", 4.0, [], {}])
 def test_stored_record_is_refused_when_render_version_is_unknown(
     scenario: Scenario, version: int | bool | str | float | list[str] | dict[str, str],
 ) -> None:

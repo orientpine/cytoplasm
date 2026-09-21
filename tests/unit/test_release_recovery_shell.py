@@ -26,10 +26,14 @@ def environment(tmp_path: Path) -> dict[str, str]:
     binaries.mkdir()
     git = binaries / "git"
     git.write_text('''#!/usr/bin/env bash
+[[ "$1" == -C ]] && shift 2
 case "$*" in
-  *"rev-parse"*) printf '%s\\n' "$TIP" ;;
-  *"rev-list"*) printf '%s\\n' "$BASE" ;;
-  *) exit 0 ;;
+  "rev-parse HEAD"|"rev-parse origin/main") printf '%s\\n' "$TIP" ;;
+  "rev-list --max-parents=0 HEAD") printf '%s\\n' "$BASE" ;;
+  "fetch --quiet origin main --tags"|"checkout --quiet --detach origin/main") exit 0 ;;
+  "status --porcelain=v1 --untracked-files=no"*) exit 0 ;;
+  "merge-base --is-ancestor $BOUND $TIP") exit 1 ;;
+  *) printf 'unsupported fake git: %s\\n' "$*" >&2; exit 128 ;;
 esac
 ''', encoding="utf-8")
     git.chmod(0o755)
@@ -43,6 +47,7 @@ ensure_signed_tag() { printf '%s\\n' "$2" >> "$GATE_DIR/tags"; }
     return {
         **os.environ, "PATH": f"{binaries}:{os.environ['PATH']}",
         "GATE_DIR": str(gate), "TIP": "e" * 40, "BASE": "c" * 40,
+        "BOUND": record["head_sha"],
         "RELEASE_REPO_ROOT": str(worktree), "RELEASE_TAG_LIB": str(library),
         "RELEASE_LOCAL_CI": str(ci), "RELEASE_DEADLINE_SECONDS": "0",
         "RELEASE_APPROVAL_CMD": f"{sys.executable} {_ROOT / 'tests/unit/release_recovery_driver.py'}",
@@ -50,6 +55,20 @@ ensure_signed_tag() { printf '%s\\n' "$2" >> "$GATE_DIR/tags"; }
         "RELEASE_COMPLETE_STATE": str(tmp_path / "state"),
         "NEW_PROBE": "bound-pending",
     }
+
+
+@pytest.mark.parametrize("command", [("unsupported-command",), ("rev-parse", "unknown-ref")])
+def test_fake_git_rejects_unsupported_commands_when_invoked(
+    environment: dict[str, str], command: tuple[str, ...],
+) -> None:
+    # Given: the shell fixture must not invent successful Git operations.
+    # When: a command outside its modeled workflow is invoked.
+    result = subprocess.run(
+        ["git", "-C", environment["RELEASE_REPO_ROOT"], *command],
+        env=environment, text=True, capture_output=True, timeout=5, check=False,
+    )
+    # Then: the unsupported operation fails rather than authorizing release work.
+    assert result.returncode == 128
 
 
 @pytest.mark.parametrize("new_probe,expected_rc", [("bound-pending", 8), ("approved", 0)])
@@ -79,8 +98,9 @@ def test_release_posts_once_when_approved_request_was_overtaken(
 def test_completer_notifies_once_when_approved_request_is_stale_across_ticks(
     environment: dict[str, str],
 ) -> None:
-    # Given: no request creation or release execution is allowed in this stale episode.
+    # Given: the approved SHA is not an ancestor; no release or request is allowed.
     gate = Path(environment["GATE_DIR"])
+    before = (gate / "pending/release.json").read_bytes()
     # When: two real completer processes run against different current tips.
     results = [subprocess.run(["bash", str(_ROOT / "automation/release_complete.sh")],
                               env={**environment, "TIP": tip * 40}, text=True,
@@ -90,5 +110,6 @@ def test_completer_notifies_once_when_approved_request_is_stale_across_ticks(
     assert [r.returncode for r in results] == [0, 0]
     notices = gate / "notices"
     assert (notices.read_text().splitlines() if notices.exists() else []) == ["notice"]
-    assert (gate / "calls").read_text().splitlines() == ["decision", "decision"]
+    assert (gate / "calls").read_text().splitlines() == ["decision"] * 4
+    assert (gate / "pending/release.json").read_bytes() == before
     assert not (gate / "tags").exists()

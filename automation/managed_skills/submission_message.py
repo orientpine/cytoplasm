@@ -23,6 +23,7 @@ _JSON_LOADS: _JsonLoader = json.loads
 
 MESSAGE_PREFIX: Final = "[personal-skill-submission-v1] "
 _MESSAGE_PREFIX_V2: Final = "[personal-skill-submission-v2] "
+_MESSAGE_PREFIX_V3: Final = "[personal-skill-submission-v3] "
 # v1 본문은 parser의 exact-match 입력이다. 공유 문구 변경을 따라가지 않는다.
 _V1_INSTRUCTION: Final = "이 메시지에 ✅ 실행 / ⛔ 취소"
 # Frozen read grammar: these persisted delimiters do not follow renderer changes.
@@ -32,6 +33,14 @@ _BODY_V2: Final = re.compile(
     r"위치: 이 메시지\n"
     r"인계: 소유자: 위 위치 · 반응 ✅ 실행 / ⛔ 취소; 다음: 관리자 명시 발행 시 재검증; 자동 발행 없음\n"
     r"되돌리기: 해당 없음; 취소 시: 제출 검토 취소; 발행하지 않음"
+)
+_BODY_V3: Final = re.compile(
+    r"\*\*🔔 (?P<skill>[^\n]*)\*\*\n"
+    + r"> (?P<fact>[^\n]*)\n\n"
+    + r"\*\*결정:\*\* 이 메시지에 ✅ 실행 / ⛔ 취소 · 만료 없음\n"
+    + r"취소 시: 제출 검토 취소; 발행하지 않음\n"
+    + r"다음: 관리자 명시 발행 시 재검증; 자동 발행 없음\n"
+    + r"-# 참조: `(?P<reference>[^`\n]+)`"
 )
 _FIELDS: Final = frozenset(
     {
@@ -195,13 +204,38 @@ def _render_v2(envelope: SubmissionEnvelope) -> str | None:
 
 
 def render_submission_message(envelope: SubmissionEnvelope) -> str:
-    """Select v2 for new cards; record v1 bytes if the optional capability is unavailable."""
-    content = _render_v2(envelope)
+    """Select v3 for new cards; fall back only when the optional capability is absent."""
+    content = _render_v3(envelope)
+    if content is None:
+        content = _render_v2(envelope)
     if content is None:
         return _render_v1(envelope)
     if len(content) > 1900:
         raise SubmissionArtifactError("submission approval message exceeds 1900 characters")
     return content
+
+
+def _render_v3(envelope: SubmissionEnvelope) -> str | None:
+    """New presentation with the same immutable JSON and semantic action hash."""
+    try:
+        from automation.interop.owner_message import Action, Approval, OwnerMessage, OwnerMessageError, Ref, render
+    except ImportError:
+        return None
+    here = Ref(scope="self")
+    try:
+        body = render(OwnerMessage(
+            subject_key=envelope.action_hash, subject=envelope.skill,
+            fact=" ".join(f"그룹 {envelope.group_id} · 제출자 {envelope.submitter}".split()),
+            location=here, owner=Action("react", here, "✅ 실행 / ⛔ 취소"),
+            agent_next="관리자 명시 발행 시 재검증; 자동 발행 없음",
+            recovery="not_applicable",
+            detail=Approval(None, "제출 검토 취소; 발행하지 않음"),
+            render_version="owner-ko-v2",
+        ), destination=here)
+    except OwnerMessageError:
+        return None
+    payload = json.dumps(asdict(envelope), separators=(",", ":"), sort_keys=True)
+    return f"{body}\n-# {_MESSAGE_PREFIX_V3}{payload}"
 
 
 def _body_matches(body: str, envelope: SubmissionEnvelope) -> bool:
@@ -220,15 +254,29 @@ def _body_matches(body: str, envelope: SubmissionEnvelope) -> bool:
 
 
 def parse_submission_message(content: str) -> SubmissionEnvelope:
-    """Read frozen v1/v2 grammar and digests; rendering is only for new messages."""
+    """Read frozen v1/v2/v3 grammars and digests; never invoke a renderer."""
     if len(content) > 1900:
         raise SubmissionArtifactError("submission approval message exceeds 1900 characters")
-    first, separator, body = content.partition("\n")
-    prefix = MESSAGE_PREFIX if first.startswith(MESSAGE_PREFIX) else _MESSAGE_PREFIX_V2
-    if not separator or not first.startswith(prefix):
+    body, separator, footer = content.rpartition("\n")
+    prefix = _MESSAGE_PREFIX_V3 if footer.startswith(f"-# {_MESSAGE_PREFIX_V3}") else None
+    payload = footer.removeprefix(f"-# {_MESSAGE_PREFIX_V3}")
+    if prefix is None:
+        first, separator, body = content.partition("\n")
+        prefix = next((prefix for prefix in (MESSAGE_PREFIX, _MESSAGE_PREFIX_V2)
+                       if first.startswith(prefix)), None)
+        payload = first.removeprefix(prefix) if prefix is not None else ""
+    if not separator or prefix is None:
         raise SubmissionArtifactError("submission approval message has invalid framing")
-    envelope = _parse_payload(first.removeprefix(prefix))
-    valid_body = body == _V1_INSTRUCTION if prefix == MESSAGE_PREFIX else _body_matches(body, envelope)
+    envelope = _parse_payload(payload)
+    if prefix == _MESSAGE_PREFIX_V3:
+        matched = _BODY_V3.fullmatch(body)
+        valid_body = matched is not None and (
+            matched.group("skill") == " ".join(envelope.skill.split())
+            and matched.group("fact") == " ".join(f"그룹 {envelope.group_id} · 제출자 {envelope.submitter}".split())
+            and matched.group("reference") == envelope.action_hash[:8]
+        )
+    else:
+        valid_body = body == _V1_INSTRUCTION if prefix == MESSAGE_PREFIX else _body_matches(body, envelope)
     if not valid_body:
         raise SubmissionArtifactError("submission approval message is not canonical")
     return envelope

@@ -29,6 +29,9 @@ class DraftRecord(TypedDict):
     approval_guild_id: NotRequired[str]
     render_version: NotRequired[str]
     approval_content: NotRequired[str]
+    digest_day: NotRequired[str]
+    digest_key: NotRequired[str]
+    dm_message_id: NotRequired[str]
 
 
 def _adapter() -> Any:

@@ -46,6 +46,7 @@ def test_pyright_config_lists_existing_sibling_import_roots() -> None:
     # Then: 모든 형제 import 루트와 격리 서브서비스가 설정되어야 한다.
     assert sibling_roots <= set(roots)
     assert "configs/stt-engines" in config["exclude"]
+    assert "tests/unit" in roots
     assert all((_REPO / root).is_dir() for root in roots)
     environments = cast(list[dict[str, object]], json.loads(_CONFIG.read_text(encoding="utf-8"))["executionEnvironments"])
     assert tuple(environment["root"] for environment in environments) == roots

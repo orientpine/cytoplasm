@@ -28,6 +28,7 @@ import stt_client
 import stt_coverage
 import stt_diarize
 import stt_eval_build
+import stt_identify_run
 import stt_local_attribution
 import stt_media
 import stt_speaker_count
@@ -144,6 +145,9 @@ def transcribe(
         else:
             attribution_mode = "legacy"
             sentences = stt_diarize.assign(stt_blocks.sentences_from_words(words), turns)
+        # 식별은 분리가 끝난 뒤, wav 가 아직 있는 이 자리에서만 할 수 있다. 어떤 실패도
+        # 표식 한 줄로 끝나고 전사는 그대로 간다(fail-soft).
+        identified = stt_identify_run.identify(wav, sentences, env=os.environ) if turns else ()
     text = stt_window.text_of(segments)
     if not text:
         raise stt_audio.TranscriptionRefused(stt_audio.EMPTY_TRANSCRIPT_NOTICE, exit_code=5)
@@ -167,6 +171,7 @@ def transcribe(
     )
     return stt_eval_build.SnapshotTranscription(
         text=text,
+        speakers=identified,
         model=f"local:{toolchain.model.stem}",
         endpoint="local",
         coverage=coverage,

@@ -95,11 +95,27 @@ def test_envelope_is_used_when_a_new_card_is_rendered(producer: str, tmp_path: P
     monkeypatch.setattr(om, "render", observe)
     match producer:
         case "plaud":
-            plaud_render.render_plaud_approval(PLAUD_RECORD, preview=PREVIEW)
+            plaud_render.render_plaud_approval(
+                PLAUD_RECORD,
+                preview=PREVIEW,
+                render_version="plaud-sync-render-v5",
+            )
         case "memory":
-            memory_render.render_relocation_approval(memory_record(), entry_text=ENTRY)
+            memory_render.render_relocation_approval(
+                memory_record(),
+                entry_text=ENTRY,
+                render_version="mc-reloc-render-v2",
+            )
         case "todo":
-            todo_gate(tmp_path)._render()
+            if TYPE_CHECKING:
+                from skills.todo.scripts.todo_approval_render import render_todo_approval
+            else:
+                from todo_approval_render import render_todo_approval
+
+            render_todo_approval(
+                todo_gate(tmp_path).intent,
+                render_version="todo-render-v2",
+            )
     assert observed == [(expected[producer], om.Ref("self"))]
 
 

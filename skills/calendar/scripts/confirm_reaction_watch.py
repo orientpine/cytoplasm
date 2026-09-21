@@ -168,6 +168,13 @@ def _expired_notice(record: Mapping[str, object], draft_id: str) -> str:
     )
 
 
+def _failed_notice(record: Mapping[str, object], draft_id: str) -> str:
+    return (
+        f"⚠️ 캘린더 {_action_label(record)} 실행 실패 (draft {draft_id}) — "
+        "승인은 그대로 두고 다음 감시 틱에 다시 시도합니다."
+    )
+
+
 def _orphan_notice(record: Mapping[str, object], draft_id: str) -> str:
     return (
         f"🧹 캘린더 {_action_label(record)} 초안 자동 정리 (draft {draft_id}) — "
@@ -195,7 +202,16 @@ class OwnerDecision:
         record = {**self.draft_record(self.entry.draft_id), "dm_message_id": self.entry.dm_message_id}
         match decision:
             case state.APPROVED:
-                self.commands.confirm(self.entry, self.owner_id)
+                try:
+                    self.commands.confirm(self.entry, self.owner_id)
+                except ConfirmWatchError:
+                    # 실패도 그 카드 아래(스레드)로 알린다 — 항목은 남겨 다음 틱에 재시도한다.
+                    if record.get("digest_day"):
+                        _notify_result(
+                            self.discord, record, _failed_notice(record, self.entry.draft_id),
+                            calendar_confirm.OUTCOME_FAILED,
+                        )
+                    raise
                 # 승인 스레드(또는 채널 지시)로 결과를 돌려주고 닫는다.
                 # 둘 다 없는 옛 초안도 기존 소유자 DM 경로로 실행 결과를 알린다.
                 _notify_result(
@@ -279,7 +295,15 @@ def sweep_orphan_drafts(
         if not isinstance(record, dict) or record.get("status") != "pending":
             continue
         draft_id = record.get("id")
-        if not isinstance(draft_id, str) or not draft_id or draft_id in posted:
+        if not isinstance(draft_id, str) or not draft_id:
+            continue
+        # 다이제스트 초안은 카드가 붙어 있어도 내용이 바뀌었으면(교체 실패) 게시가 안 끝난 것이다.
+        digest = bool(record.get("digest_day"))
+        live = {entry.sha256 for entry in snapshot if entry.draft_id == draft_id}
+        if (record.get("sha256") in live) if digest else (draft_id in posted):
+            continue
+        if digest and live:  # 옛 카드가 살아 있는 교체 실패 — 나이와 무관하게 그 카드를 교체한다
+            import_module("calendar_digest").retry(record)
             continue
         created_raw = record.get("created")
         if not isinstance(created_raw, str):
@@ -292,7 +316,10 @@ def sweep_orphan_drafts(
             continue
         age = now.astimezone(UTC) - created
         if age <= EXPIRY:
-            if age > POST_GRACE:
+            # 다이제스트 카드는 3분 유예 없이 즉시 — 게시가 끝나야 정상 대기다(실패는 이미 통지됨).
+            if digest:
+                import_module("calendar_digest").retry(record)
+            elif age > POST_GRACE:
                 _post_missing_confirmation(record, draft_id)
             continue
         try:
@@ -442,7 +469,9 @@ def _notify_result(
 def _notify_thread(record: Mapping[str, object], content: str, outcome: str = "") -> None:
     """Post to the request thread; the command already committed, so failures only log."""
     try:
-        calendar_confirm.notify_result(dict(record), content, outcome)
+        calendar_confirm.notify_result(
+            dict(record), content, outcome, transport=import_module("calendar_digest").reply_transport(record),
+        )
     except Exception as error:  # noqa: BLE001 — 통지 실패가 완료된 tick을 되돌리면 안 된다
         print(
             f"calendar-confirm-watch thread notification failed: {_redact(str(error))}",

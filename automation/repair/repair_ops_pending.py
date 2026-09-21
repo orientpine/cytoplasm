@@ -66,7 +66,7 @@ class PendingRepairApproval:
     changes: tuple[PatchFileDelta, ...] | None = None
     patch_source_path: str | None = None
     approval_guild_id: str | None = field(default=None, kw_only=True)
-    render_version: Literal[2, 3] | None = field(default=None, kw_only=True)
+    render_version: Literal[2, 3, 4] | None = field(default=None, kw_only=True)
     content_sha256: str | None = field(default=None, kw_only=True)
     # The resolved approval binding stays LAST: a shared conformance check reads
     # the final four annotated fields of every pending record in the system.
@@ -206,7 +206,7 @@ class PendingRepairApprovalStore:
         if not isinstance(decoded, dict):
             raise PendingApprovalError("pending repair approval fields are invalid")
         binding = _decode_content_binding(decoded)
-        render_version: Literal[2, 3] | None
+        render_version: Literal[2, 3, 4] | None
         match decoded.get("render_version"):
             case None:
                 render_version = None
@@ -214,6 +214,8 @@ class PendingRepairApprovalStore:
                 render_version = 2
             case 3 if type(decoded["render_version"]) is int:
                 render_version = 3
+            case 4 if type(decoded["render_version"]) is int:
+                render_version = 4
             case _:
                 raise PendingApprovalError("pending repair render version is unsupported")
         fields: dict[str, str] = {}

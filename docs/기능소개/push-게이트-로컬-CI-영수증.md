@@ -4,6 +4,17 @@
 
 브랜치를 push 하려면 **그 트리가 로컬 CI 를 통과한 영수증**이 있어야 한다. 없으면 `git push` 가 훅에서 거부되고, 무엇을 실행해야 하는지 그 자리에서 알려준다.
 
+스킬 시나리오의 프로세스 격리에는 Linux `bubblewrap`이 필요하다. Ubuntu에서는
+`sudo apt-get install bubblewrap`으로 준비한다. GitHub 러너는 검증 전에 설치하지만,
+로컬 CI는 개발 환경을 임의로 바꾸지 않고 `bwrap`이 없으면 안내와 함께 중단한다.
+격리를 끄거나 시나리오를 건너뛰어 영수증을 발급하지 않는다.
+Ubuntu 24.04에서 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`가
+나면 AppArmor의 사용자 네임스페이스 정책도 확인해야 한다. CI는 배포판의
+`apparmor-profiles`가 제공하는 `bwrap-userns-restrict` 프로필을 설치·로드한 뒤
+`--unshare-all` 실행을 먼저 검사한다. 이 프로필은 bwrap의 격리 구성 단계에 필요한
+권한을 허용하고 실행되는 프로그램에서는 거둔다. 호스트 전체의 AppArmor 제한을
+끄거나 `--share-net`으로 네트워크 격리를 없애지 않는다.
+
 ```
 $ git push -u origin cxsess/my-work
 [pre-push] REFUSED — refs/heads/cxsess/my-work has no valid local CI receipt.

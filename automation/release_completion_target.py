@@ -7,24 +7,103 @@
 `completed/<sha>` 마커가 없어 `release_applied_notice` 스윕이 그 릴리스를 보지 못해 적용
 완료 DM 도 유실됐다.
 
-대상은 **origin/main 에서 도달 가능한 가장 가까운 릴리스 태그의 커밋**이다. 팁이 곧
-릴리스인 정상 경로에서는 대상이 head 와 같아 `NoWork` 이므로 기존 경로는 그대로 돈다.
-
-이 판정은 새 인가를 만들지 않는다: 태그는 이미 잘려 있고 남은 일은 전량 반영과 마커뿐이라
-호출부가 `release.sh` 를 부를 이유가 없다. 옛 ✅ 로 새 tip 을 인가하는 문은
-`release_approval.cmd_decision` 의 HEAD 불일치 거부가 계속 잠근다.
+태그 후 대상은 **origin/main 에서 도달 가능한 가장 가까운 릴리스 태그의 커밋**이다.
+태그 전에는 원격 승인 판정이 검증한 bound SHA·버전을 rc 3 후보로 내보낸다. 후보는
+새 팁의 인가가 아니며, 워크스테이션이 조상 여부를 확인한 뒤 그 SHA만 태그·배포한다.
+팁과 바인딩이 같으면 기존 결정 바이트·종료코드가 그대로이고, 이미 태그된 요청은
+재인증·낡은 승인 통지 없이 기존 리컨실에 맡긴다.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, assert_never
 
+from automation import skill_gate
+from automation.interop.approval_lifecycle import ApprovalRecordsError, ApprovalSurfaceError, Probe
 from automation.release_applied_notice import release_tags
+from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_record
+from automation.skill_gate_approval import SkillApprovalGate
+
+DECISION_APPROVED: Final = 0
+DECISION_UNAVAILABLE: Final = 2
+DECISION_CANDIDATE: Final = 3  # Bound approval only; never approval of the requested tip.
+DECISION_PENDING: Final = 7
+DECISION_DENIED: Final = 9
+
+
+def decision_exit(probe: Probe) -> int:
+    """⛔ wins; everything that is not a definite owner answer stays pending."""
+    if probe is Probe.APPROVED:
+        return DECISION_APPROVED
+    if probe is Probe.CANCELLED:
+        return DECISION_DENIED
+    return DECISION_PENDING
+
+
+def approval_decision(
+    args: argparse.Namespace,
+    gate_factory: Callable[[ReleaseSpec], SkillApprovalGate],
+    notify: Callable[[Mapping[str, str], str], None],
+) -> int:
+    """Resolve the live approval without changing its request lifecycle."""
+    try:
+        decoded = json.loads((skill_gate.GATE_DIR / "pending/release.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print("RELEASE-DECISION: no live release request", file=sys.stderr)
+        return DECISION_UNAVAILABLE
+    except (OSError, json.JSONDecodeError):
+        print("RELEASE-DECISION: release request record is unreadable", file=sys.stderr)
+        return DECISION_UNAVAILABLE
+    if not isinstance(decoded, dict):
+        return DECISION_UNAVAILABLE
+    record = {str(name): str(value) for name, value in decoded.items()}
+    expected_head = str(getattr(args, "head", "") or "")
+    tagged_head = str(getattr(args, "tagged", "") or "")
+    mismatched = bool(expected_head and record.get("head_sha", "") != expected_head)
+    if mismatched and tagged_head and record.get("head_sha", "") == tagged_head:
+        print(
+            f"RELEASE-DECISION: executed release {tagged_head[:12]} awaiting retirement",
+            file=sys.stderr,
+        )
+        return DECISION_UNAVAILABLE
+    candidate = bool(getattr(args, "completion_candidate", False))
+    if mismatched and not (candidate or getattr(args, "notify_stale", False)):
+        print("RELEASE-DECISION: live request is bound to a different HEAD", file=sys.stderr)
+        return DECISION_UNAVAILABLE
+    try:
+        gate = gate_factory(spec_from_record(record))
+        outstanding = gate.outstanding("release")
+        if not outstanding:
+            return DECISION_UNAVAILABLE
+        probe = gate.probe(outstanding[0])
+    except (ReleaseSpecError, ApprovalRecordsError, ApprovalSurfaceError, OSError) as error:
+        print(f"RELEASE-DECISION: unverifiable ({type(error).__name__})", file=sys.stderr)
+        return DECISION_UNAVAILABLE if mismatched else DECISION_PENDING
+    if mismatched:
+        branch = "candidate" if candidate else "notify-stale"
+        print(f"RELEASE-DECISION: live request is bound to a different HEAD branch={branch} probe={probe.name.lower()}", file=sys.stderr)
+        match probe:
+            case Probe.APPROVED:
+                if candidate:
+                    print(f"{record['head_sha']} {record['version']}")
+                    return DECISION_CANDIDATE
+                notify(record, expected_head)
+            case (
+                Probe.BOUND_PENDING | Probe.CANCELLED | Probe.MISSING
+                | Probe.BINDING_MISMATCH | Probe.UNVERIFIABLE
+            ):
+                return DECISION_UNAVAILABLE
+            case unreachable:
+                assert_never(unreachable)
+        return DECISION_UNAVAILABLE
+    print(f"RELEASE-DECISION: {probe.name.lower()} version={record['version']}", file=sys.stderr)
+    return decision_exit(probe)
 
 #: `git describe` 의 탐색 범위. 무엇이 릴리스 번호인지는 `release_tags` 가 단독으로 정한다.
 _DESCRIBE_MATCH: Final = "v[0-9]*.[0-9]*.[0-9]*"

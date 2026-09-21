@@ -228,7 +228,7 @@ def test_draft_create_peer_named_with_exact_time_creates_solo_draft(
     # NOT fan out to coordination (which drifted to a different day/time).
     args = argparse.Namespace(
         text="peer-test랑 다음주 수요일 오전 10시 30분 미팅", summary="",
-        calendar="primary", channel_id="dm",
+        calendar="primary", channel_id="dm", digest_day="",
     )
 
     # When: calendar draft creation is requested.
@@ -260,7 +260,7 @@ def test_draft_create_bare_peer_name_without_cue_clarifies_without_draft(
 def test_draft_create_when_request_is_solo_creates_draft(draft_gate_dir: Path) -> None:
     # Given: a request that names no registered peer.
     args = argparse.Namespace(
-        text="내일 오후 3시 실험 미팅", summary="", calendar="primary", channel_id="dm"
+        text="내일 오후 3시 실험 미팅", summary="", calendar="primary", channel_id="dm", digest_day=""
     )
 
     # When: calendar draft creation is requested.
@@ -274,7 +274,7 @@ def test_draft_create_when_request_is_solo_creates_draft(draft_gate_dir: Path) -
 def test_draft_create_when_request_names_owner_agent_creates_draft(draft_gate_dir: Path) -> None:
     # Given: the configured owner agent id, not a peer, is present in the request.
     args = argparse.Namespace(
-        text="agent-cha와 내일 오후 3시 실험 미팅", summary="", calendar="primary", channel_id="dm"
+        text="agent-cha와 내일 오후 3시 실험 미팅", summary="", calendar="primary", channel_id="dm", digest_day=""
     )
 
     # When: calendar draft creation is requested.

@@ -149,7 +149,7 @@ def prepare_export(paths: PatentPaths, slug: str, *, mode: str) -> str:
         mode=mode,
         expiry_ts=now + 3600,
         created_ts=now,
-        render_version=2,
+        render_version=3,
     )
     content = None
     if not patent_export_binding.live_requests(slug):

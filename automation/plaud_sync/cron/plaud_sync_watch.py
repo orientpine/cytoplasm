@@ -238,12 +238,22 @@ def _run(argv: Sequence[str]) -> list[str]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
+        args = tuple(sys.argv[1:] if argv is None else argv)
+        migration = "--migrate-aliases" in args
+        if migration and set(args) - {"--migrate-aliases", "--apply"}:
+            raise WatchError("--migrate-aliases only accepts --apply")
         _load_env_secrets()
         lock = acquire_single_instance_lock(LOCK_PATH)
         if lock is None:
             return 0
         with lock:
-            lines = _run(sys.argv[1:] if argv is None else argv)
+            if migration:
+                from automation.plaud_sync.aliases import migrate_file
+
+                for line in migrate_file(STATE_PATH, apply="--apply" in args):
+                    print(line)
+                return 0
+            lines = _run(args)
         # watch.lock is released here on purpose: local transcription runs for tens of
         # minutes and must not hold the next tick's ✅ hostage (transcribe_live docstring).
         step = _transcribe()

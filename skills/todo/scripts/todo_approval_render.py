@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from todo_approval_model import TodoApprovalIntent
 
-RENDER_VERSION: Final = "todo-render-v2"
+RENDER_VERSION: Final = "todo-render-v3"
 MAX_MESSAGE_CHARS: Final = 1900
 
 
@@ -32,6 +32,8 @@ def render_todo_approval(
             content = _render_v1(intent)
         case "todo-render-v2":
             content = _render_v2(intent, expires_at)
+        case "todo-render-v3":
+            content = _render_v3(intent, expires_at)
         case _:
             raise TodoRenderError(f"unsupported todo render version: {render_version}")
     if len(content) > MAX_MESSAGE_CHARS:
@@ -68,5 +70,35 @@ def _render_v2(intent: TodoApprovalIntent, expires_at: datetime | None) -> str:
     try:
         lines = om.render(message, destination=here).splitlines()
         return "\n".join((*lines[:3], f"argv hash: {intent.action_hash}", *lines[3:]))
+    except om.OwnerMessageError as error:
+        raise TodoRenderError("owner envelope cannot render") from error
+
+
+def _render_v3(intent: TodoApprovalIntent, expires_at: datetime | None) -> str:
+    try:
+        from automation.interop import owner_message as om
+    except ImportError as error:
+        raise TodoRenderError("owner envelope unavailable") from error
+    if not callable(getattr(om, "render", None)):
+        raise TodoRenderError("owner envelope renderer unavailable")
+    here = om.Ref(scope="self")
+    message = om.OwnerMessage(
+        subject_key=intent.title,
+        subject="Google Tasks 등록",
+        fact=(
+            f"제목: {intent.title}\n"
+            f"기한: {intent.due or '-'}\n"
+            "판본: todo-render-v3"
+        ),
+        location=here,
+        owner=om.Action("react", here, "✅ 승인 / ⛔ 취소"),
+        agent_next="Google Tasks 등록",
+        recovery="not_applicable",
+        detail=om.Approval(expires_at, "등록 취소"),
+        render_version="owner-ko-v2",
+    )
+    try:
+        lines = om.render(message, destination=here).splitlines()
+        return "\n".join((*lines[:-1], f"argv hash: {intent.action_hash}", lines[-1]))
     except om.OwnerMessageError as error:
         raise TodoRenderError("owner envelope cannot render") from error

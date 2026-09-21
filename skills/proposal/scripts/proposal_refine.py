@@ -1121,7 +1121,9 @@ def _write_json(path: Path, payload: object) -> None:
 def _update_manifest(version_path: Path, **updates: object) -> None:
     path = version_path / "manifest.json"
     if path.is_symlink() or not path.is_file():
-        raise RefinementInputError("version manifest is missing")
+        raise RefinementInputError(
+            "version manifest is missing; 버전이 VersionStore 를 거쳐 생성되었는지 확인"
+        )
     try:
         raw = cast(object, json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as error:

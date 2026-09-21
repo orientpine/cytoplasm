@@ -68,8 +68,10 @@ def test_probe_when_selected_version_is_recorded_verifies(
     # When: the real probe compares the remote card, local record and attachments.
     probe = gate.probe(request)
     # Then: the selected version is recorded, accepted and not replaced.
-    version = 2 if capability else 1
-    assert content.startswith(f"[personal-skill-submission-v{version}] ")
+    if capability:
+        assert content.splitlines()[-1].startswith("-# [personal-skill-submission-v3] ")
+    else:
+        assert content.startswith("[personal-skill-submission-v1] ")
     assert probe is Probe.BOUND_PENDING
     record = _JSON_LOADS(gate.path().read_text())
     assert isinstance(record, dict)
@@ -140,7 +142,7 @@ def test_post_when_card_is_oversized_blocks_discord(tmp_path: Path) -> None:
     assert transport.messages == {}
 
 
-@pytest.mark.parametrize("mode", ["v2", "fallback", "invalid-metadata"])
+@pytest.mark.parametrize("mode", ["v3", "fallback", "invalid-metadata"])
 def test_cli_when_invoked_runs_packaging_to_wire_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
 ) -> None:
@@ -205,8 +207,10 @@ def test_cli_when_invoked_runs_packaging_to_wire_boundary(
         assert result == 0
         assert stdout.getvalue().strip() == "SUBMISSION-STAGED message_id=333"
         content, = posted
-        version = 1 if mode == "fallback" else 2
-        assert content.startswith(f"[personal-skill-submission-v{version}] ")
+        if mode == "fallback":
+            assert content.startswith("[personal-skill-submission-v1] ")
+        else:
+            assert content.splitlines()[-1].startswith("-# [personal-skill-submission-v3] ")
         assert parse_submission_message(content).skill == "managed-x"
         record = _JSON_LOADS(next((config.state_root / "pending").glob("*.json")).read_text())
         assert isinstance(record, dict)

@@ -92,6 +92,67 @@ def test_fails_when_config_is_absent_ambiguous_or_invalid(
     assert "PEER-IGNORED-CHANNELS-PASS" not in result.stdout
 
 
+_NOTIFICATIONS: Final = "55555"
+
+
+def _with_notifications(files: tuple[Path, Path]) -> None:
+    """The peer bot can see #notifications — the surface it flooded on 2026-09-21."""
+    files[1].write_text(json.dumps({"platforms": {"discord": [
+        {"name": "approvals", "id": _APPROVALS, "type": "text", "guild": "fixture"},
+        {"name": "notifications", "id": _NOTIFICATIONS, "type": "text", "guild": "fixture"},
+        {"name": "agent-chat", "id": "67890", "type": "text", "guild": "fixture"},
+    ]}}), encoding="utf-8")
+
+
+def test_fails_when_notifications_is_visible_but_not_ignored(
+    peer_files: tuple[Path, Path],
+) -> None:
+    # Given: the peer directory lists #notifications, but only approvals is ignored —
+    # the 2026-09-21 state in which the peer opened a thread on every weekly-report chunk.
+    _with_notifications(peer_files)
+    # When
+    result = _probe(peer_files)
+    # Then: drift, with recovery guidance and without leaking the channel id.
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "PEER-IGNORED-CHANNELS-MISSING" in result.stdout
+    assert "PEER-IGNORED-CHANNELS-RECOVERY:" in result.stdout
+    assert _NOTIFICATIONS not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("ignored", [
+    f'"{_APPROVALS}, {_NOTIFICATIONS}"', f'\n    - "{_NOTIFICATIONS}"\n    - {_APPROVALS}',
+])
+def test_passes_when_both_approvals_and_notifications_are_ignored(
+    peer_files: tuple[Path, Path], ignored: str,
+) -> None:
+    # Given
+    _with_notifications(peer_files)
+    peer_files[0].write_text(f"discord:\n  ignored_channels: {ignored}\n", encoding="utf-8")
+    # When
+    result = _probe(peer_files)
+    # Then
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PEER-IGNORED-CHANNELS-PASS" in result.stdout
+    assert _NOTIFICATIONS not in result.stdout + result.stderr
+
+
+def test_fails_when_notifications_is_ambiguous(peer_files: tuple[Path, Path]) -> None:
+    # Given: two channels named notifications — the probe cannot know which one to require.
+    peer_files[1].write_text(json.dumps({"platforms": {"discord": [
+        {"name": "approvals", "id": _APPROVALS},
+        {"name": "notifications", "id": _NOTIFICATIONS},
+        {"name": "notifications", "id": "55556"},
+    ]}}), encoding="utf-8")
+    peer_files[0].write_text(
+        f'discord:\n  ignored_channels: "{_APPROVALS}, {_NOTIFICATIONS}, 55556"\n', encoding="utf-8",
+    )
+    # When
+    result = _probe(peer_files)
+    # Then: fail-closed, never a presumed pass.
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "PEER-IGNORED-CHANNELS-INVALID" in result.stdout
+
+
 @pytest.mark.parametrize("directory", [
     '{', '{}', '[]', '{"platforms":{"discord":[]}}',
     '{"platforms":{"discord":[{"name":"approvals","id":""}]}}',

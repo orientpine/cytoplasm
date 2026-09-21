@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage() { echo '사용법: run.sh [--evidence-dir DIR] [--keep] [--stub-hermes] [-- <명령...>]'; }
+usage() { echo '사용법: run.sh [--evidence-dir DIR] [--operator NAME] [--keep] [--stub-hermes] [-- <명령...>]'; }
 
 harness_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(git -C "$harness_dir" rev-parse --show-toplevel)
-evidence_dir=/tmp/install-systemd-qa keep=false stub_hermes=false
+evidence_dir=/tmp/install-systemd-qa keep=false stub_hermes=false operator=root
 while (($#)); do
     case "$1" in
         --evidence-dir)
             if (($# < 2)) || [[ -z $2 ]]; then usage >&2; exit 2; fi
             evidence_dir=$2; shift 2 ;;
+        # 이름은 useradd·노드 설정·sudoers 자산에 리터럴로 들어간다. 그대로 실어도
+        # 안전한 POSIX 계정 이름만 받는다 — docker 를 건드리기 전에 막는다.
+        --operator)
+            if (($# < 2)) || [[ ! $2 =~ ^[a-z_][a-z0-9_-]{0,30}$ ]]; then usage >&2; exit 2; fi
+            operator=$2; shift 2 ;;
         --keep) keep=true; shift ;;
         --stub-hermes) stub_hermes=true; shift ;;
         --) shift; break ;;
@@ -127,15 +132,24 @@ docker cp "$temporary/trust.pub" "$container_name:/root/trust.pub"
 rm -rf -- "$temporary"
 temporary=''
 
-docker exec -i -w /root/autophagy-agents "$container_name" python3 - <<'PY' | tee "$evidence_dir/config-notes.txt"
+# 운영자는 서비스 계정이 아니라 사람이라 설치기가 만들지 않는다. 결함이 나타나는 조건은
+# 운영자가 배포 체크아웃(ops:autophagy 2750)을 읽을 수 없는 평범한 계정인 것이므로,
+# 서비스 그룹에 넣지 않은 채로 만든다.
+if [[ $operator != root ]]; then
+    printf 'WORKING: 비-root 운영자 계정 생성 %s\n' "$operator"
+    docker exec "$container_name" useradd --create-home --shell /bin/bash -- "$operator"
+fi
+
+docker exec -i -w /root/autophagy-agents "$container_name" python3 - "$operator" <<'PY' | tee "$evidence_dir/config-notes.txt"
 from __future__ import annotations
-import json, socket, tomllib
+import json, socket, sys, tomllib
 from pathlib import Path
 from automation.node_config import NodeConfigError, load_node_config
 
+operator = sys.argv[1]
 values = tomllib.loads(Path('configs/node.example.toml').read_text())
 values.update(origin_url='https://github.com/orientpine/cytoplasm.git',
-              require_signed_updates=True, deploy_ssh_host='', operator_account='root',
+              require_signed_updates=True, deploy_ssh_host='', operator_account=operator,
               primary_node_name=socket.gethostname(), rag_node_name=socket.gethostname())
 path = Path('/root/node.toml')
 def write_config():
@@ -150,7 +164,7 @@ except NodeConfigError as error:
     write_config()
     load_node_config(path)
     print('CONFIG-NOTE: empty deploy_ssh_host rejected by parser; using container hostname')
-print('CONFIG-VALID: /root/node.toml (operator_account=root; require_signed_updates=true)')
+print(f'CONFIG-VALID: /root/node.toml (operator_account={operator}; require_signed_updates=true)')
 PY
 
 : > "$evidence_dir/install-transcript.txt"
@@ -201,35 +215,16 @@ fi
 # independent evidence that successful result lines reflect real mutations.
 verification_rc=0
 if "$default_command"; then
-    docker exec -i -w /root/autophagy-agents "$container_name" python3 - <<'PY' > "$evidence_dir/mutation-state.txt" 2>&1 || verification_rc=$?
-from __future__ import annotations
-import pwd, subprocess
-from pathlib import Path
-from automation.install.assets import build_inputs
-from automation.install.state import inspect_state
-from automation.node_config import load_node_config
-
-assert Path('/proc/1/comm').read_text().strip() == 'systemd'
-config = load_node_config(Path('/root/node.toml'))
-inputs = build_inputs(Path.cwd(), config, Path('/root/trust.pub').read_text())
-state = inspect_state(inputs)
-for account in ('agent', 'peer', 'ops'):
-    assert account in state.ready_accounts, f'account not converged: {account}'
-    linger = subprocess.check_output(['loginctl', 'show-user', account, '--property=Linger', '--value'], text=True).strip()
-    assert linger == 'yes', f'linger not enabled: {account}'
-    print(f'ACCOUNT-VERIFIED: {account} uid={pwd.getpwnam(account).pw_uid} Linger={linger}')
-assert config.private_root in state.directories
-assert config.peer_home / '.ssh' / 'peer_attest_ed25519' in state.peer_attest_keys
-print('MUTATION-VERIFIED: directories and peer-attest key ownership/modes/publication')
-PY
+    docker exec -i -w /root/autophagy-agents "$container_name" python3 - \
+        < "$harness_dir/verify_mutations.py" > "$evidence_dir/mutation-state.txt" 2>&1 || verification_rc=$?
 fi
 
-python3 - "$evidence_dir" "$image_digest" "$revision" "$boot_state" "$rc" "$((SECONDS - started))" "$stub_hermes" "${command[@]}" <<'PY'
+python3 - "$evidence_dir" "$image_digest" "$revision" "$boot_state" "$rc" "$((SECONDS - started))" "$stub_hermes" "$operator" "${command[@]}" <<'PY'
 from __future__ import annotations
 import re, shlex, sys
 from pathlib import Path
 
-folder, digest, revision, boot, rc, elapsed, stub, *command = sys.argv[1:]
+folder, digest, revision, boot, rc, elapsed, stub, operator, *command = sys.argv[1:]
 root = Path(folder)
 lines = (root / 'install-transcript.txt').read_text().split('===== HARNESS-PASS-2: Hermes 스텁 적용 후 재실행 =====\n')[-1].splitlines()
 plan = [line for line in lines if re.match(r'^\d+\. ', line)]
@@ -261,7 +256,8 @@ for line in lines:
 summary = '\n'.join([
     f'image_digest={digest}', f'repository_revision={revision}',
     f'command={shlex.join(command)}', f'rc={rc}', f'boot_state={boot}',
-    f'elapsed_seconds={elapsed}', f'stub_hermes={stub}', f'first_boundary={boundary}',
+    f'elapsed_seconds={elapsed}', f'stub_hermes={stub}', f'operator_account={operator}',
+    f'first_boundary={boundary}',
     f'highest_action_reached={plan[reached] if reached >= 0 else "none evidenced"}',
 ]) + '\n'
 (root / 'summary.txt').write_text(summary)

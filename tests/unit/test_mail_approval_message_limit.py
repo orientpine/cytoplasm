@@ -7,11 +7,11 @@ from tests.unit import test_mail_single_live_request as mail
 from tests.unit.test_mail_single_live_request import mail_env as mail_env
 
 
-def test_an_oversize_approval_is_refused_before_the_journal_reserves(mail_env, monkeypatch):
-    # Real lifecycle, lease, journal and store; only the rendered wire is oversized.
+def test_an_oversize_summary_is_refused_before_the_journal_reserves(mail_env):
+    # Given a subject that cannot fit even in the attachment summary.
     fake, _, _ = mail_env
-    draft = mail._draft()
-    monkeypatch.setattr(mail.triage_approval.triage_core, "render_approvals_message", lambda *a, **kw: "x" * 2001)
+    draft = {**mail._draft(), "subject": "x" * 2001}
+    # When / Then refusal precedes every external effect and journal reservation.
     with pytest.raises(mail.triage_gate.GateError) as raised:
         mail.triage_approval.request_approval(draft)
     assert raised.value.exit_code == 3

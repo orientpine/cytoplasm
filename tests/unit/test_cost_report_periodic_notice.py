@@ -234,13 +234,16 @@ def test_research_trends_notice_when_running_pipeline(tmp_path: Path, monkeypatc
     ingested: list[bool] = []
     monkeypatch.setattr(trends, "_ingest_report", lambda: ingested.append(True))
     sent: list[str] = []
+    attached: list[tuple[Path, ...]] = []
 
-    def transport(token: str, channel: str, body: str) -> None:
+    def transport(token: str, channel: str, body: str, files: tuple[Path, ...]) -> None:
+        # 2026-09-21: the weekly report rides the file transport (summary head + .md attachment).
         if not delivered:
             raise OSError("fixture transport unavailable")
         sent.append(body)
+        attached.append(tuple(files))
 
-    monkeypatch.setattr(owner_notice, "send_notice", transport)
+    monkeypatch.setattr(owner_notice, "send_notice_files", transport)
     # When
     if delivered:
         assert trends.run() == 0
@@ -254,6 +257,7 @@ def test_research_trends_notice_when_running_pipeline(tmp_path: Path, monkeypatc
         assert "research-trends-20260907.md" in sent[0]
         assert "https://discord.com" not in sent[0]
         assert Path("reports/research-trends-20260907.md").is_file()
+        assert [file.name for file in attached[0]] == ["research-trends-20260907.md"]
 
 
 @pytest.mark.parametrize("valid", [True, False])

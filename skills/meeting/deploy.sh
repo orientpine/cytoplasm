@@ -22,6 +22,7 @@ source "$repo_root/automation/deploy_push.sh"
 source "$repo_root/automation/deploy_provenance.sh"
 deploy_provenance_check "$repo_root" \
   "$repo_root/skills/meeting/scripts/meeting_pending_transcript_watch.py" \
+  "$repo_root/skills/meeting/scripts/meeting_deploy_notice.py" \
   "$repo_root/skills/meeting/plugin/__init__.py" \
   "$repo_root/skills/meeting/plugin/plugin.yaml" || exit 4
 
@@ -45,6 +46,11 @@ if [ "${plugin_before//[[:space:]]/}" != "${plugin_after//[[:space:]]/}" ]; then
   echo "PLUGIN-CHANGED: 게이트웨이 플러그인이 갱신됐습니다 (${plugin_before:0:12} -> ${plugin_after:0:12})." >&2
   echo "                플러그인은 프로세스 시작 시 로드되므로 **agent·peer 게이트웨이를 함께**" >&2
   echo "                재시동해야 반영됩니다 (docs/guide/operations.md §2)." >&2
+  # 자격증명·통지 채널은 노드 agent 계정의 것. 사본을 설치하지 않고 승인된 바이트를 실행한다.
+  notice_command='set -e; set -a; if [ -r "$HOME/.env.secrets" ]; then source "$HOME/.env.secrets"; fi; set +a; PYTHONPATH="${AUTOPHAGY_RUNTIME_ROOT:-/srv/autophagy-agent-current}" python3 -'
+  run_agent "$notice_command $(printf '%q %q' "$plugin_before" "$plugin_after")" \
+    < "$repo_root/skills/meeting/scripts/meeting_deploy_notice.py" \
+    || echo "PLUGIN-NOTICE-FAIL: owner notice not delivered; see PLUGIN-CHANGED above." >&2
 fi
 
 # `0 0 * * *` 은 **KST 자정**이다. 노드 TZ 는 Etc/UTC 지만 Hermes 스케줄러가 +09:00 으로

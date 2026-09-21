@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, Literal, TypeAlias, assert_never, cast
 
 from . import proposal_sensitivity
 
@@ -156,14 +156,20 @@ def assert_route_allowed(
     if selected == "public":
         return _allow("public payload is allowed")
     if selected == "patent-sensitive":
-        if destination == "drive":
-            return _allow("patent-sensitive payload is allowed on owner-only Drive")
-        if destination == "refine-host":
-            descriptor = (host or "").strip().lower()
-            if descriptor in _owner_controlled_refine_hosts():
-                return _allow("patent-sensitive payload is allowed on an owner-controlled host")
-            return _refuse("patent-sensitive refinement requires an owner-controlled host")
-        return _refuse("patent-sensitive payload is denied at this destination")
+        match destination:
+            case "render":
+                return _allow("patent-sensitive payload is allowed for credential-free local rendering")
+            case "drive":
+                return _allow("patent-sensitive payload is allowed on owner-only Drive")
+            case "refine-host":
+                descriptor = (host or "").strip().lower()
+                if descriptor in _owner_controlled_refine_hosts():
+                    return _allow("patent-sensitive payload is allowed on an owner-controlled host")
+                return _refuse("patent-sensitive refinement requires an owner-controlled host")
+            case "image-api":
+                return _refuse("patent-sensitive payload is denied at this destination")
+            case _:
+                assert_never(destination)
 
     if destination == "drive" and payload_kind == "index":
         return _allow("owner-private source index is allowed on owner-only Drive")

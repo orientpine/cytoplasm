@@ -153,7 +153,7 @@ class DeploySpec:
         return f"[skill-deploy] {self.skill} 배포 승인 요청\n"
 
     def render(self) -> str:
-        return self.posted_text or (_render_v2(self) if self.render_version == 2 else self.render_v1())
+        return self.posted_text or (_render_v3(self) if self.render_version == 3 else _render_v2(self) if self.render_version == 2 else self.render_v1())
 
     def render_v1(self) -> str:
         peer_status = f"{self.peer_status}\n" if self.peer_status else ""
@@ -241,7 +241,7 @@ class PublishSpec:
         return StoredBinding(action_hash, message_id, nonce)
 
     def render(self) -> str:
-        return self.posted_text or (_render_v2(self) if self.render_version == 2 else self.render_v1())
+        return self.posted_text or (_render_v3(self) if self.render_version == 3 else _render_v2(self) if self.render_version == 2 else self.render_v1())
 
     def render_v1(self) -> str:
         return (
@@ -295,28 +295,31 @@ def _bound_stored(spec: DeploySpec | PublishSpec, content: str, record: Mapping[
         fields["nonce"] = record.get("deploy_nonce", "")
     else:
         fields.update(manifest=record.get("manifest_hash", ""), tag=record.get("tag", ""), nonce=record.get("publish_nonce", ""))
-    return (record.get("render_version") in ("1", "2") and content_matches(content, record.get("content_sha256"))
+    return (record.get("render_version") in ("1", "2", "3") and content_matches(content, record.get("content_sha256"))
             and matched is not None and matched.groupdict() == fields)
 
 
-def _render_v2(spec: DeploySpec | PublishSpec) -> str:
+def _render_v2(spec: DeploySpec | PublishSpec, *, readable: bool = False) -> str:
     # 새 전체 본문. 기존 prefix 는 peer/check 파서의 wire 로 유지한다.
-    try:
-        from automation.interop.owner_message import Action, Approval, OwnerMessage, Ref, render
-    except ImportError:
-        raise
+    from automation.interop.owner_message import Action, Approval, OwnerMessage, Ref, render
     legacy = spec.render_v1().splitlines()
     deploy = isinstance(spec, DeploySpec)
     wire_count, verb = (4, "배포") if deploy else (6, "발행")
-    fact = " ".join(line for line in legacy[wire_count:] if line != _APPROVAL_LINE) if deploy else f"tag: `{spec.tag}`"
+    fact = ("\n" if readable else " ").join(line for line in legacy[wire_count:] if line != _APPROVAL_LINE) if deploy else f"{'발행 태그' if readable else 'tag'}: `{spec.tag}`"
     here = Ref(scope="self")
     message = OwnerMessage(
         subject_key=spec.key(), subject=f"{spec.skill} {verb} 승인", fact=fact,
         location=here, owner=Action("react", here, "✅ 승인 또는 ⛔ 취소 (소유자 전용)"),
         agent_next=f"승인된 스킬만 {verb}", recovery="not_applicable",
         detail=Approval(None, f"스킬 {verb} 안 함"),
+        render_version="owner-ko-v2" if readable else "owner-ko-v1",
     )
     return "\n".join((*legacy[:wire_count], render(message, destination=here)))
+
+
+def _render_v3(spec: DeploySpec | PublishSpec) -> str:
+    """Keep the peer wire prefix exact; owner-ko-v2 presents the remaining facts."""
+    return _render_v2(spec, readable=True)
 
 
 if TYPE_CHECKING:

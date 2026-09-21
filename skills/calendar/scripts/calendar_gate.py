@@ -122,7 +122,7 @@ def build_draft(
     return record
 
 
-def persist_draft(record: dict[str, JsonValue]) -> None:
+def persist_draft(record: dict[str, JsonValue] | DraftRecord) -> None:
     write_json(_draft_path(str(record["id"])), record)
 
 
@@ -153,11 +153,11 @@ def bind_approval_thread(draft: DraftRecord, thread_id: str, guild_id: str | Non
     return record
 
 
-def load_draft(draft_id: str) -> dict:
+def load_draft(draft_id: str) -> DraftRecord:
     path = _draft_path(draft_id)
     if not path.exists():
         raise GateError(f"드래프트 없음: {draft_id}", 3)
-    record = json.loads(path.read_text(encoding="utf-8"))
+    record: DraftRecord = json.loads(path.read_text(encoding="utf-8"))
     if record.get("status") != "pending":
         raise GateError(f"드래프트 {draft_id} 상태={record.get('status')} — pending 아님", 1)
     return record
@@ -167,7 +167,11 @@ def discard_draft(draft_id: str) -> None:
     path = _draft_path(draft_id)
     if not path.exists():
         raise GateError(f"드래프트 없음: {draft_id}", 3)
-    path.unlink()
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if record.get("digest_day"):
+        write_json(path, {**record, "status": "cancelled"})
+    else:
+        path.unlink()
 
 
 def list_drafts() -> list[dict]:

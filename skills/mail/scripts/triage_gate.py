@@ -236,8 +236,8 @@ def set_message_id(
     updated = {**current, "message_id": message_id, "channel_id": channel_id}
     if approval_created_at:
         updated["approval_created_at"] = approval_created_at
-    if "render_version" in draft:
-        updated["render_version"] = draft["render_version"]
+    updated.update({key: draft[key] for key in ("render_version", "approval_format", "approval_attachment")
+                    if key in draft})
     write_json(path, updated)
     return updated
 

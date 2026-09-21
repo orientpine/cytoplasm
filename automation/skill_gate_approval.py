@@ -435,13 +435,22 @@ class SkillApprovalGate:
         return PostedApproval(message_id=message_id, channel_id=intent.channel_id)
 
     def commit(self, intent: ApprovalIntent, posted: PostedApproval, created_at: str) -> None:
-        """The ONLY writer of the pending record — it persists this run's nonce and binding."""
+        """Persist the nonce/binding before best-effort bot reaction decoration."""
         del intent, created_at  # the record's field set is frozen by the gate's CLI contract
         path = self.path()
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         record = self.spec.serialize(self.new_record(posted))
         _ = path.write_text(record, encoding="utf-8")
         path.chmod(0o600)
+        for emoji in (APPROVE_EMOJI, CANCEL_EMOJI):
+            try:
+                self.surface.api(
+                    "PUT",
+                    f"/channels/{posted.channel_id}/messages/{posted.message_id}"
+                    f"/reactions/{quote(emoji)}/@me",
+                )
+            except _TRANSPORT_ERRORS as error:
+                print(f"APPROVAL-REACTION-FAIL {type(error).__name__}", file=sys.stderr)
 
     def _message_path(self, request: ApprovalRequest) -> str:
         return f"/channels/{request.channel_id}/messages/{request.message_id}"

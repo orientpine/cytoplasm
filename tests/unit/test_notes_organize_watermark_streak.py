@@ -120,7 +120,8 @@ def test_two_consecutive_failures_emit_exactly_one_real_helper_notice(tmp_path: 
     ]
     assert not (state / "delivered-week").exists()
     stored = json.loads((streak / "notes-weekly-organize.json").read_text(encoding="utf-8"))
-    assert stored == {"consecutive_failures": 2, "incident_open": True}
+    assert stored["consecutive_failures"] == 2
+    assert stored["incident_open"] is True
 
 
 def test_success_after_failure_emits_one_real_helper_recovery_notice(tmp_path: Path) -> None:
@@ -135,9 +136,13 @@ def test_success_after_failure_emits_one_real_helper_recovery_notice(tmp_path: P
     recovered = _run_wrapper(tmp_path / "home", scripts, state, streak)
 
     assert recovered.returncode == 0
-    assert recovered.stdout == "notes-weekly-organize recovered after 1 consecutive failures\n"
+    assert recovered.stdout.startswith(
+        "notes-weekly-organize recovered after 1 consecutive failures ("
+    )
+    assert " UTC) — last failure: rc=1\n" in recovered.stdout
     stored = json.loads((streak / "notes-weekly-organize.json").read_text(encoding="utf-8"))
-    assert stored == {"consecutive_failures": 0, "incident_open": False}
+    assert stored["consecutive_failures"] == 0
+    assert stored["incident_open"] is False
 
 
 def test_helper_missing_failure_emits_exactly_one_masked_fallback(

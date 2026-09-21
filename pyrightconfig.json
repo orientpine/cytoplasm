@@ -30,6 +30,7 @@
     { "root": "skills/todo/scripts", "extraPaths": ["."] },
     { "root": "skills/topics/scripts", "extraPaths": ["."] },
     { "root": "skills/wiki/scripts", "extraPaths": ["."] },
+    { "root": "tests/unit", "extraPaths": ["."] },
     { "root": "." }
   ]
 }

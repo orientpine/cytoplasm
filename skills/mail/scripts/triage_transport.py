@@ -74,15 +74,16 @@ def _clip(detail: str) -> str:
     return collapsed[:_STDERR_CLIP] if collapsed else "(없음)"
 
 
-def _delegate_schedule(schedule_text: str, uid_opaque: str) -> str:
+def _delegate_schedule(schedule_text: str, uid_opaque: str, digest_day: str = "") -> str:
     calendar_cli = _env_path(
         "TRIAGE_CALENDAR_CLI", "/srv/autophagy-skills/live/calendar/scripts/calendar_cli.py"
     )
     if not calendar_cli.exists():
         return "calendar-unavailable"
     try:
-        proc = subprocess.run(  # noqa: S603 — W3-1 skill delegation (draft only)
-            [sys.executable, str(calendar_cli), "draft-create", "--text", schedule_text],
+        proc = subprocess.run(  # noqa: S603 — calendar owns draft + digest approval publication
+            [sys.executable, str(calendar_cli), "draft-create", "--text", schedule_text,
+             *(["--digest-day", digest_day] if digest_day else [])],
             capture_output=True, text=True, timeout=CALENDAR_TIMEOUT_SECONDS, check=False,
         )
     except subprocess.TimeoutExpired:  # 느린 캘린더 CLI 가 다이제스트 전체를 죽이지 못한다

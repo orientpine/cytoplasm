@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import ast
 import json
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,6 +31,37 @@ from skills.proposal.scripts.proposal_ir import (  # noqa: E402
 )
 
 
+@pytest.fixture
+def mounted_proposal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Copy the skill into the governed release/symlink layout, without a checkout."""
+    release = tmp_path / "releases" / "proposal" / ("a" * 64)
+    _ = shutil.copytree(
+        ROOT / "skills" / "proposal", release,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    live = tmp_path / "live" / "proposal"
+    live.parent.mkdir()
+    live.symlink_to(release, target_is_directory=True)
+    monkeypatch.delenv("AUTOPHAGY_REPO_ROOT", raising=False)
+    return live
+
+
+@pytest.mark.parametrize("entry", ["proposal_cli.py", "proposal_ir.py"])
+def test_entry_point_runs_without_checkout_package(
+    mounted_proposal: Path, entry: str,
+) -> None:
+    # Given: the mounted skill has no enclosing skills package.
+    command = mounted_proposal / "scripts" / entry
+    # When: its real file entry point runs with no ambient Python search path.
+    result = subprocess.run(
+        [sys.executable, "-I", str(command), "--help"],
+        cwd=mounted_proposal.parent, capture_output=True, text=True,
+        timeout=30, check=False,
+    )
+    # Then: importing the public profile cannot prevent the CLI from starting.
+    assert result.returncode == 0, result.stderr
+
+
 def test_layout_profiles_match_budgets() -> None:
     thirty = PROFILES["30-page"].sections
     assert [s.target_pages for s in thirty] == [2, 8, 4, 12, 4]
@@ -39,6 +74,75 @@ def test_layout_profiles_match_budgets() -> None:
     # document — refine enforces them, so correctly sized sections failed.
     assert [s.figure_slots for s in ten] == [1, 1, 1, 2, 1]
     assert [s.prose_char_budget for s in ten] == [900, 1800, 1800, 2700, 1800]
+
+
+def test_profile_values_have_no_second_definition_in_script_modules() -> None:
+    # Given: one public contract owns every machine-consumed profile value.
+    from skills.proposal.layout_profile import LAYOUT_PROFILES
+
+    vectors = {
+        tuple(values.values())
+        for profile in LAYOUT_PROFILES.values()
+        for values in (
+            profile.section_page_targets, profile.figure_targets, profile.prose_budgets
+        )
+    }
+    duplicates: list[str] = []
+
+    # When: Python modules and Python heredoc fixtures under scripts are inspected.
+    scripts = ROOT / "skills/proposal/scripts"
+    sources = [(path, path.read_text(encoding="utf-8")) for path in scripts.rglob("*.py")]
+    sources.extend(
+        (path, match.group(1))
+        for path in scripts.rglob("*.sh")
+        for match in re.finditer(r"<<'PY'\n(.*?)\nPY", path.read_text(encoding="utf-8"), re.S)
+    )
+    for path, source in sources:
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            match node:
+                case ast.Tuple(elts=values) | ast.List(elts=values):
+                    elements = values
+                case ast.Dict(values=values):
+                    elements = values
+                case _:
+                    continue
+            if all(isinstance(value, ast.Constant) for value in elements):
+                literal = tuple(ast.literal_eval(value) for value in elements)
+                if literal in vectors:
+                    duplicates.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+
+    # Then: no script embeds a second profile vector, even under another name.
+    assert duplicates == []
+
+
+def test_profile_adapter_tracks_the_contract_when_values_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a distinct shared profile, not the current fallback values.
+    import importlib.util
+    from dataclasses import replace
+    from skills.proposal import layout_profile
+
+    changed = replace(
+        layout_profile.LAYOUT_PROFILES["10-page"],
+        section_page_targets={0: 7}, figure_targets={0: 3}, prose_budgets={0: 4321},
+    )
+    monkeypatch.setattr(layout_profile, "LAYOUT_PROFILES", {changed.name: changed})
+    spec = importlib.util.spec_from_file_location(
+        "skills.proposal.scripts.proposal_ir", ROOT / "skills/proposal/scripts/proposal_ir.py"
+    )
+    assert spec is not None and spec.loader is not None
+    adapter = importlib.util.module_from_spec(spec)
+
+    # When: the real adapter is loaded against the changed shared definition.
+    spec.loader.exec_module(adapter)
+
+    # Then: both the profile set and its values come from that definition.
+    assert list(adapter.PROFILES) == ["10-page"]
+    section = adapter.PROFILES["10-page"].sections[0]
+    assert (section.section_id, section.target_pages, section.figure_slots,
+            section.prose_char_budget) == (0, 7, 3, 4321)
 
 
 def test_resolve_tokens_in_document_order_and_unknown_is_typed() -> None:
@@ -96,6 +200,64 @@ def test_cli_contract(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> Non
     figures.write_text("{", encoding="utf-8")
     assert main(["resolve", "--figures", str(figures), "--text", str(text)]) == 2
     assert "INVALID-INPUT" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("figure_id", "exit_code"), [("fig-s1-01", 0), ("fig-s9-99", 3)])
+def test_direct_cli_resolves_or_refuses_when_run_outside_checkout(
+    tmp_path: Path, figure_id: str, exit_code: int,
+) -> None:
+    # Given: local input files and no checkout on the interpreter search path.
+    figures = tmp_path / "figures.json"
+    figures.write_text(
+        figures_to_json((FigureSpec("fig-s1-01", "s1", (), "p", "c", "a" * 64, 0),)),
+        encoding="utf-8",
+    )
+    text = tmp_path / "text.txt"
+    text.write_text(f"[[FIG:{figure_id}]]", encoding="utf-8")
+
+    # When: the public file entry point runs in an isolated interpreter.
+    result = subprocess.run(
+        [sys.executable, "-I", str(ROOT / "skills/proposal/scripts/proposal_ir.py"),
+         "resolve", "--figures", str(figures), "--text", str(text)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=10, check=False,
+    )
+
+    # Then: document numbering or the typed refusal survives the engine import.
+    assert result.returncode == exit_code, result.stderr
+    if exit_code == 0:
+        assert result.stdout == "그림 1"
+    else:
+        assert f"UNKNOWN-FIGURE-TOKEN: {figure_id}" in result.stderr
+
+
+def test_ir_cli_runs_when_the_private_engine_is_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the public proposal tree without the manifest-excluded engine.
+    exported = tmp_path / "export" / "skills" / "proposal"
+    _ = shutil.copytree(
+        ROOT / "skills/proposal", exported,
+        ignore=shutil.ignore_patterns("engine", "__pycache__"),
+    )
+    monkeypatch.delenv("AUTOPHAGY_REPO_ROOT", raising=False)
+    figures = tmp_path / "figures.json"
+    _ = figures.write_text(
+        figures_to_json((FigureSpec("fig-s1-01", "s1", (), "p", "c", "a" * 64, 0),)),
+        encoding="utf-8",
+    )
+    text = tmp_path / "body.txt"
+    _ = text.write_text("[[FIG:fig-s1-01]]", encoding="utf-8")
+
+    # When: the isolated interpreter executes the exported CLI, not this checkout.
+    result = subprocess.run(
+        [sys.executable, "-I", str(exported / "scripts/proposal_ir.py"),
+         "resolve", "--figures", str(figures), "--text", str(text)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=10, check=False,
+    )
+
+    # Then: the public runtime can resolve a figure without the private engine.
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "그림 1"
 
 
 def test_invalid_table_kind() -> None:

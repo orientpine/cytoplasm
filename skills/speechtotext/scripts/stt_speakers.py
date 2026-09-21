@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from typing import Final, Protocol, TypeAlias
 
 SPEAKERS_PREFIX: Final = "- 화자:"
+#: 등록된 목소리와의 대조가 낸 출처 접두어. 범례 문법과 신뢰 단계를 한 모듈이 쥐고 있으므로
+#: 정의도 여기 하나뿐이다 — `stt_identify` 가 이것을 가져다 쓴다(반대 방향 import 는 없다).
+CATALOG_SOURCE: Final = "카탈로그"
+CATALOG_SUGGEST: Final = f"{CATALOG_SOURCE} 제안: "
 _LABEL: Final = re.compile(r"^화자(?!0$)\d+$")
 _INTRODUCTION: Final = re.compile(
     r"(?:저는|제가|저희는|저는요)\s*(?:[가-힣]{2,12}(?:의|에서(?:\s*온)?|소속)?\s+)?"
@@ -131,6 +135,8 @@ def parse_llm(items: Sequence[Mapping[str, object]]) -> SpeakerMap:
 
 def _kind(speaker: SpeakerName) -> int:
     if speaker.source == "소유자":
+        return 4
+    if speaker.source.startswith(CATALOG_SOURCE):
         return 3
     if speaker.source.startswith("자기소개"):
         return 2
@@ -139,8 +145,35 @@ def _kind(speaker: SpeakerName) -> int:
     return 0
 
 
+def _provenance(winner: SpeakerName, entries: Sequence[SpeakerName]) -> SpeakerName:
+    """승자보다 덜 믿는 출처의 동의·이견만 출처 줄에 남긴다 — 이름은 승자의 것이다.
+
+    등록된 목소리(카탈로그)가 이겼을 때 자기소개를 지우지 않는 이유는, 그 둘이 어긋난
+    것 자체가 소유자가 볼 사실이기 때문이다. 반대로 자기소개가 이겼을 때의 카탈로그
+    제안은 「확인하면 그 사람의 등록본이 하나 더 쌓인다」는 다음 행동을 가리킨다.
+    """
+    notes: list[str] = []
+    rank = _kind(winner)
+    if rank == 3:
+        rule = next((entry for entry in entries if _kind(entry) == 2 and entry.name), None)
+        if rule is not None:
+            notes.append("자기소개" if rule.name == winner.name else f"자기소개 제안: {rule.name}")
+    elif rank == 2:
+        catalog = next(
+            (entry for entry in entries if entry.source.startswith(CATALOG_SUGGEST)), None
+        )
+        if catalog is not None:
+            notes.append(catalog.source)
+        llm = next((entry for entry in entries if _kind(entry) == 1 and entry.name), None)
+        if llm is not None:
+            notes.append("LLM" if llm.name == winner.name else f"LLM 제안: {llm.name}")
+    if not notes:
+        return winner
+    return SpeakerName(winner.label, winner.name, " · ".join((winner.source, *notes)))
+
+
 def merge(*maps: SpeakerMap) -> SpeakerMap:
-    """Combine sources by trust, retaining an LLM disagreement as provenance."""
+    """Combine sources by trust, retaining a lower-trust disagreement as provenance."""
     grouped: dict[str, list[SpeakerName]] = {}
     for speaker_map in maps:
         for speaker in speaker_map:
@@ -152,13 +185,7 @@ def merge(*maps: SpeakerMap) -> SpeakerMap:
         if not named:
             merged.append(max(entries, key=_kind))
             continue
-        winner = max(named, key=_kind)
-        if _kind(winner) == 2:
-            llm = next((entry for entry in named if _kind(entry) == 1), None)
-            if llm:
-                suffix = "LLM" if llm.name == winner.name else f"LLM 제안: {llm.name}"
-                winner = SpeakerName(winner.label, winner.name, f"{winner.source} · {suffix}")
-        merged.append(winner)
+        merged.append(_provenance(max(named, key=_kind), entries))
     return tuple(merged)
 
 
@@ -170,13 +197,16 @@ def render_legend(speakers: SpeakerMap) -> str:
     speakers = tuple(speaker for speaker in speakers if speaker.label != "화자0")
     if not speakers:
         return ""
-    entries = [
-        f"{speaker.label}={speaker.name} [{speaker.source}]"
-        if speaker.name
-        else f"{speaker.label}=미상"
-        for speaker in speakers
-    ]
-    return f"{SPEAKERS_PREFIX} " + " · ".join(entries)
+    return f"{SPEAKERS_PREFIX} " + " · ".join(_entry(speaker) for speaker in speakers)
+
+
+def _entry(speaker: SpeakerName) -> str:
+    """미상에 대괄호를 붙이는 경우는 하나뿐 — 확인하면 이름이 되는 후보가 있을 때다."""
+    if speaker.name:
+        return f"{speaker.label}={speaker.name} [{speaker.source}]"
+    if speaker.source.startswith(CATALOG_SUGGEST):
+        return f"{speaker.label}=미상 [{speaker.source}]"
+    return f"{speaker.label}=미상"
 
 
 def parse_legend(header: str) -> SpeakerMap:

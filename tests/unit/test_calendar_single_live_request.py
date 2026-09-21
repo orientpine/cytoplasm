@@ -165,7 +165,7 @@ def _approval() -> ModuleType:
 def _draft(*, summary: str = "same") -> dict[str, str | list[str]]:
     return calendar_gate.create_draft(
         action="update",
-        argv=("gws", "calendar", "events", "patch", summary),
+        argv=calendar_cli.calendar_core.build_patch_argv("primary", "event-1", {"summary": summary}),
         calendar_id="primary",
         event_id="event-1",
         summary=summary,
@@ -376,9 +376,9 @@ def test_new_intent_carries_a_concrete_agent_chat_thread_id(
 
 
 def _masked_draft() -> dict[str, str | list[str]]:
-    """A draft whose every calendar field is content that must never leave the DM."""
+    """Calendar fields must stay out of thread titles, notices and shared outputs."""
     return calendar_gate.create_draft(
-        action="update", argv=("gws", "calendar", "events", "patch", SECRET_SUMMARY),
+        action="update", argv=calendar_cli.calendar_core.build_patch_argv("secret-calendar@group.calendar.google.com", SECRET_EVENT_ID, {"summary": SECRET_SUMMARY}),
         calendar_id="secret-calendar@group.calendar.google.com", event_id=SECRET_EVENT_ID,
         summary=SECRET_SUMMARY, start=SECRET_START, end=SECRET_START, channel_id="dm",
         origin_channel_id=AGENT_CHAT_CHANNEL_ID, origin_message_id="410000000000000009",

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from automation.entity_preflight.contracts import JsonValue
+    from calendar_confirm_input import DraftRecord
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -283,8 +284,10 @@ def external_effect_action_hash(argv: tuple[str, ...]) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
-def draft_sha256(record: Mapping[str, JsonValue]) -> str:
+def draft_sha256(record: Mapping[str, JsonValue] | DraftRecord) -> str:
     """Content hash binding a draft to the exact mutation it will execute."""
+    if "argv" not in record:
+        raise KeyError("argv")
     bound = {key: record[key] for key in ("action", "argv", "calendar_id", "event_id", "summary", "start", "end")}
     canonical = json.dumps(bound, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

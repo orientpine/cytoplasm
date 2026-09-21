@@ -1,10 +1,15 @@
-"""Controlled owner-DM review transport; no submission or other outbound path."""
+"""Controlled owner review notice; no submission or other outbound path.
+
+ON-1..ON-3: 목적지 해석도 전송도 `automation.owner_notice` 파사드만 한다. 여기서는
+본문만 만든다 — 대상 문자열은 "보낼지 말지"의 스위치로만 남는다(빈 값이면 전송 없음).
+"""
 from __future__ import annotations
 
 import json
 import os
-import subprocess
+import sys
 from pathlib import Path
+from types import ModuleType
 
 
 class DeliveryError(RuntimeError):
@@ -32,19 +37,29 @@ def resolve_target(explicit: str = "") -> str:
     raise DeliveryError("DOCTYPE_DM_TARGET is required for an owner review DM")
 
 
-def _chunks(message: str) -> tuple[str, ...]:
-    chunks: list[str] = []
-    remaining = message
-    while len(remaining) > 1800:
-        boundary = remaining.rfind("\n", 0, 1800)
-        split_at = boundary if boundary > 0 else 1800
-        chunks.append(remaining[:split_at])
-        remaining = remaining[split_at:].lstrip("\n")
-    return (*chunks, remaining)
+def _facade() -> ModuleType:
+    """통지 파사드 — 배포 레이아웃에서도 automation 을 담은 코드 루트를 되짚어 import 한다."""
+    override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
+    roots = (
+        *((Path(override).expanduser(),) if override else ()),
+        *Path(__file__).resolve().parents,
+        Path("/srv/autophagy-agent-current"),
+        Path("/srv/autophagy-agents"),
+    )
+    for root in roots:
+        if (root / "automation" / "owner_notice.py").is_file():
+            if str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+            break
+    try:
+        from automation import owner_notice
+    except ImportError as error:
+        raise DeliveryError(f"통지 파사드 사용 불가: {type(error).__name__}") from None
+    return owner_notice
 
 
 def send_review(target: str, message: str, file: Path | None = None) -> None:
-    """문서 좌표를 렌더하되 옛 런타임과 좌표 없는 호출은 원문을 보낸다."""
+    """문서 좌표를 렌더하되 옛 런타임과 좌표 없는 호출은 원문을 보낸다. 전송은 파사드가 한다."""
     if not target:
         return
     content = message
@@ -63,20 +78,5 @@ def send_review(target: str, message: str, file: Path | None = None) -> None:
                 ), destination=Ref(scope="none"))
             except OwnerMessageError:
                 content = message
-    binary = os.environ.get("DOCTYPE_DM_HERMES_BIN", "hermes")
-    environment = {**os.environ, "PATH": f"{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
-    for chunk in _chunks(content):
-        try:
-            completed = subprocess.run(
-                (binary, "send", "--to", target, chunk),
-                cwd=Path.home(),
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise DeliveryError(error.__class__.__name__) from error
-        if completed.returncode != 0:
-            raise DeliveryError(f"owner DM rc={completed.returncode}")
+    if not _facade().notify_owner(content):
+        raise DeliveryError("소유자 통지 전송 실패 — owner-notice 마커를 확인하세요")

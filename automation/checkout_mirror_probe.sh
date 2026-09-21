@@ -22,6 +22,8 @@
 #               the old probe compared against its own stale ref  → detected as
 #               mirror-behind via `git ls-remote` (a network READ that writes no
 #               local ref, so the read-only invariant holds: never fetch/pull/reset).
+#   2026-09-01  three nonignored untracked files survived beside tracked edits,
+#               proving that blanket `--untracked-files=no` hid real mirror work.
 
 checkout_mirror_log() { printf '[checkout-mirror] %s\n' "$*" >&2; }
 
@@ -31,7 +33,7 @@ checkout_mirror_log() { printf '[checkout-mirror] %s\n' "$*" >&2; }
 checkout_mirror_verdict() { # checkout_mirror_verdict <checkout-path>
   local checkout="$1" remote head
   [[ -d "$checkout/.git" ]] || { echo "mirror-no-checkout"; return 1; }
-  if [[ -n "$(git -C "$checkout" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+  if [[ -n "$(git -C "$checkout" status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
     echo "mirror-dirty"; return 1
   fi
   if ! git -C "$checkout" merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
@@ -67,7 +69,7 @@ BEHIND_EOF
       cat <<'AHEAD_EOF'
 The ops deploy checkout is a one-way mirror of origin/main: the only writes
 allowed inside it are git fetch and git pull --ff-only. This failure means a
-commit was made there, or a tracked file was edited there.
+commit was made there, or a tracked/nonignored untracked file was edited there.
 Recover WITHOUT discarding the work - it exists nowhere else:
   here$         git format-patch origin/main..HEAD
   workstation$  git am *.patch && git push origin main

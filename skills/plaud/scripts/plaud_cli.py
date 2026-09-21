@@ -48,6 +48,7 @@ class Transcribing:
     recording_id: str
     attempts: int
     reason: str
+    last_recheck_error: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +133,8 @@ def summarize(payload: object, transcripts_dir: Path | None = None) -> StatusSum
         elif status == "transcribing":
             transcribing.append(
                 Transcribing(
-                    _text(raw, "recording_id", str(key)), _attempts(raw), _text(raw, "last_block_reason")
+                    _text(raw, "recording_id", str(key)), _attempts(raw), _text(raw, "last_block_reason"),
+                    last_recheck_error=_text(raw, "last_recheck_error"),
                 )
             )
         if transcripts_dir is not None and (path := _transcript(raw, transcripts_dir)) is not None:
@@ -180,6 +182,7 @@ def render(summary: StatusSummary) -> str:
         lines.append(f"- 전사 대기(transcribing) {len(summary.transcribing)}건:")
         lines.extend(
             f"  - {t.recording_id} · 시도 {t.attempts} · 사유 {t.reason or '없음(다음 틱에 전사)'}"
+            + (f" · 마지막 클라우드 재확인 오류 {t.last_recheck_error}" if t.last_recheck_error else "")
             for t in summary.transcribing
         )
     if summary.transcripts:
@@ -196,7 +199,8 @@ def _payload(summary: StatusSummary) -> dict[str, object]:
         "counts": dict(summary.counts),
         "approved": [{"recording_id": r, "reason": why} for r, why in summary.approved],
         "transcribing": [
-            {"recording_id": t.recording_id, "attempts": t.attempts, "reason": t.reason}
+            {"recording_id": t.recording_id, "attempts": t.attempts, "reason": t.reason,
+             **({"last_recheck_error": t.last_recheck_error} if t.last_recheck_error else {})}
             for t in summary.transcribing
         ],
         "transcripts_dir": str(summary.transcripts_dir) if summary.transcripts_dir else None,

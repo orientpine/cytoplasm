@@ -10,6 +10,7 @@ Two cells deserve their footnote:
   (``expires_at``), not a request-expiry in the triage store, which has none.
 * ``skill-deploy``'s reminder is the supply-chain tick that claims reminder slots for
   unanswered deploy approvals; the deploy gate itself schedules nothing.
+* ``release``'s reminder is the same supply-chain tick for unanswered release cards.
 
 ``memory_relocate`` is intentionally absent: its approval kind comes from the payload
 (``automation/memory_relocate/model.py:193``), so no static kind can be named for it.
@@ -91,8 +92,16 @@ POLICY_TABLE: Final[tuple[PolicyEntry, ...]] = (
         ttl_seconds=None,
         ttl_source="UNKNOWN:automation/skill_gate.py",
         reminder=True,
-        reminder_source="automation/supply_chain_remind.py:151",
+        reminder_source="automation/supply_chain_remind.py:176",
         note="supply-chain 틱이 미응답 deploy 승인의 reminder slot 을 claim 한다",
+    ),
+    PolicyEntry(
+        kind="release",
+        ttl_seconds=None,
+        ttl_source="UNKNOWN:automation/release_approval.py",
+        reminder=True,
+        reminder_source="automation/supply_chain_remind.py:176",
+        note="supply-chain 틱이 미응답 release 승인의 reminder slot 을 claim 한다",
     ),
     PolicyEntry(
         kind="coordination",

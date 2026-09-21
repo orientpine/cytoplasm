@@ -31,13 +31,31 @@ def test_envelope_bytes_when_new_card_is_rendered(producer: str, tmp_path: Path)
     # Given fixed inputs; when rendered; then compare with independently captured shipped bytes.
     match producer:
         case "plaud":
-            actual, expected = p.render_plaud_approval(PLAUD_RECORD, preview=PREVIEW), PLAUD_V5
+            actual = p.render_plaud_approval(
+                PLAUD_RECORD,
+                preview=PREVIEW,
+                render_version="plaud-sync-render-v5",
+            )
+            expected = PLAUD_V5
         case "memory":
-            actual, expected = m.render_relocation_approval(memory_record(), entry_text=ENTRY), MEMORY_V2
+            actual = m.render_relocation_approval(
+                memory_record(),
+                entry_text=ENTRY,
+                render_version="mc-reloc-render-v2",
+            )
+            expected = MEMORY_V2
         case "todo":
-            actual, expected = render_todo_approval(todo_gate(tmp_path).intent), TODO_V2
+            actual = render_todo_approval(
+                todo_gate(tmp_path).intent,
+                render_version="todo-render-v2",
+            )
+            expected = TODO_V2
         case "todo-deadline":
-            actual = render_todo_approval(todo_gate(tmp_path).intent, datetime(2026, 9, 11, 13, tzinfo=UTC))
+            actual = render_todo_approval(
+                todo_gate(tmp_path).intent,
+                datetime(2026, 9, 11, 13, tzinfo=UTC),
+                render_version="todo-render-v2",
+            )
             expected = TODO_V2_DEADLINE
         case _:
             raise AssertionError(producer)
@@ -108,9 +126,16 @@ def test_v5_keeps_all_seven_full_preview_lines_when_metadata_is_realistic() -> N
     record = replace(PLAUD_RECORD, recording_id="00000000-0000-4000-8000-000000000001",
                      note_title="주간 회의 검토와 다음 일정 조율 및 자료 준비에 관한 논의 (2026-09-08)",
                      note_relpath="000_PARA/Area/Lifelog/2026/2026-09-08-주간-회의-검토와-다음-일정-조율-및-자료-준비에-관한-논의--abcdef123456.md")
-    preview = p.summary_preview("## 요약\n" + "\n".join("가" * 300 for _ in range(8)))
+    preview = p.summary_preview(
+        "## 요약\n" + "\n".join("가" * 300 for _ in range(8)),
+        render_version="plaud-sync-render-v5",
+    )
     # When rendered through the v5 default.
-    card = p.render_plaud_approval(record, preview=preview)
+    card = p.render_plaud_approval(
+        record,
+        preview=preview,
+        render_version="plaud-sync-render-v5",
+    )
     # Then envelope fields fit without stealing any preview line or binding character.
     assert p.PREVIEW_LINES == 7 and p.PREVIEW_LINE_CHARS == 190 and p.MAX_MESSAGE_CHARS == 1900
     assert len(card) <= 1900

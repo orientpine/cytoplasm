@@ -119,15 +119,54 @@ def test_deploy_provenance_ref_default_unchanged() -> None:
 
 # 1.3 remote-sha race: fail BEFORE running the command -----------------------
 
-def test_remote_sha_race_fails_before_command(tmp_path: Path) -> None:
+def test_pinned_sha_behind_origin_main_still_materializes_that_sha(tmp_path: Path) -> None:
+    """main moving past the pin is not a race — the pin is a published ancestor.
+
+    2026-09-18: v1.9.0 was approved and signed at sha_A, then three doc PRs landed and
+    origin/main moved to B. The old guard (`remote main == expected`) refused to snapshot
+    sha_A forever, so a signed release could never converge unless nobody merged in the
+    window — the same coupling update_trust dropped on 2026-09-09. The pin means "exactly
+    this commit", not "the tip"; what must hold is that the pin is on origin/main.
+    """
     origin, mirror, sha_a = _origin_and_mirror(tmp_path)
-    _push_second_commit(tmp_path, origin)  # origin/main now past sha_a
+    sha_b = _push_second_commit(tmp_path, origin)  # origin/main now past sha_a
     result = _run_snapshot(
-        tmp_path, mirror, sha_a, "echo ran > $OLDPWD/ran"
+        tmp_path, mirror, sha_a, "git rev-parse HEAD > $OLDPWD/seen"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    seen = (tmp_path / "seen").read_text(encoding="utf-8").strip()
+    assert seen == sha_a and seen != sha_b  # the pin, never the moved tip
+    assert _worktree_count(mirror) == 1
+
+
+def _push_side_branch_commit(tmp_path: Path, origin: Path) -> str:
+    """A commit that exists in origin only on a side branch — never on main."""
+    side = tmp_path / "side"
+    subprocess.run(
+        ("git", "clone", str(origin), str(side)), check=True, capture_output=True, text=True
+    )
+    _init_identity(side)
+    _git(side, "checkout", "-b", "feature")
+    (side / "content.txt").write_text("C\n", encoding="utf-8")
+    _git(side, "add", "content.txt")
+    _git(side, "commit", "-m", "commit C (side branch)")
+    _git(side, "push", "origin", "feature")
+    return _git(side, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_pinned_sha_off_origin_main_is_blocked_before_command(tmp_path: Path) -> None:
+    """Ancestry is the safety belt that replaces equality: a commit that is not on
+    origin/main (even one someone tagged) must not be materialized."""
+    origin, mirror, _sha_a = _origin_and_mirror(tmp_path)
+    sha_c = _push_side_branch_commit(tmp_path, origin)
+    result = _run_snapshot(
+        tmp_path, mirror, sha_c, "echo ran > $OLDPWD/ran"
     )
     assert result.returncode != 0, result.stdout + result.stderr
     assert "SNAPSHOT-BLOCK" in result.stderr
+    assert "not on origin/main" in result.stderr
     assert not (tmp_path / "ran").exists()  # command must never have run
+    assert _worktree_count(mirror) == 1
 
 
 # 1.4 resident-ahead commit must not be materialized -------------------------

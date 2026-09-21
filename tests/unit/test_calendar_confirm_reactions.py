@@ -261,7 +261,7 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
     config.write_text(json.dumps({"agent_chat_channel_id": AGENT_CHAT_CHANNEL_ID}), encoding="utf-8")
     monkeypatch.setenv("INTEROP_CONFIG", str(config))
     draft = calendar_gate.create_draft(
-        action="delete", argv=("gws", "calendar", "events", "delete"), calendar_id="primary",
+        action="delete", argv=calendar_cli.calendar_core.build_delete_argv("primary", "evt1"), calendar_id="primary",
         event_id="evt1", summary="private", start="", end="", channel_id="dm",
     )
     calls: list[tuple[str, str, dict[str, str] | None]] = []
@@ -892,11 +892,14 @@ def test_draft_subcommands_thread_origin_into_the_record(tmp_path: Path, monkeyp
     )
     monkeypatch.setenv("CALENDAR_PEERS_CONFIG", str(peers))
     origin = {"origin_channel_id": ORIGIN_CHANNEL, "origin_message_id": ORIGIN_MESSAGE}
+    monkeypatch.setattr(calendar_cli.calendar_preflight, "read_event", lambda *_args: {
+        "id": "evt1", "summary": "private", "start": {"date": "2031-10-01"}, "end": {"date": "2031-10-02"},
+    })
 
     # When each draft-creating subcommand runs
     assert calendar_cli.cmd_draft_create(
         SimpleNamespace(text="내일 오후 3시 실험 미팅", summary="", calendar="primary",
-                        channel_id="dm", **origin)
+                        channel_id="dm", digest_day="", **origin)
     ) == 0
     assert calendar_cli.cmd_draft_update(
         SimpleNamespace(text="", summary="새 제목", calendar="primary", channel_id="dm",

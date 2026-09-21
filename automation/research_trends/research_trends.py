@@ -324,21 +324,32 @@ def _bot_token() -> str:
     raise OwnerDmDeliveryError("DISCORD_BOT_TOKEN is unavailable")
 
 
-def _send_dm(report: str, *, report_path: Path | None = None) -> None:
+def _send_dm(
+    report: str, *, report_path: Path | None = None, summary: str | None = None
+) -> None:
     """ON-2: 목적지(지정 통지 채널/DM)·청킹은 owner_notice 파사드가 소유한다.
 
     agent-chat 직송(2026-08-24)은 §10-6 확정으로 대체됐다 — 정기 통지 트래픽은
     `#notifications`(`owner_notice_channel_id`) 로 분리한다. 마스킹은 여기 그대로.
+
+    2026-09-21: 보고 파일이 있으면 본문은 `summary`(한 메시지) 이고 전문은 그 파일을
+    첨부한다 — 13KB 본문이 2000자 청크 7건으로 잘려 채널을 덮었고 청크마다 peer 가
+    스레드를 열었다. 파일이 없으면(레거시 호출) 예전처럼 전문을 보낸다.
     """
     os.environ.setdefault("DISCORD_BOT_TOKEN", _bot_token())
     from automation import owner_notice
     from automation.owner_notice import notify_owner
 
-    message = core.report_message(report, report_path)
-    if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
-        ok = notify_owner(report, message=message)
+    accepts = bool(getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False))
+    if report_path is not None and summary is not None:
+        message = core.report_message(summary, report_path, summary=True)
+        if message is not None and accepts:
+            ok = notify_owner(summary, message=message, attachments=(report_path,))
+        else:
+            ok = notify_owner(summary, attachments=(report_path,))
     else:
-        ok = notify_owner(report)
+        message = core.report_message(report, report_path)
+        ok = notify_owner(report, message=message) if message is not None and accepts else notify_owner(report)
     if not ok:
         raise OwnerDmDeliveryError("owner notice delivery failed")
 
@@ -408,7 +419,9 @@ def run() -> int:
     if dry_run:
         print(report)
         return 0
-    _send_dm(report, report_path=report_path)
+    summary = (core.report_summary(day, validated, report_path.name)
+               if isinstance(report_path, Path) else None)
+    _send_dm(report, report_path=report_path, summary=summary)
     _record_delivered_week(week)
     _ingest_report()
     return 0

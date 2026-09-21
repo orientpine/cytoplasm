@@ -7,7 +7,13 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Final, Sequence
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).absolute().parents[2]))
+    __package__ = "proposal.scripts"
+
+from ..layout_profile import LAYOUT_PROFILES  # noqa: E402
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,24 +59,21 @@ class LayoutProfile:
     sections: tuple[SectionSpec, ...]
 
 
-def _sections(
-    pages: tuple[int, ...], slots: tuple[int, ...], budgets: tuple[int, ...]
-) -> tuple[SectionSpec, ...]:
-    return tuple(SectionSpec(i, pages[i], budgets[i], slots[i]) for i in range(5))
-
-
-PROFILES: dict[str, LayoutProfile] = {
-    "30-page": LayoutProfile(
-        "30-page", _sections((2, 8, 4, 12, 4), (1, 4, 2, 6, 2), (1350, 6000, 2800, 9000, 2800))
-    ),
-    # Budgets are pages x the engine's calibrated characters-per-page, less the
-    # share each section's own figure and headings take. The earlier map gave
-    # sections 0 and 4 half the characters per page that 1 and 3 got, and refine
-    # enforces these, so a section written to its page target failed char-budget.
-    # Section 0 also had no figure slot: a section with no band renders no prose.
-    "10-page": LayoutProfile(
-        "10-page", _sections((1, 2, 2, 3, 2), (1, 1, 1, 2, 1), (900, 1800, 1800, 2700, 1800))
-    ),
+# Keep the skill's section-oriented API; the public contract owns profile values.
+PROFILES: Final[dict[str, LayoutProfile]] = {
+    name: LayoutProfile(
+        name,
+        tuple(
+            SectionSpec(
+                section_id=section_id,
+                target_pages=profile.section_page_targets[section_id],
+                prose_char_budget=profile.prose_budgets[section_id],
+                figure_slots=profile.figure_targets[section_id],
+            )
+            for section_id in sorted(profile.section_page_targets)
+        ),
+    )
+    for name, profile in LAYOUT_PROFILES.items()
 }
 
 FIG_TOKEN_RE = re.compile(r"\[\[FIG:([a-z0-9][a-z0-9-]*)\]\]")

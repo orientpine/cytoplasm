@@ -5,7 +5,7 @@
 # 상태와 전부 배포된 상태가 명령 수준에서 구분되지 않았다(C3). 이 명령은 그 질문을
 # 하나로 접는다 — 판정은 노드 릴리스 트리의 `deploy_all_probe.py` 가 내고(관측과 판정이
 # 같은 세대의 코드), 실행은 기존 배포기(`deploy-skill.sh`·`<pkg>/deploy.sh`)를 부를
-# 뿐이며(배포 로직 사본 0), 마지막 **전량 재판정**을 통과할 때만 영수증을 쓴다 —
+# 뿐이며(배포 로직 사본 0), 실행 성공과 마지막 **전량 재판정**을 모두 통과해야 영수증을 쓴다 —
 # 부분 성공은 성공으로 보고되지 않는다.
 #
 # Usage: deploy_all.sh [--plan|--verify|--apply [--wait-converge]]
@@ -19,7 +19,7 @@
 # ⑤ root 자산·⑥ RAG·런타임 패키지는 상시 healthcheck 프로브가 소유한다(영수증의
 # delegated 필드) — 여기서 실행하지 않고, 어긋남도 그 프로브가 알린다.
 #
-# Exit: 0 ok(영수증 기록) · 1 drift/재판정 실패 · 2 usage · 3 host 미설정 · 4 판정 불가/전제 미충족
+# Exit: 0 ok(영수증 기록) · 1 실행 실패/drift/재판정 실패 · 2 usage · 3 host 미설정 · 4 판정 불가/전제 미충족
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -196,8 +196,9 @@ case "$mode" in
     fi
     if ((${#failures[@]})); then
       log "incomplete: ${failures[*]}"
+      exit 1
     fi
-    # 전량 재판정 — 여기가 하드 게이트다. 위 실행이 몇 개 성공했든 rc 는 이 판정이 정한다.
+    # 실행 성공 뒤에도 전량 재판정은 필수다. digest 일치가 실행 실패를 덮지는 않는다.
     if probe report; then
       write_receipt
       exit $?

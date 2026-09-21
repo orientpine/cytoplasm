@@ -33,7 +33,7 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
    보류 건의 클라우드 재확인(전사 슬롯과 별도, 잠금이 바빠도 수행) →
    `pipeline_lock`(speechtotext 워처와 공유 — whisper 는 같은 자원, 못 잡으면 로컬 전사 양보) →
    `get_file` presigned URL(24h, JSON 뒤 산문이 붙어 `raw_decode`) → 스트리밍 다운로드(상한 1 GiB,
-   `audio/<id>.mp3`, 캐시) → speechtotext CLI `transcribe --file … --label <stem>` → 전사본을
+   `audio/<id>.<presigned URL 의 확장자>` — 2026-09-15 15:31 UTC 부터 Plaud 가 `.ogg` 를 준다, 그 전은 `.mp3`, 캐시) → speechtotext CLI `transcribe --file … --label <stem>` → 전사본을
    `transcripts/<stem>.md` 에 저장 → 요약을 `get_note` 로 갱신하고 노트 본문을 재조립 →
    **commit: watch.lock 을 blocking 으로 다시 잡고 레코드가 여전히 `transcribing`·같은 action_hash 인지
    재검사한 뒤 한 번 저장** → 오디오 삭제 → `planned`.
@@ -49,6 +49,17 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
 | 환경(노드) | rc=3(governed 거부)·rc=4(whisper/sherpa 없음), CLI 미마운트, MCP 오류, 네트워크 | **카운트 안 함**, 사유를 `last_block_reason` 에 적고 매 틱 재시도 |
 | 녹음 | rc≠0(빈 전사·잘림·미지원 형식), 시간 초과, 오디오 상한 초과 | `transcribe_attempts`+1; 상한(기본 2) 도달 시 **클라우드 전사로 폴백**해 `planned`, 노트 출처 줄에 `PLAUD 클라우드 전사(로컬 전사 N회 실패: …)`; 클라우드도 요약·전사가 없으면 `planned` 로 올리지 않고 `transcribing` 에 보류한 뒤 1·2·4·8·16·24시간 상한 백오프로 로컬 재시도한다. 클라우드는 매 틱 확인하고, 총 실패 상한(기본 5)에도 비어 있으면 `abandoned`로 닫는다. 대기 건은 전사 슬롯을 쓰지 않는다 |
 | stale | commit 시점에 레코드가 바뀌어 있음 | 아무것도 덮어쓰지 않는다 |
+
+**2026-09-16 · `.ogg` 사고**: Plaud `get_file` 이 전날 15:31 UTC 부터 presigned URL 을 `.ogg` 로 주기 시작했고
+(그 전 녹음은 전부 `.mp3`), speechtotext 의 형식 게이트 `stt_audio.SUPPORTED_SUFFIXES` 에 `.ogg` 가 없어
+**ffmpeg 가 돌기도 전에** rc=5「지원하지 않는 형식입니다」로 거부됐다 — 녹음 실패로 세어져 3건이 `transcribing`
+보류(백오프), 2건은 5회 상한에서 `abandoned`. 저장소는 바뀐 것이 없었고 공급자가 형식을 바꾼 것이다. 조치는
+게이트에 `.ogg` 를 더한 것 하나(speechtotext 1.3.1) — 로컬 경로는 어떤 형식이든 ffmpeg 로 16 kHz wav 를 만들므로
+워처에서 따로 변환할 이유가 없다(두 번째 형식 정책이 생긴다). 릴리스 수렴 뒤 보류 3건은 각자의
+`next_transcribe_at` 에 스스로 재시도하고(캐시된 오디오를 다시 받지 않는다), `abandoned` 2건은 소유자가
+`plaud_sync_watch.py --reprocess <녹음 id>` 로 되살린다. 진단상 주의: 보류 중 클라우드 재확인이 일시적
+`get_note: PlaudMcpError` 를 내면 그것이 `last_block_reason` 을 덮어써 원래 rc=5 사유가 `plaud 상태` 에서 사라진다
+([후속 과제](../follow-ups.md#plaud-ogg-형식-사고-착지-후-남긴-것-2026-09-16)).
 
 ## 사용 시나리오
 

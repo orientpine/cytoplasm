@@ -278,7 +278,7 @@ def render_approvals_message(
     if version == "1":
         return _render_v1(draft, destination=destination, instruction=instruction)
     from automation.interop.approval_card import CardRenderError
-    if version != "2":
+    if version not in ("2", "3"):
         raise CardRenderError("unknown mail card render version")
     from automation.interop import owner_message
     from triage_card import message
@@ -286,7 +286,8 @@ def render_approvals_message(
         raise CardRenderError("owner envelope unavailable")
     try:
         body = owner_message.render(
-            message(str(draft["id"]), _render_v1(draft, destination=destination), instruction),
+            message(str(draft["id"]), _render_v1(draft, destination=destination), instruction,
+                    render_version="owner-ko-v2" if version == "3" else "owner-ko-v1"),
             destination=owner_message.Ref(scope="self"),
         )
     except owner_message.OwnerMessageError as error:

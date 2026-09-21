@@ -54,8 +54,16 @@ def test_rejects_missing_file_fail_closed(tmp_path: Path) -> None:
 
 def test_supported_suffixes_match_provider_contract() -> None:
     assert stt_audio.SUPPORTED_SUFFIXES == frozenset(
-        {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm"}
+        {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"}
     )
+
+
+def test_accepts_ogg_when_plaud_serves_ogg_recordings(tmp_path: Path) -> None:
+    # 2026-09-15 부터 Plaud get_file 이 .ogg presigned URL 을 준다 — 게이트가 ffmpeg 앞에서 막으면
+    # 로컬 전사가 rc=5 로 끝나 녹음이 transcribing 에 고인다(노드 실측 5건).
+    checked = stt_audio.check_audio(_write(tmp_path / "of_abc.ogg", 2048))
+    assert checked.suffix == ".ogg"
+    assert checked.mime == "audio/ogg"
 
 
 # --- transcription client: proven against a real local HTTP server -----------

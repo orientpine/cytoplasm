@@ -120,7 +120,7 @@ def _is_retry_safe(marker: str) -> bool:
     return "retry_safe=true" in marker
 
 
-def _note_outcome(*, ok: bool) -> None:
+def _note_outcome(*, ok: bool, detail: str = "") -> None:
     """Track the digest's failure streak so a recovery is announced exactly once.
 
     The failure side stays untouched: the DIGEST-FAIL marker is this watcher's contract
@@ -131,7 +131,7 @@ def _note_outcome(*, ok: bool) -> None:
     """
     if watch_failure_streak is None:
         return
-    notice = watch_failure_streak.record(WATCH_NAME, ok=ok, threshold=1)
+    notice = watch_failure_streak.record(WATCH_NAME, ok=ok, detail=detail, threshold=1)
     if ok and notice is not None:
         print(notice[:300])
 
@@ -174,7 +174,7 @@ def _report_runtime_drift() -> None:
 def main() -> int:
     _load_env_secrets()
     if not CLI.exists():
-        _note_outcome(ok=False)
+        _note_outcome(ok=False, detail="mail skill is not mounted")
         print("DIGEST-FAIL stage=runner retry_safe=false code=not_mounted detail=mail skill is not mounted")
         return 1
     result = _run_digest()
@@ -188,13 +188,15 @@ def main() -> int:
     if result.returncode == 0:
         _note_outcome(ok=True)
         return 0
-    _note_outcome(ok=False)
     marker = _child_marker(result.stderr or result.stdout)
     if marker is not None:
-        print(_redact(marker)[:300])
+        detail = _redact(marker)
+        _note_outcome(ok=False, detail=detail)
+        print(detail[:300])
     else:
         tail = (result.stderr or result.stdout).strip().splitlines()
         detail = _redact(tail[-1]) if tail else ""
+        _note_outcome(ok=False, detail=detail or f"rc={result.returncode}")
         print(
             f"DIGEST-FAIL stage=runner retry_safe=false code=child_exit "
             f"child_rc={result.returncode} detail={detail[:200]}"

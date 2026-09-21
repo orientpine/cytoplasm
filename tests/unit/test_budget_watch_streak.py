@@ -73,7 +73,11 @@ def _stub_child(
 
 
 def _state(tmp_path: Path) -> dict[str, object]:
-    return json.loads((tmp_path / "watch-failure" / _STATE_NAME).read_text(encoding="utf-8"))
+    raw = json.loads((tmp_path / "watch-failure" / _STATE_NAME).read_text(encoding="utf-8"))
+    return {
+        "consecutive_failures": raw["consecutive_failures"],
+        "incident_open": raw["incident_open"],
+    }
 
 
 def _lines(captured: str) -> list[str]:
@@ -173,7 +177,8 @@ def test_recovery_closes_the_incident_with_one_line_and_resets(
     assert (recovered, quiet) == (0, 0)
     spoken = _lines(captured)
     assert len(spoken) == 1
-    assert "budget-watch recovered after 3 consecutive failures" in spoken[0]
+    assert spoken[0].startswith("budget-watch recovered after 3 consecutive failures (")
+    assert f" UTC) — last failure: rc=4: {_TRANSIENT_503}" in spoken[0]
     assert capsys.readouterr().out == ""
     assert _state(tmp_path) == {"consecutive_failures": 0, "incident_open": False}
 

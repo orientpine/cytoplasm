@@ -23,7 +23,7 @@ from .binding import PlaudHashFields, plaud_action_hash
 from .duration import DEFAULT_MIN_DURATION_MS
 from .lifelog_fields import DEFAULT_TIMEZONE
 from .lifelog_model import ExtractionOutcome, ExtractionSkipped, Extractor, LifelogExtractError
-from .model import PlaudStatus, PlaudSyncRecord, PlaudSyncState
+from .model import PlaudStatus, PlaudSyncRecord, PlaudSyncState, canonical_recording_id
 from .note import LifelogRecording, PlaudNoteError, corrected_lifelog_note, recording_stamp
 
 APPROVAL_KIND: Final = "obsidian-write"
@@ -82,6 +82,11 @@ def plan_new_records(
     min_duration_ms: int = DEFAULT_MIN_DURATION_MS,
 ) -> DiscoveryResult:
     records = dict(state.records)
+    known_ids = {
+        canonical_recording_id(alias)
+        for key, record in records.items()
+        for alias in (key, record.recording_id, *record.aliases)
+    }
     bodies: dict[str, str] = {}
     planned: list[str] = []
     skipped: list[str] = []
@@ -90,7 +95,7 @@ def plan_new_records(
     corrections: list[tuple[str, tuple[term_correction.Correction, ...]]] = []
 
     for recording in recordings:
-        if recording.id in records:
+        if canonical_recording_id(recording.id) in known_ids:
             continue
         if recording.duration_ms < min_duration_ms:
             skipped.append(recording.id)
@@ -161,6 +166,7 @@ def plan_new_records(
         )
         bodies[recording.id] = plan.body
         planned.append(recording.id)
+        known_ids.add(canonical_recording_id(recording.id))
 
     return DiscoveryResult(
         state=PlaudSyncState(state.version, now.isoformat(), records),

@@ -4,7 +4,7 @@ Agents and humans have repeatedly committed INSIDE ``/srv/autophagy-agents``, so
 code that never reached origin/main and a later deploy from a clean checkout silently
 reverted it (2026-07-27 선례: skills/mail/SKILL.md v1.5.3->v1.5.5, 4 commits recovered).
 ``probe_checkout_mirrors_origin`` is the DETECT half of the permanent fix: it fails when
-HEAD is not an ancestor of origin/main, or when a tracked file is modified.
+HEAD is not an ancestor of origin/main, or when tracked or nonignored untracked work exists.
 
 The probe is shell, so it is exercised as shell. ``ssh``/``sudo`` stand-ins placed first on
 PATH run the remote command against a throwaway git repo in ``tmp_path`` — no node, no
@@ -186,11 +186,33 @@ def test_modified_tracked_file_fails(tmp_path: Path) -> None:
     assert "PROBE-FAIL" in result.stdout
 
 
-def test_untracked_files_alone_pass(tmp_path: Path) -> None:
-    """``--untracked-files=no`` is deliberate: logs/ and caches are not drift."""
+def test_nonignored_untracked_code_fails(tmp_path: Path) -> None:
+    """The later mirror incident stranded three untracked files outside origin."""
     checkout = _mirror_checkout(tmp_path)
-    (checkout / "healthcheck-20260727T000000Z.log").write_text("noise\n", encoding="utf-8")
+    code = checkout / "skills" / "mail" / "scripts" / "runtime_override.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("print('outside origin')\n", encoding="utf-8")
+
     result = _probe(tmp_path, checkout)
+
+    assert result.returncode == 1
+    assert "PROBE-FAIL" in result.stdout
+    assert "mirror-dirty" in result.stderr
+
+
+def test_ignored_runtime_logs_pass(tmp_path: Path) -> None:
+    """Repository ignore policy, not a blanket untracked exemption, admits runtime noise."""
+    checkout = _mirror_checkout(tmp_path)
+    (checkout / ".gitignore").write_text("logs/*\n", encoding="utf-8")
+    _git(checkout, "add", ".gitignore")
+    _git(checkout, "commit", "-m", "declare runtime logs")
+    _git(checkout, "push", "origin", "main")
+    log = checkout / "logs" / "healthcheck-20260727T000000Z.log"
+    log.parent.mkdir()
+    log.write_text("noise\n", encoding="utf-8")
+
+    result = _probe(tmp_path, checkout)
+
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PROBE-PASS" in result.stdout
 

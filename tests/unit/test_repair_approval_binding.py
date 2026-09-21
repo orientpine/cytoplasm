@@ -277,8 +277,7 @@ def test_assert_surface_accepts_the_guild_approvals_channel_and_refuses_a_mismat
 
 
 def test_repair_request_posts_to_its_own_agent_chat_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: v8 (§10-7) — the Ops bot is invited, so its own credential resolves
-    # the 승인-repair thread under the personal guild's agent-chat channel.
+    # Given: a posting caller explicitly names the ticket whose thread it needs.
     directory = _OpsDirectory(
         OPS_THREAD_ID,
         ChannelFacts(11, "승인-repair", (), AGENT_CHAT_CHANNEL_ID),
@@ -288,15 +287,15 @@ def test_repair_request_posts_to_its_own_agent_chat_thread(monkeypatch: pytest.M
     monkeypatch.setattr(repair_ops_discord, "directory_for_ops", lambda token, owner: directory)
 
     # When: repair resolves the transport for a new owner approval request.
-    discord = repair_ops_discord.configured_discord()
+    discord = repair_ops_discord.configured_discord(TICKET)
 
-    # Then: every post is bound to the thread resolved by the repair bot itself,
-    # and older policy versions keep their historical meaning.
-    assert directory.thread_calls == [OPS_THREAD_ID]
+    # Then: posting resolves the ticket thread, never the legacy kind thread.
+    assert directory.thread_calls == []
+    assert directory.request_specs == [(ApprovalKind.REPAIR, RequestThread(title=TICKET))]
     assert discord.binding == ApprovalBinding(
         ApprovalKind.REPAIR,
         ApprovalSurface.AGENT_CHAT_THREAD,
-        OPS_THREAD_ID,
+        REQUEST_THREAD_ID,
         approval_surface.POLICY_VERSION,
     )
     assert all(
@@ -315,9 +314,14 @@ def test_repair_refuses_a_thread_its_credential_cannot_describe(monkeypatch: pyt
     monkeypatch.setenv("AUTOPHAGY_OWNER_ID", OWNER_ID)
     monkeypatch.setattr(repair_ops_discord, "directory_for_ops", lambda token, owner: directory)
 
-    # When / Then: repair fails closed instead of posting anywhere else.
-    with pytest.raises(RepairDiscordError, match="surface cannot be resolved"):
-        _ = repair_ops_discord.configured_discord()
+    pending = PendingRepairApproval(
+        TICKET, "patch.diff", repair_action_hash(TICKET, "patch.diff"), "nonce", "message", NOW,
+        kind=ApprovalKind.REPAIR, surface=ApprovalSurface.AGENT_CHAT_THREAD,
+        channel_id=AGENT_OWNER_DM_CHANNEL_ID, policy_version=approval_surface.POLICY_VERSION,
+    )
+    # When / Then: readers validate the stored destination, never resolve a new one.
+    with pytest.raises(RepairDiscordError, match="stored repair approval surface is invalid"):
+        _ = repair_ops_discord.configured_discord().for_pending(pending)
 
 
 def test_repair_binds_a_new_request_to_a_thread_named_for_its_ticket() -> None:

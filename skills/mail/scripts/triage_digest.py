@@ -95,12 +95,16 @@ def select_new_mails(
 
 def build_item(
     mail_detail: dict, item_no: int, *, rules: tuple[triage_sensitivity.TagRule, ...],
+    digest_day: str = "",
 ) -> tuple[dict, dict]:
     """Gate → classify → summarize one mail; return ``(owner_item, store_item)``.
 
     ``owner_item`` carries the real subject/summary for the owner message;
     ``store_item`` follows the ``digest_items`` contract and, when the gate
     hits, persists only the masked subject and an empty summary (constraint 7).
+    ``digest_day`` (KST 게시일) is forwarded to the calendar delegation so a detected
+    schedule ends as a posted ✅/⛔ card in that day's approval thread, not as an
+    orphan draft; empty means a plain draft (manual post-confirm/backstop path).
     Both LLM steps are retried once, then fall back per item: a summarize failure
     keeps the item with a fallback summary and records the masked reason via
     ``triage_llm.log_failure`` (the cron drops stderr, so that line is the only
@@ -197,7 +201,7 @@ def build_item(
         flags = flags + (_CLASSIFY_FAILED_FLAG,)
     note = ""
     if cls.category == "important" and cls.schedule_needed and cls.schedule_text:
-        note = triage_transport._delegate_schedule(cls.schedule_text, uid_opaque)
+        note = triage_transport._delegate_schedule(cls.schedule_text, uid_opaque, digest_day)
     shared = {
         "item_no": item_no,
         "uid": uid,
@@ -327,6 +331,7 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
     with no second tier to degrade to, the tick fails closed rather than
     delivering a digest of placeholders.
     """
+    kst_now = datetime.now(ZoneInfo("Asia/Seoul"))
     rules = triage_sensitivity.load_rules(triage_transport._rules_path())
     db = triage_gate.db_path()
     digested = triage_store.digested_uids(db)
@@ -346,7 +351,7 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
         uid = str(mail.get("uid") or "")
         detail = {**mail, **triage_transport._get_mail(uid), "uid": uid}
         try:
-            dm_item, store_item = build_item(detail, item_no, rules=rules)
+            dm_item, store_item = build_item(detail, item_no, rules=rules, digest_day=kst_now.date().isoformat())
         except triage_llm.LlmUnavailableError as error:  # fail closed — no downgraded digest
             raise triage_gate.GateError(
                 _fail_marker("build", "codex_unavailable", error), 4
@@ -355,7 +360,7 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
             raise triage_gate.GateError(_fail_marker("build", "llm_call_failed", error), 4) from error
         dm_items.append(dm_item)
         store_items.append(store_item)
-    body = render_digest_dm(dm_items, kst_now=datetime.now(ZoneInfo("Asia/Seoul")))
+    body = render_digest_dm(dm_items, kst_now=kst_now)
     if sync_failed:
         body = "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)\n" + body
     if dry_run:

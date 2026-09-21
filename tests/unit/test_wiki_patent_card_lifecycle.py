@@ -30,7 +30,7 @@ def test_patent_version_when_new_card_is_posted(env) -> None:
     patent_export.prepare_export(env.paths, SLUG, mode="enc")
     # Then
     stored = pm.load_manifest(SLUG)
-    assert stored.render_version == 2
+    assert stored.render_version == 3
     assert env.fake.messages[stored.message_id][1] == patent_export.render_approval(stored)
 
 

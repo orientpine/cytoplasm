@@ -25,9 +25,16 @@ push_contents() {
 # Deploy guard: refuse to push code that origin/main does not have (see the header of
 # automation/deploy_provenance.sh for why a silent revert is otherwise inevitable).
 source "$repo_root/automation/deploy_provenance.sh"
-deploy_provenance_check "$repo_root" "$repo_root/automation/skill_generation" || exit 4
+deploy_provenance_check "$repo_root" \
+  "$repo_root/automation/skill_generation" "$repo_root/automation/selfskill_audit" \
+  "$repo_root/automation/skill_review.py" "$repo_root/automation/skill_mount.py" \
+  "$repo_root/automation/scenario_runner.py" || exit 4
 
 push_tree "$repo_root/automation/skill_generation" '.hermes/skill-generation/runtime/automation'
+push_tree "$repo_root/automation/selfskill_audit" '.hermes/skill-generation/runtime/automation'
+push_tree "$repo_root/automation/skill_review.py" '.hermes/skill-generation/runtime/automation'
+push_tree "$repo_root/automation/skill_mount.py" '.hermes/skill-generation/runtime/automation'
+push_tree "$repo_root/automation/scenario_runner.py" '.hermes/skill-generation/runtime/automation'
 push_contents "$repo_root/automation/skill_generation/plugin" '.hermes/plugins/05-skill-generation'
 ssh "$host" "sudo -n -u agent -H bash -lc 'PATH=\"\$HOME/.local/bin:\$PATH\"; hermes plugins enable 05-skill-generation; XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user restart hermes-gateway.service; hermes plugins list --plain --no-bundled'"
 # 게이트웨이 재시동 규칙(AGENTS.md, 2026-07-22): agent만 재시동하지 않는다 — peer gateway도 함께 재시동.

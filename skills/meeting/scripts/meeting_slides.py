@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Final, Protocol, runtime_checkable
 
 import meeting_knowledge
 
@@ -29,6 +29,22 @@ MAX_PROMPT_CHARS: Final = 12000
 _UNIT: Final = "슬라이드"
 _TRUNCATED: Final = "…(이하 생략)"
 _RUNTIME_MISSING: Final = "본문 추출 런타임을 찾지 못했습니다"
+_RUNTIME_SKEW: Final = "본문 추출 런타임 버전이 맞지 않습니다"
+_EXTRACTION_FAILED: Final = "발표자료 본문 추출에 실패했습니다"
+
+
+class _Extracted(Protocol):
+    units: tuple[str, ...]
+    status: str
+
+
+@runtime_checkable
+class _ExtractDocument(Protocol):
+    def __call__(self, path: Path, *, max_bytes: int) -> _Extracted: ...
+
+
+class _RuntimeVersionSkew(Exception):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,10 +61,12 @@ def _refused(path: Path, reason: str) -> Deck:
     return Deck(name=path.name, text="", slide_count=0, status=reason)
 
 
-def _extract(path: Path) -> Any:
-    return meeting_knowledge.module("automation.document_text").extract_document(
-        path, max_bytes=MAX_DECK_BYTES
-    )
+def _extractor() -> _ExtractDocument:
+    module = meeting_knowledge.module("automation.document_text")
+    extractor = getattr(module, "extract_document", None)
+    if not isinstance(extractor, _ExtractDocument):
+        raise _RuntimeVersionSkew
+    return extractor
 
 
 def _slide_text(number: int, body: str) -> str:
@@ -58,9 +76,18 @@ def _slide_text(number: int, body: str) -> str:
 def extract_deck(path: Path) -> Deck:
     """Never raises — a deck that cannot be read comes back with an explaining status."""
     try:
-        extracted = _extract(path)
-    except Exception:  # noqa: BLE001 - 런타임 부재도 회의록을 멈추지 않는다
+        extractor = _extractor()
+    except ModuleNotFoundError as error:
+        reason = _RUNTIME_MISSING if error.name == "automation" else _RUNTIME_SKEW
+        return _refused(path, f"읽지 못함: {reason}")
+    except (ImportError, _RuntimeVersionSkew):
+        return _refused(path, f"읽지 못함: {_RUNTIME_SKEW}")
+    except Exception:  # noqa: BLE001 - 런타임 로드 실패도 회의록을 멈추지 않는다
         return _refused(path, f"읽지 못함: {_RUNTIME_MISSING}")
+    try:
+        extracted = extractor(path, max_bytes=MAX_DECK_BYTES)
+    except Exception:  # noqa: BLE001 - 발표자료 추출 실패도 회의록을 멈추지 않는다
+        return _refused(path, f"읽지 못함: {_EXTRACTION_FAILED}")
     if extracted.status != "ok":
         return _refused(path, extracted.status)
     slides = [_slide_text(number, unit) for number, unit in enumerate(extracted.units, start=1)]

@@ -1,0 +1,2 @@
+# Obsidian 트리거 등록 no-agent cron — 중앙표는 watcher_manifest emit으로 생성한다.
+agent|automation/voice_catalog/cron/voice_catalog_enroll_watch.py|.hermes/scripts/voice_catalog_enroll_watch.py|required

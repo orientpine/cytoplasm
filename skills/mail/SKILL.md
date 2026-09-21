@@ -26,6 +26,12 @@ prerequisites:
 - **`~/.hermes/skills/mail/...` 은 존재하지 않는다**(SS-1 반전 이후 그 루트는 자가 스킬 전용). 없는 경로를 찾아 다른 사본을 뒤지지 말고 위 live 경로를 쓴다.
 - 코드가 강제한다: `mail_runtime.governed_copy_refusal` — 이 호스트에 배포본 마운트가 있으면 다른 사본의 mutating 서브커맨드(`draft`·`compose`·`process`·`digest`·`watch`·`confirm`·`discard`·`sign`)는 `GATE-REFUSED STALE-SKILL-COPY-BLOCK …`(exit 3)으로 멈추고 올바른 경로를 알려 준다. 읽기 전용(`mode`·`list-drafts`·`digest-items`·`evidence`)은 막지 않는다. 이 메시지를 보면 경로를 고쳐 다시 실행하면 된다 — 우회 옵션은 없다.
 
+## 장문 승인 카드
+
+새 승인 카드가 Discord 2,000자 한도를 넘으면 제목·수신자·draft id·본문 SHA256·승인 해시와 ✅/⛔ 안내를 담은 요약 카드로 게시합니다. `본문: 첨부 파일 참조` 아래의 같은 메시지에 본문과 원문 인용 전체를 UTF-8 텍스트 파일 하나로 첨부하므로, 긴 메일도 내용을 줄이지 않고 검토할 수 있습니다.
+
+승인 재사용 검사와 리액션 처리 모두 저장된 첨부 이름·바이트 수·SHA256, 메시지의 첨부 선언, 내려받은 실제 바이트를 대조합니다. 첨부 누락·변조·다운로드 실패 시 ✅를 실행하지 않습니다. 첨부 검증 정보는 기존 승인 해시 밖에 보관하며, 짧은 카드와 이미 게시된 카드의 렌더링은 바꾸지 않습니다. 제목·수신자 등 때문에 요약 카드마저 한도를 넘으면 승인 스레드 생성과 posting journal 예약 전에 거부합니다.
+
 ## 읽기 명령 (W4-1, READ-ONLY)
 
 ```bash
@@ -97,6 +103,20 @@ mode 머신러리 설명("2회 실패→no-go", "둘 다 없으면 no-go 폴백"
 주의: **20은 종료코드가 아니라 수집 계약의 페이지 크기**(20건/page, 최대
 500 page — mailon/scraper.py PAGE_SIZE)다.
 
+## 본문 보여주기
+
+소유자가 "본문 보여줘"라고 하면 요약 대신 다음 읽기 전용 명령을 사용한다.
+
+```bash
+python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py get <uid> --body
+```
+
+- 출력된 렌더 청크를 **순서대로 그대로 붙여 넣는다. 다시 요약하거나 문장을 고치지 않는다.** 여러 청크이면 각 `(i/n)` 접미까지 한 Discord 메시지로 보낸다(접미 포함 최대 1,900자). 청크 사이의 빈 줄은 구분용이며 재결합해 한 메시지로 보내지 않는다.
+- 제목·보낸 사람·받는 사람/참조·날짜·첨부 건수는 불릿 헤더, 본문은 빈 줄 한 줄로 정돈된다. 목록·표·링크 Markdown은 유지하고, 한 메시지보다 긴 문단만 줄/낱말/글자 순으로 나눈다.
+- 인용 원문은 기본적으로 마지막 한 줄의 생략 줄 수로 접는다. 소유자가 인용까지 요청하면 `--full`을 붙인다. 서명 구분자(`--`)와 영문·국문 면책문은 한 줄로 줄인다. 서명까지 가공 없는 원문이 필요하면 `--raw`로 wrapper가 공개한 본문 문자열을 그대로 받는다(청크 분할 없음).
+- **노출 범위는 기존 wrapper와 같다.** 공개·QA 표면에서는 기존처럼 `--masked`를 사용한다. 이 경우 `--raw`·`--full`도 마스킹을 풀지 않으며 기존 해시·바이트 수 JSON이 그대로 나온다. 본문 파일이 없으면 렌더에는 그 안내가 표시되고, 조회 실패는 기존 오류·종료코드를 유지한다.
+- `mail_wrapper.py get`의 JSON 계약은 그대로다. 사람이 읽을 본문에는 위 triage 명령을 쓰고, 기계가 소비하는 조회에는 기존 wrapper 명령을 유지한다. `get`은 읽기 전용으로 배포 사본의 변경 명령 가드 대상이 아니다.
+
 ## W4-2 triage 파이프라인 (`scripts/triage_cli.py`)
 
 두 개의 루프와 현재 정책의 승인 스레드에서 확정하는 소유자 지시 기반 회신·compose 초안 플로우로 운영된다.
@@ -116,7 +136,8 @@ Hermes cron(`mail-triage-watch`, no_agent)이 `watch`를 돌린다. 이 루프�
 - **항목 단위 fail-open (분류)**: 한 메일의 분류 LLM 호출이 실패(모델 timeout 또는 파싱 불가한 비-JSON 응답)해도 다이제스트 전체가 중단되지 않는다. 해당 항목은 보수적으로 `🔴 중요` + `⚠️ 분류 실패` 배지로 표면화되고(플래그는 모두 미부여 — 조작된 판정으로 캘린더 초안을 위임하지 않음), 나머지 메일은 정상 전달·기록된다. 요약 실패가 `(요약 실패)` fallback으로 항목을 유지하는 것과 동일한 취지이며, 요약도 분류와 같이 **1회 재시도**한 뒤에야 fallback으로 내려간다 — 재시도까지 실패한 건은 `llm-calls.jsonl`에 `purpose=digest_summary_failed` 한 줄로 예외 클래스와 레닥션·클립된 메시지, 불투명 uid만 남겨(제목·발신자·본문·주소 등 메일 내용은 절대 기록하지 않음) no-agent cron이 stderr를 버려도 원인을 추적할 수 있게 한다. 분류도 재시도 소진 시 `purpose=classify_failed`로 같은 방식으로 기록한다. (분류가 파싱은 되나 bool을 문자열로 준 경우 `"false"`가 참으로 새는 버그도 함께 차단 — `_json_bool` 엄격 파싱.)
 - **티어 불가 = fail closed (2026-09-04 공급자 이관)**: 모델 경로는 공유 Codex OAuth 클라이언트(`automation/codex_llm.py`, provider `openai-codex`) 하나뿐이다. 자격 증명 없음·쿼터·전송 실패는 `LlmUnavailableError`로 구분되며, **강등할 티어가 없으므로 강등하지 않는다** — 그 단계는 재시도하지 않고(사고 당시 재시도 폭주 방지) 틱 전체가 `DIGEST-FAIL stage=build retry_safe=false code=codex_unavailable` 마커 한 줄로 종료한다. DM도 저장도 하지 않으므로 메일은 다음 틱에 그대로 남고, 원인은 `llm-calls.jsonl`의 `purpose=classify_failed`(마스킹) 한 줄로 남는다. 개별 요청 실패(1회성 rc≠0·파싱 불가)는 기존 항목 단위 fail-open 그대로다. 2026-09-03 은퇴한 2차 티어로의 강등 폴백(`fallback_from` 표식과 `⚠️ 티어 사용 불가` 알림 줄)은 그 티어와 함께 제거되었다.
 - 민감 메일은 DM에는 전문이 포함되나, 로컬 DB에는 마스킹된 제목과 빈 요약만 저장된다(제약 7).
-- 일정 예약이 필요한 메일은 이 단계에서 캘린더 스킬로 초안 생성이 위임된다. **위임 실패는 원인별로 구분해 보고한다** — 카드의 `🗓️ 일정 초안` 노트가 `calendar-unavailable`(배포본 없음) · `calendar-refused`(rc=1 게이트 거부) · `calendar-unparsed`(rc=2 일정 문장 해석 불가) · `calendar-misconfigured`(rc=3 설정·피어 레지스트리 등) · `calendar-routing`(rc=4 단독 일정이 아님 — coordination/되묻기) · `calendar-ambiguous`(rc=5 되묻기) · `calendar-exec-failed`(rc=6) · `calendar-timeout` · `calendar-spawn-failed` · 계약 밖 종료코드는 `calendar-failed-rc<N>` 중 하나가 된다. 자식 CLI의 stderr는 카드가 아니라 운영 로그 한 줄(`CAL-FAIL uid=<마스킹> rc=… cause=… stderr=…`, 개행 제거·200자 클립)로만 나가고, 캘린더 CLI가 느리거나(timeout) 실행되지 않아도 그 항목만 잃고 다이제스트는 계속된다(항목 단위 fail-open).
+- 일정 예약이 필요한 메일은 이 단계에서 캘린더 스킬에 `--digest-day`를 전달해 초안 생성과 승인 카드 게시까지 위임된다. **위임 실패는 원인별로 구분해 보고한다** — 카드의 `🗓️ 일정 초안` 노트가 `calendar-unavailable`(배포본 없음) · `calendar-refused`(rc=1 게이트 거부) · `calendar-unparsed`(rc=2 일정 문장 해석 불가) · `calendar-misconfigured`(rc=3 설정·피어 레지스트리 등) · `calendar-routing`(rc=4 단독 일정이 아님 — coordination/되묻기) · `calendar-ambiguous`(rc=5 되묻기) · `calendar-exec-failed`(rc=6) · `calendar-timeout` · `calendar-spawn-failed` · 계약 밖 종료코드는 `calendar-failed-rc<N>` 중 하나가 된다. 자식 CLI의 stderr는 카드가 아니라 운영 로그 한 줄(`CAL-FAIL uid=<마스킹> rc=… cause=… stderr=…`, 개행 제거·200자 클립)로만 나가고, 캘린더 CLI가 느리거나(timeout) 실행되지 않아도 그 항목만 잃고 다이제스트는 계속된다(항목 단위 fail-open).
+- 다이제스트 게시일(KST)마다 승인 스레드 하나에 일정별 카드를 묶는다. 미결 중복·정정은 최신 카드로 교체하고 이미 결정한 일정은 다시 묻지 않는다. 게시 실패는 소유자 통지를 시도하고 다음 감시 틱에 재시도하며, 실행·취소 결과는 원래 카드 아래 답글로 남긴다.
 - **참조(CC) 수신 메일**: cha가 To가 아닌 Cc로만 수신한 메일은 회신 대상이 아니다
   (frontmatter `to:`/`cc:`를 `MAILON_ID`와 대조 — `scripts/triage_recipient.py`).
   파이프라인은 `reply_needed`를 자동 억제하고 flags에 `cc`를 표기하며

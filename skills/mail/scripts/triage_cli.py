@@ -366,9 +366,44 @@ def cmd_mode(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_get(args: argparse.Namespace) -> int:
+    """Read via the existing masking boundary; only project a disclosed body."""
+    import io
+    import json
+    from contextlib import redirect_stdout
+
+    import mail_body_view
+    import mail_wrapper
+
+    if args.masked or not args.body:
+        return mail_wrapper.cmd_get(args)
+    with io.StringIO() as buffer:
+        with redirect_stdout(buffer):
+            code = mail_wrapper.cmd_get(args)
+        output = buffer.getvalue()
+    if code:
+        sys.stdout.write(output)
+        return code
+    mail: mail_body_view.Mail = json.loads(output)["mail"]
+    if args.raw:
+        sys.stdout.write(mail.get("body") or "")
+    else:
+        print("\n\n".join(mail_body_view.render(mail, full=args.full)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mail-triage", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+
+    get = sub.add_parser("get", help="단건 읽기 — 본문은 Discord용 청크로 표시")
+    get.add_argument("uid")
+    get.add_argument("--body", action="store_true")
+    get.add_argument("--masked", action="store_true", help="기존 wrapper 마스킹 JSON 유지")
+    view = get.add_mutually_exclusive_group()
+    view.add_argument("--raw", action="store_true", help="공개된 본문을 가공 없이 출력")
+    view.add_argument("--full", action="store_true", help="원문 인용도 표시")
+    get.set_defaults(func=cmd_get)
 
     process = sub.add_parser(
         "process",
@@ -470,7 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # 읽기 전용 서브커맨드 — 낡은 사본이 읽어도 외부효과가 없다. 나머지는 관리자 배포본에서만 돈다.
-_READ_ONLY_COMMANDS = (cmd_mode, cmd_list_drafts, cmd_digest_items, cmd_evidence)
+_READ_ONLY_COMMANDS = (cmd_mode, cmd_list_drafts, cmd_digest_items, cmd_evidence, cmd_get)
 
 
 def main() -> int:

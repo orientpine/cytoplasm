@@ -1,13 +1,14 @@
-"""Hourly pointers for unanswered skill-deploy approvals in the existing watcher tick."""
+"""Hourly pointers for unanswered skill-deploy and release approvals in the existing watcher tick."""
 from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final, Protocol, TypeAlias
 
+from automation.approval_kpi.policy_table import POLICY_TABLE
 from automation.interop.approval_lease import (
     ApprovalLease,
     ReminderJournal,
@@ -122,6 +123,25 @@ def _request(
     )
 
 
+_REMINDED_KINDS: Final = frozenset({ApprovalKind.SKILL_DEPLOY, ApprovalKind.RELEASE})
+
+
+def _config_for(kind: ApprovalKind, config: ApprovalReminderConfig) -> ApprovalReminderConfig:
+    """Kind cadence from the policy table; UNKNOWN TTL keeps the skill-deploy interval."""
+    for entry in POLICY_TABLE:
+        if entry.kind != kind.value:
+            continue
+        if entry.ttl_seconds is None:
+            return config
+        interval = timedelta(seconds=entry.ttl_seconds)
+        return ApprovalReminderConfig(
+            enabled=config.enabled,
+            initial_delay=interval,
+            repeat_interval=interval,
+        )
+    return config
+
+
 def remind_unanswered(
     results: tuple[TickResult, ...],
     gate_dir: Path,
@@ -138,8 +158,12 @@ def remind_unanswered(
     """Send due pointers only for records this tick proved are still unanswered."""
     verdicts: list[ReminderVerdict] = []
     for result in results:
+        try:
+            kind = ApprovalKind(result.request.kind)
+        except ValueError:
+            continue
         if (
-            result.request.kind != ApprovalKind.SKILL_DEPLOY.value
+            kind not in _REMINDED_KINDS
             or result.outcome != "retain"
             or result.reason != "unanswered"
         ):
@@ -147,9 +171,9 @@ def remind_unanswered(
         try:
             request, record = _request(gate_dir, result)
             context = ReminderContext(
-                config=config,
+                config=_config_for(kind, config),
                 journal=ReminderJournal(gate_dir / "reminder-journal"),
-                request_type=ApprovalKind.SKILL_DEPLOY,
+                request_type=kind,
                 deliver=deliver,
                 clock=clock,
                 guild_id_for=guild_of,

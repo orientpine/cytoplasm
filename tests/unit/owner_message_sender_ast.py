@@ -2,6 +2,8 @@
 
 Finite assignments, destructuring, lambdas, literal/local getattr names, packs,
 containers, finite tuple/list loops (including enumerate/zip and dict views),
+finite constructions (iter/list/tuple/dict over a proven sequence) whose slots
+next/subscript/unpacking then select by value,
 comprehension and finite match captures, returned callbacks, lexical global/nonlocal declarations and known
 class receivers form a flow-insensitive union graph. Repository imports are wired
 by owner_message_sender_repository. Every possible sender counts; render, not
@@ -13,7 +15,9 @@ requests an explicit finite alias or a binding-model extension. Finite sequence,
 mapping, as/or and starred match captures resolve; class/unknown projections fail
 closed when their subject carries a sender. Opaque calls also fail closed.
 Unknown graph alternatives remain explicit, so one known literal/callee cannot
-certify a partially unresolved sender projection or callback dispatch.
+certify a partially unresolved sender projection or callback dispatch. One
+unprovable key (a float, a variable) leaves the whole construction unselectable:
+its payload stays visible and every subscript on it fails closed.
 
 ACKNOWLEDGED BLIND SPOTS: runtime-computed getattr names, eval/exec, descriptors
 and monkeypatching can introduce senders without a syntactic sender seed; these
@@ -33,7 +37,7 @@ from typing import TypeAlias
 
 from tests.unit.owner_message_sender_bindings import SENDER, UNKNOWN, Bindings, Key, parent, symbol
 from tests.unit.owner_message_sender_boundary import UnresolvedOwnerSender, audit_consumption
-from tests.unit.owner_message_sender_iteration import carries_iteration, iteration
+from tests.unit.owner_message_sender_iteration import carries_iteration, iteration, selection
 from tests.unit.owner_message_sender_patterns import bind_pattern
 
 _Function: TypeAlias = ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
@@ -183,7 +187,10 @@ def sender_calls(
         positional, keywords, finite = graph.arguments(scope, call)
         values = [*positional, *keywords.values(), *call.args, *(kw.value for kw in call.keywords)]
         carries_sender = any(graph.carries(scope, value) for value in values)
-        if carries_sender and iteration(graph, scope, call) is not None:
+        # A modelled construction or next() keeps the payload in the graph, so it
+        # is not an escape; the consumer of its slots is checked on its own terms.
+        if carries_sender and (iteration(graph, scope, call) is not None
+                               or selection(graph, scope, call) is not None):
             continue
         if carries_sender and (not finite or UNKNOWN in targets or not targets & (definitions.keys() | classes)):
             raise UnresolvedOwnerSender(

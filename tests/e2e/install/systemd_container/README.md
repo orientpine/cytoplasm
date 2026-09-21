@@ -27,6 +27,30 @@ python3 -m automation.install --config /root/node.toml --update-trust-key /root/
 않으므로 깨끗한 컨테이너에서는 `check hermes-gateway`의 외부 전제 실패로 멈춘다.
 설치기는 Hermes를 설치하지 않는다.
 
+## 비-root 운영자로 실행
+
+```bash
+tests/e2e/install/systemd_container/run.sh --operator ops2 --stub-hermes \
+  --evidence-dir /tmp/harness-nonroot-qa
+```
+
+`--operator NAME`의 기본값은 `root`이며, 생략하면 이전과 같은 실행이다.
+`root`가 아니면 컨테이너에 `useradd --create-home`으로 그 계정을 만들고
+**서비스 그룹(`autophagy`)에는 넣지 않은 채** 노드 설정의 `operator_account`로 쓴다.
+배포 체크아웃이 `ops:autophagy 2750`이라 그 계정은 체크아웃을 읽지 못하는데,
+이것이 v1.6.1을 그대로 통과한 결함(`ProvisionHealthcheckProbe`가 운영자를 root로 가정)이
+나타나는 **유일한 조건**이다 — docs/qa/INSTALL-TUI/12-probe-asset-nonroot-operator.txt.
+이름은 `useradd`·노드 설정·sudoers 자산에 리터럴로 들어가므로 POSIX 계정 이름
+(`^[a-z_][a-z0-9_-]{0,30}$`)만 받고, 아니면 docker를 건드리기 전에 rc=2로 거부한다.
+
+기본 명령일 때 `verify_mutations.py`가 컨테이너 안에서 사후 상태를 직접 읽는다.
+운영자가 root가 아니면 여기에 네 가지가 더 붙는다: 운영자가 서비스 그룹 밖이라는
+조건 자체, `/etc/sudoers.d/autophagy-orchestration`의 수혜자와 0440, 프로브 래퍼와
+`authorized_keys`의 소유·모드, 그리고 `inspect_probe`의 수렴 판정이다.
+프로브는 계획의 뒤쪽에 있으므로 **`--stub-hermes`와 함께 써야** 그 경계까지 간다.
+도달하지 못하면 `PROBE-UNREACHED`로 rc=125이다 — 조건을 만들어 놓고 증명하지 못한 실행을
+통과로 세지 않는다.
+
 ## Hermes 스텁으로 다음 경계 확인
 
 ```bash
@@ -61,7 +85,8 @@ tests/e2e/install/systemd_container/run.sh --stub-hermes --evidence-dir /tmp/har
 `install-transcript.txt`는 전체 stdout/stderr를 보존한다. 스텁 모드에서는 두 실행 사이에
 `===== HARNESS-PASS-2: Hermes 스텁 적용 후 재실행 =====` 구분자가 들어간다.
 `summary.txt`는 이미지 ID, 고정 HEAD, 명령, rc, 부팅 상태, 소요 시간,
-`stub_hermes=true|false`, 첫 실패, 실제 결과로 입증한 마지막 계획 항목을 기록한다.
+`stub_hermes=true|false`, `operator_account=<이름>`, 첫 실패,
+실제 결과로 입증한 마지막 계획 항목을 기록한다.
 스텁 모드의 `first_boundary`와 `highest_action_reached`는 **2차 실행만** 반영한다.
 미리 출력된 전체 계획의 마지막 항목을 실행 성공으로 세지 않는다.
 빌드·부팅·설정 메모·기본 명령의 변경 검증은 별도 파일에 남긴다.
@@ -70,7 +95,8 @@ tests/e2e/install/systemd_container/run.sh --stub-hermes --evidence-dir /tmp/har
 저장소는 시작 시 고정한 **커밋된 HEAD만** 복사한다. 로컬 편집, `.git`, `.omo`,
 `.venv`, `.env.secrets`는 복사하지 않으며 이미지 빌드 입력도 Dockerfile뿐이다.
 시험용 신뢰 개인키는 출력하거나 컨테이너에 복사하지 않고 공개키 복사 직후 삭제한다.
-호스트의 비밀 환경변수는 전달하지 않는다. 설정은 컨테이너 호스트명과 root 운영자를 쓴다.
+호스트의 비밀 환경변수는 전달하지 않는다. 설정은 컨테이너 호스트명과 `--operator`가
+정한 운영자(기본 root)를 쓴다.
 빈 `deploy_ssh_host`를 파서가 거부하면 컨테이너 호스트명으로 대체하고
 `config-notes.txt`에 기록한다. 설치기 코드는 변경하지 않는다.
 

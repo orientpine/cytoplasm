@@ -4,11 +4,14 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.error import HTTPError
+from urllib.request import Request
 from importlib import import_module
 import triage_confirm
 import triage_binding
 import triage_gate
+import mail_approval_attachment
 if TYPE_CHECKING:
+    from automation.entity_preflight.contracts import JsonValue
     from automation.interop.approval_lifecycle import ApprovalIntent, ApprovalRequest, PostedApproval, Probe
 
 def refuse_unpostable_content(content: str) -> None:
@@ -31,7 +34,7 @@ def refuse_unpostable_content(content: str) -> None:
 class MailApprovalGate:
     """``approval_lifecycle.ApprovalGate`` over the triage draft store + Discord REST."""
 
-    draft: dict
+    draft: dict[str, JsonValue]
     notice: str = ""
     content: str = ""
 
@@ -85,6 +88,12 @@ class MailApprovalGate:
             raise approval.lifecycle().ApprovalSurfaceError(str(error)) from error
         if not isinstance(message, dict):
             raise approval.lifecycle().ApprovalSurfaceError("승인 메시지 응답이 유효하지 않음")
+        record = self.draft
+        if record.get("message_id") != request.message_id:
+            record = next((item for _, item, key in approval._pending_drafts()
+                           if key == request.key and item.get("message_id") == request.message_id), record)
+        if not mail_approval_attachment.matches(record, message):
+            return ""
         return str(message.get("content", "")) or None
 
     def delete(self, request: ApprovalRequest) -> None:
@@ -116,7 +125,19 @@ class MailApprovalGate:
     def post(self, intent: ApprovalIntent) -> PostedApproval:
         approval = import_module("triage_approval")
         content = self.content or approval._approval_content(self.draft, self.notice)
-        message_id = triage_confirm.post_approval_request(content, intent.channel_id)
+        if self.draft.get("approval_format") == mail_approval_attachment.FORMAT:
+            request = mail_approval_attachment.upload_request(content, Request(
+                f"{triage_confirm.API}/channels/{intent.channel_id}/messages",
+                headers={"Authorization": f"Bot {triage_confirm.bot_token()}",
+                         "User-Agent": triage_confirm.USER_AGENT},
+            ), mail_approval_attachment.body_attachment(self.draft))
+            match triage_confirm._send(request):
+                case {"id": str(message_id)} if message_id:
+                    pass
+                case _:
+                    raise triage_gate.GateError("승인 첨부 게시 응답에 메시지 id 없음 — 거부", 3)
+        else:
+            message_id = triage_confirm.post_approval_request(content, intent.channel_id)
         for emoji in (triage_confirm.APPROVE_EMOJI, triage_confirm.CANCEL_EMOJI):
             try:
                 triage_confirm.add_reaction(message_id, emoji, intent.channel_id)
@@ -139,7 +160,34 @@ class MailApprovalGate:
         )
 
 
-def expire_retired_approval(draft: dict) -> bool:
+def prepare_request(draft: dict[str, JsonValue], notice: str) -> tuple[ApprovalIntent, MailApprovalGate]:
+    """Use attachment-v1 bytes with the new card layout only when inline is too long."""
+    approval = import_module("triage_approval")
+    cards = approval._repo_module("approval_card")
+    version = draft.get("render_version", "1" if draft.get("message_id") else None)
+    prepared = dict(draft)
+    try:
+        try:
+            card = cards.prepare(
+                lambda selected: approval._approval_content({**draft, "render_version": selected}, notice), version,
+            )
+        except triage_gate.GateError:
+            if version is not None:
+                raise
+            metadata = mail_approval_attachment.body_attachment(draft).metadata
+            prepared.update(approval_format=mail_approval_attachment.FORMAT, approval_attachment={
+                "filename": metadata["filename"], "size": metadata["size"], "sha256": metadata["sha256"],
+            })
+            card = cards.prepare(
+                lambda selected: approval._approval_content({**prepared, "render_version": selected}, notice),
+            )
+    except cards.CardRenderError as error:
+        raise triage_gate.GateError(str(error), 3) from error
+    prepared["render_version"] = card.render_version
+    return approval.confirm_intent(prepared), MailApprovalGate(prepared, notice, card.content)
+
+
+def expire_retired_approval(draft: dict[str, JsonValue]) -> bool:
     """Expire an undecided request whose persisted surface has been retired.
 
     The approval-key lease closes the reaction/delete/store race. An owner decision

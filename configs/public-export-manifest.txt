@@ -173,3 +173,6 @@ skills/proposal/engine/
 # promoted together with the engine when the owner publishes it.
 tests/unit/test_proposal_render.py
 tests/unit/test_proposal_engine_in_tree.py
+tests/unit/test_proposal_engine_corpus.py
+tests/unit/test_proposal_engine_schedule.py
+tests/unit/test_proposal_hwpx_layer.py

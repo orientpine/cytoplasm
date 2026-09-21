@@ -2,6 +2,7 @@
 
 One owner ✅ binds one version, HEAD and surface set; the nonce is outside the hash.
 Decision exits: 0 approved · 9 denied · 7 pending/unverifiable · 2 absent/other HEAD.
+Opt-in completion discovery: 3 verified bound candidate (not approval of the tip).
 """
 # 새 승인 기계장치는 하나도 만들지 않는다 — 스펙(`ReleaseSpec`)·게이트(`SkillApprovalGate`)·
 # lifecycle 호스트(`skill_gate_request`)를 그대로 재사용하고, 표면은 `ApprovalKind.RELEASE`
@@ -14,9 +15,8 @@ import argparse
 import json
 import secrets
 import sys
-from dataclasses import replace
 from pathlib import Path
-from typing import Final, assert_never
+from typing import Final
 
 from automation import (
     release_abandon,
@@ -29,32 +29,24 @@ from automation import (
 from automation.interop.approval_lifecycle import (
     ApprovalRecordsError,
     ApprovalSurfaceError,
-    Probe,
 )
 from automation.interop.approval_surface import ApprovalKind
-from automation.interop.discord_transport import DiscordTransport
-from automation.release_card import card_for_new_request
-from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_plan, spec_from_record
+from automation.release_card import preflight_new_request, spec_from_plan
+from automation.release_completion_target import (
+    DECISION_APPROVED as DECISION_APPROVED,
+    DECISION_UNAVAILABLE as DECISION_UNAVAILABLE,
+    DECISION_PENDING as DECISION_PENDING,
+    DECISION_DENIED as DECISION_DENIED,
+    decision_exit as decision_exit,
+    approval_decision,
+)
+from .release_request_gate import ReleaseRequestGate
+from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_record
 from automation.release_retire import notify_stale_approval
 from automation.skill_gate_approval import GateSurface, SkillApprovalGate
 
 #: release.sh 의 자동 복구가 읽는 유일한 기계 판독 줄 — 거절 메시지는 바뀌지 않는다.
 STALE_PENDING_PREFIX: Final = "RELEASE-REQUEST-STALE:"
-DECISION_APPROVED: Final = 0
-DECISION_UNAVAILABLE: Final = 2
-DECISION_PENDING: Final = 7
-DECISION_DENIED: Final = 9
-
-
-def decision_exit(probe: Probe) -> int:
-    """⛔ wins; everything that is not a definite owner answer stays pending."""
-    if probe is Probe.APPROVED:
-        return DECISION_APPROVED
-    if probe is Probe.CANCELLED:
-        return DECISION_DENIED
-    return DECISION_PENDING
-
-
 def _bindings() -> skill_gate_surface.SupplyChainSurface:
     return skill_gate_surface.surface_for(
         ApprovalKind.RELEASE, skill_gate._identity()  # noqa: SLF001 - the gate owns this
@@ -132,33 +124,6 @@ def _stale_pending_line() -> str | None:
     )
 
 
-def detail_transport(channel_id: str) -> DiscordTransport:
-    """변경 상세를 보내는 유일한 이음매 — 자격증명은 게이트가 읽는 그 토큰 하나다."""
-    return DiscordTransport(
-        token=skill_gate._token(),  # noqa: SLF001 - the gate owns the credential
-        channel_id=channel_id,
-    )
-
-
-def _deliver_details(
-    gate: SkillApprovalGate, spec: ReleaseSpec, record: dict[str, str]
-) -> dict[str, str]:
-    """카드 뒤에 변경 상세를 올리고 그 id 를 레코드에 남긴다 — 승인 바인딩 밖의 감사 흔적."""
-    delivery = release_notes.post_details(
-        detail_transport(gate.channel_id()).send, spec.detail_messages()
-    )
-    if delivery.failure:
-        print(delivery.failure, file=sys.stderr)
-    updated = {
-        **record,
-        "detail_message_ids": json.dumps(delivery.message_ids, separators=(",", ":")),
-    }
-    path = gate.path()
-    _ = path.write_text(spec.serialize(updated), encoding="utf-8")
-    path.chmod(0o600)
-    return updated
-
-
 def _emit_request(requested: skill_gate_request.Requested) -> int:
     """The legacy stdout/exit contract byte-for-byte, plus ONE stale hint on stderr."""
     exit_code = skill_gate_request.emit(requested, json_output=True)
@@ -180,87 +145,28 @@ def cmd_request(args: argparse.Namespace) -> int:
     reused = skill_gate_request.reuse(_gate(spec))
     if reused is not None:
         return _emit_request(reused)
-    # 재사용할 것이 없을 때에만 렌더한다. 최종 카드와 그 예산을 첫 효과(게시·레코드·저널)
-    # 앞에서 확정하므로, 한도를 넘긴 요청은 고아 카드도 반쯤 만들어진 레코드도 남기지 않는다.
-    card, refusal = card_for_new_request(spec)
-    if card is None:
+    # 재사용할 것이 없을 때에만 판본과 최악 링크 길이 예산을 확정한다. 실제 상세 좌표를
+    # 얻은 최종 본문은 저널 뒤 release 전용 post 경계가 고정하되 같은 예산을 넘을 수 없다.
+    candidate, refusal = preflight_new_request(spec)
+    if candidate is None:
         refused = skill_gate_request.Requested(None, skill_gate_request.LIFECYCLE_REFUSAL_EXIT, refusal)
         return _emit_request(refused)
-    gate = _gate(card)
+    gate = ReleaseRequestGate(
+        _gate(candidate),
+        skill_gate._api,  # noqa: SLF001 - release uses the gate's existing API seam
+    )
     print(skill_gate_surface.where_to_look(ApprovalKind.RELEASE), file=sys.stderr)
     requested = skill_gate_request.post_request(gate, fresh=False)
-    if requested.posted and requested.record is not None:
-        requested = replace(requested, record=_deliver_details(gate, card, requested.record))
     return _emit_request(requested)
 
 
 def cmd_abandon(args: argparse.Namespace) -> int:
     """Delegate audited abandonment through the existing remote producer surface."""
-    # 로직은 한 줄도 복제하지 않는다 — `automation.release_abandon` 의 3필드 일치·fsync 감사·
-    # 바이트 그대로의 archive 에 argv 로 위임한다. 워크스테이션에는 게이트 상태가 없으므로,
-    # 이 서브커맨드가 없으면 자동 복구는 노드 셸을 열어야만 가능하다.
-    return release_abandon.main([
-        "--version", str(args.version), "--head", str(args.head),
-        "--message-id", str(args.message_id), "--reason", str(args.reason),
-    ])
+    return release_abandon.command(args)
 
 
 def cmd_decision(args: argparse.Namespace) -> int:
-    try:
-        decoded = json.loads(_record_path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        print("RELEASE-DECISION: no live release request", file=sys.stderr)
-        return DECISION_UNAVAILABLE
-    except (OSError, json.JSONDecodeError):
-        print("RELEASE-DECISION: release request record is unreadable", file=sys.stderr)
-        return DECISION_UNAVAILABLE
-    if not isinstance(decoded, dict):
-        return DECISION_UNAVAILABLE
-    record = {str(name): str(value) for name, value in decoded.items()}
-    expected_head = str(getattr(args, "head", "") or "")
-    tagged_head = str(getattr(args, "tagged", "") or "")
-    mismatched = bool(expected_head and record.get("head_sha", "") != expected_head)
-    if mismatched and tagged_head and record.get("head_sha", "") == tagged_head:
-        # 이 요청은 낡은 것이 아니라 **이미 실행된 릴리스**다 — 소유자 ✅ 를 받아 서명
-        # 태그까지 잘렸고, 남은 일은 다음 release.sh 의 감사 회수뿐이다. 팁이 그 뒤로
-        # 전진했다는 이유만으로 "자동 완결할 수 없습니다" 를 보내면 거짓말이 된다
-        # (2026-09-10 실측: v1.6.7 의 적용 완료 통지와 ⛔ 가 나란히 도착했다).
-        #
-        # 인가 의미는 한 뼘도 넓히지 않는다 — rc 는 그대로 UNAVAILABLE 이라 옛 ✅ 로 새
-        # 팁을 자르는 문은 잠긴 채다. Discord 도 다시 조회하지 않는다: 프로브 결과가
-        # 무엇이든 답이 같으므로 조회는 예산만 쓴다.
-        print(
-            f"RELEASE-DECISION: executed release {tagged_head[:12]} awaiting retirement",
-            file=sys.stderr,
-        )
-        return DECISION_UNAVAILABLE
-    if mismatched and not getattr(args, "notify_stale", False):
-        print("RELEASE-DECISION: live request is bound to a different HEAD", file=sys.stderr)
-        return DECISION_UNAVAILABLE
-    try:
-        gate = _gate(spec_from_record(record))
-        outstanding = gate.outstanding("release")
-        if not outstanding:
-            return DECISION_UNAVAILABLE
-        probe = gate.probe(outstanding[0])
-    except (ReleaseSpecError, ApprovalRecordsError, ApprovalSurfaceError, OSError) as error:
-        print(f"RELEASE-DECISION: unverifiable ({type(error).__name__})", file=sys.stderr)
-        return DECISION_UNAVAILABLE if mismatched else DECISION_PENDING
-    if mismatched:
-        print("RELEASE-DECISION: live request is bound to a different HEAD", file=sys.stderr)
-        match probe:
-            case Probe.APPROVED:
-                notify_stale_approval(record, expected_head)
-            case (
-                Probe.BOUND_PENDING | Probe.CANCELLED | Probe.MISSING
-                | Probe.BINDING_MISMATCH | Probe.UNVERIFIABLE
-            ):
-                return DECISION_UNAVAILABLE
-            case unreachable:
-                assert_never(unreachable)
-        return DECISION_UNAVAILABLE
-    print(f"RELEASE-DECISION: {probe.name.lower()} version={record['version']}", file=sys.stderr)
-    return decision_exit(probe)
+    return approval_decision(args, _gate, notify_stale_approval)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -293,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     decision = commands.add_parser("decision", help="소유자 결정 조회(0/9/7/2)")
     decision.add_argument("--head", default="")
     decision.add_argument("--notify-stale", action="store_true")
+    decision.add_argument("--completion-candidate", action="store_true",
+                          help="다른 HEAD 의 승인 후보만 출력(rc 3); 조상 판정은 워크스테이션이 수행")
     decision.add_argument(
         "--tagged",
         default="",

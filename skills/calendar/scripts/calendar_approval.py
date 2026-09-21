@@ -190,6 +190,7 @@ class CalendarApprovalGate:
         if self.draft is None:
             raise lifecycle().ApprovalSurfaceError("calendar approval payload unavailable")
         try:
+            calendar_binding.validate_post_binding(self._binding_for(intent))
             channel_id, message_id = calendar_confirm.post_confirmation_message(
                 self.draft, intent.channel_id
             )

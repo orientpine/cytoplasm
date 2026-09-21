@@ -46,12 +46,19 @@ class RepairDiscordError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class RepairDiscordApi:
-    """Use the ops-scoped bot credential against one validated approval binding."""
+    """Keep readers unbound until a stored request supplies a validated destination."""
 
     token: str
-    binding: ApprovalBinding
+    _binding: ApprovalBinding | None
     directory: ChannelDirectory
     owner_id: str
+
+    @property
+    def binding(self) -> ApprovalBinding:
+        """Unbound bootstraps cannot read or write an arbitrary approval surface."""
+        if self._binding is None:
+            raise RepairDiscordError("repair transport requires a stored approval binding")
+        return self._binding
 
     def post_approval(self, content: str) -> str:
         """Post one sanitized repair request and return its immutable message identifier."""
@@ -178,6 +185,8 @@ class RepairDiscordSetup:
     ) -> RepairDiscordApi:
         try:
             directory = directory_for_ops(self.token, self.owner_id)
+            if ticket_id is None:
+                return RepairDiscordApi(self.token, None, directory, self.owner_id)
             binding = new_binding(directory, self.owner_id, ticket_id, outstanding)
         except ApprovalSurfaceError as error:
             raise RepairDiscordError("repair approval surface cannot be resolved") from error

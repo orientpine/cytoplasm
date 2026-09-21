@@ -10,7 +10,7 @@ from automation.release_notes import (
     render_detail_messages,
 )
 from automation.release_plan import ReleasePlan
-from automation.release_spec import MESSAGE_LIMIT
+from automation.release_spec_message import MESSAGE_LIMIT
 
 _HEAD = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 #: 렌더러가 절대 만들어서는 안 되는 문자열 — 원문 항목이 사라졌다는 신호다.

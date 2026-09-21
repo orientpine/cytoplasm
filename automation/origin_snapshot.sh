@@ -95,8 +95,19 @@ origin_snapshot_run() ( # <mirror_checkout> <expected_sha> <command...>
     if (( rc == 0 )); then
       local remote_sha
       remote_sha="$(git -C "$mirror" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' 2>/dev/null)"
-      if [[ "$remote_sha" != "$expected_sha" ]]; then
-        origin_snapshot_log "SNAPSHOT-BLOCK: remote main moved (want $expected_sha, got ${remote_sha:-<none>})"
+      # The pin is "exactly this published commit", NOT "the current tip". Until
+      # 2026-09-18 this demanded remote_sha == expected_sha, which re-coupled release
+      # convergence to origin/main HEAD after update_trust had already stopped doing
+      # so (2026-09-09): the caller pins the SIGNED TAG's commit, so the moment one PR
+      # landed after the tag the node answered SNAPSHOT-BLOCK forever (v1.9.0 실측 —
+      # 승인·서명까지 끝난 릴리스가 문서 PR 세 건 뒤에서 영영 설치되지 않았다). Ancestry keeps
+      # the safety the equality bought — a commit that is not on main (a signed tag on
+      # a side branch, a dangling object) is still refused — without freezing merges.
+      if [[ -z "$remote_sha" ]]; then
+        origin_snapshot_log "SNAPSHOT-BLOCK: origin/main is unresolved after fetch"
+        rc=3
+      elif ! git -C "$mirror" merge-base --is-ancestor "$expected_sha" "$remote_sha" 2>/dev/null; then
+        origin_snapshot_log "SNAPSHOT-BLOCK: expected sha is not on origin/main (want $expected_sha, main at $remote_sha)"
         rc=3
       fi
     fi

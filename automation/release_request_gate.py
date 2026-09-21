@@ -1,0 +1,202 @@
+"""Release-only posting transaction: details first, linked card second."""
+from __future__ import annotations
+
+import sys
+from dataclasses import replace
+from pathlib import Path
+from typing import Final, final
+
+from automation.interop.approval_lifecycle import (
+    ApprovalIntent,
+    ApprovalSurfaceError,
+    PostedApproval,
+)
+from automation.interop.approval_directory import DiscordApi
+from automation.interop.approval_types import ApprovalRequest, Probe
+from automation.interop.owner_message import LinkStatus, discord_link
+from automation.release_card import CARD_REFUSED_PREFIX, finalize_card
+from automation.release_spec import ReleaseSpec
+from automation.skill_gate_approval import GateSurface, SkillApprovalGate
+from automation.skill_gate_surface import JsonValue
+
+_WIRE_ERRORS: Final = (OSError, ValueError, KeyError, TypeError)
+_POST_ERRORS: Final = (*_WIRE_ERRORS, ApprovalSurfaceError)
+
+
+def _snowflake(value: JsonValue) -> str | None:
+    return (
+        value
+        if isinstance(value, str)
+        and value.isascii()
+        and value.isdecimal()
+        and bool(value.strip("0"))
+        and not value.startswith("0")
+        and len(value) <= 20
+        else None
+    )
+
+
+@final
+class ReleaseRequestGate:
+    """Mutable transaction state so commit records the exact linked card that was posted."""
+
+    def __init__(self, gate: SkillApprovalGate, api: DiscordApi) -> None:
+        self._gate = gate
+        self._api = api
+
+    @property
+    def surface(self) -> GateSurface:
+        return self._gate.surface
+
+    @property
+    def spec(self) -> ReleaseSpec:
+        current = self._gate.spec
+        if not isinstance(current, ReleaseSpec):
+            raise ApprovalSurfaceError("release request gate requires a release spec")
+        return current
+
+    def channel_id(self) -> str:
+        return self._gate.channel_id()
+
+    def stored(self) -> dict[str, str] | None:
+        return self._gate.stored()
+
+    def outstanding(self, key: str) -> tuple[ApprovalRequest, ...]:
+        return self._gate.outstanding(key)
+
+    def probe(self, request: ApprovalRequest) -> Probe:
+        return self._gate.probe(request)
+
+    def delete(self, request: ApprovalRequest) -> None:
+        self._gate.delete(request)
+
+    def drop(self, request: ApprovalRequest) -> None:
+        self._gate.drop(request)
+
+    def path(self) -> Path:
+        return self._gate.path()
+
+    def new_record(self, posted: PostedApproval) -> dict[str, str]:
+        return self._gate.new_record(posted)
+
+    def post(self, intent: ApprovalIntent) -> PostedApproval:
+        messages = self.spec.detail_messages()
+        detail_ids = self._post_details(intent.channel_id, messages)
+        guild_id = self._guild_id(intent.channel_id)
+        linked = replace(
+            self.spec,
+            posted_text="",
+            detail_message_ids=detail_ids,
+            detail_channel_id=intent.channel_id,
+            detail_guild_id=guild_id,
+        )
+        card, refusal = finalize_card(linked)
+        if card is None:
+            self._delete_details(intent.channel_id, detail_ids)
+            raise ApprovalSurfaceError(refusal.removeprefix(f"{CARD_REFUSED_PREFIX} "))
+        self._gate = replace(self._gate, spec=card)
+        payload: dict[str, JsonValue] = {"content": card.render()}
+        if detail_ids:
+            payload["message_reference"] = {
+                "message_id": detail_ids[0],
+                "fail_if_not_exists": True,
+            }
+            payload["allowed_mentions"] = {"parse": [], "replied_user": False}
+        try:
+            raw = self._api("POST", f"/channels/{intent.channel_id}/messages", payload)
+            card_id = _snowflake(raw.get("id")) if isinstance(raw, dict) else None
+            if card_id is None:
+                raise ApprovalSurfaceError("approval post response carries no message id")
+        except _POST_ERRORS as error:
+            self._delete_details(intent.channel_id, detail_ids)
+            raise ApprovalSurfaceError(type(error).__name__) from error
+        if self.spec.render_version >= 6:
+            self._backlink_details(
+                intent.channel_id, guild_id, card_id, messages, detail_ids
+            )
+        return PostedApproval(card_id, intent.channel_id)
+
+    def commit(
+        self, intent: ApprovalIntent, posted: PostedApproval, created_at: str
+    ) -> None:
+        self._gate.commit(intent, posted, created_at)
+
+    def _post_details(
+        self, channel_id: str, messages: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        posted: list[str] = []
+        for message in messages:
+            try:
+                raw = self._api(
+                    "POST", f"/channels/{channel_id}/messages", {"content": message}
+                )
+                raw_id = raw.get("id") if isinstance(raw, dict) else None
+                message_id = _snowflake(raw_id)
+                if message_id is None:
+                    if isinstance(raw_id, str) and raw_id:
+                        posted.append(raw_id)
+                    raise ApprovalSurfaceError("detail post response carries no message id")
+                posted.append(message_id)
+            except _POST_ERRORS as error:
+                self._delete_details(channel_id, tuple(posted))
+                print(
+                    (
+                        f"RELEASE-DETAIL-POST-FAIL {type(error).__name__}"
+                        f" posted={len(posted)}/{len(messages)}"
+                    ),
+                    file=sys.stderr,
+                )
+                raise ApprovalSurfaceError(type(error).__name__) from error
+        return tuple(posted)
+
+    def _guild_id(self, channel_id: str) -> str:
+        try:
+            raw = self._api("GET", f"/channels/{channel_id}")
+        except _WIRE_ERRORS:
+            return ""
+        guild_id = _snowflake(raw.get("guild_id")) if isinstance(raw, dict) else None
+        return guild_id or ""
+
+    def _delete_details(self, channel_id: str, message_ids: tuple[str, ...]) -> None:
+        for message_id in message_ids:
+            try:
+                _ = self._api(
+                    "DELETE", f"/channels/{channel_id}/messages/{message_id}"
+                )
+            except _WIRE_ERRORS as error:
+                print(
+                    f"RELEASE-DETAIL-CLEANUP-FAIL {type(error).__name__}",
+                    file=sys.stderr,
+                )
+
+    def _backlink_details(
+        self,
+        channel_id: str,
+        guild_id: str,
+        card_id: str,
+        messages: tuple[str, ...],
+        message_ids: tuple[str, ...],
+    ) -> None:
+        link = discord_link(
+            space="guild" if guild_id else "unknown",
+            guild_id=guild_id or None,
+            channel_id=channel_id,
+            message_id=card_id,
+        )
+        reference = (
+            link.url
+            if link.status is LinkStatus.AVAILABLE and link.url is not None
+            else f"검색: 승인 카드 / {self.spec.version} {self.spec.head_sha[:12]}"
+        )
+        for message, message_id in zip(messages, message_ids, strict=True):
+            try:
+                _ = self._api(
+                    "PATCH",
+                    f"/channels/{channel_id}/messages/{message_id}",
+                    {"content": f"{message}\n-# 승인 카드 → {reference}"},
+                )
+            except _WIRE_ERRORS as error:
+                print(
+                    f"RELEASE-DETAIL-BACKLINK-FAIL {type(error).__name__}",
+                    file=sys.stderr,
+                )

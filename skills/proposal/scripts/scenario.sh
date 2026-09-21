@@ -79,12 +79,12 @@ version_dir="$PROPOSAL_ROOT/demo/versions/$version"
 "${cli[@]}" draft --slug demo --section approach \
   --text "검증된 근거 20건을 바탕으로 단계별 실증을 수행한다. 이를 통해 목표 성능을 확보한다." >/dev/null
 (
-  cd "$skill_pkg_root/.."
+  cd "$skill_pkg_root"
   python3 - "$version_dir" <<'PY'
 import sys
 from pathlib import Path
 
-from skills.proposal.engine.contracts import (
+from proposal.engine.contracts import (
     Claim,
     KPI,
     PlanSpec,
@@ -93,13 +93,14 @@ from skills.proposal.engine.contracts import (
     TraceabilityMatrix,
     WorkPackage,
 )
-from skills.proposal.engine.converter.ingest import ingest_dir
-from skills.proposal.engine.converter.materialize import materialize
-from skills.proposal.engine.converter.normalize import normalize
-from skills.proposal.engine.converter.pms import ProposalMaterialStore
-from skills.proposal.engine.pipeline.draft_bundle import save_draft_file, save_planspec
-from skills.proposal.engine.pipeline.orchestrator import _save_pms_snapshot
-from skills.proposal.scripts.proposal_excavator_e2e import augment
+from proposal.engine.converter.ingest import ingest_dir
+from proposal.engine.converter.materialize import materialize
+from proposal.engine.converter.normalize import normalize
+from proposal.engine.converter.pms import ProposalMaterialStore
+from proposal.engine.pipeline.draft_bundle import save_draft_file, save_planspec
+from proposal.engine.pipeline.orchestrator import _save_pms_snapshot
+from proposal.scripts.proposal_excavator_e2e import augment
+from proposal.scripts.proposal_ir import PROFILES
 
 version_dir = Path(sys.argv[1])
 out = version_dir / "out"
@@ -113,7 +114,10 @@ planspec = PlanSpec(
     keywords=["실증"],
     kpis=[KPI("TRL 진전", "단계", "3", "6", 100, "반복 시험", "실증 환경", "공개 근거")],
     work_packages=[WorkPackage("WP1", "단계별 실증", "scenario", 12, ["실증 결과"])],
-    page_budget={"0": 1350, "1": 6000, "2": 2800, "3": 9000, "4": 2800},
+    page_budget={
+        str(section.section_id): section.prose_char_budget
+        for section in PROFILES["30-page"].sections
+    },
     traceability=TraceabilityMatrix(
         links=[TraceLink("methodology", [unit.unit_id for unit in units])]
     ),

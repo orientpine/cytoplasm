@@ -50,6 +50,22 @@ _V3 = (
     "인계: 소유자: 위 위치 · 반응 ✅ 승인 또는 ⛔ 취소; 다음: 승인된 패치만 반영",
     "되돌리기: 해당 없음; 취소 시: 패치 미반영, 티켓 재개",
 )
+_V4 = (
+    "**🔔 수리 승인**",
+    "> 수리 요청: {ticket}",
+    "> 변경 파일: {count}개, +{added}/-{removed}",
+    "{files}",
+    "> 승인 식별값: {hash}",
+    "> 패치 식별값: {patch}",
+    "> 요청 식별값: {nonce}",
+    "> 샌드박스: PASS",
+    "> 패치 본문 비노출: `{path}`",
+    "",
+    "**결정:** 이 메시지에 ✅ 승인 또는 ⛔ 취소 · 만료 {expiry}",
+    "취소 시: 패치 미반영, 티켓 재개",
+    "다음: 승인된 패치만 반영",
+    "-# 참조: `{reference}`",
+)
 
 
 def approval_content_matches(pending: StoredApprovalView, content: str) -> bool:
@@ -62,11 +78,13 @@ def approval_content_matches(pending: StoredApprovalView, content: str) -> bool:
         })
     if pending.content_binding_version != 2 or len(content) > 1900:
         return False
+    if pending.render_version not in (None, 2, 3, 4):
+        return False
     envelope = pending.render_version == 3
     changes = pending.changes
     if not changes or not pending.patch_sha256 or not pending.patch_source_path:
         return False
-    files = _files(changes, envelope)
+    files = _files(changes, envelope, readable=pending.render_version == 4)
     if files is None:
         return False
     expected = {
@@ -78,6 +96,14 @@ def approval_content_matches(pending: StoredApprovalView, content: str) -> bool:
     }
     if envelope:
         expected["expiry"] = (pending.created_at.astimezone(UTC) + timedelta(hours=24)).isoformat()
+    if pending.render_version == 4:
+        if pending.content_sha256 is None:
+            return False
+        expected = {key: " ".join(value.split()) for key, value in expected.items()}
+        expected["files"] = files
+        expected["expiry"] = (pending.created_at.astimezone(UTC) + timedelta(hours=24)).strftime("%Y-%m-%d %H:%M (+00:00)")
+        expected["reference"] = _field(pending.ticket_id)[:8]
+        return _bound_match(_V4, content, expected)
     return _bound_match(_V3 if envelope else _V2, content, expected, envelope)
 
 
@@ -102,7 +128,7 @@ def _field(value: str) -> str:
     return _shorten(redact(value), 96)
 
 
-def _files(changes: tuple[PatchFileDelta, ...], envelope: bool) -> str | None:
+def _files(changes: tuple[PatchFileDelta, ...], envelope: bool, *, readable: bool = False) -> str | None:
     lines: list[str] = []
     for change in changes[:10]:
         old, new = change.old_path, change.new_path
@@ -123,7 +149,9 @@ def _files(changes: tuple[PatchFileDelta, ...], envelope: bool) -> str | None:
     omitted = len(changes) - 10
     if omitted > 0:
         lines.append(
-            f"외 {omitted}개 생략 (합계·해시는 전체)" if envelope else
+            f"외 {omitted}개 생략 (합계·해시는 전체)" if envelope or readable else
             f"  … 외 {omitted}개 파일 생략 (합계와 action_hash는 전체를 포함)"
         )
+    if readable:
+        return "\n".join("> " + " ".join(line.split()) for line in lines)
     return ("; " if envelope else "\n").join(lines)

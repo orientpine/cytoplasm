@@ -152,12 +152,16 @@ class RepairApprovalPayload:
         """외부 효과 전에 판본·시각·본문을 한 번 동결해 post/commit이 공유한다."""
         draft = self.draft(intent)
         if draft.content_binding_version is not None:
-            draft = replace(draft, render_version=3)
+            draft = replace(draft, render_version=4)
             try:
                 content = approval_request_content(draft)
             except ApprovalRenderError:
-                draft = replace(draft, render_version=2)
-                content = approval_request_content(draft)
+                draft = replace(draft, render_version=3)
+                try:
+                    content = approval_request_content(draft)
+                except ApprovalRenderError:
+                    draft = replace(draft, render_version=2)
+                    content = approval_request_content(draft)
         else:
             content = approval_request_content(draft)
         return replace(draft, content_sha256=hash_parts(content)), content

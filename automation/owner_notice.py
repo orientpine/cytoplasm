@@ -19,14 +19,20 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
+from urllib.request import Request, urlopen
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from automation.interop.owner_message import OwnerMessage
 
 ACCEPTS_OWNER_MESSAGE: Final = True
+_DISCORD_API: Final = "https://discord.com/api/v10"
+_USER_AGENT: Final = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
 
 
 def owner_notice_channel(home: Path | None = None) -> str:
@@ -96,14 +102,74 @@ def send_notice(token: str, channel_id: str, body: str) -> None:
     _ = DiscordTransport(token=token, channel_id=channel_id).send(body)
 
 
+def _multipart(body: str, files: Sequence[Path]) -> tuple[str, bytes]:
+    """Discord 첨부 한 벌의 multipart 본문 — 순수 인코딩, 네트워크 없음."""
+    boundary = f"----owner-notice{secrets.token_hex(12)}"
+    payload = json.dumps(
+        {"content": body,
+         "attachments": [{"id": index, "filename": file.name} for index, file in enumerate(files)]},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    parts = [
+        f'--{boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\n'
+        "Content-Type: application/json\r\n\r\n".encode("utf-8"),
+        payload,
+    ]
+    for index, file in enumerate(files):
+        parts.append(
+            f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="files[{index}]"; '
+            f'filename="{file.name}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n".encode("utf-8"),
+        )
+        parts.append(file.read_bytes())
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return boundary, b"".join(parts)
+
+
+def _post_multipart(token: str, channel_id: str, body: str, files: Sequence[Path]) -> None:
+    boundary, data = _multipart(body, files)
+    request = Request(
+        f"{_DISCORD_API}/channels/{channel_id}/messages",
+        data=data,
+        headers={
+            "Authorization": f"Bot {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": _USER_AGENT,
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=120) as response:  # noqa: S310
+        _ = response.read()
+
+
+def send_notice_files(token: str, channel_id: str, body: str, files: Sequence[Path]) -> None:
+    """첨부가 붙는 통지 — 첫 청크가 파일을 태우고 남은 본문은 공용 전송이 잇는다.
+
+    `DiscordTransport` 는 JSON 본문만 보낸다. 두 번째 전송 계층을 만들지 않기 위해
+    multipart 인코딩만 파사드 안에 두고, 청크 경계는 공용 `chunk_message` 를 그대로 쓴다.
+    FOLLOW_UP: mail 장기 승인 레인이 `discord_transport` 를 확장하면 이 인코딩을 그리로 합친다.
+    """
+    from automation.interop.chunker import chunk_message
+
+    head = chunk_message(body)[0]
+    _post_multipart(token, channel_id, head, files)
+    rest = body[len(head):]
+    if rest:
+        send_notice(token, channel_id, rest)
+
+
 def notify_owner(
     content: str | None = None, *, notice: str | None = None, message: OwnerMessage | None = None,
+    attachments: Sequence[Path] = (),
 ) -> bool:
     """Deliver one notice. False means "not delivered" — never an exception.
 
     `message` 가 있으면 가드 안에서 렌더하고, 없으면 본문을 그대로 보낸다.
     `notice=`는 기존 본문 별칭이다. 본문 누락·서로 다른 두 본문은 False로 거부한다.
     정기 통지 목적지는 참조 스레드 밖이므로 봉투의 원본 링크를 숨기지 않는다.
+    `attachments=` 는 구매 검토처럼 초안 파일을 함께 올리는 통지용이다. 목적지 규칙·최선노력·
+    실패 마커는 첨부가 있든 없든 같다 — 첨부 때문에 발신자가 자기 전송을 갖게 두면 목적지
+    규칙이 두 벌이 되고, 드리프트하는 쪽은 언제나 둘째 사본이다(ON-2/ON-3).
     RETAINED: content: str은 budget_confirm.dm_owner의 렌더 완료 본문·기존 폴백을 받는다.
     전체 계약의 영구 예외는 calendar_confirm.send_owner_dm, approval_reminder._PointerSender,
     카드 없는 obsidian_write.gate_binding 위임도 포함한다. meeting 게이트웨이의 별도 문자열
@@ -135,7 +201,10 @@ def notify_owner(
             from automation.interop.owner_message import Ref, render
 
             body = render(message, destination=Ref(scope="channel", space="unknown", channel_id=channel_id))
-        send_notice(token, channel_id, body)
+        if attachments:
+            send_notice_files(token, channel_id, body, attachments)
+        else:
+            send_notice(token, channel_id, body)
     except Exception as error:  # noqa: BLE001 - see docstring: escaping would stop prod
         print(f"[owner-notice] NOTIFY-FAILED: {type(error).__name__}", file=sys.stderr)
         return False

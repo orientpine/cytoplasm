@@ -16,7 +16,6 @@ from __future__ import annotations
 import builtins
 import importlib
 import json
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -261,16 +260,16 @@ def test_audit_import_failure_preserves_delivery_and_markers(
     "skills.doctype.scripts.doctype_review", "skills.proposal.scripts.proposal_dm",
 ])
 def test_review_import_failure_still_sends(
-    module_name: str, error: type[Exception],
+    module_name: str, error: type[Exception], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = importlib.import_module(module_name)
     send = cast(Callable[[str, str, Path], None], module.send_review)
     body = "  body\t\n"
-    with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as transport:
+    monkeypatch.setenv("OWNER_NOTICE_CHANNEL_ID", "111")
+    with patch.object(owner_notice, "send_notice") as transport:
         with patch("builtins.__import__", _reject_optional_import(error)):
             send("fixture", body, Path("fixture.md"))
-    transport.assert_called_once()
-    assert transport.call_args.args[0][-1] == body
+    transport.assert_called_once_with("unit-test-token", "111", body)
 
 
 @pytest.mark.parametrize("error", [ImportError, RuntimeError])

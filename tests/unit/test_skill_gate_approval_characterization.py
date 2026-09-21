@@ -72,10 +72,13 @@ _BINDING_FIELDS = {
 
 
 def _install_api_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
-    """Seam used by the existing gate tests: patch GATE_DIR + bindings + ``_api``."""
+    """Trace message operations; reaction behavior has its own lifecycle tests."""
     calls: list[tuple[str, str]] = []
 
     def discord_api(method: str, path: str, _payload: dict[str, str] | None = None) -> dict[str, str]:
+        if method == "PUT":
+            assert path.endswith("/@me") and _payload is None
+            return {}
         calls.append((method, path))
         return {"id": f"message-{len(calls)}"}
 
@@ -130,7 +133,7 @@ def test_cmd_request_when_first_call_then_pending_record_field_set_is_exact(
         "kind": "skill-deploy",
         "policy_version": str(POLICY_VERSION),
         "surface": "skill-approvals",
-        "render_version": "2",
+        "render_version": "3",
         "content_sha256": state["content_sha256"],
     })
     assert calls == [("POST", f"/channels/{_CHANNEL_ID}/messages")]

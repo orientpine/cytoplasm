@@ -1,4 +1,4 @@
-"""Pure stdlib contract; no I/O/network/clock. Contract 1 / owner-ko-v1 is append-only.
+"""Pure stdlib contract; no I/O/network/clock. Contract 1 / render versions are append-only.
 Public: Ref, Action, Approval, Result, Periodic, OwnerMessage, render, discord_link,
 LinkStatus, LinkResult, OwnerMessageError, Space. Private text: owner_message_text.
 Malformed fields/unsupported versions raise OwnerMessageError; declared types render.
@@ -8,11 +8,14 @@ from __future__ import annotations
 from dataclasses import MISSING, dataclass, fields
 from datetime import datetime
 from enum import StrEnum
-from typing import Final, Literal, TypeAlias, assert_never
+from typing import Final, assert_never
 
-from .owner_message_text import resource_url as _resource_url, result_text as _result_text
+from .owner_message_text import (
+    Action as Action, Approval as Approval, OwnerMessage as OwnerMessage,
+    Periodic as Periodic, Ref as Ref, Result as Result, Space as Space,
+    Presentation, render_v1, render_v2, resource_url as _resource_url,
+)
 
-Space: TypeAlias = Literal["guild", "dm", "unknown"]
 __all__: Final = (
     "Ref", "Action", "Approval", "Result", "Periodic", "OwnerMessage", "render",
     "discord_link", "LinkStatus", "LinkResult", "OwnerMessageError", "Space",
@@ -32,55 +35,6 @@ class LinkResult:
     status: LinkStatus
     url: str | None = None
     detail: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Ref:
-    scope: Literal["self", "channel", "message", "resource", "none"]
-    space: Space = "unknown"
-    guild_id: str | None = None
-    channel_id: str | None = None
-    message_id: str | None = None
-    url: str | None = None
-    search: tuple[str, str] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Action:
-    verb: Literal["none", "react", "reply", "open"]
-    target: Ref | None = None
-    argument: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Approval:
-    expires_at: datetime | None
-    cancel_effect: str
-
-
-@dataclass(frozen=True, slots=True)
-class Result:
-    outcome: Literal["executed", "cancelled", "expired"]
-
-
-@dataclass(frozen=True, slots=True)
-class Periodic:
-    start: datetime
-    end: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class OwnerMessage:
-    subject_key: str
-    subject: str
-    fact: str
-    location: Ref
-    owner: Action
-    agent_next: str | None
-    recovery: Literal["not_applicable", "irreversible"] | Action
-    detail: Approval | Result | Periodic
-    contract_version: int = 1
-    render_version: str = "owner-ko-v1"
 
 
 class OwnerMessageError(ValueError):
@@ -253,38 +207,27 @@ def _action(action: Action, location: str, destination: Ref) -> str:
 
 
 def render(message: OwnerMessage, *, destination: Ref) -> str:
-    """동결 v1: 대상, 사실(kind 확장 포함), 위치, 인계, 되돌리기 각 한 줄."""
+    """Validate once; replay v1 or present Discord v2 without changing the contract."""
     _validate(message, destination)
-    if message.contract_version != 1 or message.render_version != "owner-ko-v1":
+    if message.contract_version != 1 or message.render_version not in {"owner-ko-v1", "owner-ko-v2"}:
         field = "contract_version" if message.contract_version != 1 else "render_version"
         raise OwnerMessageError(message.contract_version, message.render_version, detail=f"message.{field}")
     location = _reference(message.location, destination)
+    # v2 omits local location rows, so actions cannot point "above" at such a row.
+    action_location = "" if message.render_version == "owner-ko-v2" and location in {
+        "이 메시지", "여기", "해당 없음",
+    } else location
     match message.recovery:
         case "not_applicable":
             recovery = "해당 없음"
         case "irreversible":
             recovery = "되돌릴 수 없음"
         case Action() as action:
-            recovery = _action(action, location, destination)
+            recovery = _action(action, action_location, destination)
         case _:
             assert_never(message.recovery)
-    match message.detail:
-        case Approval(expires_at=expires_at, cancel_effect=cancel_effect):
-            expiry = "기한 없음" if expires_at is None else _datetime(expires_at, "expires_at")
-            detail = f"승인 요청; 만료: {expiry}"
-            recovery += f"; 취소 시: {cancel_effect}"
-        case Result(outcome=outcome):
-            detail = _result_text(outcome)
-        case Periodic(start=start, end=end):
-            detail = f"관측: {_datetime(start, 'start')} ~ {_datetime(end, 'end')}"
-        case _:
-            assert_never(message.detail)
-    owner = _action(message.owner, location, destination)
-    agent_next = "추가 실행 없음" if message.agent_next is None else message.agent_next
-    return "\n".join(" ".join(line.split()) for line in (
-        f"대상: {message.subject} ({message.subject_key})",
-        f"사실: {message.fact} ({detail})",
-        f"위치: {location}",
-        f"인계: 소유자: {owner}; 다음: {agent_next}",
-        f"되돌리기: {recovery}",
-    ))
+    owner = _action(message.owner, action_location, destination)
+    presentation = Presentation(location, owner, recovery)
+    if message.render_version == "owner-ko-v1":
+        return render_v1(message, presentation, _datetime)
+    return render_v2(message, presentation, _datetime)

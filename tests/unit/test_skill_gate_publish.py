@@ -83,6 +83,9 @@ def _run_publish_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str
     posted: list[str] = []
 
     def discord_api(method: str, path: str, payload: dict[str, str] | None = None) -> dict[str, str]:
+        if method == "PUT":
+            assert path.endswith("/@me") and payload is None
+            return {}
         assert method == "POST"
         assert path == f"/channels/{_CHANNEL_ID}/messages"
         assert payload is not None
@@ -151,7 +154,7 @@ def test_publish_request_when_posted_then_message_binds_all_release_fields(
     assert f"- manifest_sha256: `{_MANIFEST_DIGEST}`\n" in content
     assert f"- tag: `{_TAG}`\n" in content
     assert re.search(r"- publish_nonce: `[0-9a-f]{32}`\n", content) is not None
-    assert "반응 ✅ 승인 또는 ⛔ 취소 (소유자 전용)" in content
+    assert "✅ 승인 또는 ⛔ 취소 (소유자 전용)" in content
 
 
 def test_publish_request_when_posted_then_pending_record_written(
@@ -177,7 +180,7 @@ def test_publish_request_when_posted_then_pending_record_written(
         "message_id": "message-1",
         "policy_version": str(POLICY_VERSION),
         "publish_nonce": match.group("nonce"),
-        "render_version": "2",
+        "render_version": "3",
         "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "surface": "skill-approvals",
         "tag": _TAG,
@@ -413,6 +416,9 @@ def test_request_when_provenance_file_given_then_lines_follow_binding_and_bindin
     posted: list[str] = []
 
     def discord_api(_method: str, _path: str, payload: dict[str, str] | None = None) -> dict[str, str]:
+        if _method == "PUT":
+            assert _path.endswith("/@me") and payload is None
+            return {}
         assert payload is not None
         posted.append(payload["content"])
         return {"id": "message-1"}
@@ -434,7 +440,7 @@ def test_request_when_provenance_file_given_then_lines_follow_binding_and_bindin
         f" / manifest-sha256 `{_MANIFEST_DIGEST}`"
     )
     assert expected in content
-    assert content.index("사실:") < content.index("- provenance:") < content.index("위치:")
+    assert content.index("- deploy_nonce:") < content.index("- provenance:") < content.index("**결정:**")
     match = skill_gate._REQUEST_BINDING.match(content)
     assert match is not None
     assert match.group("skill") == "calendar"

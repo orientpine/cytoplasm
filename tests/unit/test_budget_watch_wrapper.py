@@ -50,7 +50,8 @@ def test_wrapper_ignores_the_self_skill_root(tmp_path: Path) -> None:
             encoding="utf-8"
         )
     )
-    assert state == {"consecutive_failures": 1, "incident_open": False}
+    assert state["consecutive_failures"] == 1
+    assert state["incident_open"] is False
 
 
 def test_pre_main_crash_prints_one_masked_line_on_the_first_tick(tmp_path: Path) -> None:

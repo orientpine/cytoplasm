@@ -45,7 +45,7 @@ cat > "$work/gws-stub" <<'SH'
 printf '%s\n' "$*" >> "$(dirname "$0")/gws-calls.log"
 case "$*" in
   *"events insert"*|*"events patch"*) printf '{"id":"stub-event-1","status":"confirmed"}\n' ;;
-  *"events get"*) printf '{"id":"stub-event-1","summary":"실험 미팅"}\n' ;;
+  *"events get"*) printf '{"id":"stub-event-1","summary":"실험 미팅","start":{"dateTime":"2031-10-01T15:00:00+09:00"},"end":{"dateTime":"2031-10-01T16:00:00+09:00"}}\n' ;;
   *"events list"*) printf '{"items":[]}\n' ;;
 esac
 SH

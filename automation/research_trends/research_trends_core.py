@@ -218,20 +218,47 @@ def run_topics(
     return tuple(outcomes)
 
 
-def report_message(report: str, report_path: Path | None = None) -> OwnerMessage | None:
-    """검색에는 날짜 필터가 없다. 주간 발송 주기를 관측 구간으로 둔갑시키지 않는다."""
+def report_message(
+    report: str, report_path: Path | None = None, *, summary: bool = False
+) -> OwnerMessage | None:
+    """검색에는 날짜 필터가 없다. 주간 발송 주기를 관측 구간으로 둔갑시키지 않는다.
+
+    `summary=True` 는 `report_summary` head 를 싣는 경로다 — v1 은 fact 의 줄바꿈을 접어
+    주제별 한 줄 목록을 뭉개므로 v2 로 렌더한다. 전문 경로의 v1 바이트는 그대로다.
+    """
     try:
         from automation.interop.owner_message import Action, OwnerMessage, Ref, Result
     except Exception:  # noqa: BLE001 - optional module initialization must preserve string delivery
         return None
     location = (Ref(scope="none") if report_path is None else
                 Ref(scope="resource", search=("연구동향 보고서", report_path.name)))
+    reason = "관측 구간 없음: 날짜 필터 없는 최신 검색"
     return OwnerMessage(
         subject_key="research-trends", subject="주간 연구 동향",
-        fact=f"{report} · 관측 구간 없음: 날짜 필터 없는 최신 검색",
+        fact=f"{report}\n{reason}" if summary else f"{report} · {reason}",
         location=location, owner=Action(verb="none"), agent_next="다음 주 정기 보고",
         recovery="not_applicable", detail=Result(outcome="executed"),
+        render_version="owner-ko-v2" if summary else "owner-ko-v1",
     )
+
+
+def report_summary(
+    report_day: str, outcomes: tuple[TopicOutcome, ...], report_name: str
+) -> str:
+    """One-screen head for the notice; the full report travels as the attached file."""
+    papers = sum(len(outcome.papers) for outcome in outcomes)
+    lines = [
+        f"📚 주간 연구 동향 — {report_day} KST",
+        f"주제 {len(outcomes)}개 · 논문 {papers}편 — 전문은 첨부 `{report_name}`",
+    ]
+    for outcome in outcomes:
+        if outcome.failure is not None:
+            lines.append(f"- {outcome.topic}: ⚠️ {outcome.failure}")
+        elif not outcome.papers:
+            lines.append(f"- {outcome.topic}: 검색 결과 없음")
+        else:
+            lines.append(f"- {outcome.topic}: 논문 {len(outcome.papers)}편")
+    return "\n".join(lines)
 
 
 def assemble_report(

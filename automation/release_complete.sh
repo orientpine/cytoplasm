@@ -163,10 +163,37 @@ read -r -a release_cmd <<< "$release_command"
 tagged_release="$(cd "$REPO_ROOT" && PYTHONPATH="$REPO_ROOT" \
   python3 -m automation.release_completion_target \
   --repo "$WORKTREE" --state "$STATE" --print-tagged 2>/dev/null)" || tagged_release=""
-decision_argv=(decision --head "$head" --notify-stale)
+decision_argv=(decision --head "$head" --notify-stale --completion-candidate)
 [[ -n "$tagged_release" ]] && decision_argv+=(--tagged "$tagged_release")
-"${approval[@]}" "${decision_argv[@]}"
+decision_output="$("${approval[@]}" "${decision_argv[@]}")"
 decision_rc=$?
+bound_version=""
+if (( decision_rc == 3 )); then
+  # rc 3 은 팁 인가가 아니다. 원격 레코드가 준 후보를 로컬 그래프로 판정한다.
+  if [[ ! "$decision_output" =~ ^([0-9a-f]{40})\ (v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    log "BOUND-HEAD-BLOCK: malformed candidate"
+    exit 1
+  fi
+  bound_head="${BASH_REMATCH[1]}"
+  bound_version="${BASH_REMATCH[2]}"
+  git -C "$WORKTREE" merge-base --is-ancestor "$bound_head" "$head"
+  ancestry_rc=$?
+  case "$ancestry_rc" in
+    0) log "RELEASE-DECISION: different HEAD branch=ancestor bound=$bound_head tip=$head" ;;
+    1)
+      log "RELEASE-DECISION: different HEAD branch=non-ancestor bound=$bound_head tip=$head"
+      "${approval[@]}" decision --head "$head" --notify-stale
+      exit 0
+      ;;
+    *) log "RELEASE-DECISION: different HEAD branch=ancestry-unavailable bound=$bound_head tip=$head"; exit 1 ;;
+  esac
+  head="$bound_head"
+  marker="$STATE/completed/$head"
+  [[ -f "$marker" ]] && exit 0
+  decision_rc=0
+else
+  [[ -z "$decision_output" ]] || printf '%s\n' "$decision_output"
+fi
 case "$decision_rc" in
   0)
     # 시도 상한은 sha 별이다 — deploy-skill.sh 의 백오프와 같은 원리로, 지속 결함(예:
@@ -174,6 +201,8 @@ case "$decision_rc" in
     # 새 sha 가 새 릴리스가 되어 상한이 처음부터 다시 센다. 손으로 재개하려면
     # automation/release.sh 를 직접 돌린다(그 경로는 이 상한을 모른다).
     attempts_file="$STATE/attempts/$head"
+    # 태그 전·후가 같은 예산을 쓴다. 태그 컷이 실패 횟수를 초기화하지 않는다.
+    [[ -z "$bound_version" ]] || attempts_file="$STATE/attempts/reconcile-$head"
     attempts="$(cat "$attempts_file" 2>/dev/null || printf 0)"
     max_attempts="${RELEASE_COMPLETE_MAX_ATTEMPTS:-3}"
     if (( attempts >= max_attempts )); then
@@ -184,9 +213,27 @@ case "$decision_rc" in
     (
       cd "$WORKTREE" || exit 1
       export RELEASE_REPO_ROOT="$WORKTREE"
-      "${release_cmd[@]}"
+      if [[ -z "$bound_version" ]]; then
+        "${release_cmd[@]}"
+      else
+        # release.sh 의 승인 이후 경로만 재사용한다 — 요청·회수·계획은 호출하지 않는다.
+        source "${RELEASE_TAG_LIB:-$SCRIPT_DIR/release_tag_lib.sh}" || exit 1
+        bash "${RELEASE_LOCAL_CI:-$SCRIPT_DIR/local_ci.sh}" verify "$head" || exit 1
+        git -C "$WORKTREE" checkout --quiet --detach "$head" || exit 1
+        ensure_signed_tag "$WORKTREE" "$head" "$bound_version" || exit 1
+        read -r -a deploy_cmd <<< "${RELEASE_COMPLETE_DEPLOY_CMD:-$WORKTREE/automation/deploy_all.sh}"
+        "${deploy_cmd[@]}" --apply --wait-converge
+      fi
     )
     release_rc=$?
+    if [[ -n "$bound_version" ]]; then
+      git -C "$WORKTREE" checkout --quiet --detach origin/main \
+        || { log "BOUND-RESTORE-FAIL"; exit 1; }
+      if (( release_rc == 4 )); then
+        log "RECONCILE-DEFER ${head:0:12} — 노드 릴리스가 아직 그 sha 가 아니다"
+        exit 0
+      fi
+    fi
     if (( release_rc != 0 )); then
       mkdir -p -- "$STATE/attempts" && printf '%s\n' "$(( attempts + 1 ))" > "$attempts_file"
       log "COMPLETE-FAIL rc=$release_rc for ${head:0:12} — 재실행이 재개다(다음 틱)"

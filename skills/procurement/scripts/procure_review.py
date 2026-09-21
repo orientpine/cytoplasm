@@ -1,9 +1,12 @@
 """Review-request DM transport for the procurement skill (W4-4).
 
-The ONLY outbound surface of this skill: a DM to the owner (cha) asking for
-human review. ≤25 MiB attaches the draft; larger files are uploaded to cha's
-own Drive (gws CLI) and the DM carries the link. Submission is ALWAYS human —
+The ONLY outbound surface of this skill: one owner notice asking for human
+review. ≤25 MiB attaches the draft; larger files are uploaded to the owner's
+own Drive (gws CLI) and the notice carries the link. Submission is ALWAYS human —
 this module has no mail/submit code path at all.
+
+ON-1..ON-3: 목적지 해석도 전송도 `automation.owner_notice` 가 한다. 이 모듈은 본문과
+첨부 목록만 만들고, 첨부 multipart 인코딩은 파사드 안에 한 벌만 있다.
 
 Sandbox hooks: PROCURE_DISCORD_STUB=<dir> records the would-be DM as JSON
 instead of calling Discord. Drive upload goes through automation.drive_outputs
@@ -13,33 +16,34 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import sys
 import uuid
 from pathlib import Path
-from urllib.request import Request, urlopen
+from types import ModuleType
 
 from procure_core import DM_MAX_BYTES, review_mode
 
-API = "https://discord.com/api/v10"
-USER_AGENT = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
-
 
 class ReviewError(RuntimeError):
-    """Review DM could not be delivered (exit 6)."""
+    """Review notice could not be delivered (exit 6)."""
 
 
-def _notice_channel() -> str:
-    """ON-2: 검토 요청이 갈 채널 — 해석(지정 채널/DM 오픈)은 owner_notice 파사드만 한다."""
+def _facade() -> ModuleType:
+    """ON-2/ON-3: 채널 해석도 전송(첨부 포함)도 owner_notice 파사드만 한다."""
     override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
     release = Path("/srv/autophagy-agent-current")
     root = override or str(release if release.is_dir() else Path("/srv/autophagy-agents"))
     if root not in sys.path:
         sys.path.insert(0, root)
-    from automation.owner_notice import resolve_notice_target
+    from automation import owner_notice
 
+    return owner_notice
+
+
+def _notice_channel() -> str:
+    """검토 요청이 갈 채널 — 봉투의 목적지 좌표를 렌더하려면 값 자체가 필요하다."""
     try:
-        target = resolve_notice_target(_token())
+        target = _facade().resolve_notice_target(_token())
     except ReviewError:
         raise
     except Exception as error:  # noqa: BLE001 - 원인 유형만 남기고 exit 6 계약 유지
@@ -99,11 +103,11 @@ def send_review(file: Path, note: str) -> str:
         out = Path(stub) / f"dm-{uuid.uuid4().hex[:8]}.json"
         out.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
         return f"REVIEW-DM-SENT message=stub:{out.name} mode={mode} size={size}"
-    if mode == "attach":
-        message = _post_attachment(channel_id, file, content)
-    else:
-        message = _api("POST", f"/channels/{channel_id}/messages", {"content": content})
-    return f"REVIEW-DM-SENT message={message['id']} mode={mode} size={size}"
+    # 목적지·전송은 파사드 몫이다. 25 MiB 이하만 첨부가 붙고, 그 위는 Drive 링크 본문뿐이다.
+    attachments = (file,) if mode == "attach" else ()
+    if not _facade().notify_owner(content, attachments=attachments):
+        raise ReviewError("통지 전송 실패 — owner-notice 마커를 확인하세요")
+    return f"REVIEW-DM-SENT message=notice mode={mode} size={size}"
 
 
 
@@ -112,49 +116,3 @@ def _token() -> str:
     if not token:
         raise ReviewError("DISCORD_BOT_TOKEN 누락 — 검토 DM 전송 불가")
     return token
-
-
-def _api(method: str, path: str, payload: dict | None = None) -> dict:
-    request = Request(
-        f"{API}{path}",
-        data=None if payload is None else json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bot {_token()}",
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-        },
-        method=method,
-    )
-    with urlopen(request, timeout=60) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _post_attachment(channel_id: str, file: Path, content: str) -> dict:
-    boundary = f"----procure{secrets.token_hex(12)}"
-    payload = json.dumps(
-        {"content": content, "attachments": [{"id": 0, "filename": file.name}]},
-        ensure_ascii=False,
-    ).encode("utf-8")
-    body = b"".join(
-        [
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\n"
-            "Content-Type: application/json\r\n\r\n".encode("utf-8"), payload,
-            f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; "
-            f"filename=\"{file.name}\"\r\n"
-            "Content-Type: application/octet-stream\r\n\r\n".encode("utf-8"),
-            file.read_bytes(),
-            f"\r\n--{boundary}--\r\n".encode("utf-8"),
-        ]
-    )
-    request = Request(
-        f"{API}/channels/{channel_id}/messages",
-        data=body,
-        headers={
-            "Authorization": f"Bot {_token()}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "User-Agent": USER_AGENT,
-        },
-        method="POST",
-    )
-    with urlopen(request, timeout=120) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))

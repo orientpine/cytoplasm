@@ -50,10 +50,13 @@ def test_render_approval_message_when_draft_is_unbound_does_not_import_approval_
 
 
 def test_resolve_reaction_when_binding_is_persisted_does_not_import_approval_policy(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     # Given: a message whose fact-checked, concrete surface was persisted at post time.
+    monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "gate"))
+    monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
     draft = {
+        "id": "draft123",
         "channel_id": "100000000000000001",
         "kind": "reply",
         "message_id": "message-1",

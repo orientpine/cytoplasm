@@ -43,7 +43,11 @@ def _hermetic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _state(tmp_path: Path) -> dict[str, object]:
     path = tmp_path / "watch-failure" / "research-trends.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        "consecutive_failures": raw["consecutive_failures"],
+        "incident_open": raw["incident_open"],
+    }
 
 
 def test_first_failed_tick_writes_state_and_emits_threshold_one_notice(
@@ -87,9 +91,9 @@ def test_success_after_failure_emits_recovery_and_resets_state(
     monkeypatch.setattr(research_trends, "run", lambda: 0)
     assert research_trends.main() == 0
 
-    assert capsys.readouterr().out == (
-        "research-trends recovered after 1 consecutive failures\n"
-    )
+    output = capsys.readouterr().out
+    assert output.startswith("research-trends recovered after 1 consecutive failures (")
+    assert " UTC) — last failure: RuntimeError: temporary outage\n" in output
     assert _state(tmp_path) == {"consecutive_failures": 0, "incident_open": False}
 
 

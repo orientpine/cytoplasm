@@ -130,6 +130,8 @@ cmd_run() {
   workflow_digest="$(sha256sum -- "$WORKFLOW" | cut -d' ' -f1)"
 
   cd "$REPO_ROOT" || die "cannot enter $REPO_ROOT"
+  command -v bwrap >/dev/null \
+    || die "bubblewrap is required; install it before running local CI (Ubuntu: sudo apt-get install bubblewrap)"
   record_step lint ruff check . --exclude skills/mail/vendor \
     || die "lint failed — no receipt written"
   record_step unit-tests python3 -m pytest tests/unit -q \

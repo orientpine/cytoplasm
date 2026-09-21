@@ -9,7 +9,7 @@ readonly PEER_CHANNEL_DIRECTORY="${HEALTHCHECK_PEER_CHANNEL_DIRECTORY:-$NODE_PEE
 
 peer_ignored_channels_guidance() {
   printf '%s\n' \
-    'PEER-IGNORED-CHANNELS-RECOVERY: OWNER restore top-level discord.ignored_channels from the unique approvals entry in the peer channel directory; then follow operations.md gateway-pair restart rules. Never auto-edit config or restart.' \
+    'PEER-IGNORED-CHANNELS-RECOVERY: OWNER restore top-level discord.ignored_channels from the unique approvals entry (plus the notifications entry when the peer directory lists one) in the peer channel directory; then follow operations.md gateway-pair restart rules. Never auto-edit config or restart.' \
     'PEER-IGNORED-CHANNELS-RECOVERY: if unreadable, OWNER review/install these exact read-only sudoers entries with visudo (no shell or Python sudo grant):'
   printf '%s ALL=(%s) NOPASSWD: /usr/bin/cat -- %s\n' "$NODE_OPS_ACCOUNT" "$NODE_PEER_ACCOUNT" "$PEER_GATEWAY_CONFIG" "$NODE_OPS_ACCOUNT" "$NODE_PEER_ACCOUNT" "$PEER_CHANNEL_DIRECTORY"
   printf '%s\n' 'PEER-IGNORED-CHANNELS-RECOVERY: parser unavailable: OWNER provide python3 with PyYAML (Debian/Ubuntu: apt-get install python3-yaml).'
@@ -74,10 +74,22 @@ try:
     channels = raw["platforms"].get("discord")
     if not isinstance(channels, list) or not all(isinstance(row, dict) for row in channels):
         raise ProbeInputError
-    matches = [row.get("id") for row in channels if row.get("name") == "approvals"]
-    if len(matches) != 1 or not isinstance(matches[0], str) or not matches[0].isascii() or not matches[0].isdigit():
-        raise ProbeInputError
-    approvals = ChannelId(matches[0])
+
+    def unique_channel(name: str, *, required: bool) -> ChannelId | None:
+        """One channel by name; absence is allowed only for optional surfaces."""
+        matches = [row.get("id") for row in channels if row.get("name") == name]
+        if not matches and not required:
+            return None
+        if len(matches) != 1 or not isinstance(matches[0], str) or not matches[0].isascii() or not matches[0].isdigit():
+            raise ProbeInputError
+        return ChannelId(matches[0])
+
+    # #approvals must exist; #notifications is required only when the peer can see it —
+    # a peer that receives owner notices opens a thread on every chunk (2026-09-21).
+    required = {unique_channel("approvals", required=True)}
+    notifications = unique_channel("notifications", required=False)
+    if notifications is not None:
+        required.add(notifications)
     with os.fdopen(4, encoding="utf-8") as stream:
         root = yaml.compose(stream, Loader=yaml.SafeLoader)
     ignored = field(field(root, "discord"), "ignored_channels")
@@ -94,7 +106,7 @@ try:
         ids = {ChannelId(part.strip()) for part in ignored.value.split(",")}
     else:
         raise ProbeInputError
-    if approvals not in ids:
+    if not required <= ids:
         print("[healthcheck] PEER-IGNORED-CHANNELS-MISSING")
         raise SystemExit(1)
 except (OSError, UnicodeError, json.JSONDecodeError, yaml.YAMLError, ProbeInputError):

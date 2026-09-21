@@ -29,9 +29,15 @@ def render_approval(m: CardFields) -> str:
         case 1:
             return render_v1(m)
         case 2:
-            pass
+            return render_v2(m)
+        case 3:
+            return render_v3(m)
         case _:  # Persisted version boundary, not an open-ended fallback.
             raise ExportGateError("unknown patent approval render version", 3)
+
+
+def render_v2(m: CardFields) -> str:
+    """Frozen owner-ko-v1 envelope card."""
     try:
         from automation.interop.owner_message import Action, Approval, OwnerMessage, OwnerMessageError, Ref, render
     except ImportError as error:
@@ -48,6 +54,30 @@ def render_approval(m: CardFields) -> str:
     except OwnerMessageError as error:
         raise ExportGateError("patent owner envelope cannot render", 3) from error
     return "\n".join((*lines[:2], *binding_lines(m), *lines[2:]))
+
+
+def render_v3(m: CardFields) -> str:
+    try:
+        from automation.interop.owner_message import Action, Approval, OwnerMessage, OwnerMessageError, Ref, render
+    except ImportError as error:
+        raise ExportGateError("patent owner envelope unavailable", 3) from error
+    here = Ref(scope="self")
+    message = OwnerMessage(
+        subject_key=m.slug,
+        subject="특허 반출",
+        fact=f"반출 ID: {m.slug}\n모드: {m.mode}\n판본: patent-export-render-v3",
+        location=here,
+        owner=Action("react", here, "✅ 실행 / ⛔ 취소"),
+        agent_next="승인 시 반출",
+        recovery="not_applicable",
+        detail=Approval(datetime.fromtimestamp(m.expiry_ts, UTC), "반출하지 않음"),
+        render_version="owner-ko-v2",
+    )
+    try:
+        lines = render(message, destination=here).splitlines()
+    except OwnerMessageError as error:
+        raise ExportGateError("patent owner envelope cannot render", 3) from error
+    return "\n".join((*lines[:-1], *binding_lines(m), lines[-1]))
 
 
 def binding_lines(m: CardFields) -> tuple[str, str, str, str]:

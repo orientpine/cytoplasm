@@ -501,10 +501,10 @@ def test_build_item_to_recipient_keeps_reply_flag(
 def test_build_item_delegates_calendar_for_important_schedule_needed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, str]] = []
 
-    def delegate(schedule_text: str, uid_opaque: str) -> str:
-        calls.append((schedule_text, uid_opaque))
+    def delegate(schedule_text: str, uid_opaque: str, digest_day: str) -> str:
+        calls.append((schedule_text, uid_opaque, digest_day))
         return "calendar:abc123"
 
     monkeypatch.setattr(triage_transport, "_delegate_schedule", delegate)
@@ -515,9 +515,10 @@ def test_build_item_delegates_calendar_for_important_schedule_needed(
         _classify_stub("important", schedule=True, schedule_text="7/20 10:00 장비 회의"),
     )
 
-    dm_item, store_item = triage_digest.build_item(_detail("uid-5"), 1, rules=())
+    dm_item, store_item = triage_digest.build_item(_detail("uid-5"), 1, rules=(), digest_day="2026-07-20")
 
-    assert calls == [("7/20 10:00 장비 회의", triage_core.mask_value("uid-5"))]
+    # The digest day travels with the delegation so the calendar side groups the card by day.
+    assert calls == [("7/20 10:00 장비 회의", triage_core.mask_value("uid-5"), "2026-07-20")]
     assert dm_item["note"] == "calendar:abc123"
     assert store_item["note"] == "calendar:abc123"
 
@@ -661,7 +662,7 @@ def _patch_cli_digest_engine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     )
 
     def build_item(  # noqa: ARG001
-        detail: dict, item_no: int, *, rules: tuple
+        detail: dict, item_no: int, *, rules: tuple, digest_day: str = ""
     ) -> tuple[dict, dict]:
         shared = {
             "item_no": item_no,

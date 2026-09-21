@@ -104,7 +104,10 @@ def _streak_state(home: Path, watch_name: str) -> dict[str, object]:
     raw = (home / ".hermes" / "watch-failure" / f"{watch_name}.json").read_text(encoding="utf-8")
     parsed: object = json.loads(raw)
     assert isinstance(parsed, dict)
-    return {str(key): value for key, value in parsed.items()}
+    return {
+        "consecutive_failures": parsed["consecutive_failures"],
+        "incident_open": parsed["incident_open"],
+    }
 
 
 def test_shared_definition_when_no_override_then_governed_live_scripts() -> None:

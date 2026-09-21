@@ -24,6 +24,7 @@ import triage_binding
 import triage_core
 import triage_gate
 import triage_approval_gate
+import mail_approval_attachment
 
 MailApprovalGate = triage_approval_gate.MailApprovalGate
 expire_retired_approval = triage_approval_gate.expire_retired_approval
@@ -115,6 +116,10 @@ def _approval_content(draft: dict, notice: str) -> str:
     The pre-flight size check and the post itself must never render differently, or the
     check would clear a message the post cannot deliver.
     """
+    if draft.get("approval_format") == mail_approval_attachment.FORMAT:
+        content = mail_approval_attachment.summary(draft, reaction_instruction(draft)) + notice
+        _refuse_unpostable_content(content)
+        return content
     content = (
         triage_core.render_approvals_message(
             draft,
@@ -229,16 +234,7 @@ def _live_requests(draft: dict) -> tuple[ApprovalRequest, ...]:
 
 def _prepare_request(draft: dict[str, JsonValue], notice: str) -> tuple[ApprovalIntent, MailApprovalGate]:
     """Prepare final bytes before resolving a new surface."""
-    cards = _repo_module("approval_card")
-    version = draft.get("render_version", "1" if draft.get("message_id") else None)
-    try:
-        card = cards.prepare(
-            lambda selected: _approval_content({**draft, "render_version": selected}, notice), version,
-        )
-    except cards.CardRenderError as error:
-        raise triage_gate.GateError(str(error), 3) from error
-    prepared = {**draft, "render_version": card.render_version}
-    return confirm_intent(prepared), MailApprovalGate(prepared, notice, card.content)
+    return triage_approval_gate.prepare_request(draft, notice)
 
 
 def request_approval(draft: dict, *, notice: str = "") -> Verdict:

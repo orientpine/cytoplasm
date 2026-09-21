@@ -1,7 +1,7 @@
 ---
 name: speechtotext
 description: "Google Drive 폴더에 올려둔 음성 녹취를 전사본(.md)으로 만들고, 그 전사본을 meeting 스킬로 넘겨 회의록까지 잇는 스킬. 전사는 기본이 로컬(whisper.cpp)이고, 2시간이 넘는 단일 녹취도 누락 검증을 통과해야만 회의록으로 넘어간다."
-version: 1.3.0
+version: 1.5.0
 author: autophagy-agents
 ---
 
@@ -31,6 +31,10 @@ author: autophagy-agents
 4. **거부는 그대로 전달하라.** 종료코드가 곧 사유다 — 3=크기 초과, 4=로컬 전사 도구 부재,
    5=미지원 형식/빈 전사, 6=전사 API 실패, 7=회의록 체인 실패(전사본은 남아 있으므로
    재시도해도 전사를 다시 지불하지 않는다), 8=**누락 의심**. 내용을 추측해 채우지 마라.
+   허용 형식은 `stt_audio.SUPPORTED_SUFFIXES` 하나가 정한다 — flac/mp3/mp4/mpeg/mpga/m4a/**ogg**/wav/webm
+   (ogg 는 2026-09-16, Plaud `get_file` 이 전날부터 .ogg 를 주기 시작해 로컬 전사가 ffmpeg 앞에서
+   rc=5 로 막힌 뒤 더했다 — 로컬 경로는 어떤 형식이든 ffmpeg 로 16 kHz wav 를 만들므로 이 게이트가
+   유일한 장벽이었다). Drive 감시 폴더의 `is_audio` 도 같은 집합을 읽는다.
 
 ## 전사 백엔드 — 로컬이 기본인 이유
 
@@ -239,6 +243,89 @@ VAD 는 조용한 한국어 발화를 잘라낼 수 있어 기본이 아니다 �
 python3 /srv/autophagy-skills/live/speechtotext/scripts/speechtotext_cli.py polish --file <전사본.md>
 ```
 
+### 화자 등록 (voice catalog) — 등록된 목소리 저장소
+
+`stt_catalog_cli.py` 는 소유자가 지정한 「이 녹음의 화자N = 이름」을 받아 그 화자의 발화
+구간을 원음에서 잘라 등록본(16 kHz mono wav, 최대 60초, 블록당 최대 30초)으로 남긴다.
+저장은 노드 로컬 `~/.hermes/speechtotext/voice-catalog/`(`SPEECHTOTEXT_VOICE_CATALOG`,
+0700/0600, git 체크아웃 안이면 `CATALOG-ROOT-REFUSED`)이고 **음성은 노드 밖으로 나가지
+않는다.** 이 단계(②)는 저장소만 만든다 — 등록본을 화자 분리에 결합해 이름을 자동으로
+붙이는 것(③)은 아직 없다.
+
+```bash
+C=/srv/autophagy-skills/live/speechtotext/scripts/stt_catalog_cli.py
+python3 $C propose <전사본.md> [--audio <원음>|--duration-ms N]   # 읽기 전용: 화자N 별 블록·발화·계획
+python3 $C enroll --transcript <전사본.md> --speaker 화자2 --name 김민수 [--audio <원음>]
+python3 $C list
+python3 $C remove --name 김민수                                       # 등록본 파일도 지운다
+```
+
+| 규칙 | 내용 |
+|---|---|
+| **동의 = 소유자의 명시 지시** | `enroll`·`remove` 는 타인의 목소리를 남기는 일이다. 에이전트는 소유자가 **이름을 명시해** 지시했을 때만 돌리고, 스스로 이름을 추측해 등록하지 않는다. `propose` 는 읽기 전용이라 스스로 돌려 제안해도 된다 |
+| 원음 출처 | `--audio` 가 없으면 Drive 아카이브 manifest(`~/.hermes/stt-eval/manifest.jsonl`) 에서 전사본 stem 이 같은 행의 `drive_file_id` 를 받아 0700 임시 디렉터리에서 자르고 지운다. 행이 없으면 `CATALOG-AUDIO-MISSING` |
+| 구간 | 블록 헤더는 시작 시각만 있으므로 구간 끝 = **다음 블록의 시작**. 마지막 블록은 오디오 길이를 알 때만 쓴다. 1.5초 미만 블록 제외, 긴 블록 우선 |
+| 전사본 조건 | **화자가 실제로 갈린 전사본**이어야 한다. ① 이전(옛 임베딩·임계값 1.35)에 만든 라이프로그는 여러 사람이 `화자1` 하나로 뭉쳐 있어(2026-09-17 실측 3건) 거기서 자르면 섞인 목소리가 등록된다 — `plaud_sync_watch.py --reprocess` 로 다시 전사한 뒤 등록한다 |
+| 멱등 | 같은 `(recording_id, 화자N)` 재등록은 그 등록본만 교체. 다른 녹음의 같은 사람은 등록본이 늘어난다 |
+| 게이트 | `enroll`·`remove` 는 배포 사본에서만 실행(`STALE-SKILL-COPY-BLOCK`, exit 3). 외부효과 승인 게이트 대상은 아니다(로컬 쓰기) |
+
+#### Obsidian 에 적으면 등록된다 (2026-09-17)
+
+CLI 를 부르지 않아도 된다. 라이프로그 노트(vault `000_PARA/Area/Lifelog/`)의 `## 한눈에` 아래에
+한 줄을 적으면 no-agent 워처 `voice_catalog_enroll_watch.py`(10분 틱, `automation/voice_catalog/`)가
+RAG 미러에서 그 줄을 읽어 위의 `enroll` 을 돌리고 `#notifications` 에 결과를 올린다:
+
+```
+- 화자:: 화자1=차백동 · 화자3=김민수
+```
+
+- 구분자는 `·` `,` `;`, `미상`·`화자0`·빈 이름은 무시, 첫 `- 화자::` 줄만 읽는다. 소유자가 자기
+  vault 에 이름을 적은 것이 곧 명령=동의다.
+- 같은 이름이 이미 등록됐으면 무동작, 이름을 고치면 재등록(같은 녹음·라벨의 등록본이 교체된다).
+  실패(`CATALOG-NO-SEGMENTS`·`TRANSCRIPT-MISSING`·`ENROLL-CLI-MISSING`)는 통지 1건으로 끝나고
+  노트 본문이 바뀌기 전엔 다시 시도하지 않는다 — 원장 `<voice-catalog>/obsidian-enroll.json`.
+- 미러는 RAG 인제스트가 당겨 오므로 vault 편집이 워처에 보이기까지 그 주기만큼 늦다. 줄을 지워도
+  등록은 남는다(되돌리기는 `remove --name`).
+
+### 화자 식별 (voice catalog ③) — 등록된 목소리로 `화자N` 에 이름을 붙인다
+
+등록본이 있으면 전사가 끝난 뒤 **자동으로** 대조한다. 분리기가 만든 `화자N` 군집마다 그 사람이
+확실히 말한 블록을 골라 임베딩을 뽑고, 카탈로그의 등록본과 코사인을 재서 판정 세 가지 중
+하나를 낸다. 등록본을 녹음 앞에 이어 붙이지 **않는다** — 붙이면 카탈로그가 커질수록 군집
+예산(상한 8·임계값)을 먹고 녹음 본체의 군집 경계까지 흔들려 식별하려다 분리를 망친다.
+
+| 판정 | 조건 | 문서에 남는 것 |
+|---|---|---|
+| **확정** | 점수 ≥ `accept` **그리고** 2위와의 여유 ≥ `margin` | 범례 `화자1=김민수 [카탈로그 0.86]` · 블록 헤더에 이름 |
+| **제안** | 점수 ≥ `suggest` (확정 아님) | 범례 `화자2=미상 [카탈로그 제안: 이영희 0.72]` — 이름은 붙지 않는다 |
+| **미상** | 그 아래 | 아무것도 남지 않는다(`화자3=미상`) |
+
+- **제안을 확정으로 바꾸는 방법은 소유자의 한 줄이다.** 라이프로그 노트에 `- 화자:: 화자2=이영희`
+  를 적으면 ②b 워처가 그 녹음에서 등록본을 하나 더 만들고, 다음 녹음부터 점수가 올라간다.
+  에이전트는 식별 결과를 그 줄에 **쓰지 않는다** — 쓰면 워처가 자기 제안을 명령으로 읽는다.
+- 이름 신뢰 순서는 **소유자 > 카탈로그 > 자기소개 > LLM** 이다. 카탈로그가 자기소개보다 위인
+  이유는 라이프로그 전사본 28건에서 자기소개 규칙이 이름을 준 적이 0건이기 때문이다. 어긋난
+  자기소개는 지우지 않고 출처에 함께 적는다(`[카탈로그 0.86 · 자기소개 제안: 김민수]`).
+- **임계값은 노드 실측값이다**(`docs/qa/VC3`): `accept 0.80` · `suggest 0.65` · `margin 0.05`.
+  같은 녹음에서 확실한 양성 0.83, 가장 높은 음성 0.75 였다. 표본이 녹음 1건·등록 1명이므로
+  실패 방향을 「확정 대신 제안」으로 잡았고, 등록본이 늘면 같은 표로 다시 잰다. env 로 덮을 수
+  있다: `SPEECHTOTEXT_IDENTIFY_ACCEPT`·`_SUGGEST`·`_MARGIN`(제안 문턱이 확정 문턱보다 높으면
+  전부 기본값으로 돌아간다).
+- **킬스위치** `SPEECHTOTEXT_IDENTIFY=0`. 그 외에도 카탈로그가 비었거나 C API·임베딩 모델이
+  없으면 `IDENTIFY-SKIP reason=…` 한 줄을 남기고 전사는 그대로 간다. 식별 실패는 어떤 경우에도
+  전사·회의록·라이프로그를 막지 않는다(fail-soft). 진단 표식에는 이름을 싣지 않는다.
+- 임베딩은 화자 분리와 **같은 모델**(`SPEECHTOTEXT_DIARIZE_EMBEDDING`)을 stdlib `ctypes` 로 부른다
+  (`stt_voiceprint.py` → `<bin>/../lib/libsherpa-onnx-c-api.so`). 새 노드 설정은 없다. 등록본
+  임베딩은 `<voice-catalog>/embeddings/<모델 12자>.json`(0600)에 캐시돼 녹음마다 다시 뽑지 않는다.
+
+손으로 물어보려면(읽기 전용, 아무것도 쓰지 않는다):
+
+```bash
+python3 $C match <전사본.md> [--audio <원음>]
+# 화자1: 김민수 0.86 · 다음 후보 0.31 → 확정
+# 화자2: 이영희 0.72 → 제안
+```
+
 ### 용어집 — 전사 **전에** 주는 힌트 (전사본은 고치지 않는다)
 
 전사본은 증거다. 잘못 들린 낱말도 **들린 그대로** 남기고, 용어 교정은 이 전사본으로 회의록·
@@ -378,12 +465,15 @@ sherpa-onnx/
   bin/    화자 분리 실행 파일 (SPEECHTOTEXT_DIARIZE_BIN)
   lib/    공유 라이브러리 (CLI 가 LD_LIBRARY_PATH 에 자동으로 얹는다)
   models/ sherpa-onnx-pyannote-segmentation-3-0/model.onnx
-          3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx
+          3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx
   samples/
 ```
 
 두 모델 경로를 `SPEECHTOTEXT_DIARIZE_SEGMENTATION`·`SPEECHTOTEXT_DIARIZE_EMBEDDING` 에
-적으면 다음 틱부터 화자 블록이 붙는다. 화자 분리는 CPU 에서 돌고 전사는 GPU 에서 도므로
+적으면 다음 틱부터 화자 블록이 붙는다. 임계값은 임베딩 모델에 붙은 값이라
+`SPEECHTOTEXT_DIARIZE_THRESHOLD` 를 함께 적는다 — `eres2net_200k` 는 `0.8`
+(2026-09-17 노드 실측, `docs/qa/PLE1/summary.md`; 그 전에는 `eres2net_base` 에 코드
+기본값 1.0 이었다). 다른 임베딩으로 바꾸면 같은 표본으로 임계값을 다시 잰다. 화자 분리는 CPU 에서 돌고 전사는 GPU 에서 도므로
 둘이 자원을 놓고 다투지 않는다.
 
 ## 관련

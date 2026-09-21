@@ -1,4 +1,8 @@
-"""Procurement review transport contracts without Discord or Drive network calls."""
+"""Procurement review transport contracts without Discord or Drive network calls.
+
+ON-1..ON-3 이관 후: 목적지 해석도 전송도 `automation.owner_notice` 파사드가 한다.
+첨부는 파사드의 `attachments=` 로 넘어가고, 본문 바이트는 이관 전과 같다.
+"""
 from __future__ import annotations
 
 import json
@@ -11,7 +15,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from automation import drive_outputs
+from automation import drive_outputs, owner_notice
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "procurement" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
@@ -25,37 +29,66 @@ _LEGACY_WITHOUT_LINK: Final = (
 )
 
 
+@pytest.fixture
+def notice(monkeypatch: pytest.MonkeyPatch) -> tuple[list[tuple[str, str]], list[tuple[str, str, tuple[Path, ...]]]]:
+    """파사드의 두 전송 계층(본문 전용 / 첨부 동반)만 스텁한다."""
+    plain: list[tuple[str, str]] = []
+    files: list[tuple[str, str, tuple[Path, ...]]] = []
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "unit-token")
+    monkeypatch.setenv("OWNER_NOTICE_CHANNEL_ID", "111")
+    monkeypatch.setattr(
+        owner_notice, "send_notice", lambda _token, channel, body: plain.append((channel, body)),
+    )
+    monkeypatch.setattr(
+        owner_notice, "send_notice_files",
+        lambda _token, channel, body, attachments: files.append((channel, body, tuple(attachments))),
+        raising=False,
+    )
+    return plain, files
+
+
 @pytest.mark.parametrize("scenario", [(1, "attach"), (0, "drive-link")])
 def test_transport_keeps_route_and_receipt_when_review_is_sent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: tuple[int, str],
+    notice: tuple[list[tuple[str, str]], list[tuple[str, str, tuple[Path, ...]]]],
 ) -> None:
     # Given a real artifact and narrow outbound boundaries.
+    plain, files = notice
     limit, mode = scenario
     file = tmp_path / "draft.hwpx"
     file.write_bytes(b"x")
     monkeypatch.delenv("PROCURE_DISCORD_STUB", raising=False)
     monkeypatch.setenv("PROCURE_DM_MAX_BYTES", str(limit))
-    monkeypatch.setattr(pr, "_notice_channel", lambda: "111")
     publish = Mock(return_value=drive_outputs.PublishResult(("https://drive.example/draft",), "created", "folder"))
     monkeypatch.setattr(drive_outputs, "publish_best_effort", publish)
-    post = Mock(return_value={"id": "222"})
-    attach = Mock(return_value={"id": "333"})
-    monkeypatch.setattr(pr, "_api", post)
-    monkeypatch.setattr(pr, "_post_attachment", attach)
     # When
     receipt = pr.send_review(file, "검토")
     # Then: route choice and rc-facing receipt are independent of notice wording.
     if mode == "attach":
-        assert attach.call_args.args[:2] == ("111", file)
-        post.assert_not_called()
+        assert [(channel, attachments) for channel, _body, attachments in files] == [("111", (file,))]
+        assert plain == []
         publish.assert_not_called()
-        assert receipt == "REVIEW-DM-SENT message=333 mode=attach size=1"
     else:
-        assert post.call_args.args[:2] == ("POST", "/channels/111/messages")
-        assert set(post.call_args.args[2]) == {"content"}
-        attach.assert_not_called()
+        assert [channel for channel, _body in plain] == ["111"]
+        assert files == []
         publish.assert_called_once_with("procurement", "draft", [(file, "draft")])
-        assert receipt == "REVIEW-DM-SENT message=222 mode=drive-link size=1"
+    assert receipt == f"REVIEW-DM-SENT message=notice mode={mode} size=1"
+
+
+def test_review_error_when_facade_reports_a_failed_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    notice: tuple[list[tuple[str, str]], list[tuple[str, str, tuple[Path, ...]]]],
+) -> None:
+    # Given the never-raising facade answering False; when a review is requested;
+    del notice
+    file = tmp_path / "draft.hwpx"
+    file.write_bytes(b"x")
+    monkeypatch.delenv("PROCURE_DISCORD_STUB", raising=False)
+    monkeypatch.setenv("PROCURE_DM_MAX_BYTES", "1")
+    monkeypatch.setattr(owner_notice, "send_notice_files", Mock(side_effect=OSError("unavailable")), raising=False)
+    # Then the skill keeps its exit-6 refusal contract.
+    with pytest.raises(pr.ReviewError):
+        pr.send_review(file, "검토")
 
 
 def test_stub_records_review_when_drive_import_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,8 +154,10 @@ def test_document_ref_reaches_renderer_when_drive_result_varies(
 ])
 def test_legacy_bytes_are_sent_when_envelope_is_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: tuple[bool, bool],
+    notice: tuple[list[tuple[str, str]], list[tuple[str, str, tuple[Path, ...]]]],
 ) -> None:
     # Given both capability fallbacks crossed with absent-link/publisher-import failure.
+    plain, _files = notice
     available, publisher_available = scenario
     from automation.interop import owner_message as om
 
@@ -130,7 +165,6 @@ def test_legacy_bytes_are_sent_when_envelope_is_unavailable(
     file.write_bytes(b"x")
     monkeypatch.setenv("PROCURE_DM_MAX_BYTES", "0")
     monkeypatch.delenv("PROCURE_DISCORD_STUB", raising=False)
-    monkeypatch.setattr(pr, "_notice_channel", lambda: "111")
     monkeypatch.setattr(drive_outputs, "publish_best_effort", Mock(
         return_value=None, side_effect=None if publisher_available else ImportError("unavailable"),
     ))
@@ -138,35 +172,33 @@ def test_legacy_bytes_are_sent_when_envelope_is_unavailable(
         monkeypatch.setattr(om, "render", Mock(side_effect=om.OwnerMessageError(detail="message.fact")))
     else:
         monkeypatch.setitem(sys.modules, "automation.interop.owner_message", None)
-    post = Mock(return_value={"id": "222"})
-    monkeypatch.setattr(pr, "_api", post)
     # When
     pr.send_review(file, "review\nnotes")
     # Then
-    assert post.call_args.args[2]["content"].encode() == _LEGACY_WITHOUT_LINK.encode("utf-8")
+    assert [body.encode() for _channel, body in plain] == [_LEGACY_WITHOUT_LINK.encode("utf-8")]
 
 
 def test_attachment_carries_search_locator_when_file_has_no_drive_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    notice: tuple[list[tuple[str, str]], list[tuple[str, str, tuple[Path, ...]]]],
 ) -> None:
     # Given a real artifact and channel id; rendering must not infer a DM space.
     from automation.interop import owner_message as om
 
+    _plain, files = notice
     file = tmp_path / "draft.hwpx"
     file.write_bytes(b"x")
     monkeypatch.setenv("PROCURE_DM_MAX_BYTES", "1")
     monkeypatch.delenv("PROCURE_DISCORD_STUB", raising=False)
-    monkeypatch.setattr(pr, "_notice_channel", lambda: "111")
     renderer = Mock(wraps=om.render)
     monkeypatch.setattr(om, "render", renderer)
-    attach = Mock(return_value={"id": "222"})
-    monkeypatch.setattr(pr, "_post_attachment", attach)
     # When
     pr.send_review(file, "review")
     # Then
     assert renderer.call_args.kwargs["destination"] == om.Ref(scope="channel", channel_id="111")
     assert renderer.call_args.args[0].location == om.Ref(scope="resource", search=("문서 검색", file.name))
-    content = attach.call_args.args[2]
+    _channel, content, attachments = files[0]
+    assert attachments == (file,)
     assert file.name in content.splitlines()[2]
     assert "https://" not in content
 

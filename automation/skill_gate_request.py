@@ -12,22 +12,23 @@ import json
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Final, assert_never
+from typing import Final, Protocol, assert_never
 
 from automation.interop.approval_lease import ApprovalLease, FileKeyLease, PostingJournal
 from automation.interop.approval_lifecycle import (
     ApprovalIntent,
+    ApprovalGate,
     ApprovalRecordsError,
-    ApprovalRequest,
     ApprovalSurfaceError,
     Outcome,
-    Probe,
+    PostedApproval,
     Reason,
     Verdict,
     request_owner_approval,
 )
+from automation.interop.approval_types import ApprovalRequest, Probe
 from automation.skill_gate_approval import SkillApprovalGate
-from automation.skill_gate_specs import DeploySpec, PublishSpec
+from automation.skill_gate_specs import DeploySpec, GateSpec, PublishSpec
 
 LIFECYCLE_REFUSAL_EXIT: Final = 6
 LEASE_DIRNAME: Final = "approval-leases"
@@ -44,6 +45,27 @@ class Requested:
     posted: bool = False
 
 
+class GateRoot(Protocol):
+    @property
+    def gate_dir(self) -> Path: ...
+
+
+class RequestGate(ApprovalGate, Protocol):
+    """The lifecycle plus the record/spec access needed by its CLI adapter."""
+
+    @property
+    def surface(self) -> GateRoot: ...
+
+    @property
+    def spec(self) -> GateSpec: ...
+
+    def stored(self) -> dict[str, str] | None: ...
+
+    def channel_id(self) -> str: ...
+
+    def new_record(self, posted: PostedApproval) -> dict[str, str]: ...
+
+
 def lease(gate_dir: Path) -> FileKeyLease:
     return FileKeyLease(gate_dir / LEASE_DIRNAME)
 
@@ -57,7 +79,7 @@ def _refused(reason: Reason, outcome: str = "refused") -> Requested:
     return Requested(None, LIFECYCLE_REFUSAL_EXIT, message)
 
 
-def _clear(gate: SkillApprovalGate, request: ApprovalRequest) -> Reason | None:
+def _clear(gate: RequestGate, request: ApprovalRequest) -> Reason | None:
     """Destroy one outstanding request, or name the reason it must survive untouched."""
     try:
         state = gate.probe(request)
@@ -84,7 +106,7 @@ def _clear(gate: SkillApprovalGate, request: ApprovalRequest) -> Reason | None:
             assert_never(unreachable)
 
 
-def supersede(gate: SkillApprovalGate, key: str, held: ApprovalLease) -> Reason | None:
+def supersede(gate: RequestGate, key: str, held: ApprovalLease) -> Reason | None:
     """``--fresh``: destroy the live request BEFORE a new one is posted — never orphan it."""
     with held.hold(key) as owned:
         if not owned:
@@ -100,7 +122,7 @@ def supersede(gate: SkillApprovalGate, key: str, held: ApprovalLease) -> Reason 
     return None
 
 
-def settle(verdict: Verdict, gate: SkillApprovalGate) -> Requested:
+def settle(verdict: Verdict, gate: RequestGate) -> Requested:
     """Map one lifecycle verdict onto the gate's stdout record and exit code."""
     match verdict.outcome:
         case Outcome.POSTED:
@@ -122,7 +144,7 @@ def settle(verdict: Verdict, gate: SkillApprovalGate) -> Requested:
             assert_never(unreachable)
 
 
-def reuse(gate: SkillApprovalGate) -> Requested | None:
+def reuse(gate: RequestGate) -> Requested | None:
     """PENDING fast path — the identical live request is reused; an unreadable record refuses."""
     try:
         record = gate.stored()
@@ -136,27 +158,27 @@ def reuse(gate: SkillApprovalGate) -> Requested | None:
     return Requested(record, 0) if found.action_hash == gate.spec.action_hash() else None
 
 
-def _prepare_card(gate: SkillApprovalGate) -> SkillApprovalGate | Requested:
+def _prepare_card(gate: RequestGate) -> RequestGate | Requested:
     """재사용 뒤, 저널·삭제·게시 전 최종 본문을 한 번만 확정한다."""
     if not isinstance(gate.spec, DeploySpec | PublishSpec):
         return gate
-    spec = replace(gate.spec, render_version=2)
-    try:
-        content = spec.render()
-    except Exception as error:
-        print(f"APPROVAL-RENDER-FALLBACK: {type(error).__name__}", file=sys.stderr)
-        spec = replace(spec, render_version=1)
-        try:
-            content = spec.render_v1()
-        except Exception as error:
-            print(f"APPROVAL-RENDER-REFUSED: {type(error).__name__}", file=sys.stderr)
-            return _refused(Reason.UNVERIFIABLE)
-    if len(content) > 1900:
+    if not isinstance(gate, SkillApprovalGate):
         return _refused(Reason.UNVERIFIABLE)
-    return replace(gate, spec=replace(spec, posted_text=content))
+    for version in (3, 2, 1):
+        spec = replace(gate.spec, render_version=version)
+        try:
+            content = spec.render()
+        except (ImportError, RuntimeError, TypeError, ValueError) as error:
+            marker = "APPROVAL-RENDER-REFUSED" if version == 1 else "APPROVAL-RENDER-FALLBACK"
+            print(f"{marker}: {type(error).__name__}", file=sys.stderr)
+            continue
+        if len(content) > 1900:
+            return _refused(Reason.UNVERIFIABLE)
+        return replace(gate, spec=replace(spec, posted_text=content))
+    return _refused(Reason.UNVERIFIABLE)
 
 
-def post_request(gate: SkillApprovalGate, *, fresh: bool) -> Requested:
+def post_request(gate: RequestGate, *, fresh: bool) -> Requested:
     """One guarded post: the optional ``--fresh`` supersede, then the shared lifecycle."""
     prepared = _prepare_card(gate)
     if isinstance(prepared, Requested):

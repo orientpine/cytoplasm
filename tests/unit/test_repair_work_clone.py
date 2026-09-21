@@ -13,14 +13,15 @@ from automation.repair.repair_ops_work_clone import RepairWorkClone
 class GitInvocation:
     argv: tuple[str, ...]
     cwd: Path
+    stdin: bytes | None = None
 
 
 @dataclass
 class RecordingGitRunner:
     invocations: list[GitInvocation] = field(default_factory=list)
 
-    def run(self, argv: tuple[str, ...], *, cwd: Path) -> subprocess.CompletedProcess[str]:
-        self.invocations.append(GitInvocation(argv, cwd))
+    def run(self, argv: tuple[str, ...], *, cwd: Path, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
+        self.invocations.append(GitInvocation(argv, cwd, input))
         stdout = ""
         if argv == ("git", "remote", "get-url", "origin"):
             stdout = "ssh://example.invalid/autophagy.git\n"
@@ -112,6 +113,8 @@ def test_repository_when_applying_registering_and_reverting_then_never_mutates_d
     assert [invocation.argv[1] for invocation in mutations] == ["apply", "add", "commit", "add", "commit", "revert"]
     assert all(invocation.cwd == work_clone for invocation in mutations)
     assert all(invocation.cwd != deploy_checkout for invocation in mutations)
+    assert mutations[0].argv == ("git", "apply", "-")
+    assert mutations[0].stdin == patch.read_bytes()
 
 
 def test_repository_when_registering_scenario_then_writes_only_under_work_clone(tmp_path: Path) -> None:

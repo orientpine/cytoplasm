@@ -10,6 +10,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
+from .release_spec_message import (
+    DETAIL_BACKLINK_BUDGET,
+    render_v1,
+    render_v2,
+    render_v3,
+    render_v5,
+    render_v6,
+    split_messages,
+)
 from automation.interop.approval_surface import ApprovalBinding
 from automation.skill_gate_specs import (
     _APPROVAL_LINE,
@@ -19,16 +28,15 @@ from automation.skill_gate_specs import (
 )
 
 RELEASE_ACTION: Final = "release.deploy"
-#: 카드 한 통과 상세 메시지 한 통의 상한 — Discord 한도 2000 아래의 같은 여유폭.
-MESSAGE_LIMIT: Final = 1900
-#: 신규 카드가 쓰는 판본. 1·2·3 은 이미 게시된 카드의 재생 전용이며 문구가 동결이다.
-NEW_RENDER_VERSION: Final = 4
+#: 신규 카드가 쓰는 판본. 1~5 는 이미 게시된 카드의 재생 전용이며 문구가 동결이다.
+NEW_RENDER_VERSION: Final = 6
 
 _RELEASE_VERSION: Final = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 _COMMIT_SHA: Final = re.compile(r"[0-9a-f]{40}\Z")
 _NONCE: Final = re.compile(r"[0-9a-f]{32}\Z")
 _SURFACE_NAME: Final = re.compile(r"[a-z0-9][a-z0-9:._/-]{0,99}\Z")
 _SHA256: Final = re.compile(r"[0-9a-f]{64}\Z")
+_SNOWFLAKE: Final = re.compile(r"[1-9][0-9]{0,19}\Z")
 
 
 class ReleaseSpecError(ValueError):
@@ -37,48 +45,6 @@ class ReleaseSpecError(ValueError):
 
 class EnvelopeUnavailable(ReleaseSpecError):
     """봉투를 부를 수 없다 — 신규 카드만 직전 판본으로 내려가고, 저장된 판본은 fail-closed."""
-
-
-def detail_header(version: str, head_sha: str, index: int, total: int) -> str:
-    """상세 메시지 머리글 — 매 통이 어느 릴리스·어느 배포 기준의 것인지 스스로 말한다."""
-    return f"[release] {version} 변경 상세 ({index}/{total}) — 기준 {head_sha[:12]}"
-
-
-def _packed(body: str, budget: int) -> list[str]:
-    """줄 단위로 채운다 — 한도보다 긴 줄만 이어붙일 수 있게 쪼개고, 버리지는 않는다."""
-    chunks: list[str] = []
-    current: list[str] = []
-    size = 0
-    for line in body.splitlines():
-        for piece in [line[at : at + budget] for at in range(0, len(line), budget)] or [""]:
-            if current and size + len(piece) + 1 > budget:
-                chunks.append("\n".join(current))
-                current, size = [piece], len(piece)
-                continue
-            size += len(piece) + (1 if current else 0)
-            current.append(piece)
-    if current:
-        chunks.append("\n".join(current))
-    return chunks or [""]
-
-
-def split_messages(*, version: str, head_sha: str, body: str) -> tuple[str, ...]:
-    """본문을 한도 안의 메시지들로 나눈다.
-
-    스펙 쪽에 두는 이유: 카드가 '아래 k개 메시지' 라고 약속하고, 노드의 게이트는 저장된
-    레코드만으로 그 k 와 본문을 재생해야 한다 — 계획(git·매니페스트) 없이도 되어야 한다.
-    """
-    total = 1
-    for _ in range(8):
-        budget = MESSAGE_LIMIT - len(detail_header(version, head_sha, total, total)) - 1
-        chunks = _packed(body, budget)
-        if len(chunks) == total:
-            return tuple(
-                f"{detail_header(version, head_sha, index, total)}\n{chunk}"
-                for index, chunk in enumerate(chunks, start=1)
-            )
-        total = len(chunks)
-    raise ReleaseSpecError("release detail messages do not converge on a stable count")
 
 
 def spec_from_record(record: Mapping[str, str]) -> ReleaseSpec:
@@ -95,6 +61,17 @@ def spec_from_record(record: Mapping[str, str]) -> ReleaseSpec:
         render_version = int(record.get("render_version", "1"))
     except ValueError as error:
         raise ReleaseSpecError("stored render version is malformed") from error
+    detail_ids: tuple[str, ...] = ()
+    if render_version >= 6:
+        try:
+            raw_detail_ids = json.loads(record.get("detail_message_ids", "[]"))
+        except json.JSONDecodeError as error:
+            raise ReleaseSpecError("stored detail message ids are malformed") from error
+        if not isinstance(raw_detail_ids, list) or any(
+            not isinstance(value, str) for value in raw_detail_ids
+        ):
+            raise ReleaseSpecError("stored detail message ids are malformed")
+        detail_ids = tuple(raw_detail_ids)
     return ReleaseSpec(
         version=record.get("version", ""),
         head_sha=record.get("head_sha", ""),
@@ -103,26 +80,9 @@ def spec_from_record(record: Mapping[str, str]) -> ReleaseSpec:
         patch_notes=record.get("patch_notes", ""),
         render_version=render_version,
         major_note=record.get("major_note", ""),
-    )
-
-
-def spec_from_plan(payload: Mapping[str, object], release_nonce: str) -> ReleaseSpec:
-    """One immutable spec from the plan JSON `release.sh` carries between steps.
-
-    `spec_from_record` 의 형제다 — 둘 다 바깥 표현(계획 JSON · 저장 레코드)을 같은 스펙으로
-    되살리므로 한 자리에 둔다. 2026-09-10 에 `release_approval` 에서 옮겼다: 그 모듈이 250
-    pure-LOC 천장을 넘겼고, 이 함수의 집은 원래 여기다(이 모듈 자신이 같은 이유로 갈라졌다).
-    """
-    surfaces = payload.get("surface_digests")
-    if not isinstance(surfaces, list):
-        raise ReleaseSpecError("plan payload carries no surface digest list")
-    return ReleaseSpec(
-        version=str(payload.get("version", "")),
-        head_sha=str(payload.get("head", "")),
-        release_nonce=release_nonce,
-        surface_digests=tuple((str(row[0]), str(row[1])) for row in surfaces),
-        patch_notes=str(payload.get("patch_notes", "")),
-        major_note=str(payload.get("major_note", "")),
+        detail_message_ids=detail_ids,
+        detail_channel_id=record.get("detail_channel_id", ""),
+        detail_guild_id=record.get("detail_guild_id", ""),
     )
 
 
@@ -138,6 +98,9 @@ class ReleaseSpec:
     render_version: int = NEW_RENDER_VERSION
     major_note: str = ""
     posted_text: str = ""
+    detail_message_ids: tuple[str, ...] = ()
+    detail_channel_id: str = ""
+    detail_guild_id: str = ""
 
     def __post_init__(self) -> None:
         if _RELEASE_VERSION.fullmatch(self.version) is None:
@@ -159,10 +122,19 @@ class ReleaseSpec:
             raise ReleaseSpecError("surface names and sha256 digests must be canonical")
         if not isinstance(self.patch_notes, str) or not self.patch_notes.strip():
             raise ReleaseSpecError("release patch notes must not be empty")
-        if self.render_version not in (1, 2, 3, 4):
-            raise ReleaseSpecError("release render version must be 1, 2, 3 or 4")
+        if self.render_version not in (1, 2, 3, 4, 5, 6):
+            raise ReleaseSpecError("release render version must be 1, 2, 3, 4, 5 or 6")
         if "\n" in self.major_note:
             raise ReleaseSpecError("the operator note must stay on one card line")
+        coordinates = (
+            *self.detail_message_ids,
+            self.detail_channel_id,
+            self.detail_guild_id,
+        )
+        if any(value and _SNOWFLAKE.fullmatch(value) is None for value in coordinates):
+            raise ReleaseSpecError("release detail coordinates must be Discord snowflakes")
+        if self.detail_message_ids and not self.detail_channel_id:
+            raise ReleaseSpecError("release detail message ids require a channel id")
         object.__setattr__(self, "surface_digests", rows)
 
     def key(self) -> str:
@@ -189,15 +161,47 @@ class ReleaseSpec:
 
     def detail_messages(self) -> tuple[str, ...]:
         """카드가 가리키는 변경 상세 메시지 전부 — 레코드의 원문에서 그대로 재생된다."""
+        body = self.patch_notes
+        if self.render_version >= 6:
+            bundles = "\n".join(
+                f"- `{name}`" for name, _digest in self.surface_digests
+            ) or "- 변경 없음"
+            body = f"### 배포 묶음 전체\n{bundles}\n{body}"
         return split_messages(
-            version=self.version, head_sha=self.head_sha, body=self.patch_notes
+            version=self.version,
+            head_sha=self.head_sha,
+            body=body,
+            suffix_budget=(
+                DETAIL_BACKLINK_BUDGET
+                if self.render_version >= 6
+                else 0
+            ),
         )
 
     def render(self) -> str:
         """게시할 카드 본문. 버전형이며 과거 판본은 저장된 레코드를 위해 동결이다."""
         if self.posted_text:
             return self.posted_text
-        renderers = {1: self._render_v1, 2: self._render_v2, 3: self._render_v3, 4: self._render_v4}
+        renderers = {
+            1: lambda: render_v1(self, approval_line=_APPROVAL_LINE),
+            2: lambda: render_v2(
+                self,
+                bundle_names=self._bundle_names(),
+                approval_line=_APPROVAL_LINE,
+            ),
+            3: lambda: render_v3(
+                self,
+                bundle_names=self._bundle_names(),
+                approval_line=_APPROVAL_LINE,
+            ),
+            4: self._render_v4,
+            5: lambda: render_v5(
+                self, bundle_names=self._bundle_names()
+            ),
+            6: lambda: render_v6(
+                self, bundle_summary=self._bundle_summary()
+            ),
+        }
         content = renderers[self.render_version]()
         if len(content) > 1900:
             raise ReleaseSpecError(
@@ -208,47 +212,20 @@ class ReleaseSpec:
     def _bundle_names(self) -> str:
         return ", ".join(f"`{name}`" for name, _digest in self.surface_digests) or "변경 없음"
 
-    def _render_v1(self) -> str:
-        surfaces = "\n".join(
-            f"- surface `{name}`: `{digest}`"
-            for name, digest in self.surface_digests
-        ) or "- surface: 변경 없음"
-        return (
-            f"[release] {self.version} 배포 승인 요청\n"
-            f"- version: `{self.version}`\n"
-            f"- HEAD: `{self.head_sha}`\n"
-            f"- release_nonce: `{self.release_nonce}`\n"
-            f"{surfaces}\n"
-            "- 패치노트:\n"
-            f"{self.patch_notes.rstrip()}\n"
-            f"{_APPROVAL_LINE}"
+    def _bundle_summary(self) -> str:
+        skills = sum(name.startswith("skill:") for name, _digest in self.surface_digests)
+        homes = sum(name.startswith("home:") for name, _digest in self.surface_digests)
+        summary: list[str] = []
+        if skills:
+            summary.append(f"스킬 {skills}")
+        if homes:
+            summary.append(f"홈 패키지 {homes}")
+        summary.extend(
+            name
+            for name, _digest in self.surface_digests
+            if not name.startswith(("skill:", "home:"))
         )
-
-    def _render_v3(self) -> str:
-        """v3: 카드는 무엇을 승인하는지만 싣고, 변경 원문은 뒤따르는 상세 메시지가 싣는다."""
-        operator = f"{self.major_note}\n" if self.major_note else ""
-        return (
-            f"[release] {self.version} 배포 승인 요청\n"
-            f"- 배포 기준: `{self.head_sha}`\n"
-            f"- 배포 번들 ({len(self.surface_digests)}): {self._bundle_names()}\n"
-            f"- 승인 바인딩: `{self.action_hash()}`\n"
-            f"{operator}"
-            f"- 변경 상세: 아래 {len(self.detail_messages())}개 메시지"
-            f" (같은 릴리스 {self.version} · 기준 {self.head_sha[:12]})\n"
-            f"{_APPROVAL_LINE}"
-        )
-
-    def _render_v2(self) -> str:
-        surfaces = self._bundle_names()
-        return (
-            f"[release] {self.version} 배포 승인 요청\n"
-            f"- 배포 기준: `{self.head_sha}`\n"
-            f"- 배포 번들 ({len(self.surface_digests)}): {surfaces}\n"
-            f"- 승인 바인딩: `{self.action_hash()}`\n"
-            "- 변경 내용:\n"
-            f"{self.patch_notes.rstrip()}\n"
-            f"{_APPROVAL_LINE}"
-        )
+        return " · ".join(summary) or "변경 없음"
 
     def _render_v4(self) -> str:
         """v4(신규 기본): 저장된 레코드만으로 재생되는 봉투 — 시계도 계획도 읽지 않는다."""
@@ -257,6 +234,17 @@ class ReleaseSpec:
         return render_v4(self, bundle_names=self._bundle_names())
 
     def new_record(self, message_id: str, binding: ApprovalBinding) -> dict[str, str]:
+        detail_fields = (
+            {
+                "detail_message_ids": json.dumps(
+                    self.detail_message_ids, separators=(",", ":")
+                ),
+                "detail_channel_id": self.detail_channel_id,
+                "detail_guild_id": self.detail_guild_id,
+            }
+            if self.detail_message_ids
+            else {}
+        )
         return {
             "version": self.version,
             "head_sha": self.head_sha,
@@ -272,6 +260,7 @@ class ReleaseSpec:
             "content_sha256": _hash(self.render()),
             "approval_action": RELEASE_ACTION,
             "approval_destination": f"release:{self.version}",
+            **detail_fields,
             **binding_fields(binding),
         }
 

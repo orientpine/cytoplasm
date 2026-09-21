@@ -32,6 +32,7 @@ def _run(copied_cli: Path, live_root: Path) -> subprocess.CompletedProcess[str]:
 
 def _copy_scripts(destination: Path) -> Path:
     destination.mkdir(parents=True)
+    _ = shutil.copy2(SCRIPTS.parent / "layout_profile.py", destination.parent / "layout_profile.py")
     for source in SCRIPTS.iterdir():
         if source.is_file():
             shutil.copy2(source, destination / source.name)

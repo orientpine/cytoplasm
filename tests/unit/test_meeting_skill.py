@@ -1082,6 +1082,7 @@ def test_sensitive_meeting_skips_drive_publish(tmp_path, monkeypatch, capsys):
 
 
 def test_drive_facade_import_failure_does_not_block_local_save(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("DRIVE_PUBLISH_ENABLED", "0")
     monkeypatch.setitem(sys.modules, "automation.drive_outputs", None)
     assert _run_meeting_ingest(tmp_path, monkeypatch, "meeting-clean.md", "recorded-clean.json") == 0
     assert list((tmp_path / "notes").glob("*.md"))
@@ -1138,6 +1139,7 @@ def test_note_is_published_under_the_meeting_label(tmp_path: Path, monkeypatch) 
 
 
 def test_sensitive_meeting_is_never_published(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("DRIVE_PUBLISH_ENABLED", "0")
     from datetime import date
 
     if str(REPO) not in sys.path:

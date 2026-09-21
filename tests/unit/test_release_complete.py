@@ -625,7 +625,7 @@ def test_the_decision_carries_the_cut_release_so_it_is_not_called_stale(
     assert result.returncode == 0, result.stdout + result.stderr
     tip = _git(source, "rev-parse", "origin/main")
     assert _lines(tmp_path / "calls.log") == [
-        f"decision --head {tip} --notify-stale --tagged {tagged}"
+        f"decision --head {tip} --notify-stale --completion-candidate --tagged {tagged}"
     ]
 
 
@@ -640,7 +640,7 @@ def test_the_decision_omits_the_cut_release_when_no_release_tag_exists(
 
     assert result.returncode == 0, result.stdout + result.stderr
     head = _git(source, "rev-parse", "origin/main")
-    assert _lines(tmp_path / "calls.log") == [f"decision --head {head} --notify-stale"]
+    assert _lines(tmp_path / "calls.log") == [f"decision --head {head} --notify-stale --completion-candidate"]
 
 
 def test_a_stale_checkout_as_cwd_does_not_shadow_the_completer_runtime(

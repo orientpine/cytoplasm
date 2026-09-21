@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from automation.interop.discord_transport import SentMessage
     from automation.release_plan import ReleasePlan
 
-from automation.release_spec import split_messages
+from automation.release_spec_message import split_messages
 
 _RAG_PREFIXES: Final = ("configs/rag/", "automation/rag_ingest/", "automation/rag_stack/")
 _ROOT_PREFIXES: Final = ("automation/systemd/", "automation/sudoers.d/", "automation/libexec/")

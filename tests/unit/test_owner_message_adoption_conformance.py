@@ -78,7 +78,7 @@ _CARD_RENDER_ROOTS: Final = {
     "automation/managed_skills/submission_cli.py::submit": "automation/managed_skills/submission_message.py::render_submission_message",
     "automation/repair/repair_ops_posting.py::PostingOwnerApproval.permits": "automation/repair/repair_approval_render.py::approval_request_content",
     "skills/wiki/scripts/wiki_gate.py::post_confirm_message": "skills/wiki/scripts/wiki_gate.py::confirm_text",
-    "skills/calendar/scripts/calendar_approval.py::request_confirmation": "skills/calendar/scripts/calendar_confirm.py::post_confirmation_message",
+    "skills/calendar/scripts/calendar_approval.py::request_confirmation": "skills/calendar/scripts/calendar_card.py::render_envelope",
     "skills/coordination/scripts/coordination_approval.py::request_confirmation": "skills/coordination/scripts/coordination_lifecycle.py::render_owner_card",
     "skills/mail/scripts/triage_approval.py::request_approval": "skills/mail/scripts/triage_core.py::render_approvals_message",
     "skills/budget/scripts/budget_approval.py::request_approval": "skills/budget/scripts/budget_core.py::render_approvals_message",
@@ -87,7 +87,7 @@ _CARD_RENDER_ROOTS: Final = {
     "automation/memory_relocate/approval_gate.py::request_approval": "automation/memory_relocate/render.py::render_relocation_approval",
     "automation/plaud_sync/approval_gate.py::request_approval": "automation/plaud_sync/render.py::render_plaud_approval",
     "skills/todo/scripts/todo_cli.py::_cmd_request": "skills/todo/scripts/todo_approval_render.py::render_todo_approval",
-    "automation/release_approval.py::cmd_request": "automation/release_spec_message.py::render_v4",
+    "automation/release_approval.py::cmd_request": "automation/release_spec_message.py::render_v6",
 }
 # Closed pending ledger. Delete rows only WITH migration or reasoned promotion;
 # stale rows silently un-guard their scope (approval inventory precedent).
@@ -99,11 +99,17 @@ _PERMANENT_RAW_CONTENT_EXEMPT: dict[str, str] = {
     "automation/obsidian_write/gate_binding.py::request_approval": "영구 위임 경계 — 주입 ApprovalGate에 lifecycle을 위임하며 자체 카드·구체 게시 어댑터가 없다; 어댑터 도입 시 재감사",
     "skills/budget/scripts/budget_confirm.py::dm_owner": "영구 문자열 수신 경계 — deliver가 목적지별 렌더한 본문 또는 import·능력 폴백의 기존 바이트를 notify_owner로 전달; 재렌더 금지",
     "skills/calendar/scripts/calendar_confirm.py::send_owner_dm": "영구 문자열 수신 경계 — deliver 폴백·워처의 렌더된 본문 또는 기존 바이트·공유 최소정보 리마인더를 수신; 목적지 선택은 호출자가 소유",
+    "skills/doctype/scripts/doctype_review.py::send_review": "영구 문자열 발신 경계 — 스킬이 봉투를 렌더하고 옛 런타임·렌더 거부의 능력 폴백으로 기존 바이트를 보존한 뒤 notify_owner로 전달; message=는 폴백을 없애므로 재렌더 금지",
+    "skills/procurement/scripts/procure_review.py::send_review": "영구 문자열 발신 경계 — 해석된 통지 채널 좌표로 렌더한 본문·레거시 폴백 바이트를 첨부와 함께 notify_owner로 전달; 재렌더하면 좌표와 폴백이 모두 사라진다",
+    "skills/proposal/scripts/proposal_dm.py::send_review": "영구 문자열 발신 경계 — 스킬이 봉투를 렌더하고 옛 런타임·렌더 거부의 능력 폴백으로 기존 바이트를 보존한 뒤 notify_owner로 전달; message=는 폴백을 없애므로 재렌더 금지",
 }
 
 # Transport internals, peer protocols and approval posting: not notice producers.
 _NOT_OWNER_FACING: dict[str, str] = {
     "automation/interop/discord_transport.py::DiscordTransport._send_chunk": "공유 전송 내부 — 봉투 채택은 호출한 발신자가 소유한다",
+
+    "automation/owner_notice.py::_post_multipart": "파사드 첨부 전송 내부 — 목적지·본문은 notify_owner가 정하고 여기서는 multipart 인코딩만 올린다",
+
 
     "automation/interop/reaction_approval.py::DiscordTransport.post_message": "승인 라이프사이클 공용 전송 — 카드 생산자에서 렌더 경로를 검사한다",
 
@@ -116,6 +122,8 @@ _NOT_OWNER_FACING: dict[str, str] = {
     "automation/repair/repair_report_send.py::_send_direct": "agents-log 봇 보고 프로토콜이며 소유자 통지 표면이 아니다",
 
     "automation/skill_gate_approval.py::SkillApprovalGate.post": "승인 라이프사이클 카드 게시 — skill 및 release 생산자의 렌더 경로가 검사 대상이다",
+    "automation/release_request_gate.py::ReleaseRequestGate.post": "릴리스 승인 게시 트랜잭션 — 카드 봉투는 release 생산자의 render_v6 경로가 검사하고, 여기서는 실제 상세 좌표와 reply payload만 결합한다",
+    "automation/release_request_gate.py::ReleaseRequestGate._post_details": "릴리스 변경 상세 전송 내부 — 저장된 패치노트와 전체 번들 목록의 기계적 분할이며 승인 카드 생산자는 render_v6 경로가 검사한다",
 
     "automation/supply_chain_watch_cli.py::main.deliver": "승인 리마인더의 주입 전송 — approval_reminder 발신자가 봉투를 소유한다",
 
@@ -131,8 +139,6 @@ _NOT_OWNER_FACING: dict[str, str] = {
     "skills/mail/scripts/triage_confirm.py::post_approval_request": "메일 승인 카드 전송 — mail 생산자의 렌더 경로가 검사 대상이다",
 
     "skills/patent-prep/scripts/patent_export_gate.py::post_approval_request": "특허 승인 카드 전송 — patent 생산자의 렌더 경로가 검사 대상이다",
-
-    "skills/procurement/scripts/procure_review.py::_post_attachment": "구매 검토 첨부 전송 내부 — 같은 파일 send_review 발신자의 봉투를 전달한다",
 
     "skills/todo/scripts/todo_discord.py::TodoDiscordTransport.post_message": "할 일 승인 라이프사이클 공용 전송 내부",
 

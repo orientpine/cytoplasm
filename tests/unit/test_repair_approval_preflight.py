@@ -56,7 +56,7 @@ def test_cli_has_zero_effects_when_both_renderers_refuse(tmp_path: Path) -> None
     assert not (tmp_path / "pending").exists()
 
 
-@pytest.mark.parametrize("capability", [True, False], ids=["v3", "v2-fallback"])
+@pytest.mark.parametrize("capability", [True, False], ids=["v4", "v2-fallback"])
 def test_cli_posts_frozen_card_when_surface_setup_loses_rendering(
     tmp_path: Path, capability: bool,
 ) -> None:
@@ -94,7 +94,7 @@ def test_cli_posts_frozen_card_when_surface_setup_loses_rendering(
         approval.permits(TICKET, source)
     # Then: the frozen chosen version posts once to the unchanged request policy.
     record = PendingRepairApprovalStore(tmp_path / "pending").get(TICKET)
-    assert record is not None and record.render_version == (3 if capability else 2)
+    assert record is not None and record.render_version == (4 if capability else 2)
     assert setup_calls == ["111"]
     assert directory.opened == [RequestThread(title=TICKET)]
     assert len(http.posts) == 1

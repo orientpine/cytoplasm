@@ -1,4 +1,9 @@
-"""Ops-only entry point for owner-gated W6-2 repairs."""
+"""Ops-only entry point for owner-gated W6-2 repairs.
+
+Exit 5 means AWAITING_APPROVAL: no patch applied, retain the pending record.
+Exit 3 is a blocked bank; exit 4 is an unpublished commit.
+PR publication is reported as pr_url/pr_error; a PR error does not undo apply.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import assert_never
 
 from automation.interop.injection_adapter import InboundEvent
 from automation.node_config import load_node_config
@@ -24,6 +30,7 @@ from automation.repair.repair_lifecycle import LifecycleState, RepairLifecycleSt
 from automation.repair.repair_ops_reporting import HermesTicketBoard, PatchDocumentWriter
 from automation.repair.repair_redaction import redact
 from automation.repair.repair_ops_work_clone import RepairWorkClone
+from automation.repair.repair_patch_binding import plan_patch_path
 
 
 # Not under /home: both repair units run with ProtectHome=yes, which would make
@@ -133,7 +140,7 @@ def planner_for(config: RepairOpsConfig) -> CodexPlanner | StaticPlanner:
     return CodexPlanner(config.plans)
 
 
-def _agent(config: RepairOpsConfig, approval: Approval) -> RepairAgent:
+def _agent(config: RepairOpsConfig, approval: Approval, expected_patch_sha256: str | None = None) -> RepairAgent:
     work_clone = RepairWorkClone(config.checkout, config.work_clone).prepare()
     return RepairAgent(
         planner_for(config),
@@ -142,6 +149,7 @@ def _agent(config: RepairOpsConfig, approval: Approval) -> RepairAgent:
         GitRepository(
             work_clone,
             Path(os.environ.get("REPAIR_BANK_STATE", str(DEFAULT_STATE_PATH))),
+            expected_patch_sha256=expected_patch_sha256,
         ),
         HermesTicketBoard(),
         PatchDocumentWriter(work_clone / "docs/patch"),
@@ -173,18 +181,41 @@ def _push_repair_branch(config: RepairOpsConfig, outcome: RepairOutcome) -> str 
     )
 
 
-def _run(config: RepairOpsConfig, approval: Approval) -> int:
-    outcome = _agent(config, approval).repair(config.ticket_id, private_log(config.ticket_id, config.logs))
+def _run(config: RepairOpsConfig, approval: Approval, expected_patch_sha256: str | None = None) -> int:
+    outcome = _agent(config, approval, expected_patch_sha256).repair(config.ticket_id, private_log(config.ticket_id, config.logs))
     branch: str | None = None
     push_error: str | None = None
     try:
         branch = _push_repair_branch(config, outcome)
     except RepairOpsError as error:
         push_error = redact(str(error))[:180]
-    print(json.dumps({"ticket": outcome.ticket_id, "phase": outcome.phase, "commit": outcome.commit, "patch_doc": str(outcome.patch_doc) if outcome.patch_doc else None, "branch": branch, "push_error": push_error}))
-    if outcome.phase is RepairPhase.BANK_BLOCKED:
-        return 3
-    return 4 if push_error is not None else 0
+    pr_url: str | None = None
+    pr_error: str | None = None
+    exit_code = 4 if push_error is not None else 0
+    match outcome.phase:
+        case RepairPhase.AWAITING_APPROVAL:
+            exit_code = 5
+        case RepairPhase.BANK_BLOCKED:
+            exit_code = 3
+        case RepairPhase.COMPLETED:
+            if branch is not None:
+                try:
+                    pr_url = RepairWorkClone(config.checkout, config.work_clone).ensure_pull_request(config.ticket_id)
+                except RepairOpsError as error:
+                    pr_error = redact(str(error))[:180]
+        case RepairPhase.REOPENED | RepairPhase.SANDBOX_REJECTED:
+            pass
+        case unreachable:
+            assert_never(unreachable)
+    pruned_branches: tuple[str, ...] = ()
+    prune_error: str | None = None
+    if pr_url is not None:
+        try:
+            pruned_branches = RepairWorkClone(config.checkout, config.work_clone).prune_completed_branches()
+        except RepairOpsError as error:
+            prune_error = redact(str(error))[:180]
+    print(json.dumps({"ticket": outcome.ticket_id, "phase": outcome.phase, "commit": outcome.commit, "patch_doc": str(outcome.patch_doc) if outcome.patch_doc else None, "branch": branch, "push_error": push_error, "pr_url": pr_url, "pr_error": pr_error, "pruned_branches": pruned_branches, "prune_error": prune_error}))
+    return exit_code
 
 
 def _apply_approved(config: RepairOpsConfig) -> int:
@@ -209,7 +240,10 @@ def _apply_approved(config: RepairOpsConfig) -> int:
         manual_approval_text(pending.ticket_id, pending.action_hash),
         False,
     )
-    return _run(config, ManualOwnerApproval(discord.owner_id, reaction, bound_discord.binding.channel_id))
+    approval = ManualOwnerApproval(discord.owner_id, reaction, bound_discord.binding.channel_id)
+    if not approval.permits(config.ticket_id, plan_patch_path(config.plans, config.ticket_id)):
+        return 5
+    return _run(config, approval, pending.patch_sha256)
 
 
 def _discard(config: RepairOpsConfig, reason: str) -> int:

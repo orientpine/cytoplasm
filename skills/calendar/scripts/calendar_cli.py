@@ -107,13 +107,14 @@ def cmd_draft_create(args: argparse.Namespace) -> int:
     if not summary:
         raise calendar_core.ParseRejected("일정 제목을 알 수 없습니다 (--summary로 지정 가능)")
     request = calendar_core.ParsedRequest(summary=summary, start=request.start, end=request.end)
-    record = calendar_gate.create_draft(
+    record = calendar_gate.build_draft(
         action="create", argv=calendar_core.build_create_argv(args.calendar, request),
         calendar_id=args.calendar, event_id="", summary=summary,
         start=request.start.isoformat(), end=request.end.isoformat(),
         channel_id=args.channel_id, **_origin_of(args),
     )
-    _print_draft(record)
+    # 다이제스트 건(--digest-day)은 저장에서 끝나지 않고 그날 승인 스레드에 카드까지 올린다.
+    _print_draft(import_module("calendar_digest").submit(record, args.digest_day))
     return 0
 
 
@@ -124,7 +125,7 @@ def cmd_draft_update(args: argparse.Namespace) -> int:
     if args.text:
         request = calendar_core.parse_request(args.text, datetime.now(calendar_core.KST))
     body = calendar_core.patch_body(request, args.summary)
-    record = calendar_gate.create_draft(
+    record = calendar_gate.build_draft(
         action="update", argv=calendar_core.build_patch_argv(args.calendar, args.event_id, body),
         calendar_id=args.calendar, event_id=args.event_id,
         summary=args.summary or (request.summary if request else ""),
@@ -132,17 +133,17 @@ def cmd_draft_update(args: argparse.Namespace) -> int:
         end=request.end.isoformat() if request else "",
         channel_id=args.channel_id, **_origin_of(args),
     )
-    _print_draft(record)
+    _print_draft(import_module("calendar_card").capture_context(record))
     return 0
 
 
 def cmd_draft_delete(args: argparse.Namespace) -> int:
-    record = calendar_gate.create_draft(
+    record = calendar_gate.build_draft(
         action="delete", argv=calendar_core.build_delete_argv(args.calendar, args.event_id),
         calendar_id=args.calendar, event_id=args.event_id, summary=args.label,
         start="", end="", channel_id=args.channel_id, **_origin_of(args),
     )
-    _print_draft(record)
+    _print_draft(import_module("calendar_card").capture_context(record))
     return 0
 
 
@@ -235,6 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     create = sub.add_parser("draft-create", help="생성 초안 (캘린더에 아무것도 쓰지 않음)")
     create.add_argument("--text", required=True, help="자연어 요청 (예: 내일 오후 3시 실험 미팅)")
     create.add_argument("--summary", default="", help="제목 명시 (자연어 파싱 대신)")
+    create.add_argument("--digest-day", default="", help="메일 다이제스트 게시일 YYYY-MM-DD — 그날 승인 스레드에 카드까지 게시")
     _add_common(create)
     create.set_defaults(func=cmd_draft_create)
 

@@ -376,7 +376,9 @@ def test_pending_transcript_minutes_publish_under_its_project(tmp_path, monkeypa
     전사본은 여전히 '미처리' 라 같은 회의가 매일 다시 원장에 쌓인다(2026-09-02·03 실측).
     """
     import automation.drive_outputs as drive_outputs
+    from automation.drive_client import DriveClient
 
+    monkeypatch.setattr(DriveClient, "_run", lambda self, argv, cwd=None: {})
     calls: list[tuple[tuple, dict]] = []
     monkeypatch.setenv("DRIVE_PUBLISH_ENABLED", "1")
     monkeypatch.setattr(

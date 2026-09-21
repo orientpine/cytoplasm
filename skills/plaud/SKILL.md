@@ -62,11 +62,35 @@ URL을 만든다. 길드가 없는 옛 레코드나 불완전한 좌표는 `thre
   1·2·4·8·16·24시간(상한) 백오프로 미루고, 클라우드만 매 틱 다시 확인한다. 총 실패 상한
   `PLAUD_SYNC_TRANSCRIBE_GIVE_UP`(기본 5)에 닿아도 클라우드가 비어 있으면 `abandoned`로 닫는다.
 - 틱 저널의 `outcome=waiting next_transcribe_at=…`는 전사 슬롯을 쓰지 않는 백오프 대기다.
-  `outcome=abandoned`는 폐기 사유를 동반한다. 상태 CLI의 출력 필드 자체는 바뀌지 않는다.
+  `outcome=abandoned`는 폐기 사유를 동반한다. 재확인 오류는 아래 별도 필드로 구분한다.
 - `PLAUD_SYNC_MIN_DURATION_MS`(기본 5000) 미만은 발견 시 건너뛰어 레코드·노트·카드를 만들지 않는다.
   이미 전사 대기 중이면 원본 길이를 확인하는 다음 처리에서 폐기한다.
 - Plaud 요약이 없으면 기존 필드 추출과 같은 LLM 호출에서 얻은 한국어 요약을 노트에 쓴다.
   Plaud 요약이 있으면 그것이 우선하며, 민감도 게이트·소유자 ✅는 그대로다.
+
+## 폴더 이동 별칭과 클라우드 재확인 오류
+
+폴더 정리로 녹음 id에 `of_`가 붙어도 접두어를 뺀 id가 같으면 기존 녹음이다.
+발견 단계에서 기존 키·녹음 id·`aliases`를 비교하므로 새 레코드나 승인 카드를 만들지 않는다.
+원본 id를 일괄 변경하지 않아 이미 승인된 해시와 노트 경로는 유지된다.
+이미 생긴 중복은 운영자가 다음 명령으로 계획을 검토한 뒤 적용한다(일반 틱은 병합하지 않는다):
+
+```bash
+python3 ~/.hermes/scripts/plaud_sync_watch.py --migrate-aliases
+python3 ~/.hermes/scripts/plaud_sync_watch.py --migrate-aliases --apply
+```
+
+우선순위는 `written > approved > posted > planned > transcribing > abandoned`이며,
+같은 상태면 키의 사전순으로 선택한다. 남는 레코드의 승인 바인딩·본문 경로는 그대로 두고
+다른 id를 선택적 `aliases` 목록에 보존한다. 적용은 워처 잠금 안에서
+`state.json.bak-<UTC stamp>`에 원본을 먼저 백업한 뒤 상태만 원자적으로 교체한다.
+카드·노트·외부 승인 원장을 삭제하지 않으며, 이 명령은 폴·전사·승인 처리를 실행하지 않는다.
+
+백오프 중 클라우드 재확인의 비집계 오류는 `last_recheck_error`에 따로 남는다.
+`last_block_reason`과 시도 횟수·재시도 시각을 보존하므로 원래 녹음 실패 사유를 잃지 않는다.
+`plaud 상태`는 전사 대기의 원래 사유와 마지막 재확인 오류를 함께 보여 주며,
+`status --json`의 `transcribing[]`에는 오류가 있을 때만 `last_recheck_error`가 추가된다.
+이 값은 마지막 오류 이력이지 현재 클라우드 장애 여부 판정은 아니다. 옛 상태 파일도 그대로 읽는다.
 
 ## 원본 오디오 보관과 전사 품질
 
