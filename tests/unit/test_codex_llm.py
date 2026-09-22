@@ -1,4 +1,5 @@
-"""Codex OAuth client contract: exact argv, fail-closed errors, no alternate tier."""
+"""Shared client contract: exact argv (Codex pinned, user config honored), fail-closed
+errors, no client-side retry — the only fallback is Hermes' own fallback_providers chain."""
 
 from __future__ import annotations
 
@@ -56,7 +57,6 @@ def test_argv_is_the_measured_codex_oauth_invocation(monkeypatch: pytest.MonkeyP
     argv, _ = fake.calls[0]
     assert argv == [
         BIN,
-        "--ignore-user-config",
         "-z",
         "ping",
         "--provider",
@@ -145,7 +145,7 @@ def test_model_override_via_environment_and_argument(monkeypatch: pytest.MonkeyP
     codex_llm.complete("p", model="gpt-5.6-sol-max", env=ENV)
     models = [call[0][call[0].index("-m") + 1] for call in fake.calls]
     assert models == ["gpt-5.6-sol-mini", "gpt-5.6-sol-max"]
-    assert all(call[0][1] == "--ignore-user-config" for call in fake.calls)
+    assert all("--ignore-user-config" not in call[0] for call in fake.calls)
 
 
 def test_binary_resolution_prefers_override_then_home_then_path(
@@ -196,7 +196,8 @@ def test_no_failure_mode_retries_or_switches_provider(
     with pytest.raises(CodexError):
         _client().complete("ping")
     assert len(fake.calls) == 1
-    assert fake.calls[0][0][5] == "openai-codex"
+    argv = fake.calls[0][0]
+    assert argv[argv.index("--provider") + 1] == "openai-codex"
 
 
 def test_module_declares_no_other_provider() -> None:

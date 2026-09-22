@@ -13,6 +13,9 @@ transcript-only previews disclose their source. The note approval heading and
 separate approve / request changes / cancel lines make the review explicit.
 v5 adopts the frozen owner-ko-v1 envelope. v6 selects owner-ko-v2 so the
 metadata and preview remain separate quoted fact lines and the decision is bold.
+v7 (2026-09-22, owner question about '참조: of_00924'): the reference is the
+canonical recording id (folder-move 'of_' removed) shown whole via owner-ko-v3;
+v6 kept 8 characters of the raw id, 3 of which could be the 'of_' prefix.
 """
 
 from __future__ import annotations
@@ -27,9 +30,9 @@ from .lifelog_fields import (
     lifelog_sections,
     unquote_transcript,
 )
-from .model import PlaudSyncRecord
+from .model import PlaudSyncRecord, canonical_recording_id
 
-RENDER_VERSION: Final = "plaud-sync-render-v6"
+RENDER_VERSION: Final = "plaud-sync-render-v7"
 MAX_MESSAGE_CHARS: Final = 1900
 # 1330 content characters + 21 quote/newline characters leave 549 for the card.
 # Longer metadata still fails closed; the binding is never clipped to make room.
@@ -75,6 +78,7 @@ def summary_preview(body: str, *, render_version: str = RENDER_VERSION) -> str:
         "plaud-sync-render-v4",
         "plaud-sync-render-v5",
         "plaud-sync-render-v6",
+        "plaud-sync-render-v7",
     }:
         raise PlaudRenderError(f"unsupported plaud render version: {render_version}")
     sections = lifelog_sections(body)
@@ -114,8 +118,8 @@ def render_plaud_approval(
             content = _render_v4(record, quoted)
         case "plaud-sync-render-v5":
             content = _render_v5(record, quoted)
-        case "plaud-sync-render-v6":
-            content = _render_v6(record, preview)
+        case "plaud-sync-render-v6" | "plaud-sync-render-v7":
+            content = _render_owner_card(record, preview, render_version)
         case _:
             raise PlaudRenderError(f"unsupported plaud render version: {render_version}")
     if len(content) > MAX_MESSAGE_CHARS:
@@ -157,7 +161,12 @@ def _render_v5(record: PlaudSyncRecord, quoted: str) -> str:
         raise PlaudRenderError("owner envelope cannot render") from error
 
 
-def _render_v6(record: PlaudSyncRecord, preview: str) -> str:
+def _render_owner_card(record: PlaudSyncRecord, preview: str, render_version: str) -> str:
+    """v6 bytes stay frozen; v7 changes only the reference key and envelope version."""
+    if render_version == "plaud-sync-render-v6":
+        subject_key, envelope = record.recording_id, "owner-ko-v2"
+    else:
+        subject_key, envelope = canonical_recording_id(record.recording_id), "owner-ko-v3"
     try:
         from automation.interop import owner_message as om
     except ImportError as error:
@@ -168,12 +177,12 @@ def _render_v6(record: PlaudSyncRecord, preview: str) -> str:
     fact = (
         f"녹음 시각: {record.recorded_at}\n"
         f"대상 노트: {record.note_relpath}\n"
-        "판본: plaud-sync-render-v6\n"
+        f"판본: {render_version}\n"
         "내용 미리보기:\n"
         f"{preview or '(미리보기 없음)'}"
     )
     message = om.OwnerMessage(
-        subject_key=record.recording_id,
+        subject_key=subject_key,
         subject=f"PLAUD 노트: {record.note_title}",
         fact=fact,
         location=here,
@@ -181,7 +190,7 @@ def _render_v6(record: PlaudSyncRecord, preview: str) -> str:
         agent_next="Obsidian 저장·recall 인제스트; 수정은 이 스레드에 답글",
         recovery="not_applicable",
         detail=om.Approval(None, "저장 취소"),
-        render_version="owner-ko-v2",
+        render_version=envelope,
     )
     try:
         lines = om.render(message, destination=here).splitlines()

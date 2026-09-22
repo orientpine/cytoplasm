@@ -5,8 +5,8 @@
 `TimeoutError` 로 죽었고, 야간 배치는 매일 밤 같은 자리에서 같은 이유로 실패했다 — 재시도가
 있어도 한도가 그대로면 영원히 실패한다. 값 자체가 곧 동작이라 값을 고정한다.
 
-같은 자리에서 argv 도 고정한다. `--ignore-user-config` 가 빠지면 Hermes 가 사용자 설정의
-fallback provider 로 내려가므로, 예산과 마찬가지로 값 자체가 곧 fail-closed 동작이다.
+같은 자리에서 argv 도 고정한다. 주 경로는 Codex 이고, `--ignore-user-config` 가 붙으면
+계정의 Hermes `fallback_providers` 체인이 꺼지므로(configs/routing-policy.md) 붙지 않아야 한다.
 """
 
 from __future__ import annotations
@@ -75,5 +75,5 @@ def test_every_extraction_call_pins_the_codex_oauth_route(monkeypatch, tmp_path)
 
     meeting_llm.call_codex("x", sensitive=True)
 
-    assert "--ignore-user-config" in seen["argv"]
+    assert "--ignore-user-config" not in seen["argv"]
     assert seen["argv"][seen["argv"].index("--provider") + 1] == meeting_llm.CODEX_PROVIDER

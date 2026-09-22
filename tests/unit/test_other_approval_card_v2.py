@@ -204,9 +204,10 @@ def test_plaud_v6_selects_owner_ko_v2_and_quotes_preview_as_fact(
     messages, footer = _capture(monkeypatch)
     record = _plaud_record()
 
-    card = plaud_render.render_plaud_approval(record, preview=PREVIEW)
+    card = plaud_render.render_plaud_approval(
+        record, preview=PREVIEW, render_version="plaud-sync-render-v6",
+    )
 
-    assert plaud_render.RENDER_VERSION == "plaud-sync-render-v6"
     assert len(messages) == 1
     assert messages[0].render_version == "owner-ko-v2"
     assert PREVIEW in messages[0].fact
@@ -218,10 +219,38 @@ def test_plaud_v6_selects_owner_ko_v2_and_quotes_preview_as_fact(
     ]
 
 
-def test_plaud_v6_keeps_the_full_bounded_preview_within_message_limit() -> None:
+def test_plaud_v7_references_the_whole_canonical_recording_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a folder-moved recording whose raw id carries the 'of_' prefix.
+    messages, _ = _capture(monkeypatch)
+    record = replace(_plaud_record(), recording_id="of_rec-001")
+
+    # When the current card is rendered.
+    plaud_render.render_plaud_approval(record, preview=PREVIEW)
+
+    # Then the reference is the canonical id, rendered whole by owner-ko-v3.
+    assert plaud_render.RENDER_VERSION == "plaud-sync-render-v7"
+    assert messages[0].render_version == "owner-ko-v3"
+    assert messages[0].subject_key == "rec-001"
+    assert "판본: plaud-sync-render-v7" in messages[0].fact
+
+
+def test_plaud_v6_replay_keeps_the_raw_recording_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    messages, _ = _capture(monkeypatch)
+    record = replace(_plaud_record(), recording_id="of_rec-001")
+
+    plaud_render.render_plaud_approval(record, preview=PREVIEW, render_version="plaud-sync-render-v6")
+
+    assert messages[0].render_version == "owner-ko-v2"
+    assert messages[0].subject_key == "of_rec-001"
+
+
+@pytest.mark.parametrize("version", ["plaud-sync-render-v6", "plaud-sync-render-v7"])
+def test_plaud_owner_card_keeps_the_full_bounded_preview_within_message_limit(version: str) -> None:
     record = replace(
         _plaud_record(),
-        recording_id="00000000-0000-4000-8000-000000000001",
+        recording_id="of_00000000-0000-4000-8000-000000000001",
         note_title="주간 회의 검토와 다음 일정 조율 및 자료 준비에 관한 논의",
         note_relpath=(
             "000_PARA/Area/Lifelog/2026/"
@@ -234,13 +263,13 @@ def test_plaud_v6_keeps_the_full_bounded_preview_within_message_limit() -> None:
     )
     preview = "\n".join(preview_lines)
 
-    card = plaud_render.render_plaud_approval(record, preview=preview)
+    card = plaud_render.render_plaud_approval(record, preview=preview, render_version=version)
 
     assert len(card) <= plaud_render.MAX_MESSAGE_CHARS
     assert [line[2:] for line in card.splitlines() if line.startswith("> ")] == [
         "녹음 시각: 2026-09-01T08:00:00Z",
         f"대상 노트: {record.note_relpath}",
-        "판본: plaud-sync-render-v6",
+        f"판본: {version}",
         "내용 미리보기:",
         *preview_lines,
     ]

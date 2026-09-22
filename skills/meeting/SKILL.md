@@ -1,7 +1,7 @@
 ---
 name: meeting
 description: "명시적 !meeting 신호가 붙은 회의록(md/txt/pdf 업로드 또는 본문)에서 결정사항/액션아이템/마일스톤을 추출해 연구 회의록 서식의 노트를 쓰고(근거는 하단 부록), 내 Kanban 카드와 milestones.yaml을 갱신하고 타인 항목은 #team에 규약 게시하는 W2-3 스킬. 발표자료(--slides)를 받으면 대명사·모호 지시어를 그 표기로 교정하고, 소유자 Drive 참고자료 폴더의 자료를 자동으로 근거에 더한다. `!meeting` 만 쓰면 아직 회의록이 없는 Drive 전사본을 찾아 만들고(매일 00:00 KST 에 같은 일을 하는 no-agent cron 이 함께 돈다), `--project` 를 주면 Drive 의 과제별 회의록 양식 순서로 본문을 배치하고, 과제별 action-item 데이터베이스(관리번호 10자리)를 갱신해 미결·신규 표로 회의록을 닫는다. 민감도 게이트(constraint 6) 내장."
-version: 1.7.1
+version: 1.7.2
 author: autophagy-agents
 ---
 

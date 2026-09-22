@@ -1,7 +1,7 @@
 ---
 name: proposal
 description: "개인 제안서 워크스페이스에서 섹션 Kanban·초안·인간 기여분·취합·Codex 최종 검토를 안전하게 관리한다. W5-4."
-version: 2.2.3
+version: 2.2.4
 author: autophagy-agents
 license: MIT
 metadata:

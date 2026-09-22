@@ -4,10 +4,12 @@
 #
 # Contract:
 # - A hit on any keyword (substring, case-insensitive) or pattern (regex)
-#   tags the document. Tag `patent-sensitive` permits only the Codex OAuth route
-#   (`openai-codex`) and confines the original + detail to ~agent/notes/meetings/
-#   (mode 700). A missing, malformed, or non-Codex route is refused before a
-#   provider call as the fail-closed second layer.
+#   tags the document. Tag `patent-sensitive` permits only the shared Hermes route
+#   (Codex OAuth `openai-codex` as primary plus the account's configured
+#   `fallback_providers` chain — xAI Grok since the 2026-09-22 owner decision) and
+#   confines the original + detail to ~agent/notes/meetings/ (mode 700). A missing,
+#   malformed, or foreign route is refused before a provider call as the fail-closed
+#   second layer.
 # - Keep rules DETERMINISTIC: plain keywords + explicit regexes only.
 #   No LLM/classifier may participate in this decision.
 version: 1

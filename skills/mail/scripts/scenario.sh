@@ -229,8 +229,8 @@ printf '{"mode": "full-go", "decided_at": "2026-07-16T00:00:00Z", "source": "W0-
 cat > "$work/hermes-stub" <<'PY'
 #!/usr/bin/env python3
 import json, pathlib, re, sys
-# 공유 Codex 클라이언트 argv: [bin, --ignore-user-config, -z, PROMPT, --provider, ...]
-prompt = sys.argv[3] if len(sys.argv) > 3 else ""
+# 공유 클라이언트 argv: [bin, -z, PROMPT, --provider, openai-codex, ...]
+prompt = sys.argv[sys.argv.index("-z") + 1] if "-z" in sys.argv[:-1] else ""
 base = pathlib.Path(__file__).resolve().parent
 with (base / "codex-calls.log").open("a", encoding="utf-8") as h:
     h.write(json.dumps(sys.argv[1:], ensure_ascii=False) + "\n")
@@ -313,11 +313,11 @@ grep -q '"provider":"openai-codex"' "$work/llm-calls.jsonl" || fail "routing log
 python3 - "$work/codex-calls.log" "$work/llm-calls.jsonl" <<'PY' || fail "codex routing assertions failed"
 import json, sys
 
-# 모든 호출의 argv 가 승인 티어에 고정되어야 한다 — --ignore-user-config 가 없으면
-# hermes 가 사용자 설정의 폴백 공급자로 조용히 갈아탄다.
+# 모든 호출의 argv 는 주 경로(Codex)를 고정하고, 사용자 설정을 읽어야 한다 —
+# --ignore-user-config 가 붙으면 계정의 fallback_providers 체인이 꺼진다.
 for line in open(sys.argv[1], encoding="utf-8"):
     argv = json.loads(line)
-    assert "--ignore-user-config" in argv, argv
+    assert "--ignore-user-config" not in argv, argv
     assert argv[argv.index("--provider") + 1] == "openai-codex", argv
 
 # 감사 로그에는 승인 티어만 남고, 강등 표식은 존재조차 하지 않는다.

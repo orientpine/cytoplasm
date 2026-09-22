@@ -155,9 +155,9 @@ def call_codex(
     that asks for any other tier is refused BEFORE the prompt leaves this
     process — the same guard that used to keep patent text off the second tier.
 
-    The shared client owns the transport (``-t todo`` inert toolset,
-    ``--ignore-user-config`` so the user config's fallback providers cannot
-    fire). An unavailable tier raises instead of answering from elsewhere.
+    The shared client owns the transport (``-t todo`` inert toolset, Codex
+    pinned as primary, the account's Hermes ``fallback_providers`` chain honored
+    — configs/routing-policy.md). When the whole chain fails it raises.
     """
     if provider != CODEX_PROVIDER:
         detail = " (patent-sensitive)" if sensitive else ""

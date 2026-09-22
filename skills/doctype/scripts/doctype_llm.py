@@ -1,9 +1,11 @@
 """Fail-closed Codex OAuth routing for private document-type extraction and drafting.
 
-There is one model tier: the shared client in ``automation.codex_llm`` (provider
-``openai-codex``). The routing gate that used to keep sensitivity-gated text off a
-second provider now proves the opposite property — that the resolved route IS the
-pinned Codex OAuth tier, argv included — and refuses before transport otherwise.
+Every call goes through the shared client in ``automation.codex_llm``: Codex OAuth
+(provider ``openai-codex``) is pinned as the primary in argv, and Hermes may answer
+from the account's configured ``fallback_providers`` chain when Codex cannot (owner
+decision 2026-09-22). The routing gate proves the resolved route IS that shared
+client with the Codex primary pinned, argv included, and refuses before transport
+otherwise — a completer that names any other primary never receives the document.
 """
 from __future__ import annotations
 
@@ -19,14 +21,12 @@ from typing import Any, Final
 
 CODEX_PROVIDER: Final = "openai-codex"
 CODEX_MODEL: Final = "gpt-5.4"
-# Load bearing: without it Hermes reads the user config and may switch providers.
-_IGNORE_USER_CONFIG: Final = "--ignore-user-config"
 _BINARY_ENV: Final = "AUTOPHAGY_HERMES_BIN"
 _RELEASE_ROOT: Final = "/srv/autophagy-agent-current"
 
 
 class PatentRoutingError(RuntimeError):
-    """The resolved route is not the pinned Codex OAuth tier, so nothing is sent."""
+    """The resolved route is not the shared client with Codex pinned, so nothing is sent."""
 
 
 class LlmCallError(RuntimeError):
@@ -37,7 +37,16 @@ def _log_path() -> Path:
     return Path(os.environ.get("DOCTYPE_LLM_LOG", "~/.hermes/doctype/logs/llm-calls.jsonl")).expanduser()
 
 
-def _log_call(*, provider: str, model: str, purpose: str, sensitive: bool, opaque_id: str) -> None:
+def _log_call(
+    *,
+    provider: str,
+    model: str,
+    served_provider: str,
+    served_model: str,
+    purpose: str,
+    sensitive: bool,
+    opaque_id: str,
+) -> None:
     """Append only masked routing facts; prompt and completion bodies are forbidden."""
     path = _log_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -48,6 +57,8 @@ def _log_call(*, provider: str, model: str, purpose: str, sensitive: bool, opaqu
         "provider": provider,
         "purpose": purpose,
         "sensitive": sensitive,
+        "served_model": served_model,
+        "served_provider": served_provider,
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     with path.open("a", encoding="utf-8") as handle:
@@ -96,7 +107,8 @@ def _codex_client(codex: ModuleType, timeout: float) -> Any:
     except codex.CodexError as error:
         raise LlmCallError(f"Codex OAuth tier unavailable: {error}") from None
     argv = client.argv("")
-    if codex.PROVIDER != CODEX_PROVIDER or _IGNORE_USER_CONFIG not in argv:
+    pinned = "--provider" in argv and argv[argv.index("--provider") + 1 :][:1] == [CODEX_PROVIDER]
+    if codex.PROVIDER != CODEX_PROVIDER or not pinned:
         raise PatentRoutingError("routing gate: only the pinned Codex OAuth tier may receive this document")
     return client.with_model(CODEX_MODEL)
 
@@ -113,8 +125,16 @@ def call_codex(
     codex = _codex()
     client = _codex_client(codex, timeout)
     try:
-        result = client.complete(prompt)
+        served = client.complete_served(prompt)
     except codex.CodexError as error:
         raise LlmCallError(f"Codex one-shot failed: {error}") from None
-    _log_call(provider=CODEX_PROVIDER, model=CODEX_MODEL, purpose=purpose, sensitive=sensitive, opaque_id=opaque_id)
-    return result
+    _log_call(
+        provider=CODEX_PROVIDER,
+        model=CODEX_MODEL,
+        served_provider=served.provider,
+        served_model=served.model,
+        purpose=purpose,
+        sensitive=sensitive,
+        opaque_id=opaque_id,
+    )
+    return served.text

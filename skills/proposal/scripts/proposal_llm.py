@@ -1,9 +1,10 @@
 """One-shot Codex OAuth LLM calls for private proposal drafting and review.
 
-Every call goes through the one shared client (``automation.codex_llm``): a single
-provider, no fallback and no retry. A route that does not name the Codex OAuth tier
-— and a client that cannot be imported — refuses the call instead of reaching for
-another provider.
+Every call goes through the one shared client (``automation.codex_llm``): Codex OAuth
+pinned as the primary, the account's Hermes ``fallback_providers`` chain honored, no
+client-side retry. A route that does not name the Codex OAuth tier — and a client that
+cannot be imported — refuses the call. The log records the requested primary and the
+provider/model that actually answered.
 """
 
 from __future__ import annotations
@@ -25,7 +26,9 @@ class LlmInvocationError(RuntimeError):
     """The Codex OAuth tier did not return a usable one-shot response."""
 
 
-def _log(stage: str, provider: str, model: str, sensitive: bool) -> None:
+def _log(  # noqa: PLR0913 - one masked routing line, all fields named
+    stage: str, provider: str, model: str, sensitive: bool, served_provider: str, served_model: str
+) -> None:
     directory = Path(os.environ.get("PROPOSAL_LLM_LOG_ROOT", "~/.hermes/proposal/logs")).expanduser()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory.chmod(0o700)
@@ -39,6 +42,8 @@ def _log(stage: str, provider: str, model: str, sensitive: bool) -> None:
                     "provider": provider,
                     "model": model,
                     "sensitive": sensitive,
+                    "served_model": served_model,
+                    "served_provider": served_provider,
                 },
                 sort_keys=True,
             )
@@ -77,11 +82,13 @@ def _run(stage: str, prompt: str, provider: str, model: str, sensitive: bool) ->
     if provider != CODEX_PROVIDER:
         raise LlmInvocationError(f"{stage} refused: {provider!r} is not the Codex OAuth tier")
     codex = _codex()
-    _log(stage, CODEX_PROVIDER, model, sensitive)
     try:
-        return codex.complete(prompt, model=model, timeout=_TIMEOUT_SECONDS)
+        served = codex.complete_served(prompt, model=model, timeout=_TIMEOUT_SECONDS)
     except codex.CodexError as error:
+        _log(stage, CODEX_PROVIDER, model, sensitive, codex.UNKNOWN, codex.UNKNOWN)
         raise LlmInvocationError(f"{stage} failed: {error}") from None
+    _log(stage, CODEX_PROVIDER, model, sensitive, served.provider, served.model)
+    return served.text
 
 
 def run_section_draft(prompt: str, provider: str, model: str, sensitive: bool) -> str:

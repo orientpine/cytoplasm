@@ -136,9 +136,8 @@ def test_sensitive_example_when_registered_never_leaves_the_codex_tier_or_logs_b
     extracted = doctype_extract.extract(source, store.paths.rules_file)
     result = store.add(extracted.draft("sensitive-reason", "민감서류"))
 
-    # A route that is not the pinned Codex OAuth tier (here: argv without the load-bearing
-    # --ignore-user-config, which is what keeps a configured fallback from firing) must be
-    # refused before a byte of the document leaves the node.
+    # A route whose primary is not the pinned Codex OAuth provider (here: argv naming
+    # another provider) must be refused before a byte of the document leaves the node.
     monkeypatch.setattr(
         codex_llm.CodexClient,
         "argv",

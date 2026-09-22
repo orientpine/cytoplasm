@@ -236,7 +236,7 @@ def test_unreachable_codex_oauth_fails_before_any_draft_is_emitted() -> None:
     assert runner.emitted == []
 
 
-def test_live_client_calls_codex_oauth_with_the_user_config_ignored() -> None:
+def test_live_client_calls_codex_oauth_with_the_user_config_honored() -> None:
     # Given: the live client the CLI builds for an environment that can reach Codex
     client = CodexLlmClient.from_environment(
         {"HOME": "/home/agent", "AUTOPHAGY_HERMES_BIN": "/home/agent/.local/bin/hermes"}
@@ -245,6 +245,6 @@ def test_live_client_calls_codex_oauth_with_the_user_config_ignored() -> None:
     # When: the argv of one distillation call is inspected
     argv = client.client.argv("prompt")
 
-    # Then: the provider is Codex OAuth and the user-config fallback tier cannot fire
-    assert "--ignore-user-config" in argv
+    # Then: the primary is Codex OAuth and the account's Hermes fallback chain stays live
+    assert "--ignore-user-config" not in argv
     assert argv[argv.index("--provider") + 1] == "openai-codex"

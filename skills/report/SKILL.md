@@ -1,7 +1,7 @@
 ---
 name: report
 description: "개인 노트를 민감도 게이트 뒤 보고서·reveal.js 슬라이드·발표 대본으로 생성한다. 모든 산출물은 agent 전용 outputs에만 저장한다. W5-3."
-version: 1.0.4
+version: 1.0.6
 author: autophagy-agents
 license: MIT
 metadata:

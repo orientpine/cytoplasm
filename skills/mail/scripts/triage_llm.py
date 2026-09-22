@@ -9,9 +9,11 @@ Routing contract (2026-09-04 provider migration):
   client is confirmed to be the approved Codex OAuth tier
   (``PatentRoutingError`` otherwise). There is no longer a GLM tier to keep it
   away from, so the guard now protects against the tier being repointed.
-- there is NO second tier and no fallback. When Codex OAuth cannot answer
-  (missing credentials, quota, transport) the call raises
-  ``LlmUnavailableError`` and the caller fails closed — never a downgrade.
+- when Codex OAuth cannot answer (quota, credentials, transport), Hermes itself
+  falls back along the account's ``fallback_providers`` chain (xAI Grok since
+  2026-09-22, ``configs/routing-policy.md``). Only when that whole chain fails
+  does the call raise ``LlmUnavailableError`` and the caller fail closed. The
+  routing log records the pinned primary route, not which member answered.
 
 Every call appends one masked line to the routing log (provider/model/purpose/
 opaque uid) — the auditable call-count surface for QA.
@@ -29,6 +31,7 @@ import os
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import triage_core
 
@@ -127,18 +130,21 @@ def _append_record(record: dict) -> None:
     path.chmod(0o600)
 
 
-def _log_call(*, model: str, purpose: str, uid_opaque: str, sensitive: bool) -> None:
-    """Append one masked routing line recording the codex route of this call.
+def _log_call(*, model: str, purpose: str, uid_opaque: str, sensitive: bool, served: Any) -> None:
+    """Append one masked routing line: the requested primary and the route that answered.
 
-    The line keeps its shape (provider/model/purpose/opaque uid/sensitive) so the
-    QA call-count surface still parses. ``fallback_from`` is gone with the tier it
-    described — a degraded call can no longer exist.
+    ``provider``/``model`` stay the pinned primary so the QA call-count surface still
+    parses; ``served_provider``/``served_model`` come from Hermes' usage report and
+    differ when the account's ``fallback_providers`` chain answered (``unknown`` when
+    Hermes wrote no report).
     """
     _append_record(
         {
             "model": model,
             "provider": CODEX_PROVIDER,
             "purpose": purpose,
+            "served_model": served.model,
+            "served_provider": served.provider,
             "sensitive": sensitive,
             "timestamp": triage_core.utc_now(),
             "uid": uid_opaque,
@@ -164,18 +170,18 @@ def log_failure(*, purpose: str, uid_opaque: str, sensitive: bool, error: BaseEx
     )
 
 
-def call_codex(prompt: str, *, sensitive: bool = False, timeout: float = CALL_TIMEOUT_S) -> str:
-    """One completion on the approved Codex OAuth tier — no retry, no fallback.
+def call_codex(prompt: str, *, sensitive: bool = False, timeout: float = CALL_TIMEOUT_S) -> Any:
+    """One completion on the shared route (Codex OAuth first) — no client retry.
 
-    The shared client owns the argv (``--ignore-user-config`` is load bearing:
-    without it hermes reads the user config and may switch to a configured
-    fallback provider on auth/quota/transport errors), the child environment and
-    the success rule (rc 0 AND non-empty stdout).
+    The shared client owns the argv (Codex pinned as primary, user config
+    honored so Hermes' ``fallback_providers`` chain applies), the child
+    environment and the success rule (rc 0 AND non-empty stdout). Returns the shared
+    client's ``Served`` (``.text`` plus the provider/model that answered).
     """
     codex = _approved_codex(sensitive)
     try:
         client = codex.CodexClient.from_environment(timeout=timeout)
-        return client.complete(prompt)
+        return client.complete_served(prompt)
     except codex.CodexUnavailableError as error:
         raise LlmUnavailableError(_failure_text(error)) from None
     except codex.CodexError as error:
@@ -199,9 +205,10 @@ def classify(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    raw = call_codex(prompt, sensitive=sensitive)
+    served = call_codex(prompt, sensitive=sensitive)
     _log_call(model=codex_model(), purpose="classify",
-              uid_opaque=uid_opaque, sensitive=sensitive)
+              uid_opaque=uid_opaque, sensitive=sensitive, served=served)
+    raw = served.text
     return triage_core.parse_classification(raw), CODEX_PROVIDER
 
 
@@ -215,9 +222,10 @@ def draft_reply(
         subject=subject, sender=sender, body=body, instruction=instruction,
         evidence=evidence,
     )
-    raw = call_codex(prompt, sensitive=sensitive)
+    served = call_codex(prompt, sensitive=sensitive)
     _log_call(model=codex_model(), purpose="draft_reply",
-              uid_opaque=uid_opaque, sensitive=sensitive)
+              uid_opaque=uid_opaque, sensitive=sensitive, served=served)
+    raw = served.text
     llm_subject, reply_body = triage_core.parse_reply(raw)
     return triage_core.reply_subject(llm_subject, subject), reply_body, CODEX_PROVIDER
 
@@ -230,7 +238,8 @@ def summarize(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    raw = call_codex(prompt, sensitive=sensitive)
+    served = call_codex(prompt, sensitive=sensitive)
     _log_call(model=codex_model(), purpose="digest_summary",
-              uid_opaque=uid_opaque, sensitive=sensitive)
+              uid_opaque=uid_opaque, sensitive=sensitive, served=served)
+    raw = served.text
     return triage_core.parse_digest_summary(raw)

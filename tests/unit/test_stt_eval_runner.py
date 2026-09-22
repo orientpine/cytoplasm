@@ -257,3 +257,12 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(self.execute(), 1)
         self.assertEqual([row["reason"] for row in self.rows()], ["drive-failed"] * 4)
         self.assertEqual(list(self.tmp.iterdir()), [])
+
+    def test_downloaded_audio_reaches_the_cli_with_a_suffix_it_accepts(self) -> None:
+        self.drive.payloads = {"first": b"OggS" + b"synthetic-ogg"}
+        self.manifest = [{"drive_file_id": "first", "duration_ms": 1000,
+                          "audio_sha256": hashlib.sha256(self.drive.payloads["first"]).hexdigest()}]
+        self.assertEqual(self.execute(), 0)
+        calls = read_jsonl(Path(self.env["CALLS"]))
+        self.assertEqual({Path(cast(str, call["audio"])).suffix for call in calls}, {".ogg"})
+        self.assertEqual([row["status"] for row in self.rows()], ["ok", "ok"])

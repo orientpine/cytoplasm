@@ -1,7 +1,7 @@
 ---
 name: doctype
 description: "문서(.docx/.hwpx/.md/.txt)의 ‘등록/스킬화/저장/개선/문서종류화’ 액션은 주제와 무관하게 항상 doctype이 수행한다. 작성/초안(draft)은 레지스트리에 등록된 이름으로 요청될 때만 doctype 소유이며, 미등록된 제안서 작성은 proposal, 개인 노트 기반 보고서/슬라이드/대본은 report, 발명신고서/선행기술은 patent-prep 스킬로 넘긴다."
-version: 1.3.7
+version: 1.3.9
 author: autophagy-agents
 license: MIT
 metadata:
@@ -28,9 +28,9 @@ prerequisites:
    메타데이터와 `private:<opaque>` 참조만 남긴다. `--out`은 repo 내부 경로를 거부한다.
 2. 모든 예시/입력/few-shot은 LLM 호출 전에 결정적 민감도 게이트를 통과한다. 한국어 요지 추출과 서술 초안은
    공용 Codex OAuth 클라이언트(`automation/codex_llm.py`, provider `openai-codex`)만 사용한다.
-   `call_codex`는 호출 직전에 경로가 고정된 Codex OAuth 티어(argv에 `--ignore-user-config` 포함)인지
-   확인하고, 아니면 `PatentRoutingError`로 fail-closed한다. 자격증명이 없으면 `LlmCallError`로 거부하며
-   다른 제공자로 내려가는 경로는 없다.
+   `call_codex`는 호출 직전에 경로가 공용 클라이언트이고 주 경로가 Codex OAuth(argv `--provider openai-codex`)로
+   고정됐는지 확인하고, 아니면 `PatentRoutingError`로 fail-closed한다. Codex가 답하지 못하면 Hermes가 계정 설정의
+   `fallback_providers`(xAI Grok, 2026-09-22 소유자 결정)로 넘기며, 그 체인까지 모두 실패하면 `LlmCallError`로 거부한다.
 3. `register-from-example`, 같은 이름의 재등록, `refine`은 모두 최대 버전 + 1의 불변 버전을 추가한다.
    승인본은 사설 example으로 누적되어 이후 서술 작성의 few-shot이 된다. 기존 버전은 수정·삭제하지 않는다.
 4. `--review`는 문서 본문 없이 파일명·SHA256·type/version만 cha owner에게 보낸다. 제출·메일·외부 수집 기능은 없다.
@@ -90,13 +90,13 @@ python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" show --name 
 ```
 
 바이너리 `.hwp`와 잘못된 컨테이너는 표준 `CONVERSION-REQUEST`로 거부한다. 모든 경로는 E5의
-Codex·민감도 게이트를 그대로 따르므로 본문이 단일 Codex OAuth 티어 밖으로 나가는 경로는 없다.
+Codex·민감도 게이트를 그대로 따르므로 본문은 공용 Hermes 경로(Codex 주 경로 + 설정된 폴백 체인) 밖으로 나가지 않는다.
 
 ## Runtime and sandbox
 
 Production goes through the shared client `automation/codex_llm.py`, which runs
-`hermes --ignore-user-config -z … --provider openai-codex -m <model> -t todo` with no fallback and no
-retry. Offline tests point `DOCTYPE_HERMES_BIN` at a deterministic local binary (the skill hands it to
+`hermes -z … --provider openai-codex -m <model> -t todo` with no client-side retry; when Codex cannot
+answer, Hermes falls back along the account's `fallback_providers` chain (`configs/routing-policy.md`). Offline tests point `DOCTYPE_HERMES_BIN` at a deterministic local binary (the skill hands it to
 the shared client as `AUTOPHAGY_HERMES_BIN`). `scripts/scenario.sh` creates examples, private roots,
 stubs, and drafts only under `mktemp`, then removes them.
 

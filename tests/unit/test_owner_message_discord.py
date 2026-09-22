@@ -35,6 +35,17 @@ def test_fact_line_boundaries_when_rendering_discord() -> None:
     assert body.splitlines()[-1].endswith("`01234567`")
 
 
+def test_reference_is_whole_when_rendering_v3() -> None:
+    # Given the v2 layout selected as v3.
+    message = replace(MESSAGE, render_version="owner-ko-v3")
+    # When
+    body = render(message, destination=HERE).splitlines()
+    # Then only the reference footer differs from v2: the key is not clipped.
+    v2 = render(MESSAGE, destination=HERE).splitlines()
+    assert body[-1] == f"-# 참조: `{message.subject_key}`"
+    assert body[:-1] == v2[:-1]
+
+
 @pytest.mark.parametrize("scope", ["self", "none", "channel", "message"])
 def test_location_omitted_when_reference_is_local(
     scope: Literal["self", "none", "channel", "message"],

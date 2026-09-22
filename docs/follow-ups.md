@@ -226,3 +226,12 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 - **release v5·skill deploy/publish v3 에 바이트 골든이 없다** — 일관성은 `bound()`/봉투 입력 핀으로만 잡혀 있어 문구가 조용히 바뀌어도 잡히지 않는다 → `tests/unit/mail_approval_card_golden.py` 와 같은 방식으로 세 카드의 새 버전 바이트를 고정한다. **영향: 회귀 탐지 공백 · 심각도 낮음**.
 - **`automation/release_card.py:25` 가 이름 없는 `3` 을 쓴다** — 위 두 줄은 이름 상수를 쓰는데 폴백 버전만 리터럴이다 → 기존 상수 이름으로 맞춘다. **영향: 가독성 · 심각도 낮음**.
   - ↳ [해소 2026-09-21] v6→v5→v4→v3 폴백 순서를 모두 이름 상수로 고정했다.
+
+## Grok 폴백 착지 후 남긴 것 (2026-09-22)
+
+- **라우팅 로그가 실제로 답한 모델을 적지 않는다** — mail `triage_llm._log_call`·doctype `_log_call` 등 마스킹 라우팅 로그는 `provider=openai-codex` 를 그대로 적는다. Hermes 가 `fallback_providers`(`xai-oauth/grok-4.7`)로 넘긴 호출도 Codex 로 기록되므로 특허 민감 본문이 실제로 어느 제공자에게 갔는지 로그만으로는 감사할 수 없다 → 공용 클라이언트(`automation/codex_llm.py`)가 `hermes -z … --usage-file <tmp>` 의 `provider`·`model` 을 읽어 돌려주고 각 로그가 그 값을 싣는다. **영향: 감사 정확도만 · 라우팅·민감도 게이트·실행 결과 불변 · 심각도 낮음**.
+  - ↳ [해소 2026-09-22] 공용 클라이언트에 `complete_served()` 를 더해 Hermes `--usage-file` 보고서의 provider·model 을 돌려주고, 메일·doctype·특허 초안·제안서·보고서·주간 연구 동향 로그 6곳이 `served_provider`·`served_model` 을 싣는다(기존 `provider`·`model` 은 요청한 주 경로 그대로). 보고서가 없으면 `unknown`. 회귀 `tests/unit/test_served_route_logging.py`.
+
+## ASR 후보 평가 후 남긴 것 (2026-09-22)
+
+- **용어집 힌트가 whisper 에 닿지 않는다** — 로컬 전사는 `-mc 0`(`SPEECHTOTEXT_WHISPER_CONTEXT` 기본)으로 돌고 whisper.cpp 는 `n_max_text_ctx > 0` 일 때만 prompt 를 붙여 `--prompt` 가 통째로 버려진다(힌트 유무 출력 바이트 동일, [STS2](qa/STS2/summary.md)). `--carry-initial-prompt`+`-mc 64` 로 강제하면 대리 기준 CER 14.2→19.2%(삭제 급증) → 소유자 교정 정답 3건 이상으로 다시 재서 힌트 경로를 걷어 낼지(문서·`asr_fingerprint` 정리) carry 로 살릴지 정한다. **영향: 없는 기능을 있다고 적은 문서 · 전사 결과 불변 · 심각도 중**.

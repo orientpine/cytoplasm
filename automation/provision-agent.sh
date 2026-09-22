@@ -7,6 +7,9 @@ SERVICE_NAME="$NODE_AGENT_GATEWAY_UNIT"
 readonly HERMES_INSTALLER_URL="https://hermes-agent.nousresearch.com/install.sh"
 readonly CODEX_PROVIDER="openai-codex"
 readonly CODEX_MODEL="gpt-5.6-sol"
+# Hermes switches to this when Codex cannot answer; configs/routing-policy.md owns the rule.
+readonly FALLBACK_PROVIDER="xai-oauth"
+readonly FALLBACK_MODEL="grok-4.7"
 
 log() {
   printf '[provision-agent] %s\n' "$*"
@@ -24,7 +27,9 @@ Usage: provision-agent.sh <account>
 Provision the named existing Linux account with the W1-2 Phase-A Hermes
 configuration. The account must already own a mode-0600 ~/.env.secrets file
 containing DISCORD_BOT_TOKEN. Codex OAuth credentials must already be stored with
-`hermes auth`; provisioning never installs a fallback provider.
+`hermes auth`. The seeded config names xAI Grok OAuth as the fallback provider; until
+that login is stored with `hermes auth` the fallback simply fails and Codex errors
+reach the caller unchanged.
 EOF
   exit 2
 }
@@ -137,6 +142,10 @@ render_config() {
 model:
   provider: ${CODEX_PROVIDER}
   default: ${CODEX_MODEL}
+
+fallback_providers:
+  - provider: ${FALLBACK_PROVIDER}
+    model: ${FALLBACK_MODEL}
 EOF
 
   cat <<'EOF'

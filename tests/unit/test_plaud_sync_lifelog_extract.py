@@ -302,15 +302,16 @@ def test_build_extractor_skips_when_codex_oauth_is_unavailable(tmp_path: Path) -
     assert outcome == ExtractionSkipped("LLM 미설정")
 
 
-def test_build_extractor_live_path_calls_codex_oauth_with_the_user_config_ignored(
+def test_build_extractor_live_path_calls_codex_oauth_with_the_user_config_honored(
     tmp_path: Path,
 ) -> None:
     # Given: a hermes stand-in that answers only for the measured Codex OAuth argv
+    # (Codex pinned, user config — and so the Hermes fallback chain — left live)
     root = _prepare_repo(tmp_path)
     binary = tmp_path / "hermes"
     _ = binary.write_text(
         "#!/bin/sh\n"
-        'case " $* " in *" --ignore-user-config "*) ;; *) exit 8 ;; esac\n'
+        'case " $* " in *" --ignore-user-config "*) exit 8 ;; esac\n'
         'case " $* " in *" --provider openai-codex "*) ;; *) exit 7 ;; esac\n'
         f"cat <<'JSON'\n{_payload()}\nJSON\n",
         encoding="utf-8",

@@ -7,6 +7,9 @@ was spoken; the old path joined the segments into one string and dropped those
 timings, which is why a line could never say when it was said. render() writes
 this grammar and parse() reads it back, so a transcript already on disk (space-
 joined paragraphs) and a freshly tidied one settle on the same document.
+
+A short, well-evidenced interjection inside another speaker's sentence stays on
+that sentence's line as `[화자2: 네]` (stt_asides) instead of opening a block.
 """
 
 from __future__ import annotations
@@ -17,7 +20,9 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final
 
+import stt_asides
 import stt_gap
+from stt_asides import Aside as Aside
 from stt_attribute import SpeakerTag
 from stt_sentence import UNKNOWN_MS as UNKNOWN_MS
 from stt_sentence import SentenceWord as SentenceWord
@@ -47,8 +52,9 @@ MIN_CHARS: Final = 180
 
 @dataclass(frozen=True, slots=True)
 class TimedSentence(_Sentence):
-    """토큰 좌표 문장에 문서가 직렬화할 화자 판정을 덧붙인다."""
+    """토큰 좌표 문장에 문서가 직렬화할 화자 판정과 문장 안의 끼어듦을 덧붙인다."""
     attribution: SpeakerTag | None = None
+    asides: tuple[Aside, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +65,8 @@ class Block:
     sentences: tuple[str, ...]
     folded: str = ""
     attribution: SpeakerTag | None = None
+    # Parallel to `sentences`, and empty when no sentence carries an aside.
+    asides: tuple[tuple[Aside, ...], ...] = ()
 
 
 def hhmmss(ms: int) -> str:
@@ -195,11 +203,13 @@ def _group_tag(sentence: TimedSentence) -> SpeakerTag | None:
 
 
 def _block(chunk: Sequence[TimedSentence]) -> Block:
-    texts = tuple(sentence.text for sentence in chunk if sentence.text)
+    kept = tuple(sentence for sentence in chunk if sentence.text)
+    texts = tuple(sentence.text for sentence in kept)
     first = chunk[0]
     if stt_gap.is_marker(first.text):
         return Block("", first.start_ms, texts, first.folded)
-    return Block(first.speaker, first.start_ms, texts, first.folded, first.attribution)
+    asides = tuple(sentence.asides for sentence in kept) if any(s.asides for s in kept) else ()
+    return Block(first.speaker, first.start_ms, texts, first.folded, first.attribution, asides)
 
 
 def header_line(block: Block, names: Mapping[str, str] = NO_NAMES) -> str:
@@ -221,7 +231,9 @@ def render(blocks: Sequence[Block], names: Mapping[str, str] = NO_NAMES) -> str:
     rendered: list[str] = []
     for block in blocks:
         head = header_line(block, names)
-        lines = ([head] if head else []) + list(block.sentences)
+        spoken = [stt_asides.display(text, block.asides[index] if block.asides else (), names)
+                  for index, text in enumerate(block.sentences)]
+        lines = ([head] if head else []) + spoken
         if lines:
             rendered.append("\n".join(lines))
         if block.folded:
@@ -253,13 +265,26 @@ def parse(body: str) -> tuple[TimedSentence, ...]:
             lines = lines[1:]
         first = True
         for line in lines:
-            for text in split_sentences(line):
+            for text, asides in _spoken_line(line):
                 when = start_ms if first else None
                 gap = stt_gap.is_marker(text)
                 sentences.append(TimedSentence(text, when, None, "" if gap else speaker,
-                                               attribution=None if gap else attribution))
+                                               attribution=None if gap else attribution,
+                                               asides=() if gap else asides))
                 first = False
     return tuple(sentences)
+
+
+def _spoken_line(line: str) -> tuple[tuple[str, tuple[Aside, ...]], ...]:
+    """Asides come off before the sentence split, so a marker never cuts a sentence."""
+    plain, found = stt_asides.extract(normalize(line))
+    made: list[tuple[str, tuple[Aside, ...]]] = []
+    cursor = 0
+    for text in split_sentences(plain):
+        at = plain.find(text, cursor)
+        cursor = at + len(text) if at >= 0 else cursor
+        made.append((text, stt_asides.within(found, at, at + len(text)) if at >= 0 else ()))
+    return tuple(made)
 
 
 def _parse_attribution(suffix: str) -> SpeakerTag | None:

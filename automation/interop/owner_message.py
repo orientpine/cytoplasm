@@ -207,14 +207,16 @@ def _action(action: Action, location: str, destination: Ref) -> str:
 
 
 def render(message: OwnerMessage, *, destination: Ref) -> str:
-    """Validate once; replay v1 or present Discord v2 without changing the contract."""
+    """Validate once; replay v1 or present Discord v2/v3 without changing the contract."""
     _validate(message, destination)
-    if message.contract_version != 1 or message.render_version not in {"owner-ko-v1", "owner-ko-v2"}:
+    if message.contract_version != 1 or message.render_version not in {
+        "owner-ko-v1", "owner-ko-v2", "owner-ko-v3",
+    }:
         field = "contract_version" if message.contract_version != 1 else "render_version"
         raise OwnerMessageError(message.contract_version, message.render_version, detail=f"message.{field}")
     location = _reference(message.location, destination)
     # v2 omits local location rows, so actions cannot point "above" at such a row.
-    action_location = "" if message.render_version == "owner-ko-v2" and location in {
+    action_location = "" if message.render_version != "owner-ko-v1" and location in {
         "이 메시지", "여기", "해당 없음",
     } else location
     match message.recovery:
@@ -230,4 +232,6 @@ def render(message: OwnerMessage, *, destination: Ref) -> str:
     presentation = Presentation(location, owner, recovery)
     if message.render_version == "owner-ko-v1":
         return render_v1(message, presentation, _datetime)
-    return render_v2(message, presentation, _datetime)
+    return render_v2(
+        message, presentation, _datetime, full_reference=message.render_version == "owner-ko-v3",
+    )

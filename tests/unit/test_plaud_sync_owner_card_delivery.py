@@ -61,7 +61,7 @@ def test_selected_version_persists_when_posted_and_the_real_probe_accepts(
         persisted = store.pending()[0]
         transport.content = transport.posted[0][1]
         gate = pg.PlaudApprovalGate(persisted, store, transport)
-        expected_version = "plaud-sync-render-v4" if fallback else "plaud-sync-render-v6"
+        expected_version = "plaud-sync-render-v4" if fallback else "plaud-sync-render-v7"
         key = record.recording_id
     else:
         record = memory_record()

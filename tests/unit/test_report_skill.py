@@ -201,7 +201,7 @@ def test_report_child_authenticates_through_codex_oauth_home_without_any_key(
     binary.parent.mkdir(parents=True)
     _ = binary.write_text(
         "#!/bin/sh\n"
-        'case " $* " in *" --ignore-user-config "*) ;; *) exit 9;; esac\n'
+        'case " $* " in *" --ignore-user-config "*) exit 9;; esac\n'
         'case " $* " in *" openai-codex "*) ;; *) exit 9;; esac\n'
         'printf "draft"\n',
         encoding="utf-8",

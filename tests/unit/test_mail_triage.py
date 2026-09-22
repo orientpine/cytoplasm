@@ -58,7 +58,7 @@ def test_gate_hit_refuses_unapproved_tier_fail_closed(monkeypatch: pytest.Monkey
         triage_llm.call_codex("아무 프롬프트", sensitive=True)
 
 
-def test_call_codex_pins_provider_and_ignores_user_config(
+def test_call_codex_pins_provider_and_honors_user_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given: argv 를 그대로 기록하는 hermes 대역.
@@ -75,12 +75,12 @@ def test_call_codex_pins_provider_and_ignores_user_config(
     # When: 비민감 분류 요청 한 건이 나간다.
     result = triage_llm.call_codex("return JSON", sensitive=False, timeout=30.0)
 
-    # Then: 사용자 설정의 폴백 공급자로 샐 수 없도록 argv 가 고정된다.
+    # Then: 주 경로는 Codex 로 고정되고, 사용자 설정(fallback_providers 체인)은 살아 있다.
     argv = json.loads(argv_log.read_text(encoding="utf-8"))
-    assert result == "{}"
-    assert "--ignore-user-config" in argv  # 없으면 hermes 가 폴백 공급자로 전환한다
+    assert result.text == "{}"
+    assert "--ignore-user-config" not in argv  # 붙으면 Hermes 폴백 체인이 꺼진다
     assert argv[argv.index("--provider") + 1] == triage_llm.CODEX_PROVIDER
-    assert argv[3] == "return JSON"
+    assert argv[argv.index("-z") + 1] == "return JSON"
 
 
 # --- ② classification contract ---------------------------------------------------
@@ -542,7 +542,7 @@ def test_draft_reply_passes_instruction(
         tmp_path / "hermes-stub",
         "#!/usr/bin/env python3\n"
         "import pathlib, sys\n"
-        "pathlib.Path(" + repr(str(capture)) + ").write_text(sys.argv[3], encoding='utf-8')\n"
+        "pathlib.Path(" + repr(str(capture)) + ").write_text(sys.argv[sys.argv.index('-z') + 1], encoding='utf-8')\n"
         "print('{\"subject\": \"Re: S\", \"body\": \"감사합니다.\"}')\n",
     )
     monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))

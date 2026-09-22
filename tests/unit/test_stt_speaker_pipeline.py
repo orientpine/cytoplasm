@@ -387,14 +387,17 @@ def test_todo12_short_backchannel_and_unsupported_sentence(tmp_path, monkeypatch
     monkeypatch.setattr(stt_attribute, "attribute_words", record)
     result = _local_transcription(tmp_path, monkeypatch, toolchain)
     grouped = stt_blocks.group(result.sentences)
-    assert [b.speaker for b in grouped] == ["화자1", "화자2", "화자1", "화자0"]
-    assert grouped[1].sentences == ("네",)
+    # 200ms 응답은 문장을 자르지 않고 그 문장 안에 남는다(stt_settle). 무근거 문장은 그대로 화자0.
+    assert [b.speaker for b in grouped] == ["화자1", "화자0"]
+    assert grouped[0].sentences == ("시작 네 계속.",)
+    assert result.sentences[0].asides == (stt_blocks.Aside(3, 4, "화자2"),)
     assert grouped[-1].attribution == stt_attribute.SpeakerTag("UNKNOWN")
     assert seen and [(w.start_ms, w.end_ms) for w in seen[0]][1] == (2000, 2200)
-    assert [(s.start_ms, s.end_ms) for s in result.sentences][1] == (2000, 2200)
+    assert [(s.start_ms, s.end_ms) for s in result.sentences][0] == (0, 4000)
     refs = [w for s in result.sentences for w in s.words]
     assert [w.source_index for w in refs] == list(range(5))
     body = stt_blocks.render(grouped)
+    assert "시작 [화자2: 네] 계속." in body.splitlines()
     assert stt_blocks.render(stt_blocks.group(stt_blocks.parse(body))) == body
 
 
@@ -447,7 +450,7 @@ def test_todo12_cached_words_are_attributed_again_with_current_turns(
 
     monkeypatch.setattr(stt_window_store.WindowStore, "clear", record_clear)
     first = _local_transcription(tmp_path, monkeypatch, toolchain)
-    assert first.sentences[1].speaker == "화자2"
+    assert [aside.speaker for aside in first.sentences[0].asides] == ["화자2"]
     store, raw = saved[0]
     assert raw is not None and not store.windows.exists()
     store.save(window, raw)
@@ -461,6 +464,7 @@ def test_todo12_cached_words_are_attributed_again_with_current_turns(
     monkeypatch.setattr(stt_window_run, "_run_window", unexpected_decode)
     second = _local_transcription(tmp_path, monkeypatch, toolchain)
     assert all(s.speaker == "화자1" for s in second.sentences)
+    assert all(s.asides == () for s in second.sentences)
     assert saved[1][0].key == store.key
     assert not store.windows.exists()
     assert "WHISPER-WINDOW-CACHED" in capsys.readouterr().err

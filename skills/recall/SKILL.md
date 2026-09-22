@@ -1,7 +1,7 @@
 ---
 name: recall
 description: "개인 RAG(personal_cha) 검색 스킬. `!recall <질문>` 명시 호출 + 개인/프로젝트 지식 질문에 자동 사용. 검색 결과를 출처(위키 경로/회의/보고 id)와 함께 인용하고, 결과가 없으면 반드시 '기억 없음'이라고 답한다(지어내기 금지). RAG 노드 다운 시 '검색 불가' 안내 후 일반 답변. W2-5."
-version: 1.2.1
+version: 1.2.2
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -101,10 +101,10 @@ python3 /srv/autophagy-skills/live/recall/scripts/recall_reference.py "<질의>"
 
 - 제외 시: 원문·출처·식별자 없이 건수만 `N건은 민감 분류로 제외`로 알린다.
 - 포함 시: `N건 patent-sensitive 포함 — 주 모델 Codex OAuth 확인 …` 안내가 함께 출력된다.
-- **폴백 윈도우 없음**: 모델 티어가 하나뿐이고 공용 클라이언트가
-  `--ignore-user-config`로 호출하므로, 주 모델 장애·쿼터에도 다른 제공자로
-  내려가지 않는다(자격증명이 없으면 호출 자체가 거부된다). 센티널은 방출된
-  행마다 남는 **감사 마커**로 계속 유지한다.
+- **폴백 윈도우**: 주 경로가 Codex로 확인돼도 Codex가 답하지 못하는 턴에는
+  Hermes가 `fallback_providers`(xAI Grok)로 넘어간다. 소유자가 2026-09-22 특허
+  민감 내용에도 이 폴백을 허용했으므로 가드는 주 경로만 판정한다. 센티널은
+  방출된 행마다 남는 **감사 마커**로 계속 유지한다.
 - recall에는 호출자가 포함을 강제할 CLI 표면이 없다(재포함 opt-in 없음) —
   판정은 오직 결정론적 모델-경로 가드만 내린다.
 - `sensitivity` 키가 없는 행은 비민감으로 취급하지만, Obsidian 특허 문서는 이

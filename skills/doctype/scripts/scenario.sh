@@ -31,9 +31,10 @@ cat > "$work/hermes-stub" <<'PY'
 #!/usr/bin/env python3
 """Stands in for the Codex OAuth binary and pins the argv the shared client must send.
 
-The route proof lives here now: there is no second provider to refuse, so the
-stub refuses instead — any call that drops --ignore-user-config, names another
-provider, or carries no prompt fails the scenario before it can answer.
+The route proof lives here: any call that names another primary provider, carries
+no prompt, or passes --ignore-user-config (which would drop the account's Hermes
+fallback_providers chain, configs/routing-policy.md) fails the scenario before it
+can answer.
 """
 import sys
 from pathlib import Path
@@ -47,8 +48,8 @@ def _value(argv: list[str], flag: str) -> str:
 
 
 argv = sys.argv[1:]
-if "--ignore-user-config" not in argv:
-    print("stub: --ignore-user-config is missing; the binary could switch providers", file=sys.stderr)
+if "--ignore-user-config" in argv:
+    print("stub: --ignore-user-config would drop the configured fallback chain", file=sys.stderr)
     raise SystemExit(90)
 if _value(argv, "--provider") != "openai-codex":
     print("stub: the Codex argv did not pin provider openai-codex", file=sys.stderr)
@@ -122,7 +123,7 @@ grep -R -q "$canary" "$work/metadata-repo" "$work/overlay" && fail "document bod
 python3 - "$work/logs/llm-calls.jsonl" <<'PY' || fail "masked audit log contract"
 import json, sys
 records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-assert records and all(set(item) == {"model", "opaque_id", "provider", "purpose", "sensitive", "timestamp"} for item in records)
+assert records and all(set(item) == {"model", "opaque_id", "provider", "purpose", "sensitive", "served_model", "served_provider", "timestamp"} for item in records)
 assert all(item["provider"] == "openai-codex" for item in records)
 assert any(item["sensitive"] for item in records)
 PY

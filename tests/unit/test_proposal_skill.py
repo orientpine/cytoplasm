@@ -271,8 +271,8 @@ def test_final_review_invokes_codex_once_through_the_shared_oauth_client(
 
     # Then
     assert review == "Review comments."
-    assert record.read_text(encoding="utf-8").splitlines() == [
-        "--ignore-user-config",
+    argv = record.read_text(encoding="utf-8").splitlines()
+    assert argv[:8] == [
         "-z",
         "# Proposal",
         "--provider",
@@ -282,6 +282,7 @@ def test_final_review_invokes_codex_once_through_the_shared_oauth_client(
         "-t",
         "todo",
     ]
+    assert argv[8] == "--usage-file" and len(argv) == 10
 
 
 def test_sensitive_proposal_routes_drafting_to_the_codex_oauth_tier(tmp_path: Path) -> None:
@@ -352,7 +353,7 @@ def test_section_draft_resolves_the_codex_binary_from_home_without_a_gateway_key
 
     # Then
     assert result == "draft"
-    assert "--ignore-user-config" in record.read_text(encoding="utf-8").splitlines()
+    assert "--ignore-user-config" not in record.read_text(encoding="utf-8").splitlines()
 
 
 def test_missing_codex_credentials_fail_closed_without_a_second_provider(

@@ -369,6 +369,7 @@ _V2_GOLDEN = (
     "## 한눈에\n"
     "\n"
     "- 녹음:: 2026-09-02 (수) 09:02 · 30분 30초 · 화자 2명\n"
+    "- 화자:: 화자1=미상 · 화자2=미상\n"
     "\n"
     "## 요약\n"
     "\n"
@@ -407,6 +408,15 @@ def test_render_lifelog_body_v2_matches_the_golden_note() -> None:
     body = render_lifelog_body(_real_shape_recording(), extraction=_EXTRACTION, tz=_SEOUL)
 
     assert body == _V2_GOLDEN
+
+
+def test_render_lifelog_body_provides_an_inert_speaker_correction_form() -> None:
+    from automation.voice_catalog.trigger import parse_assignments
+
+    body = render_lifelog_body(_real_shape_recording(), extraction=_EXTRACTION, tz=_SEOUL)
+
+    assert "- 화자:: 화자1=미상 · 화자2=미상" in body
+    assert parse_assignments(body) == (), "기본값은 소유자 동의 없이 목소리를 등록하면 안 된다"
 
 
 def test_plan_lifelog_note_v2_title_and_path_follow_the_local_date() -> None:

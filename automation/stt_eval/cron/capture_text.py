@@ -80,8 +80,24 @@ def parse(markdown: str, surface: Surface) -> Parsed:
             tag = SpeakerTag("SPEAKER", (sentence.speaker,))
         else:
             tag = SpeakerTag("UNKNOWN")
-        sentences.append((sentence.text, tag))
+        sentences.extend(_segments(sentence.text, sentence.asides, tag))
     return Parsed(tuple(sentences), tuple(sorted(names)))
+
+
+def _segments(text: str, asides: tuple[stt_blocks.Aside, ...], tag: SpeakerTag) -> tuple[tuple[str, SpeakerTag], ...]:
+    """문장 안 끼어듦(`[화자2: 네]`)의 낱말은 그 화자의 것으로, 나머지는 문장의 판정으로 센다."""
+    parts: list[tuple[str, SpeakerTag]] = []
+    cursor = 0
+    for aside in asides:
+        before = text[cursor:aside.start_char].strip()
+        if before:
+            parts.append((before, tag))
+        parts.append((text[aside.start_char:aside.end_char], SpeakerTag("SPEAKER", (aside.speaker,))))
+        cursor = aside.end_char
+    rest = text[cursor:].strip()
+    if rest:
+        parts.append((rest, tag))
+    return tuple(parts)
 
 
 def build_record(parsed: Parsed, *, digest: str, duration_ms: int, provenance: str) -> EvalRecord:

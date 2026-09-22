@@ -281,19 +281,36 @@ def _codex_model() -> str:
     return os.environ.get(codex_llm.MODEL_ENV, "").strip() or codex_llm.DEFAULT_MODEL
 
 
-def _run_llm(stage: str, topic: str, prompt: str) -> str:
-    """공유 Codex OAuth 클라이언트로 한 번 부른다. 실패는 이번 주 요약 실패다 — 대체 계층 없음."""
+def _log_llm(stage: str, topic: str, served_provider: str, served_model: str) -> None:
     _append_log(
         "llm-calls.jsonl",
-        {"stage": stage, "provider": codex_llm.PROVIDER, "model": _codex_model(), "topic": topic},
+        {
+            "stage": stage,
+            "provider": codex_llm.PROVIDER,
+            "model": _codex_model(),
+            "served_provider": served_provider,
+            "served_model": served_model,
+            "topic": topic,
+        },
     )
+
+
+def _run_llm(stage: str, topic: str, prompt: str) -> str:
+    """공유 클라이언트로 한 번 부른다(Codex 주 경로, Hermes 폴백 체인). 체인 전체 실패는 이번 주 요약 실패다.
+
+    로그는 요청한 주 경로와 실제로 답한 제공자·모델(`served_*`)을 함께 적는다.
+    """
     fake = os.environ.get(f"RESEARCH_TRENDS_FAKE_{stage.upper()}")
     if fake:
+        _log_llm(stage, topic, codex_llm.UNKNOWN, codex_llm.UNKNOWN)
         return fake
     try:
-        return codex_llm.complete(prompt, timeout=LLM_TIMEOUT_S)
+        served = codex_llm.complete_served(prompt, timeout=LLM_TIMEOUT_S)
     except codex_llm.CodexError as error:
+        _log_llm(stage, topic, codex_llm.UNKNOWN, codex_llm.UNKNOWN)
         raise LlmInvocationError(f"{stage}: {error.__class__.__name__}") from error
+    _log_llm(stage, topic, served.provider, served.model)
+    return served.text
 
 
 def _synthesis(topic: str, papers: tuple[Paper, ...], evidence: str = "") -> str:

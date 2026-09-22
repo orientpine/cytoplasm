@@ -24,6 +24,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,6 +39,11 @@ import triage_mode  # noqa: E402
 import triage_sensitivity  # noqa: E402
 
 # codex 한 방 응답: 분류 JSON과 요약 JSON을 동시에 만족하는 합성 페이로드.
+def _served(text: str) -> SimpleNamespace:
+    """call_codex returns the shared client's Served: the answer plus who answered it."""
+    return SimpleNamespace(text=text, provider="openai-codex", model="gpt-5.6-sol")
+
+
 _CODEX_RAW = json.dumps(
     {
         "category": "normal",
@@ -291,7 +297,7 @@ def test_unavailable_run_does_not_poison_the_next_run(
         triage_digest.run_digest(limit=10, sync=False, dry_run=False)
 
     # When: 티어가 복구되고 다음 틱이 돈다(모듈 전역 상태가 없어야 한다).
-    monkeypatch.setattr(triage_llm, "call_codex", lambda prompt, **kwargs: _CODEX_RAW)  # noqa: ARG005
+    monkeypatch.setattr(triage_llm, "call_codex", lambda prompt, **kwargs: _served(_CODEX_RAW))  # noqa: ARG005
     body = _run_digest(monkeypatch, tmp_path / "second", uids=("uid-second",))
 
     # Then: 앞 틱의 장애가 남아 있지 않다.
@@ -305,7 +311,7 @@ def test_healthy_run_records_only_the_codex_route(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Given: 유일한 티어가 정상 응답한다.
-    monkeypatch.setattr(triage_llm, "call_codex", lambda prompt, **kwargs: _CODEX_RAW)  # noqa: ARG005
+    monkeypatch.setattr(triage_llm, "call_codex", lambda prompt, **kwargs: _served(_CODEX_RAW))  # noqa: ARG005
 
     # When: 다이제스트가 돈다.
     body = _run_digest(monkeypatch, tmp_path, uids=("uid-healthy",))

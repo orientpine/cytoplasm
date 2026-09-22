@@ -1,7 +1,8 @@
 """Codex OAuth invocation for W5-3 report drafts.
 
-One provider, one model, no fallback: the draft is written by the shared
-`automation.codex_llm` client or not at all. The client is imported lazily so a
+Codex OAuth is the pinned primary and the account's Hermes `fallback_providers`
+chain may answer instead: the draft is written by the shared `automation.codex_llm`
+client or not at all, and the log records the provider/model that actually answered. The client is imported lazily so a
 deployed skill copy does not import the repository at module load; an
 ImportError refuses the draft instead of calling a model on its own.
 """
@@ -39,7 +40,7 @@ def _repo_root() -> Path:
     return _RELEASE_ROOT
 
 
-def _record_route(route: Route) -> None:
+def _record_route(route: Route, served_provider: str, served_model: str) -> None:
     directory = Path.home() / ".hermes" / "report" / "logs"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory.chmod(0o700)
@@ -49,6 +50,8 @@ def _record_route(route: Route) -> None:
         "provider": route.provider,
         "model": route.model,
         "sensitive": route.sensitive,
+        "served_model": served_model,
+        "served_provider": served_provider,
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
@@ -64,17 +67,19 @@ def generate(prompt: str, route: Route) -> str:
     """
     if route.provider != CODEX_PROVIDER:
         raise LlmInvocationError(f"refused route {route.provider!r}; only {CODEX_PROVIDER} runs")
-    _record_route(route)
     root = _repo_root()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     try:
-        from automation.codex_llm import CodexClient, CodexError  # noqa: PLC0415
+        from automation.codex_llm import UNKNOWN, CodexClient, CodexError  # noqa: PLC0415
     except ImportError as error:
         name = error.__class__.__name__
         raise LlmInvocationError(f"shared Codex client unavailable ({name})") from error
     try:
         client = CodexClient.from_environment(timeout=LLM_TIMEOUT).with_model(route.model)
-        return client.complete(prompt)
+        served = client.complete_served(prompt)
     except CodexError as error:
+        _record_route(route, UNKNOWN, UNKNOWN)
         raise LlmInvocationError(str(error)) from error
+    _record_route(route, served.provider, served.model)
+    return served.text

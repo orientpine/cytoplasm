@@ -14,7 +14,7 @@ import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Final, Protocol
 
 from automation.drive_client import DriveClientError
 from automation.stt_eval import gpu_guard, runner_store
@@ -36,6 +36,13 @@ from automation.stt_eval.runner_process import Cli, Outcome, cancellation, execu
 
 MIN_TIMEOUT_SECS = 300.0
 DEFAULT_TIMEOUT_FACTOR = 10.0
+#: 원음 머리 바이트 → 전사 CLI 가 받는 확장자. CLI 는 확장자로만 형식을 거르므로 `audio.bin`
+#: 으로는 한 번도 전사되지 않았다(2026-09-22 노드 실측: 후보 전부 rc=5 "지원하지 않는 형식").
+_AUDIO_MAGIC: Final = (
+    (b"OggS", 0, ".ogg"), (b"fLaC", 0, ".flac"), (b"ID3", 0, ".mp3"), (b"\xff\xfb", 0, ".mp3"),
+    (b"\xff\xf3", 0, ".mp3"), (b"\xff\xf2", 0, ".mp3"), (b"ftyp", 4, ".m4a"), (b"WAVE", 8, ".wav"),
+    (b"\x1a\x45\xdf\xa3", 0, ".webm"),
+)
 
 
 class DriveLike(Protocol):
@@ -55,6 +62,14 @@ def _download(drive: DriveLike, recording: Recording, audio: Path) -> str:
         return "" if digest == recording.audio_sha256 else "audio-mismatch"
     except (DriveClientError, OSError):
         return "drive-failed"
+
+
+def _named(audio: Path) -> Path:
+    """알아본 형식이면 그 확장자로 옮긴다. 모르는 형식은 그대로 두어 CLI 가 판정한다."""
+    with audio.open("rb") as handle:
+        head = handle.read(16)
+    suffix = next((ext for magic, at, ext in _AUDIO_MAGIC if head[at:at + len(magic)] == magic), "")
+    return audio.rename(audio.with_suffix(suffix)) if suffix else audio
 
 
 def _save(root: Path, label: str, recording: Recording, outcome: Outcome,
@@ -104,6 +119,8 @@ def _sweep(manifest: tuple[Recording, ...], configs: tuple[Candidate, ...], root
                 else:
                     if download_reason is None:
                         download_reason = _download(drive, recording, audio)
+                        if not download_reason:
+                            audio = _named(audio)
                     outcome = Outcome(download_reason)
                 with tempfile.TemporaryDirectory(prefix="candidate-", dir=directory) as work:
                     if not outcome.reason:

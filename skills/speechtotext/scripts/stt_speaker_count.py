@@ -16,6 +16,8 @@ import json
 import re
 from typing import Final
 
+import stt_asides
+
 _FENCE: Final = re.compile(r"^```[a-zA-Z]*\n|\n```$")
 _INTEGER: Final = re.compile(r"^-?\d+$")
 _CLOCK: Final = re.compile(r"^\[(?:\d{2}|--):(?:\d{2}|--):(?:\d{2}|--)\]")
@@ -71,8 +73,8 @@ def should_redo(estimated: int | None, observed: int) -> int | None:
 # 믿지 말고 대화를 읽어라" 라고 적어도 그 앵커를 이기지 못했다. 그래서 세지 말라고 부탁하는
 # 대신 셀 것을 주지 않는다. 시각은 남긴다: 근거 줄을 가리키는 좌표이고 화자를 암시하지 않는다.
 def unlabelled(draft: str) -> str:
-    """블록 헤더에서 화자 라벨을 걷어낸 초안 — 시각과 말만 남는다(말은 바뀌지 않는다)."""
+    """블록 헤더와 문장 안 끼어듦에서 화자 라벨을 걷어낸 초안 — 시각과 말만 남는다."""
     return "\n".join(
-        line[:_CLOCK_CHARS] if _CLOCK.match(line) else line
+        line[:_CLOCK_CHARS] if _CLOCK.match(line) else stt_asides.extract(line)[0]
         for line in draft.splitlines()
     )

@@ -90,8 +90,8 @@ def _setup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, detail: dict) ->
         tmp_path / "hermes-stub",
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        # 공유 클라이언트 argv: [bin, --ignore-user-config, -z, PROMPT, --provider, ...]
-        "prompt = sys.argv[3]\n"
+        # 공유 클라이언트 argv: [bin, -z, PROMPT, --provider, ...]
+        "prompt = sys.argv[sys.argv.index('-z') + 1]\n"
         "if '\"category\"' in prompt:\n"
         "    print('{\"category\": \"important\", \"reply_needed\": true, "
         "\"schedule_needed\": false, \"budget\": false, "

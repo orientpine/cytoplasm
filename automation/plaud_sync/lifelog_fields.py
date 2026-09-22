@@ -58,6 +58,11 @@ _IMAGE_RE: Final = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _UNRESOLVABLE_IMAGE_RE: Final = re.compile(r"!\[[^\]]*\]\((?!https?://)[^)]*\)")
 _BLANK_RUN_RE: Final = re.compile(r"\n{3,}")
 _SPEAKER_RE: Final = re.compile(r"^\[[^\]]*? · ([^\]]+)\]", re.MULTILINE)
+_SPEAKER_HEADER_RE: Final = re.compile(
+    r"^\[(?:\d{2}|--):(?:\d{2}|--):(?:\d{2}|--)\]\s+(화자\d+)(?:\s+·\s+.+)?\s*$",
+    re.MULTILINE,
+)
+_CATALOG_SPEAKER_RE: Final = re.compile(r"^화자[1-9]\d*$")
 _YAML_LEAD_CHARS: Final = "#-?:,[]{}&*!|>'\"%@\x60"
 _YAML_RESERVED: Final = frozenset({"true", "false", "null", "yes", "no", "on", "off", "~"})
 
@@ -160,9 +165,16 @@ def render_duration(duration_ms: int) -> str:
 
 def speaker_count(transcript: str) -> int:
     labels = {match.group(1).strip() for match in _SPEAKER_RE.finditer(transcript)}
-    labels.update(re.findall(r"^\[(?:\d{2}|--):(?:\d{2}|--):(?:\d{2}|--)\]\s+(화자\d+)(?:\s+·\s+.+)?\s*$",
-                             transcript, re.MULTILINE))
+    labels.update(_SPEAKER_HEADER_RE.findall(transcript))
     return len(labels - {"화자0"})
+
+
+def speaker_labels(transcript: str) -> tuple[str, ...]:
+    """목소리 등록 양식에 쓸 실제 ``화자N`` 라벨을 숫자 순서로 돌려준다."""
+    candidates = {match.group(1).strip() for match in _SPEAKER_RE.finditer(transcript)}
+    candidates.update(_SPEAKER_HEADER_RE.findall(transcript))
+    labels = {label for label in candidates if _CATALOG_SPEAKER_RE.fullmatch(label)}
+    return tuple(sorted(labels, key=lambda label: int(label.removeprefix("화자"))))
 
 
 def _tag_for(heading: str) -> str:
@@ -199,10 +211,15 @@ def glance_lines(
     stamp: datetime,
     summary: str,
 ) -> tuple[str, ...]:
-    """녹음 한 줄과 진단만 — 나머지는 요약이 말한다."""
+    """녹음·소유자 화자 교정 양식·진단 — 나머지는 요약이 말한다."""
     recorded = f"{stamp:%Y-%m-%d} ({_WEEKDAYS[stamp.weekday()]}) {stamp:%H:%M} · {render_duration(recording.duration_ms)}"
     speakers = speaker_count(recording.transcript_text)
     lines = [f"- 녹음:: {recorded}" + (f" · 화자 {speakers}명" if speakers else "")]
+    labels = speaker_labels(recording.transcript_text)
+    if labels:
+        # `미상`은 voice-catalog 워처가 무시한다. 소유자가 실제 이름으로 바꾸는 행위만
+        # 명령=동의가 되어 등록되므로 자동 식별 결과가 곧바로 학습 자료가 되지 않는다.
+        lines.append("- 화자:: " + " · ".join(f"{label}=미상" for label in labels))
     if isinstance(extraction, ExtractionSkipped):
         lines.append(f"- 추출:: 생략 ({extraction.reason})")
     elif not summary.strip():

@@ -134,8 +134,14 @@ def human_timestamp(iso: str) -> str:
 
 def render_v2(
     message: OwnerMessage, refs: Presentation, timestamp: Callable[[datetime, str], str],
+    *, full_reference: bool = False,
 ) -> str:
-    """Discord layout; only fact trailing whitespace is removed, never its line breaks."""
+    """Discord layout; only fact trailing whitespace is removed, never its line breaks.
+
+    v2 shows the first 8 reference characters (frozen bytes). v3 is the same layout
+    with the whole key: a shared prefix such as Plaud's ``of_`` left 8 characters
+    that looked complete but could not identify the subject.
+    """
     owner = refs.owner
     # A local reaction already identifies its target; do not repeat "위 위치 · 반응".
     if message.owner.verb == "react" and message.owner.target is not None:
@@ -176,11 +182,12 @@ def render_v2(
     if message.recovery != "not_applicable":
         trailing.append(f"되돌리기: {refs.recovery}")
     subject = " ".join(message.subject.split())
+    reference = message.subject_key if full_reference else message.subject_key[:8]
     return "\n".join((
         f"**{icon} {subject}**",
         *("> " + line.rstrip() for line in message.fact.split("\n")),
         "",
         decision,
         *(" ".join(line.split()) for line in trailing),
-        f"-# 참조: `{message.subject_key[:8]}`",
+        f"-# 참조: `{reference}`",
     ))

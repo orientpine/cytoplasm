@@ -1,7 +1,7 @@
 ---
 name: patent-prep
 description: "발명 신고서와 선행기술 체크리스트를 보호된 개인 워크스페이스에서 준비하고, Codex OAuth 전용 초안을 생성한다. W5-5."
-version: 1.1.3
+version: 1.1.5
 author: autophagy-agents
 license: MIT
 metadata:
@@ -25,9 +25,9 @@ prerequisites:
 1. `draft`의 모든 LLM 호출은 호출 지점에서 `patent-sensitive` 태그를 누락 시 자동 첨부하고,
    provider/model을 `openai-codex/gpt-5.4`로 고정한다. 다른 제공자 선택 인자는 없다.
 2. Hermes v0.18.2 one-shot CLI에는 호출별 metadata-tag 플래그가 없으므로, 이 스킬은 태그가
-   첨부된 호출 계획을 private audit log에 먼저 기록하고 Codex OAuth 티어를 직접 호출한다.
-   모델 티어는 하나뿐이고 호출은 `--ignore-user-config`로 나가므로 폴백 제공자가 뜨지 않으며,
-   OAuth 자격증명이 없으면 다른 티어로 내려가지 않고 호출 자체가 fail-closed로 거부된다.
+   첨부된 호출 계획을 private audit log에 먼저 기록하고 Codex OAuth를 주 경로로 호출한다.
+   Codex가 답하지 못하면 Hermes가 계정 설정의 `fallback_providers`(xAI Grok)로 넘기며 — 소유자가
+   2026-09-22 특허 민감 초안에도 이 폴백을 허용했다 —, 그 체인까지 모두 실패하면 호출은 fail-closed로 거부된다.
 3. `--brief-file`은 해당 slug의 private workspace 아래 파일만 허용한다. 경로·상태·SHA256만
    공유하며, 초안이나 입력 본문을 Discord·repo·`docs/qa`·외부 RAG API로 보내지 않는다.
    **좁은 예외 — 개인 백업 반출(`export-prepare`/`export-execute`)에 한한다: 소유자(cha)의
