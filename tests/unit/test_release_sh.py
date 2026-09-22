@@ -66,6 +66,27 @@ printf '\\n' >> "$CALLS"
 exit "$DEPLOY_ALL_RC"
 """
 
+#: 노드의 root 수렴 도우미 판정. 기본이 injected 인 것이 중요하다 — 주입하지 않으면
+#: release.sh 는 진짜 노드로 ssh 하므로, 이 스텁이 없는 테스트는 실노드를 건드린다.
+_HELPER_PROBE_STUB: Final = """#!/usr/bin/env bash
+printf 'helper-probe\\n' >> "$CALLS"
+case "$HELPER_PROBE_MODE" in
+  drift)
+    printf '[release-helper] HELPER-DRIFT: origin_snapshot.sh differs from the rendered release source\\n' >&2
+    printf '[release-helper] run provision-deploy-converge.sh on the node as root\\n' >&2
+    exit 1 ;;
+  unknown)
+    printf '[release-helper] HELPER-DRIFT-UNKNOWN: unreadable path=/usr/local/libexec/x\\n' >&2
+    exit 1 ;;
+  unreachable)
+    printf 'ssh: connect to host node port 22: Network is unreachable\\n' >&2
+    exit 255 ;;
+  *)
+    printf '[release-helper] HELPER-DRIFT-PASS: privileged helpers and units match release sources\\n' >&2
+    exit 0 ;;
+esac
+"""
+
 
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
@@ -120,6 +141,8 @@ def _run(
     abandon_unblocks: str = "1",
     abandon_rc: str = "0",
     record_version: str = "",
+    helper_probe: str = "pass",
+    allow_helper_drift: str = "0",
 ) -> subprocess.CompletedProcess[str]:
     # 낡은 pending 요청이 있는 세계는 stale_head 를 준 테스트에서만 존재한다 —
     # marker 가 없으면 stub 의 request 는 예전 그대로 성공한다.
@@ -140,12 +163,18 @@ def _run(
     deploy_all = tmp_path / "deploy-all-stub"
     _ = deploy_all.write_text(_DEPLOY_ALL_STUB, encoding="utf-8")
     deploy_all.chmod(0o755)
+    helper_probe_stub = tmp_path / "helper-probe-stub"
+    _ = helper_probe_stub.write_text(_HELPER_PROBE_STUB, encoding="utf-8")
+    helper_probe_stub.chmod(0o755)
     env = {
         **os.environ,
         "RELEASE_REPO_ROOT": str(work),
         "RELEASE_APPROVAL_CMD": f"bash {approval}",
         "RELEASE_LOCAL_CI": str(local_ci),
         "RELEASE_DEPLOY_ALL": str(deploy_all),
+        "RELEASE_HELPER_PROBE_CMD": f"bash {helper_probe_stub}",
+        "HELPER_PROBE_MODE": helper_probe,
+        "RELEASE_ALLOW_HELPER_DRIFT": allow_helper_drift,
         "RELEASE_POLL_SECONDS": "0",
         "RELEASE_DEADLINE_SECONDS": deadline,
         "UPDATE_TRUST_SIGNING_KEY": str(_signing_key(tmp_path)),
@@ -488,3 +517,42 @@ def test_latest_release_base_peels_the_newest_tag(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == first
+
+
+def test_a_drifted_node_helper_is_refused_before_any_approval_traffic(tmp_path: Path) -> None:
+    """승인을 쓰기 전에 멈춘다 — 2026-09-22 에는 태그까지 자른 뒤에야 노드가 거부했다."""
+    _origin, work = _origin_with_commits(tmp_path)
+
+    result = _run(tmp_path, work, decisions="0", helper_probe="drift")
+
+    assert result.returncode == 4
+    assert "RELEASE-BLOCK" in result.stderr
+    assert "provision-deploy-converge.sh" in result.stderr
+    # 카드도 태그도 없다: 승인 표면은 한 번도 불리지 않았다.
+    assert [call for call in _calls(tmp_path) if call in {"plan", "request", "decision"}] == []
+    assert "refs/tags/" not in _origin_tags(work)
+
+
+def test_an_unjudgeable_node_helper_warns_and_still_releases(tmp_path: Path) -> None:
+    """판정 불가(노드 불통·권한)는 위반이 아니다 — 여기서 막으면 릴리스가 노드 가용성에 묶인다."""
+    for mode in ("unknown", "unreachable"):
+        case = tmp_path / mode
+        case.mkdir()
+        _origin, work = _origin_with_commits(case)
+
+        result = _run(case, work, decisions="2 7 0", helper_probe=mode)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "HELPER-DRIFT-UNKNOWN" in result.stderr
+        assert "refs/tags/v1.0.0^{}" in _origin_tags(work)
+
+
+def test_helper_drift_can_be_waived_for_a_deliberate_release(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+
+    result = _run(tmp_path, work, decisions="2 7 0", helper_probe="drift",
+                  allow_helper_drift="1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "RELEASE_ALLOW_HELPER_DRIFT=1" in result.stderr
+    assert "refs/tags/v1.0.0^{}" in _origin_tags(work)

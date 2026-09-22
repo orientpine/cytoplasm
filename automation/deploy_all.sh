@@ -63,6 +63,16 @@ node_release_sha() {
   basename "${target//[[:space:]]/}"
 }
 
+#: 노드가 **왜** 수렴을 거부했는지는 리컨실러 저널에만 있다 — 상태 파일은 실패 횟수만
+#: 세고 사유 문구를 남기지 않는다. 그래서 2026-09-22 에는 여기서 "waiting…" 를 40번 찍고
+#: rc=4 로 죽은 뒤, 진짜 사유(`SNAPSHOT-BLOCK: remote main moved`)를 사람이 노드 저널을
+#: 뒤져서야 알았다. 진단 전용이라 실패해도 종료 코드를 바꾸지 않는다.
+converge_refusal() {
+  ssh "$host" "journalctl -u autophagy-deploy-reconcile.service -n 300 --no-pager \
+    | grep -E 'HELPER-FAILED|SNAPSHOT-BLOCK|UPDATE-TRUST-BLOCK|SYNC-BLOCK|RELEASE-ROLLBACK' \
+    | tail -n 1" < /dev/null 2>/dev/null
+}
+
 restart_gateways() { # 「게이트웨이 재시동 규칙」(2026-07-22) — 한쪽만 재시동 금지
   local acct
   for acct in agent peer; do
@@ -148,6 +158,12 @@ case "$mode" in
     if [[ "$local_head" != "$node_sha" ]]; then
       (( wait_timed_out )) && log "node release convergence wait timed out"
       log "RELEASE-MISMATCH: local HEAD ${local_head:0:12} != node release ${node_sha:0:12}"
+      refusal="$(converge_refusal)"
+      if [[ -n "$refusal" ]]; then
+        log "NODE-CONVERGE-REFUSED: ${refusal:0:300}"
+      else
+        log "NODE-CONVERGE-REFUSED: 노드 저널에서 거부 사유를 찾지 못했다(아직 거부 전이거나 저널 회전·권한)"
+      fi
       log "  릴리스 수렴(2분 리컨실러)을 기다리거나 체크아웃을 그 sha 로 맞춘 뒤 다시 실행"
       exit 4
     fi

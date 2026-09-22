@@ -32,8 +32,12 @@ def facade_closure() -> frozenset[str]:
 
 
 def test_gate_closure_excludes_notice_delivery_when_facades_are_available() -> None:
-    # Given: notice delivery modules are available in the checkout.
-    forbidden = ENTRIES | {"automation/interop/chunker.py"}
+    # Given: notice delivery modules are available in the checkout. `interop/chunker.py`
+    # is NOT one of them any more: it is a pure text splitter with no transport, and the
+    # staged gate imports it on purpose (release_spec replays the detail messages of a
+    # stored card), so it is staged as a gate helper. What must stay out is delivery —
+    # the facades that can actually reach Discord.
+    forbidden = ENTRIES
     # When: the gate import closure is followed independently of the notice facade.
     imported = gate._required()
     # Then: the staged gate does not acquire any delivery dependency.

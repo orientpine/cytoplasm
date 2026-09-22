@@ -68,6 +68,49 @@ main="$(git -C "$REPO_ROOT" rev-parse origin/main)" || die "cannot resolve origi
 # 전제 ③: 로컬 CI 영수증 — 기존 push 게이트의 판정을 그대로 재사용한다.
 bash "$local_ci" verify "$head" || die "no valid local CI receipt for ${head:0:12}" 4
 
+helper_drift_probe() { # helper_drift_probe → 노드의 판정을 그대로 돌려준다(주입 이음새 있음)
+  if [[ -n "${RELEASE_HELPER_PROBE_CMD:-}" ]]; then
+    read -r -a probe_cmd <<< "$RELEASE_HELPER_PROBE_CMD"
+    "${probe_cmd[@]}"
+    return
+  fi
+  local node_env host script
+  node_env="$(python3 "$REPO_ROOT/automation/node_config_sh.py" --print-env 2>/dev/null)" || return 70
+  eval "$node_env"
+  host="${DEPLOY_SSH_HOST:-${NODE_DEPLOY_SSH_HOST:-}}"
+  [[ -n "$host" ]] || return 70
+  # shellcheck source=automation/release_helper_probe.sh
+  source "$SCRIPT_DIR/release_helper_probe.sh" || return 70
+  script="$(release_helper_probe_script)" || return 70
+  ssh "$host" "sudo -n -u ${NODE_OPS_ACCOUNT:-ops} bash -s" <<< "$script"
+}
+
+# 전제 ④: 노드의 root 수렴 도우미가 이 릴리스와 같은 판인가 — 승인을 쓰기 **전에** 본다.
+#
+# 그 도우미는 릴리스 트리 **밖** root 정적 사본이라 머지만으로 갱신되지 않는다(MD-1: 자동
+# 갱신은 "PR 병합 = root 임의 코드 실행"이 된다). 낡은 사본은 조용히 실패하는 대신 수렴을
+# 거부하는데, 그 거부는 태그를 자른 뒤에야 보인다 — 2026-09-22 실측: 승인·서명·태그까지
+# 끝난 v1.10.3 이 `deploy_all` 에서 40분을 기다린 뒤 rc=4 로 죽었고, 진짜 사유
+# (`SNAPSHOT-BLOCK`)는 노드 저널에만 있었다. 승인 한 번이 통째로 헛돌았다.
+#
+# 재실행 경로(이미 ✅ 받은 요청)도 같이 막는다 — 낡은 도우미로는 어차피 반영되지 않고,
+# 승인 레코드는 살아 있으므로 프로비저너를 돌린 뒤 다시 실행하면 그 자리에서 재개된다.
+# 판정하지 **못한** 것(노드 불통·권한)은 위반이 아니라 미상이라 경고만 하고 진행한다 —
+# 여기서 막으면 노드가 잠깐 불통인 동안 릴리스 자체가 불가능해진다.
+helper_probe_output=""
+helper_probe_rc=0
+helper_probe_output="$(helper_drift_probe 2>&1)" || helper_probe_rc=$?
+if grep -q 'HELPER-DRIFT:' <<< "$helper_probe_output"; then
+  printf '%s\n' "$helper_probe_output" >&2
+  if [[ "${RELEASE_ALLOW_HELPER_DRIFT:-0}" == "1" ]]; then
+    log "RELEASE_ALLOW_HELPER_DRIFT=1 — 낡은 root 도우미를 알고도 진행한다(샌드박스 전용)"
+  else
+    die "노드의 root 수렴 도우미가 릴리스와 다르다 — 위 안내의 프로비저너를 먼저 돌린다(승인 전에 멈췄다)" 4
+  fi
+elif (( helper_probe_rc != 0 )); then
+  log "HELPER-DRIFT-UNKNOWN: 노드 도우미를 판정하지 못해 그대로 진행한다 — ${helper_probe_output:0:200}"
+fi
+
 workdir="$(mktemp -d)" || die "mktemp failed" 1
 trap 'rm -rf -- "$workdir"' EXIT
 

@@ -162,7 +162,8 @@ class ReleaseSpec:
     def detail_messages(self) -> tuple[str, ...]:
         """카드가 가리키는 변경 상세 메시지 전부 — 레코드의 원문에서 그대로 재생된다."""
         body = self.patch_notes
-        if self.render_version >= 6:
+        new_card = self.render_version >= 6
+        if new_card:
             bundles = "\n".join(
                 f"- `{name}`" for name, _digest in self.surface_digests
             ) or "- 변경 없음"
@@ -171,11 +172,8 @@ class ReleaseSpec:
             version=self.version,
             head_sha=self.head_sha,
             body=body,
-            suffix_budget=(
-                DETAIL_BACKLINK_BUDGET
-                if self.render_version >= 6
-                else 0
-            ),
+            suffix_budget=DETAIL_BACKLINK_BUDGET if new_card else 0,
+            preserve_urls=new_card,
         )
 
     def render(self) -> str:
@@ -228,7 +226,7 @@ class ReleaseSpec:
         return " · ".join(summary) or "변경 없음"
 
     def _render_v4(self) -> str:
-        """v4(신규 기본): 저장된 레코드만으로 재생되는 봉투 — 시계도 계획도 읽지 않는다."""
+        """v4/v5 봉투. 상세 분할 정책만 판본으로 고정하며 시계·계획은 읽지 않는다."""
         from automation.release_spec_message import render_v4
 
         return render_v4(self, bundle_names=self._bundle_names())

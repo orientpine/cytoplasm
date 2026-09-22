@@ -51,6 +51,10 @@ def _stub_ssh(tmp_path: Path) -> tuple[Path, Path, Path]:
         '  fi\n'
         '  printf "ACT|restart-gateway|agent+peer\\n"; exit 1\n'
         "fi\n"
+        # 노드가 수렴을 거부한 사유는 리컨실러 저널에만 있다(상태 파일은 횟수만 센다).
+        'if [[ "$cmd" == journalctl* ]]; then\n'
+        '  printf "%s\\n" "${FAKE_CONVERGE_REFUSAL:-}"; exit 0\n'
+        "fi\n"
         'if [[ "$cmd" == *"systemctl --user restart"* ]]; then\n'
         '  printf "active\\n"; exit 0\n'
         "fi\n"
@@ -80,6 +84,7 @@ def _run(
     stale_until: int = 0,
     converge_seconds: str = "600",
     poll_seconds: str = "0",
+    refusal: str = "",
 ) -> subprocess.CompletedProcess[str]:
     fake_bin, calls, receipt = _stub_ssh(tmp_path)
     head = subprocess.run(
@@ -99,6 +104,7 @@ def _run(
         "FAKE_HEAD": head,
         "FAKE_READLINK_COUNTER": str(tmp_path / "readlink-counter"),
         "FAKE_STALE_UNTIL": str(stale_until),
+        "FAKE_CONVERGE_REFUSAL": refusal,
         "DEPLOY_ALL_CONVERGE_SECONDS": converge_seconds,
         "DEPLOY_ALL_CONVERGE_POLL_SECONDS": poll_seconds,
         "DEPLOY_ALL_LOCK_DIR": str(tmp_path / "locks"),
@@ -297,3 +303,32 @@ def test_apply_serializes_concurrent_deployers_and_rechecks_after_waiting(
 
 def test_command_ships_executable() -> None:
     assert os.access(_COMMAND, os.X_OK)
+
+
+def test_a_convergence_timeout_reports_why_the_node_refused(tmp_path: Path) -> None:
+    """RELEASE-MISMATCH 만으로는 사람이 노드 저널을 뒤져야 했다(2026-09-22 실측)."""
+    result = _run(
+        tmp_path,
+        "--apply",
+        "--wait-converge",
+        stale_until=999,
+        converge_seconds="0",
+        refusal="[deploy-reconcile] HELPER-FAILED converge: SNAPSHOT-BLOCK: remote main moved",
+    )
+
+    assert result.returncode == 4
+    assert "NODE-CONVERGE-REFUSED: [deploy-reconcile] HELPER-FAILED" in result.stderr
+    assert "SNAPSHOT-BLOCK: remote main moved" in result.stderr
+
+
+def test_a_silent_journal_says_so_instead_of_inventing_a_reason(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        "--apply",
+        "--wait-converge",
+        stale_until=999,
+        converge_seconds="0",
+    )
+
+    assert result.returncode == 4
+    assert "NODE-CONVERGE-REFUSED: 노드 저널에서 거부 사유를 찾지 못했다" in result.stderr

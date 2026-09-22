@@ -1,7 +1,10 @@
 """Stored release v4 envelope replay; staged beside the release spec."""
 from __future__ import annotations
 
+from functools import partial
 from typing import Final, Protocol
+
+from automation.interop.chunker import chunk_lines
 
 
 class ReleaseView(Protocol):
@@ -96,43 +99,32 @@ def detail_header(version: str, head_sha: str, index: int, total: int) -> str:
     return f"[release] {version} 변경 상세 ({index}/{total}) — 기준 {head_sha[:12]}"
 
 
-def _packed(body: str, budget: int) -> list[str]:
-    chunks: list[str] = []
-    current: list[str] = []
-    size = 0
-    for line in body.splitlines():
-        for piece in [line[at : at + budget] for at in range(0, len(line), budget)] or [""]:
-            if current and size + len(piece) + 1 > budget:
-                chunks.append("\n".join(current))
-                current, size = [piece], len(piece)
-                continue
-            size += len(piece) + (1 if current else 0)
-            current.append(piece)
-    if current:
-        chunks.append("\n".join(current))
-    return chunks or [""]
-
-
 def split_messages(
-    *, version: str, head_sha: str, body: str, suffix_budget: int = 0
+    *,
+    version: str,
+    head_sha: str,
+    body: str,
+    suffix_budget: int = 0,
+    preserve_urls: bool = False,
 ) -> tuple[str, ...]:
-    """Split without truncation while keeping every message below Discord's budget."""
-    total = 1
-    for _ in range(8):
-        budget = (
-            MESSAGE_LIMIT
-            - len(detail_header(version, head_sha, total, total))
-            - suffix_budget
-            - 1
+    """Split without truncation while keeping every message below Discord's budget.
+
+    줄 경계·URL 경계 규칙은 전송 쪽과 공유하는 `interop.chunker` 한 벌이 소유한다 — 사본이
+    생기면 한쪽만 링크를 지키고 다른 쪽은 자른다. ``preserve_urls`` 를 끈 기본값은 저장된
+    판본의 조각 수와 바이트를 그대로 재생하고, 신규 판본만 켜서 URL 이 두 통으로 찢기지
+    않게 한다.
+    """
+    try:
+        return chunk_lines(
+            body,
+            limit=MESSAGE_LIMIT - suffix_budget,
+            header=partial(detail_header, version, head_sha),
+            preserve_urls=preserve_urls,
         )
-        chunks = _packed(body, budget)
-        if len(chunks) == total:
-            return tuple(
-                f"{detail_header(version, head_sha, index, total)}\n{chunk}"
-                for index, chunk in enumerate(chunks, start=1)
-            )
-        total = len(chunks)
-    raise ReleaseMessageError("release detail messages do not converge on a stable count")
+    except ValueError as error:
+        raise ReleaseMessageError(
+            "release detail messages do not converge on a stable count"
+        ) from error
 
 
 def render_v4(spec: ReleaseView, *, bundle_names: str) -> str:
