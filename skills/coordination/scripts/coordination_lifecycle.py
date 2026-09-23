@@ -23,6 +23,19 @@ OUTCOME_CANCELLED = "cancelled"
 OUTCOME_EXPIRED = "expired"
 
 
+def report_pending(entry: Any, slot_iso: str, correlation: str) -> None:
+    print(f"PENDING-OWNER draft={entry.draft_id} slot={slot_iso} correlation={correlation}")
+    try:
+        from automation.interop.thread_pointer import approval_thread_line
+    except ImportError as error:
+        print(f"APPROVAL-THREAD-UNAVAILABLE draft={entry.draft_id} err={type(error).__name__}",
+              file=sys.stderr)
+        return
+    coordinates = {"approval_thread_id": getattr(entry, "approval_thread_id", ""),
+                   "approval_guild_id": getattr(entry, "approval_guild_id", None)}
+    print(approval_thread_line("draft", str(entry.draft_id), coordinates))
+
+
 def owner_leg(args: argparse.Namespace, config: dict[str, str], correlation: str, state, slot_iso: str) -> int:
     """Create the gated calendar draft and send a reaction-ready owner request."""
     import calendar_core
@@ -76,9 +89,7 @@ def owner_leg(args: argparse.Namespace, config: dict[str, str], correlation: str
                 args.origin_channel_id, args.origin_message_id,
             ), config["owner_id"], prepare=prepare_payload,
         )
-        print(
-            f"PENDING-OWNER draft={entry.draft_id} slot={slot_iso} correlation={correlation}"
-        )
+        report_pending(entry, slot_iso, correlation)
         return 7
     calendar_gate.persist_draft(draft)
     io.obs(step="draft", draft_id=draft["id"], slot=slot_iso)

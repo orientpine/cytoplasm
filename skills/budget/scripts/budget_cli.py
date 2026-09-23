@@ -206,10 +206,22 @@ def _snapshot_one(
               f"changes={len(changes)} message=unposted")
         print(content)
         return
+    post_and_report(draft, changes=len(changes))
+
+
+def post_and_report(draft: dict[str, object], *, changes: int) -> None:
     message_id = _post_draft_for_approval(draft)
     budget_gate.set_message_id(draft, message_id)
     print(f"DRAFT-CREATED id={draft['id']} sha256={draft['sha256']} "
-          f"changes={len(changes)} message={message_id}")
+          f"changes={changes} message={message_id}")
+    try:
+        from automation.interop.thread_pointer import approval_thread_line
+    except ImportError as error:
+        print(f"APPROVAL-THREAD-UNAVAILABLE draft={draft['id']} err={type(error).__name__}",
+              file=sys.stderr)
+        return
+    draft_id = str(draft["id"])
+    print(approval_thread_line("draft", draft_id, budget_gate.load_draft(draft_id)))
 
 
 def _queue_sheet_failure(db: Path, sheet_key: str, error: Exception) -> None:

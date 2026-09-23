@@ -48,7 +48,6 @@ import triage_pipeline
 import mail_preflight
 import triage_sensitivity
 import triage_store
-import triage_thread_link
 from triage_transport import _get_mail, _rules_path
 
 mail_evidence = importlib.import_module("mail_evidence")
@@ -155,9 +154,15 @@ def cmd_compose(args: argparse.Namespace) -> int:
 
 
 def _print_thread_line(draft: dict[str, object]) -> None:
-    line = triage_thread_link.approval_thread_line(draft)
-    if line is not None:
-        print(line)
+    if not draft.get("message_id"):
+        return
+    try:
+        from automation.interop.thread_pointer import approval_thread_line
+    except ImportError as error:
+        print(f"APPROVAL-THREAD-UNAVAILABLE draft={draft['id']} err={type(error).__name__}",
+              file=sys.stderr)
+        return
+    print(approval_thread_line("draft", str(draft["id"]), draft))
 
 
 def cmd_evidence(args: argparse.Namespace) -> int:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import sys
+from importlib import import_module
 
 import calendar_core
 import calendar_gate
@@ -31,3 +33,22 @@ def cmd_list_drafts(_args: argparse.Namespace) -> int:
             f"created={record['created']}"
         )
     return 0
+
+
+def cmd_post_confirm(args: argparse.Namespace) -> int:
+    draft = calendar_gate.load_draft(args.draft)
+    calendar_approval = import_module("calendar_approval")
+    entry = calendar_approval.request_confirmation(draft)
+    print(f"PENDING-OWNER draft={draft['id']} message={entry.dm_message_id}")
+    _print_thread_line(calendar_gate.load_draft(draft["id"]))
+    return 0
+
+
+def _print_thread_line(draft: dict[str, object]) -> None:
+    try:
+        from automation.interop.thread_pointer import approval_thread_line
+    except ImportError as error:
+        print(f"APPROVAL-THREAD-UNAVAILABLE draft={draft['id']} err={type(error).__name__}",
+              file=sys.stderr)
+        return
+    print(approval_thread_line("draft", str(draft["id"]), draft))

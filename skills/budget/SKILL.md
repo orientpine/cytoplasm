@@ -1,7 +1,7 @@
 ---
 name: budget
 description: "과제비 원장(W0-10 Google Sheet) 조회 + 변경 감지 스킬 — 과제별×년도별 다중 시트 레지스트리(~/.hermes/budget/sheets.json) 지원. `!budget [항목]`은 게이트 없이 즉시 조회. 변경 감지 cron(30분)이 잔액 탭을 SQLite 스냅샷과 diff해 변경 시 규정 요청메일 초안을 만들고, 발송은 반드시 그 요청 전용 승인 스레드(`과제비 메일 · <제목>`)의 승인 메시지에서 cha 본인의 ✅/⛔ 리액션 확인(봇이 두 반응을 미리 추가, 제약 1) 이후에만 일어난다. 승인 표면은 `approval_surface.py` 정책과 초안에 저장된 바인딩으로 결정된다. W4-3."
-version: 1.5.3
+version: 1.5.4
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -102,6 +102,9 @@ approvals.jsonl 기록 후 `gws gmail +send`를 실행하며, 유효한 ⛔면 �
 요청 스레드가 거기에 앵커된다. 스레드가 없는 옛 초안은 origin 스레드, 그마저 없으면 기존
 소유자 통지 경로로 폴백한다. 스레드 게시 실패는 `NOTIFY-THREAD-FAIL` 후 폴백이고 이름 변경·
 아카이브 실패는 `THREAD-CLOSE-FAIL`이며, 어떤 통지 실패도 tick을 깨지 않는다.
+게시된 초안은 `DRAFT-CREATED …` 다음 줄에 `APPROVAL-THREAD draft=<id> url=<승인 스레드 링크>` 를
+낸다 — 에이전트가 `snapshot` 결과를 소유자에게 전할 때 **그 `url=` 값을 그대로 붙인다**(2026-09-23
+소유자 지시). `url=unavailable search=<id>` 이면 링크를 지어내지 말고 draft id 로 검색하라고 적는다.
 
 승인이 없으면 pending 상태이며 **아무것도 발송되지 않는다**. CTA의
 `실행/취소 <id>`는 문서화된 대체 수단일 뿐, 기본 확인은 리액션이다. 소유자에게

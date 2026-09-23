@@ -195,12 +195,7 @@ def cmd_discard(args: argparse.Namespace) -> int:
 cmd_list_drafts = calendar_output.cmd_list_drafts
 
 
-def cmd_post_confirm(args: argparse.Namespace) -> int:
-    draft = calendar_gate.load_draft(args.draft)
-    calendar_approval = import_module("calendar_approval")
-    entry = calendar_approval.request_confirmation(draft)
-    print(f"PENDING-OWNER draft={draft['id']} message={entry.dm_message_id}")
-    return 0
+cmd_post_confirm = calendar_output.cmd_post_confirm
 
 
 def cmd_sign(args: argparse.Namespace) -> int:

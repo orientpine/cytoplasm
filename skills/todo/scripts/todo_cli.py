@@ -269,7 +269,19 @@ def _cmd_request(args: argparse.Namespace) -> int:
     except adapter.TodoApprovalError as error:
         raise TodoError(str(error), 3) from None
     print(f"REQUESTED hash={decision.action_hash} target={decision.target_id}")
+    _print_thread_line(decision.action_hash)
     return 0
+
+
+def _print_thread_line(action_hash: str) -> None:
+    record = import_module("todo_approval_runtime").origin_record(action_hash) or {}
+    try:
+        from automation.interop.thread_pointer import approval_thread_line
+    except ImportError as error:
+        print(f"APPROVAL-THREAD-UNAVAILABLE hash={action_hash} err={type(error).__name__}",
+              file=sys.stderr)
+        return
+    print(approval_thread_line("hash", action_hash, record))
 
 
 def _cmd_create(args: argparse.Namespace) -> int:

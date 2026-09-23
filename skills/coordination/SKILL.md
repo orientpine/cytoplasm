@@ -1,7 +1,7 @@
 ---
 name: coordination
 description: "에이전트간 일정 조율 스킬 (W3-3). cha가 'OO님과 미팅 잡아줘'라고 하면 상대 에이전트에 §2 가용시간 질의 → 교집합 후보 ≤3개를 조회한다. 공개 v1에서는 상대 소유자 승인 경로가 없어 자동 합의·캘린더 등록을 하지 않으며, 실제 양측 승인 흐름은 W-F2.5-D(v2) 범위다. §2 조율 봉투(envelope)는 #autophagy-agents(인터롭 채널)에서 오가며, #team에는 간결한 확정 통지만 게시된다. 10분 무응답/후보 0개는 에스컬레이션 DM 후 종료(캘린더 쓰기 0건). 거절은 재협상 1회 후 종료. 조율은 피어+시간 범위(예: '오전') 요청 전용 — 피어가 명시돼도 '정확한 단일 시각'이면 본인 단독 일정이므로 request 진입 즉시 ROUTING-REJECT(exit 2)로 calendar로 되돌린다(피어 질의 전 차단). 상대 미지정 요청은 calendar 소유."
-version: 1.2.3
+version: 1.2.4
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -86,6 +86,9 @@ python3 /srv/autophagy-skills/live/coordination/scripts/coordinate_cli.py reques
   후보 슬롯을 보낸다. **cha는 그 DM에서 ✅를 눌러 확정하거나 ⛔를 눌러 취소한다.**
   `coordination-confirm-watch` no-agent cron이 1분마다 소유자 반응만 독립 확인한다.
   **이 단계까지 캘린더에 아무것도 쓰지 않는다.**
+  다음 줄의 `APPROVAL-THREAD draft=<id> url=<승인 스레드 링크>` 를 **소유자 답장에 그대로 붙인다**
+  (2026-09-23 소유자 지시). `url=unavailable search=<id>` 이면 링크를 지어내지 말고 draft id 로
+  검색하라고 적는다.
 - `DEADLOCK …` (exit 4): 에스컬레이션 DM이 이미 발송됨. cha에게 결과만 전달.
 - `REFUSED …` (exit 5): 재협상 1회 후 종료됨. cha에게 결과만 전달.
 - `ROUTING-REJECT …` (exit 2): cha가 **정확한 단일 시각**(예: `오전 10시`)을 지정했고
