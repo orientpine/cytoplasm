@@ -48,6 +48,7 @@ import triage_pipeline
 import mail_preflight
 import triage_sensitivity
 import triage_store
+import triage_thread_link
 from triage_transport import _get_mail, _rules_path
 
 mail_evidence = importlib.import_module("mail_evidence")
@@ -114,6 +115,8 @@ def cmd_draft(args: argparse.Namespace) -> int:
     )
     posted = int(any(action.startswith("posted:") for action in actions))
     print(f"DRAFTED draft={draft_id} posted={posted}")
+    if posted:
+        _print_thread_line(triage_gate.load_draft(draft_id))
     return 0
 
 
@@ -147,7 +150,14 @@ def cmd_compose(args: argparse.Namespace) -> int:
         mail_evidence.write_sidecar(triage_gate.gate_dir(), str(draft["id"]), pack)
     posted = int(bool(draft.get("message_id")))
     print(f"COMPOSED draft={draft['id']} posted={posted}")
+    _print_thread_line(draft)
     return 0
+
+
+def _print_thread_line(draft: dict[str, object]) -> None:
+    line = triage_thread_link.approval_thread_line(draft)
+    if line is not None:
+        print(line)
 
 
 def cmd_evidence(args: argparse.Namespace) -> int:
