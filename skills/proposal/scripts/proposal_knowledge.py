@@ -142,10 +142,22 @@ def _repo_root() -> Path:
     return Path("/srv/autophagy-agent-current")
 
 
+def ensure_repo_on_path() -> Path:
+    """Make the checkout carrying ``automation`` importable and return it.
+
+    A mounted skill lives at ``releases/proposal/<digest>``, where no parent holds the
+    repository, so a bare ``import automation`` fails there (2026-09-28: every render
+    printed ``TERM-CORRECTION-SKIP reason=ImportError``).
+    """
+    root = _repo_root()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    return root
+
+
 def module(name: str) -> ModuleType:
     """Load one shared knowledge module from the configured repository checkout."""
-    root = _repo_root()
-    sys.path.insert(0, str(root))
+    _ = ensure_repo_on_path()
     return importlib.import_module(name)
 
 

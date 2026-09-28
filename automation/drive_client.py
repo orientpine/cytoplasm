@@ -358,15 +358,44 @@ class DriveClient:
         dest.write_bytes(payload)
         return hashlib.sha256(payload).hexdigest()
 
+    def _is_gws_json_rendering(
+        self, file_id: str, local_bytes: bytes, fetched_bytes: bytes, expected: str
+    ) -> bool:
+        """True when a byte mismatch is only gws re-serializing a stored JSON file.
+
+        gws parses a JSON media response and prints its own rendering (sorted keys,
+        two-space indent), so a JSON file whose local bytes use another layout never
+        matches its re-download even though Drive stores it byte for byte (2026-09-28:
+        proposal ``figures.json``/``tables.json`` publish refused). Byte integrity then
+        comes from Drive's own ``sha256Checksum`` over the stored object, and the
+        re-download must still carry the same JSON value — any other mismatch stays fatal.
+        """
+        try:
+            same_value = cast(object, json.loads(local_bytes)) == cast(
+                object, json.loads(fetched_bytes)
+            )
+        except ValueError:
+            return False
+        if not same_value:
+            return False
+        checksum, size = self.file_checksum(file_id)
+        return checksum == expected and size == len(local_bytes)
+
     def download_and_verify(self, file_id: str, local: Path) -> str:
         """Re-download ``file_id`` and fail closed unless its sha256 matches ``local``."""
-        expected = hashlib.sha256(local.read_bytes()).hexdigest()
+        local_bytes = local.read_bytes()
+        expected = hashlib.sha256(local_bytes).hexdigest()
         with tempfile.TemporaryDirectory(prefix="drive-verify-") as tmp:
             fetched = Path(tmp) / "remote.bin"
             self._fetch_media(file_id, fetched, Path(tmp))
             if not fetched.is_file():
                 raise DriveClientError(f"재다운로드 산출물 없음(fail-closed): {file_id}")
-            actual = hashlib.sha256(fetched.read_bytes()).hexdigest()
+            fetched_bytes = fetched.read_bytes()
+            actual = hashlib.sha256(fetched_bytes).hexdigest()
+        if actual != expected and self._is_gws_json_rendering(
+            file_id, local_bytes, fetched_bytes, expected
+        ):
+            return expected
         if actual != expected:
             raise DriveClientError(
                 f"재다운로드 sha256 불일치 {file_id}: "

@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
-from automation.install.components import EnableUserUnit
+from automation.install.components import EnableUserUnit, EnsureSymlink
 from automation.install.healthcheck_probe_asset import inspect_probe
 from automation.install.plan import (
     DirectoryState,
@@ -102,13 +102,24 @@ def inspect_state(inputs: InstallInputs) -> SystemState:
         repositories=repositories,
         enabled_timers=timers,
         enabled_user_units=frozenset(unit for unit in inputs.components.user_units if _user_unit_enabled(unit)),
-        symlinks=frozenset(link for link in inputs.components.symlinks
-                          if link.path.is_symlink() and link.path.readlink() == link.target
-                          and _owner(link.path) == (link.owner, link.owner)),
+        symlinks=frozenset(link for link in inputs.components.symlinks if _symlink_ready(link)),
         gitleaks_version=_gitleaks_version(),
         operator_home=operator_home,
         healthcheck_probe_ready=inspect_probe(replace(probe, operator_home=operator_home)) if operator_home is not None else False,
     )
+
+
+def _symlink_ready(link: EnsureSymlink) -> bool:
+    try:
+        return (
+            link.path.is_symlink()
+            and link.path.readlink() == link.target
+            and _owner(link.path) == (link.owner, link.owner)
+        )
+    except OSError:
+        # 판독 불가는 수렴으로 간주하지 않는다. dry-run은 작업을 계획하고 실제 적용은
+        # 같은 권한 문제가 계속되면 실패하므로 변경 경로의 fail-closed 성질도 유지된다.
+        return False
 
 
 def _account_exists(name: str) -> bool:

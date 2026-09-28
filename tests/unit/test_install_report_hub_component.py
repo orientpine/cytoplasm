@@ -11,6 +11,7 @@ from typing import Final
 import pytest
 
 from automation.install import plan as planning
+from automation.install import state as installation_state
 from automation.install.assets import build_inputs, render_plan
 from automation.install.components import UnknownComponentError, resolve_components
 from automation.install.installer import main
@@ -77,6 +78,30 @@ def test_user_assets_are_planned_when_profile_selects_hub(trust: str, profile: s
     assert links == [planning.EnsureSymlink(hub / "automation", config.release_current / "automation", config.ops_account)]
     enables = [action for action in plan.actions if isinstance(action, planning.EnableUserUnit)]
     assert enables == [planning.EnableUserUnit(name, config.ops_account) for name in UNITS]
+
+
+def test_unreadable_hub_symlink_is_planned_as_not_converged(
+    trust: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    config = replace(default_node_config(), ops_home=tmp_path / "ops")
+    inputs = build_inputs(REPO, config, trust, profile="report-hub")
+    link_path = config.ops_home / "report-hub/automation"
+    original_is_symlink = Path.is_symlink
+
+    def unreadable_is_symlink(path: Path) -> bool:
+        if path == link_path:
+            raise PermissionError(link_path)
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", unreadable_is_symlink)
+    # When
+    observed = installation_state.inspect_state(inputs)
+    plan = planning.build_plan(inputs, observed)
+    # Then
+    assert planning.EnsureSymlink(
+        link_path, config.release_current / "automation", config.ops_account,
+    ) in plan.actions
 
 
 def test_second_run_is_check_only_when_hub_converged(trust: str) -> None:

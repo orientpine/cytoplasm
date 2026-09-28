@@ -36,6 +36,14 @@ MAX_CHUNK_CHARS: Final = 9_000
 DEFAULT_TIMEOUT_SECONDS: Final = 600.0
 REFINEMENT_INVARIANT_FAILED_EXIT: Final = 7
 REFINEMENT_INPUT_ERROR_EXIT: Final = 2
+REFINEMENT_HOST_FAILED_EXIT: Final = 6
+_HOST_FAILURE_REASONS: Final = frozenset(
+    {"host-unavailable", "host-unauthenticated", "transport-failed"}
+)
+_AUTH_FAILURE_RE: Final = re.compile(r"\b401\b|unauthori[sz]ed|not logged in", re.IGNORECASE)
+_CODEX_LOGIN_REMEDY: Final = (
+    "run `codex login` as this account (Codex CLI OAuth); the proposal renders unrefined until then"
+)
 DEFAULT_HOST: Final = "codex-oauth"
 INVARIANT_NAMES: Final = (
     "numbers-units",
@@ -147,6 +155,24 @@ class RefinementInputError(RefinementError):
 
 class RefinementTransportError(RefinementError):
     """The selected host did not return a usable Markdown chunk."""
+
+
+class RefinementHostUnauthenticated(RefinementTransportError):
+    """The Codex CLI ran but this account has no valid login (401 / not logged in)."""
+
+
+class RefinementTransportFailed(RefinementError):
+    """Every attempted chunk failed in transport, so no invariant was ever evaluated.
+
+    Kept apart from ``RefinementInvariantFailed``: a host that never answered is an
+    operational fault (login, network) with an owner remedy, not a rejected rewrite.
+    Reporting it as an invariant failure sent the 2026-09-28 diagnosis the wrong way.
+    """
+
+    def __init__(self, reason: str, *, report_path: Path | None = None) -> None:
+        super().__init__(reason)
+        self.reason: str = reason
+        self.report_path: Path | None = report_path
 
 
 class ChunkingError(RefinementError):
@@ -614,6 +640,14 @@ def _figure_tokens(text: str) -> Counter[str]:
     return Counter(values)
 
 
+# A closing figure citation "… 겹친다 ([[FIG:x]])." is the form the figures stage and the
+# refine recast produce. Dropping only the token left "겹친다 ()." — a non-da ending
+# that failed every rewrite touching the sentence (2026-09-28: 5 of 5 chunks).
+_FIGURE_CITATION_RE: Final = re.compile(
+    r"\s*\(\s*\[\[FIG:[a-z0-9][a-z0-9-]*\]\](?:\s*,\s*\[\[FIG:[a-z0-9][a-z0-9-]*\]\])*\s*\)"
+)
+
+
 def _prose_for_style(text: str) -> str:
     lines: list[str] = []
     for line in text.splitlines():
@@ -624,6 +658,7 @@ def _prose_for_style(text: str) -> str:
         for pattern in _QUOTE_PATTERNS:
             prose = pattern.sub("", prose)
         prose = _CITATION_RE.sub("", prose)
+        prose = _FIGURE_CITATION_RE.sub("", prose)
         prose = FIG_TOKEN_RE.sub("", prose)
         # The bullet marker stays: _ending_violations reads it to tell an item
         # from a sentence, and stripping it here hid 개조식 항목 behind a rule
@@ -999,6 +1034,11 @@ def _live_transport(text: str, host: str, timeout: float) -> str:
                 f"Codex refinement failed: {error.__class__.__name__}"
             ) from error
         if completed.returncode != 0 or not output_path.is_file():
+            if _AUTH_FAILURE_RE.search(completed.stderr or "") is not None:
+                raise RefinementHostUnauthenticated(
+                    f"Codex CLI is not authenticated rc={completed.returncode}; "
+                    + _CODEX_LOGIN_REMEDY
+                )
             raise RefinementTransportError(f"Codex refinement failed rc={completed.returncode}")
         try:
             payload = cast(object, json.loads(output_path.read_text(encoding="utf-8")))
@@ -1011,6 +1051,26 @@ def _live_transport(text: str, host: str, timeout: float) -> str:
     if not isinstance(output_text, str):
         raise RefinementTransportError("Codex refinement output has no text field")
     return output_text
+
+
+def _codex_login_ok() -> bool | None:
+    """Ask the Codex CLI whether this account is logged in; ``None`` when it cannot answer.
+
+    ``codex login status`` exits non-zero with "Not logged in" when ``~/.codex/auth.json``
+    is absent. Checking once up front spares one 401 round trip per chunk and names the
+    real cause instead of a per-chunk transport error.
+    """
+    try:
+        completed = subprocess.run(
+            ("codex", "login", "status"),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return completed.returncode == 0
 
 
 def _selected_transport() -> tuple[RefineTransport, str]:
@@ -1482,6 +1542,16 @@ def refine_version(
             transport_name=transport_name,
             reason="host-unavailable" if live_host_absent else "host-not-configured",
         )
+    if transport is None and transport_name == "live" and _codex_login_ok() is False:
+        return _skip_refinement(
+            version_path,
+            drafts_path,
+            output_path,
+            report_path,
+            host=selected_host,
+            transport_name=transport_name,
+            reason="host-unauthenticated",
+        )
 
     prepared = _all_prepared(sections)
     try:
@@ -1553,6 +1623,33 @@ def refine_version(
         originals=original_bodies,
         figure_citation_recasts=figure_citation_recasts,
     )
+    transport_failures = [
+        chunk
+        for chunk in attempted
+        if not chunk.passed
+        and chunk.failed_invariants
+        and all(name.startswith("transport:") for name in chunk.failed_invariants)
+    ]
+    if not reassembly_failed and attempted and len(transport_failures) == len(attempted):
+        unauthenticated = any(
+            f"transport:{RefinementHostUnauthenticated.__name__}" in chunk.failed_invariants
+            for chunk in transport_failures
+        )
+        transport_reason = "host-unauthenticated" if unauthenticated else "transport-failed"
+        output_path.unlink(missing_ok=True)
+        report["refined"] = False
+        report["reason"] = transport_reason
+        report["failure_reason"] = transport_reason
+        report["invariant_summary"] = "NOT_RUN"
+        _write_json(report_path, report)
+        _update_manifest(
+            version_path,
+            refined=False,
+            reason=transport_reason,
+            refine_report="out/refine-report.json",
+        )
+        raise RefinementTransportFailed(transport_reason, report_path=report_path)
+
     if reassembly_failed or attempted and all(not chunk.passed for chunk in attempted):
         output_path.unlink(missing_ok=True)
         report["refined"] = False
@@ -1621,6 +1718,12 @@ def command(
     json_output = cast(bool, args.json)
     try:
         result = refine_version(slug, transport=transport)
+    except RefinementTransportFailed as error:
+        suffix = f" report={error.report_path}" if error.report_path is not None else ""
+        print(f"REFINEMENT_TRANSPORT_FAILED reason={error.reason}{suffix}", file=sys.stderr)
+        if error.reason == "host-unauthenticated":
+            print(f"REFINEMENT-REMEDY {_CODEX_LOGIN_REMEDY}", file=sys.stderr)
+        return REFINEMENT_HOST_FAILED_EXIT
     except RefinementInvariantFailed as error:
         suffix = f" report={error.report_path}" if error.report_path is not None else ""
         print(f"REFINEMENT_INVARIANT_FAILED{suffix}", file=sys.stderr)
@@ -1657,6 +1760,11 @@ def command(
             + f"refined={str(result.refined).lower()}"
         )
         print(message)
+    if result.reason in _HOST_FAILURE_REASONS:
+        print(f"REFINEMENT-HOST-SKIPPED reason={result.reason}", file=sys.stderr)
+        if result.reason == "host-unauthenticated":
+            print(f"REFINEMENT-REMEDY {_CODEX_LOGIN_REMEDY}", file=sys.stderr)
+        return REFINEMENT_HOST_FAILED_EXIT
     return 0
 
 

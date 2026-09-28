@@ -1,7 +1,7 @@
 ---
 name: proposal
 description: "개인 제안서 워크스페이스에서 섹션 Kanban·초안·인간 기여분·취합·Codex 최종 검토를 안전하게 관리한다. W5-4."
-version: 2.2.4
+version: 2.3.0
 author: autophagy-agents
 license: MIT
 metadata:
@@ -46,13 +46,59 @@ prerequisites:
 | 단계 | 입력 | 출력 경로 | 게이트/비고 |
 | --- | --- | --- | --- |
 | research | 주제·브리프 요청 | `inputs/RESEARCH_BRIEF.md`, `inputs/SYNTHESIS.md` | 웹 수집 허용 구간. `## Verified Claims` 행마다 출처 URL 필수 |
-| corpus | `inputs/SYNTHESIS.md` | `corpus/*.md` | 엔진 `corpus-lint` 통과 필수, exit 3이면 차단 |
+| corpus | `inputs/SYNTHESIS.md`, `inputs/PLAN.md` | `corpus/*.md`, `corpus/plan-brief.md` | 엔진 `corpus-lint` 통과 필수, exit 3이면 차단. PLAN.md 는 render 경로 가드 통과 필수 |
 | images | corpus, 도해 지시 | `images/*.png`, `figures.json` | 프롬프트에 `no text, no labels, no numerals`, 캡션은 `그림 N. …`. 렌더 시 그림은 문단 중앙 정렬로 최대 142.9mm(엔진 캡 40,500 HWPUNIT)까지 표시된다. 전송기는 `PROPOSAL_IMAGE_TRANSPORT=fake\|live\|codex`이며, `codex`는 Codex CLI OAuth 세션의 내장 `image_gen`으로 생성하므로 OpenAI API 키가 필요 없다. 지출 원장은 전송기별 청구 주체를 기록해 `live`는 `openai-api` USD를 예약하고, `codex`는 `chatgpt-subscription` 건수·USD 0으로 기록하며 `openai-api`만 `PROPOSAL_IMAGE_MONTHLY_CAP_USD`에 센다 |
-| draft | corpus + figures | `out/drafts.json` | 엔진 `draft` |
+| draft | corpus (+`figures.json`) | `out/drafts.json`(+`.planspec.json`, `.pms.json`) | `proposal_cli.py compose` 뒤 `figures` 로 그림 자리 배치 — 엔진 planner·writer·critic·reviser를 Hermes Codex OAuth로 live 실행. 이전 윤문 산출물은 낡으므로 지운다 |
 | refine | `out/drafts.json` | 변경 시 `out/drafts.refined.json`, 항상 `out/refine-report.json` | Codex 윤문, markdown 단계, **렌더 이전**. 결정론 전처리로 그림-주어 문장(`[[FIG:x]]은 …를 나타낸다`)을 주장+괄호 인용(`…를 개발한다 ([[FIG:x]]).`)으로 재작성하고 건수를 `figure_citation_recasts`에 기록. 무변경·호스트 불가 시 refined 파일을 만들지 않고 사유 기록 |
 | render | `out/drafts.refined.json` | `out/proposal.hwpx`, `out/proposal.hwpx.traceability.md` | 엔진 `render`, `--profile 30-page\|10-page`. 근거 추적성(Coverage)은 본문이 아니라 사이드카 md 로만 나간다. `tables.json`에 `kind: "gantt"` 표(행: `[연차, 꼭지, 시작월, 종료월]`, 월은 연차 안 1..12)가 있으면 추진 내용 표를 전 연차로 채운다 — 연차마다 꼭지 정확히 8개, 마지막 연차 종료 전까지 비는 달이 없어야 하며 위반은 렌더 중단 |
 | publish | `out/proposal.hwpx` | Drive `autophagy/제안서/<YYYY>/`, `manifest.json`, `publish-receipt.json` | 게시 수신증 보관 |
 | version | 게시 결과 | `HEAD`, `changelog.json`, `CHANGELOG.md` | 다음 판은 `improve --since vN`으로 v_{n+1} |
+
+## 새 제안서 만들기 — 이 순서만 쓴다
+
+```bash
+CLI=/srv/autophagy-skills/live/proposal/scripts/proposal_cli.py
+for stage in draft images refine; do python3 $CLI preflight --stage $stage >/dev/null || break; done   # PREFLIGHT-BLOCK 이면 멈추고 소유자에게 보고
+python3 $CLI research --slug <slug> --goal "<과제 목표>"                    # 새 버전 v000001 + RESEARCH_BRIEF.md
+#   inputs/SYNTHESIS.md 의 ## Verified Claims 를 이번 주제의 웹 근거로 채운다(행마다 출처 URL)
+#   inputs/PLAN.md 에 과제 설계(개요·기술 내용·KPI 줄·일정·TRL)를 쓴다 — 엔진은 숫자를 지어내지 않는다
+python3 $CLI research --slug <slug> --validate-only --json
+python3 $CLI corpus  --slug <slug> --json
+python3 $CLI compose --slug <slug> --profile 10-page --json              # 본문·계획(planspec)·PMS 를 엔진이 만든다(수십 분)
+#   figures.json(그림별 figure_id·section_id·prompt·caption·band_index)과 tables.json·cover.json 을 작성한다
+python3 $CLI figures --slug <slug> --json                                 # 그림 자리 [[FIG:…]] 를 본문에 놓는다(멱등)
+python3 $CLI images  --slug <slug> --json                                 # 그림은 이 명령만 만든다
+python3 $CLI refine  --slug <slug> --json
+python3 $CLI render  --slug <slug> --profile 10-page --json
+python3 $CLI visual-review --slug <slug> --json                           # 모든 쪽 PNG 를 직접 연다
+python3 $CLI publish --slug <slug> --version <vNNNNNN> --json
+```
+
+**금지 (2026-09-28 사고의 원인):** `drafts.json`·`*.planspec.json`을 손으로 쓰거나 다른 제안서의 planspec·SYNTHESIS를
+복사해 고치는 것, PIL 등으로 그림을 직접 그리는 것, 양식 소제목을 문자열 치환으로 끼워 맞추는 것. 이렇게 만든
+문서는 엔진의 계획·작성·검토를 한 번도 거치지 않아 참조 제안서(v000011)의 구성·밀도에 닿지 못한다.
+단계가 실패하면 우회하지 말고 실패 마커와 필요한 소유자 조치를 그대로 보고한다.
+
+- **`inputs/PLAN.md` 는 필수 설계 입력이다.** 엔진 planner 는 KPI·작업 기간·TRL 을 근거 문장에서만 뽑고 만들어 내지 않는다.
+  v000011 이 좋았던 이유는 코퍼스에 소유자가 정리한 계획 문서(KPI·일정·기술 내용 각 2~4KB)가 있었기 때문이다.
+  `corpus` 가 PLAN.md 를 `corpus/plan-brief.md`(public)로 싣는다. KPI 는 한 줄에 하나,
+  `<지표>; baseline: 6%; target: 3%; unit: %; weight: 40%; method: …; env: …으로 설정한다` 형식이고 가중치 합은 100,
+  일정은 `전체 연구 일정은 1-24개월이며, 1-6개월 …, 7-12개월 …` 처럼 월 구간으로 쓴다. 수치는 소유자 확인 전까지 가안으로
+  보고하고, 비공개 노트 표지(`obsidian:` 등)가 있으면 render 경로 가드가 거부한다. 없으면 `compose` 가
+  `No public KPI evidence … add KPI lines to inputs/PLAN.md` 로 멈춘다.
+- `render` 는 `images` 가 만들지 않은 그림(레코드에 `model` 출처 없음)을 `UNGENERATED-FIGURES`(exit 5)로 거부한다.
+  `--allow-missing-figures` 는 draft preview 로만 렌더하고 `publish` 는 draft preview 를 받지 않는다.
+- `images`(codex 전송기)와 `refine` 은 노드 agent 의 **Codex CLI 로그인**(`codex login`, `~/.codex/auth.json`)이
+  필요하다. Hermes 게이트웨이의 OAuth(`~/.hermes/auth.json`)와 별개다. 없으면 `refine` 은
+  `REFINEMENT-HOST-SKIPPED reason=host-unauthenticated`(exit 6)와 `REFINEMENT-REMEDY` 를 내고 윤문 없이 렌더된다.
+  청크 전송이 전부 실패하면 `REFINEMENT_TRANSPORT_FAILED reason=host-unauthenticated|transport-failed`(exit 6)다 —
+  `REFINEMENT_INVARIANT_FAILED`(exit 7)는 호스트가 답한 문장을 검사가 거부했을 때만 나온다.
+- `compose` 는 Hermes(`hermes -z --provider openai-codex`)를 쓰므로 Codex CLI 로그인과 무관하다.
+- Codex CLI 로그인은 **agent 계정**의 것이어야 한다(`sudo -u agent -H bash -lc 'codex login status'`). 운영자 계정의 로그인은
+  파이프라인에 쓰이지 않는다. `images` 가 그림을 못 받으면 `IMAGE-MISSING <id>: <사유>` 를 그대로 보고한다.
+- 엔진 writer 는 `figures.json` 을 보지 않으므로 compose 직후 본문에는 그림 자리가 없다 — `figures` 를 돌리지 않으면
+  render 가 `UNREFERENCED_FIGURE` 로 멈춘다. `figures.json` 이 compose 전에 있으면 compose 가 같은 배치를 함께 한다.
+  그림 계획을 바꾸면 `figures` 만 다시 돌린다(윤문 산출물은 낡으므로 지워진다).
 
 윤문이 렌더 앞이라는 순서 자체가 계약이다. refine을 render 뒤로 미루면 다듬은 문장이 산출
 HWPX에 들어가지 못하고, 그 시점에는 고칠 표면이 바이너리뿐이라 되돌릴 방법이 없다.
@@ -159,4 +205,4 @@ python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py visual-revie
 ## Drive 게시 (최종본)
 취합 산출물은 `DRIVE_PUBLISH_ENABLED=1`일 때 assemble 직후 cha 본인 Drive의 `autophagy/제안서/<YYYY>/<YYYY-MM-DD>_<slug>.<확장자>`에 리뷰·기록용으로 자동 업로드된다(초안 제외, 게이트 없음). 날짜는 **최초 발행일로 고정**되어 재취합해도 사본이 늘지 않는다. `assemble --companion <경로>`로 명시 지정한 동반 자료(예: 이미지 프롬프트 원본)가 있으면 산출물과 companion이 `<YYYY-MM-DD>_<slug>/` 번들 폴더에 함께 저장되며, companion은 **원본 파일명을 그대로** 유지한다. 자동 발견·일괄 업로드는 금지다. 발행은 공용 파사드 `automation.drive_outputs`만 쓴다. 상세: `docs/guide/drive-publish.md`.
 
-v2 `publish` 서브커맨드는 리뷰 아티팩트 관례에 따라 승인 없이 검증된 `DriveClient` 경로(owner-only 권한 검사 + SHA-256 재다운로드 대조)를 사용한다. 공유·권한 변경·알림은 이 스킬의 범위 밖이며 반드시 external-effect gate를 거쳐야 한다.
+v2 `publish` 서브커맨드는 리뷰 아티팩트 관례에 따라 승인 없이 검증된 `DriveClient` 경로(owner-only 권한 검사 + SHA-256 재다운로드 대조)를 사용한다. gws 는 JSON 파일을 내려받을 때 자기 형식으로 다시 직렬화하므로, JSON 은 같은 값이 돌아오고 Drive 의 `sha256Checksum` 이 로컬 바이트와 같을 때 통과한다 — 로컬 JSON 을 gws 형식으로 고쳐 쓰는 우회는 필요 없다. 공유·권한 변경·알림은 이 스킬의 범위 밖이며 반드시 external-effect gate를 거쳐야 한다.

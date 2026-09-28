@@ -24,6 +24,16 @@
 # OWNER — 소유자·노드에서만 닫힌다
 
 
+## 제안서 품질 복구 뒤 노드 자격증명 (2026-09-28) — 소유자
+
+- **[OWNER] 노드 agent 계정의 Codex CLI 가 한 번도 로그인되지 않아 제안서 그림 생성과 윤문이 401 로 실패한다** — `codex login status` 가 `Not logged in`(rc 1), `~/.codex/auth.json` 이 없다. Hermes 게이트웨이 OAuth(`~/.hermes/auth.json`)는 별개라 대화·`compose` 는 동작한다.
+  ↳ **조치(OWNER)**: 노드에서 `sudo -u agent -H bash -lc 'codex login --device-auth'` 를 한 번 수행하고(codex 는 agent 의 `~/.local/bin` 에만 있어 로그인 셸이어야 찾는다 — 운영자 계정에 `snap install codex` 로 따로 설치할 필요는 없다), `proposal_cli.py preflight --stage refine`·`--stage images` 가 present 인지 확인한다. Hermes 의 토큰을 `~/.codex/auth.json` 으로 복사하지 않는다 — refresh token 회전으로 게이트웨이 인증이 깨질 수 있다.
+  ↳ **영향**: 그림 없는(draft preview) 제안서만 가능하고 윤문이 빠진다 · 심각도 중. 코드는 이제 `host-unauthenticated`·`UNGENERATED-FIGURES` 로 이 상태를 숨기지 않는다.
+- **[OWNER] 노드 Hermes 의 웹 검색 도구가 설정되지 않았다(Firecrawl 키 없음)** — `research` 단계의 새 공개 근거 수집이 막혀, 2026-09-28 실행은 이전 제안서의 SYNTHESIS 를 복사해 썼다.
+  ↳ **조치(OWNER)**: `FIRECRAWL_API_KEY` 또는 자체 Firecrawl URL 을 설정하거나, 소유자가 SYNTHESIS 근거를 직접 준다.
+  ↳ **영향**: 새 주제의 선행기술·동향 근거가 얇아진다 · 심각도 중.
+
+
 ## 일일 비용 보고 필수 임계값 미설정 (2026-09-19) — 소유자
 
 - **[OWNER] 일일 비용 보고가 필수 경보 임계값 부재로 16회 연속 실패했다** — 실제 cron의 오류는 `COST_REPORT_SOFT_CAP`이며 agent 설정 파일에도 키가 없다.

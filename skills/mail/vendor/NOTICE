@@ -53,6 +53,18 @@ Local fixes
   callability has been measured, not completion of CSRF, recipient-field, and
   editor rendering. Regression: `tests/unit/test_mailon_compose_readiness.py`.
 
+* 2026-09-28 — `mailon/send.py`: the body fill ran once, right after the
+  3-second settle, and threw `compose editor frame unavailable` when the Namo
+  editor iframe had no body. Measured on the node with a 1s poll after compose,
+  that iframe reloads itself: its body exists at t+1.4s, is gone from t+2.5s to
+  t+5.9s, and is back for good from t+7.8s. The settle landed inside that
+  window, so the BrowserError (folded into `external_service_error`,
+  stage=provider) recurred on nearly every mail-triage-watch tick and two
+  approved mails waited for hours. The fill is now retried every 0.5s for up to
+  20s, only for that exact error; any other failure, or a frame that never
+  returns, still fails closed. Regression:
+  `tests/unit/test_mailon_editor_frame_reload.py`.
+
 The private development repository preserves those bytes. Public-history
 snapshots run `automation/public_export_redaction.py` against the materialized
 copy only, replacing identifying fixture/comment values without changing the

@@ -136,7 +136,14 @@ def collect_report(env: Mapping[str, str] | None = None) -> dict[str, object]:
             and (checks["image-api-key"] == "present" or codex_image_transport)
             else "blocked"
         ),
-        "refine": "present" if checks["refine-checkout"] == "present" else "blocked",
+        "draft": "present" if checks["hermes"] == "present" else "blocked",
+        "refine": (
+            "present"
+            if checks["refine-checkout"] == "present"
+            and checks["codex"] == "present"
+            and checks["codex-auth"] == "present"
+            else "blocked"
+        ),
         "visual-review": "present" if checks["chrome"] == "present" else "blocked",
     }
     return {"checks": checks, "stages": stages}

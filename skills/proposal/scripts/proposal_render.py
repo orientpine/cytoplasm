@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
+from . import proposal_knowledge
 from .proposal_config import ConfigError, ProposalConfig, load_config
 from .proposal_ir import FigureSpec, figures_from_json
 from .proposal_route_guard import RouteRefused, assert_route_allowed
@@ -87,6 +88,27 @@ def _missing_figures(version_path: Path, figures: Sequence[FigureSpec]) -> tuple
         if not figure.png_sha256 or actual != figure.png_sha256:
             missing.append(figure.figure_id)
     return tuple(missing)
+
+
+def _ungenerated_figures(path: Path) -> tuple[str, ...]:
+    """Figures whose record carries no image-model provenance from the ``images`` stage.
+
+    ``images`` stamps ``model`` on every record it produced. A record without it was
+    drawn some other way — the 2026-09-28 run shipped hand-drawn placeholder PNGs whose
+    sha256 matched, so the missing-figure check alone let them through to publish.
+    """
+    records = cast(object, json.loads(path.read_text(encoding="utf-8")))
+    if not isinstance(records, list):
+        return ()
+    ungenerated: list[str] = []
+    for record in cast(list[object], records):
+        if not isinstance(record, dict):
+            continue
+        fields = cast(dict[str, object], record)
+        model = fields.get("model")
+        if not isinstance(model, str) or not model.strip():
+            ungenerated.append(str(fields.get("figure_id", "")))
+    return tuple(ungenerated)
 
 
 def _read_json_object(path: Path, description: str) -> dict[str, object]:
@@ -255,6 +277,16 @@ def run_render(
     if missing and not allow_missing_figures:
         print(f"MISSING-FIGURES: {', '.join(missing)}", file=sys.stderr)
         raise SystemExit(5)
+    ungenerated = tuple(
+        figure_id for figure_id in _ungenerated_figures(figures_path) if figure_id not in missing
+    )
+    if ungenerated and not allow_missing_figures:
+        print(
+            f"UNGENERATED-FIGURES: {', '.join(ungenerated)} — no image-model provenance; "
+            + f"generate them with `proposal_cli.py images --slug {slug}`",
+            file=sys.stderr,
+        )
+        raise SystemExit(5)
 
     drafts_path, refined = _drafts_path(version_path)
     body_payload = _body_payload(drafts_path)
@@ -269,6 +301,7 @@ def run_render(
             key: str(value)
             for key, value in _read_json_object(cover_path, "cover overrides").items()
         }
+    _ = proposal_knowledge.ensure_repo_on_path()
     if renderer is None:
         from ..engine.render import render_hwpx
 

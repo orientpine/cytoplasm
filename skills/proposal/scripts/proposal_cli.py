@@ -432,6 +432,24 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_preview.add_argument("--slug", required=True)
     prompt_preview.add_argument("--section", required=True)
     prompt_preview.set_defaults(func=_prompt_preview)
+    from .proposal_compose import command as compose_command
+
+    compose = commands.add_parser(
+        "compose",
+        help="v2 draft stage: engine planner/writers over the current corpus (live, Hermes)",
+    )
+    compose.add_argument("--slug", required=True)
+    compose.add_argument("--profile", choices=("30-page", "10-page"))
+    compose.add_argument("--json", action="store_true")
+    compose.set_defaults(func=compose_command)
+    from .proposal_figure_tokens import command as figures_command
+
+    figures = commands.add_parser(
+        "figures", help="anchor figures.json figures as [[FIG:...]] tokens in out/drafts.json"
+    )
+    figures.add_argument("--slug", required=True)
+    figures.add_argument("--json", action="store_true")
+    figures.set_defaults(func=figures_command)
     images = commands.add_parser("images")
     images.add_argument("--slug", required=True)
     images.add_argument("--json", action="store_true")
@@ -477,7 +495,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 _MUTATING_COMMANDS = frozenset({
     "create", "section-add", "draft", "contribute", "assemble", "review",
-    "delta", "improve", "refine", "publish",
+    "delta", "improve", "refine", "publish", "compose", "figures",
 })
 
 
@@ -498,7 +516,9 @@ def main(argv: list[str] | None = None) -> int:
         proposal_kanban.KanbanError,
         proposal_llm.LlmInvocationError,
     ) as error:
-        print(f"PROPOSAL-ERROR {error.__class__.__name__}", file=sys.stderr)
+        detail = " ".join(str(error).split())[:300]
+        suffix = f": {detail}" if detail else ""
+        print(f"PROPOSAL-ERROR {error.__class__.__name__}{suffix}", file=sys.stderr)
         return 1
 
 

@@ -177,7 +177,7 @@ class ComposeSender:
         self._browser.eval_js(_field_fill_script(
             ",".join(request.recipients), ",".join(request.cc), request.subject,
         ))
-        self._browser.eval_js(_editor_fill_script(request.body))
+        _fill_editor_when_ready(self._browser, request.body, clock=self._clock)
 
         post_count = self._browser.network_post_count()
         if dry_run:
@@ -338,12 +338,42 @@ def _editor_fill_script(body: str) -> str:
         "(function(value) {"
         "var frame = document.querySelector('#NamoSE_Ifr__mail_editor_nm');"
         "if (!frame || !frame.contentDocument || !frame.contentDocument.body) {"
-        "throw new Error('compose editor frame unavailable');"
+        f"throw new Error({json.dumps(_EDITOR_UNAVAILABLE)});"
         "}"
         "frame.contentDocument.body.innerText = value;"
         "frame.contentDocument.body.dispatchEvent(new Event('input', {bubbles: true}));"
         f"}})({encoded_body});"
     )
+
+
+# The Namo editor iframe reloads itself after compose opens. Measured 2026-09-28
+# on the node with a 1s poll after compose: its body exists at t+1.4s, is gone
+# (document without body) from t+2.5s to t+5.9s, and is back for good from
+# t+7.8s. The 3s form settle lands inside that window, so a single fill attempt
+# threw "compose editor frame unavailable" on nearly every watch tick and two
+# approved mails waited hours. Retry the real fill and let its success be the
+# readiness signal, as open_compose_when_ready() does for compose itself.
+_EDITOR_UNAVAILABLE = "compose editor frame unavailable"
+EDITOR_READY_TIMEOUT_S = 20.0
+
+
+def _fill_editor_when_ready(
+    browser: ComposeBrowser,
+    body: str,
+    *,
+    clock: Callable[[], float],
+    timeout_s: float = EDITOR_READY_TIMEOUT_S,
+) -> None:
+    script = _editor_fill_script(body)
+    deadline = clock() + timeout_s
+    while True:
+        try:
+            browser.eval_js(script)
+            return
+        except BrowserError as error:
+            if _EDITOR_UNAVAILABLE not in str(error) or clock() >= deadline:
+                raise
+        browser.wait_ms(500)
 
 
 def _field_fill_script(recipients: str, cc: str, subject: str) -> str:

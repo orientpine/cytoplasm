@@ -145,12 +145,42 @@ def _check_claims(synthesis: Path) -> tuple[proposal_research.Claim, ...]:
     return claims
 
 
+PLAN_BRIEF_NAME = "plan-brief.md"
+
+
+def _write_plan_brief(directory: Path, plan: Path | None) -> None:
+    """Carry the author's planning brief (KPI lines, schedule, TRL) into the corpus.
+
+    The engine planner never invents numbers: KPIs, work-package months and TRL come
+    only from evidence text. The v000011 reference got them from curated planning
+    notes; a corpus of web claims and owner one-liners has none, so ``compose`` stops
+    with "No public KPI evidence". The brief renders into the document, so it must
+    clear the same render route as any claim.
+    """
+    if plan is None or not plan.is_file() or plan.is_symlink():
+        return
+    try:
+        text = plan.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as error:
+        raise CorpusError(f"planning brief is unreadable: {error.__class__.__name__}") from error
+    if not text:
+        return
+    _ = assert_route_allowed(text, "render")
+    body = text.split("\n---\n", 1)[1].lstrip() if text.startswith("---\n") else text
+    path = directory / PLAN_BRIEF_NAME
+    _ = path.write_text(
+        f"---\nsource: proposal-plan\nsensitivity: public\n---\n{body}\n", encoding="utf-8"
+    )
+    path.chmod(0o600)
+
+
 def build_corpus(
     synthesis: Path,
     corpus: Path,
     pack: proposal_knowledge.EvidencePack,
     *,
     runner: Runner | None = None,
+    plan: Path | None = None,
 ) -> tuple[Path, ...]:
     """Convert and lint web claims, then atomically publish web and owner summaries."""
     _ = _check_claims(synthesis)
@@ -191,6 +221,7 @@ def build_corpus(
             os.replace(path, destination)
             destination.chmod(0o600)
         _ = _write_owner_evidence(output, pack)
+        _write_plan_brief(output, plan)
         os.replace(output, corpus)
         corpus.chmod(0o700)
         return tuple(sorted(corpus.glob("*.md")))
@@ -214,7 +245,7 @@ def command(args: argparse.Namespace, *, runner: Runner | None = None) -> int:
         _ = proposal_research.validate_synthesis(inputs / "SYNTHESIS.md")
         pack = _pack_from_brief(inputs / "RESEARCH_BRIEF.md")
         files = build_corpus(
-            inputs / "SYNTHESIS.md", corpus, pack, runner=runner
+            inputs / "SYNTHESIS.md", corpus, pack, runner=runner, plan=inputs / "PLAN.md"
         )
         payload = {
             "corpus": str(corpus),

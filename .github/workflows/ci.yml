@@ -22,7 +22,9 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # 2026-09-28 실측: 단위 테스트만 13분, 잡 전체 12분 53초~15분 4초. 15분 한도에서 테스트가
+    # 전부 통과한 잡이 취소됐다(PR #548) — 스위트 증가분까지 여유를 두어 30분으로 둔다.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

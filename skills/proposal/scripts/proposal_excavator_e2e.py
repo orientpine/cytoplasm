@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 from typing import cast
 
-from .proposal_ir import FIG_TOKEN_RE, FigureSpec, PROFILES, TableSpec, figures_to_json, tables_to_json
+from .proposal_figure_tokens import fill_body
+from .proposal_ir import FigureSpec, PROFILES, TableSpec, figures_to_json, tables_to_json
 
 _SECTION_THEMES = {
     "0": "현장 지형 인식과 목표 지형 명세를 하나의 작업 계약으로 연결하고 안전 정지 조건을 우선 적용한다.",
@@ -50,40 +50,9 @@ _SECTION_SLOTS = tuple(len(_FIGURE_CAPTIONS[str(index)]) for index in range(5))
 _PROMPT_RULE = "no text, no labels, no numerals"
 
 
-def _distribute(blocks: list[str], group_count: int) -> list[list[str]]:
-    groups: list[list[str]] = [[] for _ in range(group_count)]
-    total = sum(len(block) for block in blocks)
-    cumulative = 0
-    index = 0
-    for position, block in enumerate(blocks):
-        if index < group_count - 1 and groups[index]:
-            reserved = group_count - index - 1
-            filled_share = cumulative >= total * (index + 1) / group_count
-            if filled_share or len(blocks) - position <= reserved:
-                index += 1
-        groups[index].append(block)
-        cumulative += len(block)
-    return groups
-
-
 def _fill_body(body: str, section_id: str, figure_ids: list[str], budget: int) -> str:
     del section_id, budget
-    blocks = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
-    if not blocks:
-        raise ValueError("section body is empty")
-    if [
-        match.group(1) for block in blocks for match in FIG_TOKEN_RE.finditer(block)
-    ] == figure_ids:
-        return "\n\n".join(blocks)
-
-    paragraphs: list[str] = []
-    for figure_id, group in zip(figure_ids, _distribute(blocks, len(figure_ids)), strict=True):
-        if not group:
-            paragraphs.append(f"[[FIG:{figure_id}]]")
-            continue
-        paragraphs.append(f"[[FIG:{figure_id}]] {group[0]}")
-        paragraphs.extend(group[1:])
-    return "\n\n".join(paragraphs)
+    return fill_body(body, figure_ids, cite=False)
 
 
 

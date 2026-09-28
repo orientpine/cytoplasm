@@ -568,6 +568,8 @@ def main(
         "images": [{"path": str(path), "sha256": sha} for path, sha in result.images],
         "missing": [item.figure_id for item in result.missing],
     }
+    for item in result.missing:
+        print(f"IMAGE-MISSING {item.figure_id}: {item.reason}", file=sys.stderr)
     if args.json:
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     else:

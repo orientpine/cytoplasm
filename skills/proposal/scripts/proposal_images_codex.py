@@ -31,6 +31,10 @@ _ERROR_TAIL: Final = 500
 # with a marginally earlier mtime. One second absorbs that without widening the
 # window enough to admit an image left by an earlier call.
 _MTIME_SLACK: Final = 1.0
+# A clean exit with no image means the model answered without calling image_gen
+# (2026-09-28: one of six figures, 3.6k tokens, only the target path printed back).
+# That is a skipped tool call, not a refusal, so it earns exactly one more try.
+_ATTEMPTS: Final = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,13 +108,20 @@ def _png_bytes(path: Path) -> bytes | None:
 
 
 def _generated_image(started: float) -> bytes | None:
-    """Recover an image the CLI saved to its own gallery instead of the workdir."""
+    """Recover an image the CLI saved to its own gallery instead of the workdir.
+
+    The gallery file name is the CLI's own: older releases wrote ``ig_*.png``, while
+    0.144 writes ``exec-<uuid>.png`` under a per-session folder. Matching only the old
+    name discarded every generated figure on 2026-09-28 (4 PNGs of 1.1-2.2 MB found
+    in the gallery after a run that reported all six missing), so any PNG newer than
+    the run start counts.
+    """
     home = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
     try:
         candidates = sorted(
             (
                 (path.stat().st_mtime, path)
-                for path in (home / "generated_images").rglob("ig_*.png")
+                for path in (home / "generated_images").rglob("*.png")
                 if path.is_file() and not path.is_symlink()
             ),
             reverse=True,
@@ -142,12 +153,15 @@ def codex_transport(
     settings = _settings(params)
     directory = Path(tempfile.mkdtemp(prefix="proposal-image-codex-"))
     directory.chmod(0o700)
-    started = time.time()
     try:
-        completed = _run(settings, prompt, directory, timeout)
-        content = _png_bytes(directory / "figure.png") or _generated_image(started)
-        if content is None:
-            raise ImageGenerationError(_failure(completed))
-        return content
+        for _attempt in range(_ATTEMPTS):
+            started = time.time()
+            completed = _run(settings, prompt, directory, timeout)
+            content = _png_bytes(directory / "figure.png") or _generated_image(started)
+            if content is not None:
+                return content
+            if completed.returncode != 0:
+                break
+        raise ImageGenerationError(_failure(completed))
     finally:
         shutil.rmtree(directory, ignore_errors=True)
