@@ -2737,3 +2737,20 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   커밋으로 처리한다. **영향: 동작 결함 아님 · 워킹트리 소음과 시크릿 스캔 오탐만 · 심각도 낮음**.
   ↳ 처리(2026-09-14): 해소 — `.gitignore` 에 `.omo/senpi-task/` 를 더하고 `git rm -r --cached` 로 98개 파일을 인덱스에서만 내렸다(디스크 사본 불변). 같은 점검에서 `.omo/run-continuation/` 도 2026-07-18 무시 규칙 이전에 추적된 89개가 인덱스에 남아 있어 함께 내렸고, 비어 있어 아직 보이지 않는 `.omo/thread-tools/`(팀 메일박스·영수증·lock) 와 도구가 만든 `*` .gitignore 에만 기대던 `.pytest_cache/`·`.ruff_cache/` 를 미리 올렸다. 제안과 달리 `local_ci.sh`·`release.sh` 의 exclude pathspec 은 **남긴다** — 무시된 뒤에는 중복이지만 해가 없고 `tests/unit/test_local_ci_push_gate.py` 가 그 예외를 고정한다. `.gitleaksignore` 3줄도 **남긴다** — `e0856361b` 가 그 blob 을 여전히 들고 있고 `public_export.sh` 는 `--all --full-history` 를 스캔하므로 지우면 다음 반출이 그 커밋에서 선다.
   ↳ 재판정(2026-09-19, D337): RESOLVED-SOURCE — 소스 수준 해소 근거를 확인했으며 노드 반영은 별도다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+
+## doctor 착지 후 남긴 소유자 항목 (2026-09-29 · 소유자)
+
+> doctor 첫 운영 실측(`python3 -m automation.doctor`, 노드 agent·peer)이 드러낸 것. 전부 노드 설정·소유자 판단이라 이 저장소가 고칠 수 없다.
+
+- **일일 비용 보고가 26회 연속 실패 중이다** — `send_cost_report.py` 는 `COST_REPORT_SOFT_CAP`(필수, USD)을 요구하는데 agent `~/.env.secrets` 에 없어 매일 `KeyError` 로 끝난다 → 소유자가 임계값을 정해 그 파일에 한 줄 더한다. **영향: 일일 지출 보고 중단 · 심각도 중**.
+- **`mail-triage-repair-daily` 가 6회 연속 `drift_skip` 이다** — Hermes 가 "global inference config drifted since this job was created" 로 실행을 거부한다(2026-09-22 폴백 변경 뒤로 추정) → 설정 변경이 의도였는지 확인하고 그 잡을 다시 만든다(`hermes cron`). **영향: 메일 분류 보정 중단 · 심각도 중**.
+- **peer 에는 폴백 모델이 없다** — 주 모델은 `custom:litellm` 이고 `fallback_providers` 가 비어 doctor 가 WARN 으로 남긴다 → 의도면 그대로 두고(첫 알람 1건 뒤 되풀이하지 않는다), 아니면 폴백을 선언·로그인한다. **영향: peer 응답 여유만 · 심각도 낮음**.
+- **중앙 워처 매니페스트가 바뀌어 healthcheck 래퍼를 다시 설치해야 한다** — `configs/watcher-deploy-manifest.txt` 에 doctor-watch 두 줄이 더해져 래퍼 지문이 달라진다 → 릴리스 반영 뒤 노드 소유자가 `automation/provision-healthcheck-probe.sh` 를 1회 실행한다(`healthcheck_wrapper_current` 가 그전까지 알린다). **영향: 헬스체크 래퍼 드리프트 경고 · 심각도 낮음**.
+- **알람의 실제 첫 발송은 릴리스 뒤에 확인한다** — 단위·봉투 렌더까지만 검증했다 → 배포 뒤 첫 정각 점검에서 `#notifications` 에 위 두 정기 작업 고장이 한 건으로 도착하는지 본다. **영향: 검증 공백 · 심각도 낮음**.
+
+## 제안서 compose 중단 수리 후 남긴 것 (2026-09-29 · 동결·벤더)
+
+> compose 재개 캐시([소개](기능소개/제안서-compose-중단-재개.md))로 이제 compose 를 다시 실행하면 이어서 끝낸다. 하지만 끊기는 원인 자체는 이 저장소가 지금 고칠 수 없다.
+
+- **릴리스 수렴이 진행 중인 에이전트 작업을 끊는다** — 2분 리컨실러는 새 릴리스로 수렴하면 무조건 `autophagy-gateway-pair restart` 를 부른다. Hermes 는 종료할 때 도구 자식 프로세스를 죽이고(`killed 1 tool subprocess(es)`), 유닛도 `KillMode=mixed` 라 남은 것까지 정리된다. 턴은 끝났지만 백그라운드 도구가 도는 상태는 drain 이 세지 않는다(`active_at_start=0`) → 배포기 동결이 풀리면, 재시작 전에 agent 게이트웨이의 도구 자식 프로세스를 보고 유휴가 될 때까지(상한을 두고) 미루는 방안을 검토한다. **BLOCKED(배포기 수정 동결) · 영향: 수 분 넘게 도는 모든 백그라운드 도구 작업 · 심각도 중**.
+- **재시작 뒤 세션이 스스로 이어가지 않는다** — Hermes 는 재시작 때 백그라운드 프로세스 추적과 `notify_on_complete` 약속을 잃어 완료 알림이 오지 않는다. 소유자가 "계속"이라고 말해야 compose 재실행이 일어난다 → Hermes upstream 에서 재시작 전후 백그라운드 작업 인계를 지원하면 채택한다. **BLOCKED(벤더) · 영향: 소유자 재지시 1회 · 심각도 낮음**.

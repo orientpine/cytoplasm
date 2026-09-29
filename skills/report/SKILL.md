@@ -20,7 +20,7 @@ prerequisites:
 ## 절대 규칙
 
 1. `!report`는 선택된 **모든** 노트를 결정적 민감도 게이트로 먼저 검사한다.
-   `patent-sensitive` 적중 시 GLM을 절대 호출하지 말고 `openai-codex/gpt-5.4`만 쓴다.
+   `patent-sensitive` 적중 시 GLM을 절대 호출하지 말고 공유 Hermes 경로(계정 설정의 주 모델·폴백)만 쓴다.
 2. 노트·보고서·슬라이드·대본 본문을 Discord 공개 채널, repo 또는 docs/qa에 붙이지
    않는다. CLI 출력의 경로·provider·건수만 응답에 사용한다.
 3. `!slides`, `!script`는 이미 `~/outputs/`에 있는 보고서에서만 파생 산출물을 만든다.

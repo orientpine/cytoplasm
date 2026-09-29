@@ -108,7 +108,7 @@ def generate_draft(
     os.close(handle)
     usage = Path(name)
     command = (
-        "hermes", "-z", prompt, "--provider", call.provider, "-m", call.model, "-t", "todo",
+        "hermes", "-z", prompt, "-t", "todo",
         "--usage-file", str(usage),
     )
     served = (UNKNOWN, UNKNOWN)

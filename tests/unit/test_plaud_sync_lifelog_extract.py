@@ -312,7 +312,7 @@ def test_build_extractor_live_path_calls_codex_oauth_with_the_user_config_honore
     _ = binary.write_text(
         "#!/bin/sh\n"
         'case " $* " in *" --ignore-user-config "*) exit 8 ;; esac\n'
-        'case " $* " in *" --provider openai-codex "*) ;; *) exit 7 ;; esac\n'
+        'case " $* " in *" --provider "*|*" -m "*) exit 7 ;; esac\n'
         f"cat <<'JSON'\n{_payload()}\nJSON\n",
         encoding="utf-8",
     )

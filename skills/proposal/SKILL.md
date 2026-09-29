@@ -1,7 +1,7 @@
 ---
 name: proposal
 description: "개인 제안서 워크스페이스에서 섹션 Kanban·초안·인간 기여분·취합·Codex 최종 검토를 안전하게 관리한다. W5-4."
-version: 2.3.0
+version: 2.3.1
 author: autophagy-agents
 license: MIT
 metadata:
@@ -22,8 +22,8 @@ prerequisites:
 ## 절대 규칙
 
 1. `draft --brief-file`은 전체 제안서와 브리프를 결정적 민감도 게이트로 먼저 검사한다. 적중하면
-   `openai-codex/gpt-5.4`만 사용하며 GLM을 호출하지 않는다.
-2. `review`는 `hermes -z --provider openai-codex -m gpt-5.4 -t todo` **1회만** 실행한다. 검토는
+   공유 Hermes 경로(계정 설정의 주 모델·폴백)만 사용하며 GLM을 호출하지 않는다.
+2. `review`는 `hermes -z -t todo`(모델은 계정 설정이 정한다) **1회만** 실행한다. 검토는
    취합본에 저장하고, `PROPOSAL_DM_TARGET` 또는 `~/.hermes/proposal/config.json`의 `dm_target`으로
    cha에게 DM한다. 재검토 대신 사람이 검토 결과를 직접 반영한다.
 3. 타인 기여분은 사람이 전달한 `--file` 또는 `--text`만 `contribute`로 섹션에 접는다. 웹/외부
@@ -48,8 +48,8 @@ prerequisites:
 | research | 주제·브리프 요청 | `inputs/RESEARCH_BRIEF.md`, `inputs/SYNTHESIS.md` | 웹 수집 허용 구간. `## Verified Claims` 행마다 출처 URL 필수 |
 | corpus | `inputs/SYNTHESIS.md`, `inputs/PLAN.md` | `corpus/*.md`, `corpus/plan-brief.md` | 엔진 `corpus-lint` 통과 필수, exit 3이면 차단. PLAN.md 는 render 경로 가드 통과 필수 |
 | images | corpus, 도해 지시 | `images/*.png`, `figures.json` | 프롬프트에 `no text, no labels, no numerals`, 캡션은 `그림 N. …`. 렌더 시 그림은 문단 중앙 정렬로 최대 142.9mm(엔진 캡 40,500 HWPUNIT)까지 표시된다. 전송기는 `PROPOSAL_IMAGE_TRANSPORT=fake\|live\|codex`이며, `codex`는 Codex CLI OAuth 세션의 내장 `image_gen`으로 생성하므로 OpenAI API 키가 필요 없다. 지출 원장은 전송기별 청구 주체를 기록해 `live`는 `openai-api` USD를 예약하고, `codex`는 `chatgpt-subscription` 건수·USD 0으로 기록하며 `openai-api`만 `PROPOSAL_IMAGE_MONTHLY_CAP_USD`에 센다 |
-| draft | corpus (+`figures.json`) | `out/drafts.json`(+`.planspec.json`, `.pms.json`) | `proposal_cli.py compose` 뒤 `figures` 로 그림 자리 배치 — 엔진 planner·writer·critic·reviser를 Hermes Codex OAuth로 live 실행. 이전 윤문 산출물은 낡으므로 지운다 |
-| refine | `out/drafts.json` | 변경 시 `out/drafts.refined.json`, 항상 `out/refine-report.json` | Codex 윤문, markdown 단계, **렌더 이전**. 결정론 전처리로 그림-주어 문장(`[[FIG:x]]은 …를 나타낸다`)을 주장+괄호 인용(`…를 개발한다 ([[FIG:x]]).`)으로 재작성하고 건수를 `figure_citation_recasts`에 기록. 무변경·호스트 불가 시 refined 파일을 만들지 않고 사유 기록 |
+| draft | corpus (+`figures.json`) | `out/drafts.json`(+`.planspec.json`, `.pms.json`) | `proposal_cli.py compose` 뒤 `figures` 로 그림 자리 배치 — 엔진 planner·writer·critic·reviser를 Hermes Codex OAuth로 live 실행. 이전 윤문 산출물은 낡으므로 지운다. 끝난 호출은 `out/.llm-resume-cache.json` 에 남아 중단 뒤 재실행이 이어서 끝낸다 |
+| refine | `out/drafts.json` | 변경 시 `out/drafts.refined.json`, 항상 `out/refine-report.json` | 공용 Hermes 경로(계정 설정의 주 모델·폴백) 윤문 — 규칙은 im-not-ai humanize-korean quick-rules, markdown 단계, **렌더 이전**. 결정론 전처리로 그림-주어 문장(`[[FIG:x]]은 …를 나타낸다`)을 주장+괄호 인용(`…를 개발한다 ([[FIG:x]]).`)으로 재작성하고 건수를 `figure_citation_recasts`에 기록. 무변경·호스트 불가 시 refined 파일을 만들지 않고 사유 기록 |
 | render | `out/drafts.refined.json` | `out/proposal.hwpx`, `out/proposal.hwpx.traceability.md` | 엔진 `render`, `--profile 30-page\|10-page`. 근거 추적성(Coverage)은 본문이 아니라 사이드카 md 로만 나간다. `tables.json`에 `kind: "gantt"` 표(행: `[연차, 꼭지, 시작월, 종료월]`, 월은 연차 안 1..12)가 있으면 추진 내용 표를 전 연차로 채운다 — 연차마다 꼭지 정확히 8개, 마지막 연차 종료 전까지 비는 달이 없어야 하며 위반은 렌더 중단 |
 | publish | `out/proposal.hwpx` | Drive `autophagy/제안서/<YYYY>/`, `manifest.json`, `publish-receipt.json` | 게시 수신증 보관 |
 | version | 게시 결과 | `HEAD`, `changelog.json`, `CHANGELOG.md` | 다음 판은 `improve --since vN`으로 v_{n+1} |
@@ -64,8 +64,8 @@ python3 $CLI research --slug <slug> --goal "<과제 목표>"                    
 #   inputs/PLAN.md 에 과제 설계(개요·기술 내용·KPI 줄·일정·TRL)를 쓴다 — 엔진은 숫자를 지어내지 않는다
 python3 $CLI research --slug <slug> --validate-only --json
 python3 $CLI corpus  --slug <slug> --json
-python3 $CLI compose --slug <slug> --profile 10-page --json              # 본문·계획(planspec)·PMS 를 엔진이 만든다(수십 분)
-#   figures.json(그림별 figure_id·section_id·prompt·caption·band_index)과 tables.json·cover.json 을 작성한다
+python3 $CLI compose --slug <slug> --profile 10-page --json              # 본문·계획(planspec)·PMS 를 엔진이 만든다(수십 분) — 끊기면 같은 명령을 다시 실행해 이어서 끝낸다
+#   figures.json(그림별 figure_id·section_id·source_claim_ids·prompt·caption·png_sha256·band_index — png_sha256 은 "" 로 두면 images 가 채운다)과 tables.json·cover.json 을 작성한다
 python3 $CLI figures --slug <slug> --json                                 # 그림 자리 [[FIG:…]] 를 본문에 놓는다(멱등)
 python3 $CLI images  --slug <slug> --json                                 # 그림은 이 명령만 만든다
 python3 $CLI refine  --slug <slug> --json
@@ -88,12 +88,22 @@ python3 $CLI publish --slug <slug> --version <vNNNNNN> --json
   `No public KPI evidence … add KPI lines to inputs/PLAN.md` 로 멈춘다.
 - `render` 는 `images` 가 만들지 않은 그림(레코드에 `model` 출처 없음)을 `UNGENERATED-FIGURES`(exit 5)로 거부한다.
   `--allow-missing-figures` 는 draft preview 로만 렌더하고 `publish` 는 draft preview 를 받지 않는다.
-- `images`(codex 전송기)와 `refine` 은 노드 agent 의 **Codex CLI 로그인**(`codex login`, `~/.codex/auth.json`)이
-  필요하다. Hermes 게이트웨이의 OAuth(`~/.hermes/auth.json`)와 별개다. 없으면 `refine` 은
-  `REFINEMENT-HOST-SKIPPED reason=host-unauthenticated`(exit 6)와 `REFINEMENT-REMEDY` 를 내고 윤문 없이 렌더된다.
+- `images`(codex 전송기)만 노드 agent 의 **Codex CLI 로그인**(`codex login`, `~/.codex/auth.json`)이 필요하다.
+  `refine` 은 2026-09-29 부터 다른 모든 모델 호출처럼 공용 Hermes 경로로 가서 계정 `~/.hermes/config.yaml` 의 주 모델·폴백이
+  답한다. 윤문 규칙은 `PROPOSAL_REFINE_ROOT`(기본 `~/.hermes/im-not-ai`)의 `skills/humanize-korean/references/quick-rules.md`
+  를 프롬프트에 싣는다 — 그 파일이 없으면 `REFINEMENT-HOST-SKIPPED reason=host-unavailable`(exit 6), 주 모델 로그인이 없으면
+  청크가 모두 `host-unauthenticated` 로 실패하고 `REFINEMENT-REMEDY` 가 `hermes auth add` 를 안내한다.
   청크 전송이 전부 실패하면 `REFINEMENT_TRANSPORT_FAILED reason=host-unauthenticated|transport-failed`(exit 6)다 —
   `REFINEMENT_INVARIANT_FAILED`(exit 7)는 호스트가 답한 문장을 검사가 거부했을 때만 나온다.
-- `compose` 는 Hermes(`hermes -z --provider openai-codex`)를 쓰므로 Codex CLI 로그인과 무관하다.
+- `compose` 는 Hermes(`hermes -z`, 모델은 계정 설정이 정한다)를 쓰므로 Codex CLI 로그인과 무관하다.
+- **`compose` 는 수십 분 걸리고 도중에 끊길 수 있다 — 끊기면 같은 명령을 다시 실행한다.** 터미널은 `background=true`,
+  `notify_on_complete=true` 로 띄우고 `process poll/wait`·파일 확인으로 기다리지 않는다. 기다리는 호출마다 턴의 반복 한도를
+  쓰기 때문이다(2026-09-29: 한도 소진으로 턴이 끝났고, 이어서 릴리스 수렴의 게이트웨이 재시작이 8분째 compose 를 죽였다).
+  완료 알림이 오면 `figures` 부터 잇는다. 재시작 뒤에는 알림이 오지 않으므로 `out/drafts.json` 이 없으면 끊긴 것이다.
+  끝난 모델 호출은 버전의 `out/.llm-resume-cache.json`(0600)에 남아 있으므로, 같은 명령을 다시 실행하면 남은 호출만 한다.
+  몇 개를 되살렸는지는 출력의 `resumed_llm_calls` 가 말하고, 성공하면 캐시는 지워진다. 같은 버전에서 compose 가 아직 돌고
+  있으면 두 번째 실행은 `another compose is still running` 로 거부된다. 끊긴 상태는 "완료"가 아니라
+  "중단 — 같은 명령으로 이어감"으로 보고한다.
 - Codex CLI 로그인은 **agent 계정**의 것이어야 한다(`sudo -u agent -H bash -lc 'codex login status'`). 운영자 계정의 로그인은
   파이프라인에 쓰이지 않는다. `images` 가 그림을 못 받으면 `IMAGE-MISSING <id>: <사유>` 를 그대로 보고한다.
 - 엔진 writer 는 `figures.json` 을 보지 않으므로 compose 직후 본문에는 그림 자리가 없다 — `figures` 를 돌리지 않으면

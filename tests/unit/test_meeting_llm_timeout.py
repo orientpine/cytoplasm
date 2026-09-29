@@ -76,4 +76,4 @@ def test_every_extraction_call_pins_the_codex_oauth_route(monkeypatch, tmp_path)
     meeting_llm.call_codex("x", sensitive=True)
 
     assert "--ignore-user-config" not in seen["argv"]
-    assert seen["argv"][seen["argv"].index("--provider") + 1] == meeting_llm.CODEX_PROVIDER
+    assert not {"--provider", "-m"} & set(seen["argv"])

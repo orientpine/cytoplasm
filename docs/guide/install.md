@@ -414,6 +414,18 @@ sudo runuser -u ops -- bash /srv/autophagy-agents/automation/healthcheck.sh
 **경고(WARN)는 rc를 바꾸지 않는다** — 대표적인 것이 위의 "지문을 직접 대조하라"이며,
 그건 기계가 대신 판단할 수 없는 항목이기 때문이다.
 
+### 사람이 승인할 연결이 끝났는지 — doctor
+
+종료 게이트는 인프라만 판정한다. 주 모델 로그인·Discord 봇·승인 채널·Google 동의는 사람이 해야 하고,
+그 상태는 doctor 가 계정 안에서 읽어 판정한다(쓰기 없음). 마법사는 설치 끝에 이것을 돌려 하나씩 안내한다.
+
+```bash
+cd /srv/autophagy-agent-current && python3 -m automation.doctor
+```
+
+`[FAIL]` 이 없으면 필수 연결은 끝났다. 항목별 승인 절차와 매시간 알람은 [연결·승인 점검](연결-승인-점검.md) 가이드가 소유한다.
+프로필로 설치했다면 알람 워처(`doctor-watch` 타이머)도 이미 켜져 있다.
+
 ### 자동 업데이트가 켜졌는지
 
 ```bash

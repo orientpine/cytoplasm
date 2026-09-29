@@ -111,7 +111,7 @@ def first_json_object(raw: str) -> dict:
 def _json_bool(value: object) -> bool:
     """Coerce an LLM JSON field to bool WITHOUT Python truthiness traps.
 
-    glm-5.2 sometimes emits booleans as strings; ``bool("false")`` is ``True``,
+    The former GLM tier sometimes emitted booleans as strings; ``bool("false")`` is ``True``,
     which would spuriously trip a flag (e.g. delegate a calendar draft). Only a
     real JSON ``true`` or the string ``"true"`` (case-insensitive) is True.
     """

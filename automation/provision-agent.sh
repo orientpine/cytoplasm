@@ -6,7 +6,8 @@ eval "$(python3 "$REPO_ROOT/automation/node_config_sh.py" --print-env)"
 SERVICE_NAME="$NODE_AGENT_GATEWAY_UNIT"
 readonly HERMES_INSTALLER_URL="https://hermes-agent.nousresearch.com/install.sh"
 readonly CODEX_PROVIDER="openai-codex"
-readonly CODEX_MODEL="gpt-5.6-sol"
+# Seed of the one place that picks every model (~/.hermes/config.yaml); code never names one.
+readonly CODEX_MODEL="gpt-6-sol"
 # Hermes switches to this when Codex cannot answer; configs/routing-policy.md owns the rule.
 readonly FALLBACK_PROVIDER="xai-oauth"
 readonly FALLBACK_MODEL="grok-4.7"

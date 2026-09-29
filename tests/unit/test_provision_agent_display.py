@@ -33,7 +33,7 @@ _SCRIPT = _REPO / "automation" / "provision-agent.sh"
 
 _RENDER_ENV = {
     "CODEX_PROVIDER": "openai-codex",
-    "CODEX_MODEL": "gpt-5.6-sol",
+    "CODEX_MODEL": "gpt-6-sol",
     "NODE_AGENT_ACCOUNT": "agent",
 }
 

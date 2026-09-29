@@ -247,4 +247,4 @@ def test_live_client_calls_codex_oauth_with_the_user_config_honored() -> None:
 
     # Then: the primary is Codex OAuth and the account's Hermes fallback chain stays live
     assert "--ignore-user-config" not in argv
-    assert argv[argv.index("--provider") + 1] == "openai-codex"
+    assert not {"--provider", "-m"} & set(argv)

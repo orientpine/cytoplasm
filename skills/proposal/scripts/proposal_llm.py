@@ -17,7 +17,7 @@ from types import ModuleType
 from typing import Final
 
 CODEX_PROVIDER: Final = "openai-codex"
-FINAL_REVIEW_MODEL: Final = "gpt-5.4"
+FINAL_REVIEW_MODEL: Final = "hermes-config"
 _TIMEOUT_SECONDS: Final = 600.0
 _RELEASE_ROOT: Final = "/srv/autophagy-agent-current"
 
@@ -77,13 +77,18 @@ def _codex() -> ModuleType:
     return codex_llm
 
 
+def shared_client_module() -> ModuleType:
+    """The shared Hermes client module for proposal stages that make their own calls."""
+    return _codex()
+
+
 def _run(stage: str, prompt: str, provider: str, model: str, sensitive: bool) -> str:
     """Refuse anything that is not the Codex OAuth tier, then make exactly one call."""
     if provider != CODEX_PROVIDER:
         raise LlmInvocationError(f"{stage} refused: {provider!r} is not the Codex OAuth tier")
     codex = _codex()
     try:
-        served = codex.complete_served(prompt, model=model, timeout=_TIMEOUT_SECONDS)
+        served = codex.complete_served(prompt, timeout=_TIMEOUT_SECONDS)
     except codex.CodexError as error:
         _log(stage, CODEX_PROVIDER, model, sensitive, codex.UNKNOWN, codex.UNKNOWN)
         raise LlmInvocationError(f"{stage} failed: {error}") from None

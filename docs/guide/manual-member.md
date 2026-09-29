@@ -449,6 +449,16 @@ automation/deploy-skill.sh managed-<name> --remove
 
 **원인을 확인하기 전에 재시작·설정변경·키 재발급을 하지 않는다.** 순서대로 본다.
 
+### ⓪ 연결·승인 점검 (읽기 전용)
+
+```bash
+cd /srv/autophagy-agent-current && python3 -m automation.doctor
+```
+
+에이전트가 답하지 않거나 승인 카드가 오지 않으면 먼저 이것을 본다. 모델 로그인 만료·봇 토큰·승인 채널·
+Google 동의·반복 실패하는 정기 작업을 `[FAIL]` 로 짚고 조치 절차를 낸다([연결·승인 점검](연결-승인-점검.md)).
+같은 문제는 매시간 점검에서 바뀔 때만 통지로도 온다.
+
 ### ① 헬스체크 (읽기 전용)
 
 ```bash

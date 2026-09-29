@@ -9,7 +9,7 @@ from typing import Final
 
 
 CODEX_PROVIDER: Final = "openai-codex"
-CODEX_MODEL: Final = "gpt-5.4"
+CODEX_MODEL: Final = "hermes-config"
 
 
 @dataclass(frozen=True, slots=True)

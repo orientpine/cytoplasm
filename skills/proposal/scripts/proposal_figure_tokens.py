@@ -30,6 +30,10 @@ STALE_REFINE_OUTPUTS: Final = (
     "drafts.refined.json.pms.json",
     "refine-report.json",
 )
+PLAN_FIELDS: Final = (
+    'figure_id, section_id, source_claim_ids, prompt, caption, png_sha256 ("" until `images`), '
+    + "band_index"
+)
 
 
 class FigureTokenError(RuntimeError):
@@ -145,7 +149,11 @@ def place_figures(version: Path) -> dict[str, int]:
     try:
         figures = figures_from_json(figures_path.read_text(encoding="utf-8"))
         document = cast(dict[str, object], json.loads(drafts_path.read_text(encoding="utf-8")))
-    except (OSError, KeyError, TypeError, ValueError) as error:
+    except KeyError as error:
+        raise FigureTokenError(
+            f"a figures.json record lacks {error}; every figure needs {PLAN_FIELDS}"
+        ) from error
+    except (OSError, TypeError, ValueError) as error:
         raise FigureTokenError(f"figures.json or drafts.json is invalid: {error}") from error
     by_section: dict[str, list[str]] = {}
     claims_by_section: dict[str, list[dict[str, object]]] = {}

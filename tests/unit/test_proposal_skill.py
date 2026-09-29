@@ -272,17 +272,8 @@ def test_final_review_invokes_codex_once_through_the_shared_oauth_client(
     # Then
     assert review == "Review comments."
     argv = record.read_text(encoding="utf-8").splitlines()
-    assert argv[:8] == [
-        "-z",
-        "# Proposal",
-        "--provider",
-        "openai-codex",
-        "-m",
-        "gpt-5.4",
-        "-t",
-        "todo",
-    ]
-    assert argv[8] == "--usage-file" and len(argv) == 10
+    assert argv[:4] == ["-z", "# Proposal", "-t", "todo"]
+    assert argv[4] == "--usage-file" and len(argv) == 6
 
 
 def test_sensitive_proposal_routes_drafting_to_the_codex_oauth_tier(tmp_path: Path) -> None:
@@ -299,7 +290,7 @@ def test_sensitive_proposal_routes_drafting_to_the_codex_oauth_tier(tmp_path: Pa
     # Then
     assert route.sensitive is True
     assert route.provider == "openai-codex"
-    assert route.model == "gpt-5.4"
+    assert route.model == "hermes-config"
 
 
 def test_non_sensitive_proposal_uses_the_same_codex_oauth_tier(tmp_path: Path) -> None:
@@ -317,7 +308,7 @@ def test_non_sensitive_proposal_uses_the_same_codex_oauth_tier(tmp_path: Path) -
 
     # Then
     assert route.sensitive is False
-    assert (route.provider, route.model) == ("openai-codex", "gpt-5.4")
+    assert (route.provider, route.model) == ("openai-codex", "hermes-config")
 
 
 def test_status_metadata_never_contains_draft_or_contribution_body(tmp_path: Path) -> None:
@@ -349,7 +340,7 @@ def test_section_draft_resolves_the_codex_binary_from_home_without_a_gateway_key
     monkeypatch.setenv("PROPOSAL_LLM_LOG_ROOT", str(tmp_path / "logs"))
 
     # When
-    result = proposal_llm.run_section_draft("prompt", "openai-codex", "gpt-5.4", False)
+    result = proposal_llm.run_section_draft("prompt", "openai-codex", "hermes-config", False)
 
     # Then
     assert result == "draft"
@@ -369,11 +360,11 @@ def test_missing_codex_credentials_fail_closed_without_a_second_provider(
 
     # When / Then
     with pytest.raises(proposal_llm.LlmInvocationError):
-        _ = proposal_llm.run_section_draft("prompt", "openai-codex", "gpt-5.4", False)
+        _ = proposal_llm.run_section_draft("prompt", "openai-codex", "hermes-config", False)
 
-    recorded = record.read_text(encoding="utf-8")
-    assert recorded.count("--provider") == 1
-    assert recorded.count("openai-codex") == 1
+    recorded = record.read_text(encoding="utf-8").splitlines()
+    assert recorded.count("-z") == 1
+    assert "--provider" not in recorded
 
 
 def test_non_codex_route_is_refused_before_transport(

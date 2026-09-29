@@ -51,21 +51,11 @@ def _client(**overrides: object) -> CodexClient:
     return CodexClient.from_environment(ENV, **overrides)  # type: ignore[arg-type]
 
 
-def test_argv_is_the_measured_codex_oauth_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_argv_leaves_the_model_to_the_account_config(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _install(monkeypatch, _completed(stdout="ULW-C5-OK\n"))
     _client().complete("ping")
     argv, _ = fake.calls[0]
-    assert argv == [
-        BIN,
-        "-z",
-        "ping",
-        "--provider",
-        "openai-codex",
-        "-m",
-        "gpt-5.6-sol",
-        "-t",
-        "todo",
-    ]
+    assert argv == [BIN, "-z", "ping", "-t", "todo"]
 
 
 def test_subprocess_invocation_is_sandboxed_and_non_interactive(
@@ -139,13 +129,12 @@ def test_timeout_override_reaches_subprocess(monkeypatch: pytest.MonkeyPatch) ->
     assert [call[1]["timeout"] for call in fake.calls] == [30.0, 5.0]
 
 
-def test_model_override_via_environment_and_argument(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_environment_or_argument_can_name_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _install(monkeypatch, _completed(stdout="ok"), _completed(stdout="ok"))
-    CodexClient.from_environment({**ENV, "AUTOPHAGY_CODEX_MODEL": "gpt-5.6-sol-mini"}).complete("p")
-    codex_llm.complete("p", model="gpt-5.6-sol-max", env=ENV)
-    models = [call[0][call[0].index("-m") + 1] for call in fake.calls]
-    assert models == ["gpt-5.6-sol-mini", "gpt-5.6-sol-max"]
-    assert all("--ignore-user-config" not in call[0] for call in fake.calls)
+    CodexClient.from_environment({**ENV, "AUTOPHAGY_CODEX_MODEL": "some-other-model"}).complete("p")
+    codex_llm.complete("p", env=ENV)
+    for argv, _ in fake.calls:
+        assert not {"-m", "--model", "--provider", "--ignore-user-config"} & set(argv)
 
 
 def test_binary_resolution_prefers_override_then_home_then_path(
@@ -196,17 +185,16 @@ def test_no_failure_mode_retries_or_switches_provider(
     with pytest.raises(CodexError):
         _client().complete("ping")
     assert len(fake.calls) == 1
-    argv = fake.calls[0][0]
-    assert argv[argv.index("--provider") + 1] == "openai-codex"
+    assert "--provider" not in fake.calls[0][0]
 
 
 def test_module_declares_no_other_provider() -> None:
     source = Path(codex_llm.__file__).read_text(encoding="utf-8").lower()
     assert "litellm" not in source
     assert "glm" not in source
-    assert source.count('"--provider"') == 1
+    assert '"--provider"' not in source
     assert codex_llm.PROVIDER == "openai-codex"
-    assert codex_llm.DEFAULT_MODEL == "gpt-5.6-sol"
+    assert codex_llm.CONFIGURED_MODEL == "hermes-config"
 
 
 def test_complete_matches_the_llm_client_protocol_shape() -> None:

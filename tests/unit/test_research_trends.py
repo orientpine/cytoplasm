@@ -123,7 +123,7 @@ def test_llm_child_runs_the_codex_oauth_argv_with_no_inherited_credential(
     _ = binary.write_text(
         "#!/bin/sh\n"
         'case " $* " in *" --ignore-user-config "*) exit 8 ;; esac\n'
-        'case " $* " in *" --provider openai-codex "*) ;; *) exit 7 ;; esac\n'
+        'case " $* " in *" --provider "*|*" -m "*) exit 7 ;; esac\n'
         f"env > '{child_env}'\n"
         'printf "summary"\n',
         encoding="utf-8",

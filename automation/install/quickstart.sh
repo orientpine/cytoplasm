@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # automation/install/quickstart.sh — 처음 설치하는 사람을 위한 편의 래퍼.
 #
-# 이 스크립트는 설치 로직을 하나도 갖고 있지 않다. 하는 일은 넷뿐이다:
+# 이 스크립트는 설치 로직을 하나도 갖고 있지 않다. 하는 일은 다섯뿐이다:
 #   ① `python3 -m automation.install … --dry-run`을 먼저 돌려 계획을 그대로 보여주고
 #   ② 그 출력에서 계산한 요약을 낸 뒤 사람의 명시적 확인을 받고
 #   ③ 같은 인자를 `--dry-run`만 빼고 sudo로 다시 돌리고
-#   ④ 설치기가 마지막에 돌린 healthcheck 종료 게이트의 판정을 요약한다.
+#   ④ 설치기가 마지막에 돌린 healthcheck 종료 게이트의 판정을 요약하고
+#   ⑤ 설치가 끝났으면 `python3 -m automation.doctor`로 사람이 승인할 연결을 안내한다.
 # 절차의 단일 진실은 여전히 docs/guide/install.md이며, 이 래퍼는 그 문서의 명령을
 # 대체하지 않는다 — 같은 명령을 그대로 조립해 실행할 뿐이다.
 #
@@ -246,6 +247,10 @@ echo
 
 if [[ "$run_rc" -eq 0 ]]; then
   log "설치 완료 (rc=0). 다음: docs/guide/quickstart-install.md 의 '설치 다음' 절"
+  # 설치기는 인프라만 판정한다. Codex·Discord·Google 승인은 사람 몫이라 doctor 가 절차와 함께 보여 준다.
+  # 결과는 안내일 뿐 설치 종료코드를 바꾸지 않는다.
+  log "⑤ 연결·승인 점검 — python3 -m automation.doctor (다시 확인할 때도 같은 명령)"
+  python3 -m automation.doctor 2>&1 | tee "$log_dir/03-doctor.log" || true
 else
   log "설치 미완 (rc=$run_rc). 설치기는 첫 FAIL에서 멈춘다 — 의도된 동작이다."
   log "  위에서 지목된 항목을 고치고 **같은 명령을 그대로 다시 실행**한다(멱등)."

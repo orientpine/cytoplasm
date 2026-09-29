@@ -278,7 +278,7 @@ def _prompt(
 
 
 def _codex_model() -> str:
-    return os.environ.get(codex_llm.MODEL_ENV, "").strip() or codex_llm.DEFAULT_MODEL
+    return codex_llm.CONFIGURED_MODEL
 
 
 def _log_llm(stage: str, topic: str, served_provider: str, served_model: str) -> None:

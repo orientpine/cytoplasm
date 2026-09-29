@@ -12,12 +12,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
+from automation.doctor.capabilities import CAPABILITIES
 from automation.install.assets import render_node_toml as _render_config
 from automation.install.owner_actions import FOLLOW_UP_HEADING
 from automation.install.profiles import HEALTHCHECK_DECLARATION_PATH
 from automation.node_config import default_node_config
 
 DEFAULT_ORIGIN_URL: Final = "https://github.com/orientpine/cytoplasm.git"
+DOCTOR_ARGV: Final = ("python3", "-m", "automation.doctor")
 
 PROFILE_MENU: Final = (
     ("core", "기본 에이전트 — 게이트웨이·승인 게이트·자동 업데이트"),
@@ -164,3 +166,15 @@ def summarize_verdict(output: str, *, returncode: int) -> str:
         "  고친 뒤 같은 명령을 그대로 다시 실행한다(멱등 — 끝난 항목은 건너뛴다).",
         *follow_up,
     ))
+
+
+def approval_preview() -> str:
+    """설치 전에 보여 줄 「사람이 승인할 것」 — doctor 와 같은 레지스트리에서 뽑아 낡지 않는다."""
+    lines = ["  설치가 끝나면 사람이 승인·연결해야 하는 것 (설치 마지막에 doctor 가 하나씩 확인·안내한다):"]
+    lines += [f"    - {cap.label}: {cap.approve_at}" for cap in CAPABILITIES if cap.approve_at]
+    return "\n".join(lines)
+
+
+def doctor_settled(output: str) -> bool:
+    """고장이 없고 모든 계정을 실제로 진단했으면 끝난 것이다 — 남은 확인(WARN)은 선택 기능이다."""
+    return not any(line.startswith(("[FAIL]", "[WARN] doctor-run")) for line in output.splitlines())

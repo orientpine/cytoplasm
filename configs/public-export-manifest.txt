@@ -178,3 +178,10 @@ tests/unit/test_proposal_writer_guidance.py
 tests/unit/test_proposal_engine_corpus.py
 tests/unit/test_proposal_engine_schedule.py
 tests/unit/test_proposal_hwpx_layer.py
+tests/unit/test_proposal_compose_resume.py
+tests/unit/test_proposal_codex_model.py
+
+# compose 중단·재개 기능 소개: 노드 반복 한도·게이트웨이 재시작 시각 등 운영 세부가 실려 공개 대상이 아니다.
+docs/기능소개/제안서-compose-중단-재개.md
+# 모델 단일 출처 기능 소개: 노드 계정 경로·현재 운영 모델 값이 실려 공개 대상이 아니다.
+docs/기능소개/모델-설정-한-곳.md

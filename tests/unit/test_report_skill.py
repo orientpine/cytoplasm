@@ -92,7 +92,7 @@ def test_sensitive_notes_route_only_to_openai_codex(tmp_path: Path) -> None:
     route = report_sensitivity.route_notes(selected, rules)
 
     assert route.provider == "openai-codex"
-    assert route.model == "gpt-5.6-sol"
+    assert route.model == "hermes-config"
     assert route.sensitive is True
 
 
@@ -104,7 +104,7 @@ def test_plain_notes_route_to_the_same_single_codex_tier(tmp_path: Path) -> None
 
     route = report_sensitivity.route_notes(selected, rules)
 
-    assert (route.provider, route.model) == ("openai-codex", "gpt-5.6-sol")
+    assert (route.provider, route.model) == ("openai-codex", "hermes-config")
     assert route.sensitive is False
 
 
@@ -202,14 +202,14 @@ def test_report_child_authenticates_through_codex_oauth_home_without_any_key(
     _ = binary.write_text(
         "#!/bin/sh\n"
         'case " $* " in *" --ignore-user-config "*) exit 9;; esac\n'
-        'case " $* " in *" openai-codex "*) ;; *) exit 9;; esac\n'
+        'case " $* " in *" --provider "*|*" -m "*) exit 9;; esac\n'
         'printf "draft"\n',
         encoding="utf-8",
     )
     _ = binary.chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
     route = report_sensitivity.Route(
-        provider="openai-codex", model="gpt-5.6-sol", sensitive=False, tags=()
+        provider="openai-codex", model="hermes-config", sensitive=False, tags=()
     )
 
     # When
@@ -222,7 +222,7 @@ def test_report_child_authenticates_through_codex_oauth_home_without_any_key(
         .read_text(encoding="utf-8")
         .splitlines()[-1]
     )
-    assert logged["provider"] == "openai-codex" and logged["model"] == "gpt-5.6-sol"
+    assert logged["provider"] == "openai-codex" and logged["model"] == "hermes-config"
 
 
 def test_report_refuses_instead_of_downgrading_when_codex_credentials_are_missing(
@@ -238,7 +238,7 @@ def test_report_refuses_instead_of_downgrading_when_codex_credentials_are_missin
     _ = binary.chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
     route = report_sensitivity.Route(
-        provider="openai-codex", model="gpt-5.6-sol", sensitive=False, tags=()
+        provider="openai-codex", model="hermes-config", sensitive=False, tags=()
     )
 
     # When / Then

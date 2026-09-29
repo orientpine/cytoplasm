@@ -69,8 +69,8 @@ def test_missing_patent_tag_is_auto_attached_before_codex_dispatch() -> None:
     assert response.call.tags == (patent_routing.PATENT_SENSITIVE_TAG,)
     assert response.call.tag_auto_attached is True
     assert len(commands) == 1
-    assert commands[0][:9] == ("hermes", "-z", "private material", "--provider", patent_routing.CODEX_PROVIDER, "-m", patent_routing.CODEX_MODEL, "-t", "todo")
-    assert commands[0][9] == "--usage-file" and len(commands[0]) == 11
+    assert commands[0][:5] == ("hermes", "-z", "private material", "-t", "todo")
+    assert commands[0][5] == "--usage-file" and len(commands[0]) == 7
 
 
 def test_patent_call_never_selects_glm_even_with_unrelated_tag() -> None:

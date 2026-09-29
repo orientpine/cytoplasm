@@ -166,6 +166,13 @@ _NON_APPROVAL_DM_SENDERS: Final[Mapping[str, str]] = {}
 # Text that legitimately tells the owner WHERE to look, or reports on a surface
 # to ops. Everything else must go through `approval_surface.reaction_instruction`.
 _SURFACE_NAMING_ALLOWED: Final[Mapping[str, str]] = {
+    "automation/doctor/capabilities.py::<module>":
+        "연결·승인 점검기의 「사람이 승인·연결할 곳」 안내 — 어느 채널 id 를 적어야 하는지가 이 도구의 출력 "
+        + "그 자체다. 승인을 게시하지 않고(읽기 전용) 표면을 해석하지도 않는다.",
+    "automation/doctor/capabilities.py::_by_design":
+        "설치 점검 결과 중 #approvals id 부재를 고장에서 빼는 판정 — 표면 해석이 아니라 그 결과 이름을 읽는다.",
+    "automation/doctor/guides.py::<module>":
+        "연결·승인 점검기의 조치 절차 문구 — 어느 채널을 만들고 config 에 적을지 알려 준다. 표면을 해석하지 않는다.",
     "automation/hermes_compat/owner-dm-drain-check.py::<module>":
         "owner DM 백로그 드레인 점검 도구 — 점검 대상이 표면 그 자체다.",
     "automation/hermes_compat/patch_busy_fifo.py::<module>":

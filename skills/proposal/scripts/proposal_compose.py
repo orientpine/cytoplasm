@@ -5,11 +5,18 @@ CLI behind it. On 2026-09-28 the node agent, finding nothing to run, hand-wrote
 ``drafts.json``, copied another proposal's plan and drew placeholder figures — the
 document looked finished and read like none of the engine's work. This is that missing
 step, run live through the same Hermes Codex OAuth path the engine already uses.
+
+A draft takes tens of minutes of model calls, and on 2026-09-29 a release convergence
+restarted the gateway eight minutes in: the tool subprocess was killed, nothing was
+kept, and a rerun would have paid for every call again. Every completed call is now
+recorded in the version's resume cache, so rerunning the same command after any
+interruption replays those answers and asks the model only for what is left.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import io
 import json
 import os
@@ -25,13 +32,16 @@ from .proposal_figure_tokens import STALE_REFINE_OUTPUTS, FigureTokenError, plac
 
 _DRAFT_OUTPUTS: Final = ("drafts.json", "drafts.json.planspec.json", "drafts.json.pms.json")
 _PLAN_KPI_SHAPE: Final = "<지표>; baseline: 6%; target: 3%; unit: %; weight: 40%; method: …; env: …"
+RESUME_CACHE: Final = ".llm-resume-cache.json"
+_LOCK: Final = ".compose.lock"
+_SCRATCH_GLOB: Final = ".compose-*"
 
 
 class ComposeError(RuntimeError):
     """The engine draft stage could not produce a drafts bundle."""
 
 
-def _run_engine(corpus: Path, out: Path, profile: str) -> tuple[int, str]:
+def _run_engine(corpus: Path, out: Path, profile: str, cache: Path) -> tuple[int, str]:
     from ..engine.pipeline.cli import main as engine_main
 
     previous = os.environ.get("KIMM_DOCBOT_PROFILE")
@@ -40,7 +50,17 @@ def _run_engine(corpus: Path, out: Path, profile: str) -> tuple[int, str]:
     try:
         with redirect_stdout(stream):
             returncode = engine_main(
-                ["draft", "--corpus", str(corpus), "--out", str(out), "--mode", "live"]
+                [
+                    "draft",
+                    "--corpus",
+                    str(corpus),
+                    "--out",
+                    str(out),
+                    "--mode",
+                    "record",
+                    "--cache",
+                    str(cache),
+                ]
             )
     finally:
         if previous is None:
@@ -61,6 +81,31 @@ def _failure_detail(events: str) -> str:
     return "engine draft failed without a pipeline_failed event"
 
 
+def _resumable_calls(cache: Path) -> int:
+    """Count answers an interrupted run left behind; discard a cache that cannot be read."""
+    from ..engine.agents.llm import load_mock_responses
+
+    if not cache.exists():
+        return 0
+    try:
+        return len(load_mock_responses(cache))
+    except (AttributeError, OSError, ValueError):
+        cache.unlink(missing_ok=True)
+        return 0
+
+
+def _hold_version_lock(out: Path) -> int:
+    descriptor = os.open(out / _LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        os.close(descriptor)
+        raise ComposeError(
+            "another compose is still running for this version; wait for it to finish"
+        ) from error
+    return descriptor
+
+
 def compose(slug: str, *, profile: str | None = None) -> dict[str, object]:
     """Draft the current version from its corpus and drop refine outputs that it obsoletes."""
     store = proposal_version.VersionStore.from_environment()
@@ -74,24 +119,33 @@ def compose(slug: str, *, profile: str | None = None) -> dict[str, object]:
     selected = profile or proposal_config.load_config().profile
     out = version / "out"
     out.mkdir(mode=0o700, exist_ok=True)
-    scratch = Path(tempfile.mkdtemp(prefix=".compose-", dir=out))
+    cache = out / RESUME_CACHE
+    lock = _hold_version_lock(out)
     try:
-        returncode, events = _run_engine(corpus, scratch / "drafts.json", selected)
-        if returncode != 0:
-            detail = _failure_detail(events)
-            if "KPI evidence" in detail:
-                detail += f" — add KPI lines to inputs/PLAN.md ({_PLAN_KPI_SHAPE}) and rerun `corpus`"
-            raise ComposeError(detail)
-        for name in _DRAFT_OUTPUTS:
-            if not (scratch / name).is_file():
-                raise ComposeError(f"engine draft did not write {name}")
-        for name in STALE_REFINE_OUTPUTS:
-            (out / name).unlink(missing_ok=True)
-        for name in _DRAFT_OUTPUTS:
-            (scratch / name).chmod(0o600)
-            os.replace(scratch / name, out / name)
+        for stale in out.glob(_SCRATCH_GLOB):
+            shutil.rmtree(stale, ignore_errors=True)
+        resumed = _resumable_calls(cache)
+        scratch = Path(tempfile.mkdtemp(prefix=".compose-", dir=out))
+        try:
+            returncode, events = _run_engine(corpus, scratch / "drafts.json", selected, cache)
+            if returncode != 0:
+                detail = _failure_detail(events)
+                if "KPI evidence" in detail:
+                    detail += f" — add KPI lines to inputs/PLAN.md ({_PLAN_KPI_SHAPE}) and rerun `corpus`"
+                raise ComposeError(detail)
+            for name in _DRAFT_OUTPUTS:
+                if not (scratch / name).is_file():
+                    raise ComposeError(f"engine draft did not write {name}")
+            for name in STALE_REFINE_OUTPUTS:
+                (out / name).unlink(missing_ok=True)
+            for name in _DRAFT_OUTPUTS:
+                (scratch / name).chmod(0o600)
+                os.replace(scratch / name, out / name)
+            cache.unlink(missing_ok=True)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        os.close(lock)
     figures = None
     if (version / "figures.json").is_file():
         try:
@@ -104,6 +158,7 @@ def compose(slug: str, *, profile: str | None = None) -> dict[str, object]:
         "drafts": str(out / "drafts.json"),
         "figures": figures,
         "profile": selected,
+        "resumed_llm_calls": resumed,
         "sections": len(sections),
         "slug": slug,
         "version": head,
@@ -122,7 +177,8 @@ def command(args: argparse.Namespace) -> int:
     else:
         print(
             f"PROPOSAL-COMPOSED slug={payload['slug']} version={payload['version']} "
-            + f"sections={payload['sections']} profile={payload['profile']}"
+            + f"sections={payload['sections']} profile={payload['profile']} "
+            + f"resumed_llm_calls={payload['resumed_llm_calls']}"
         )
     return 0
 

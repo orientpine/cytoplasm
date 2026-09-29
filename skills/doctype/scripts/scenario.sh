@@ -51,8 +51,8 @@ argv = sys.argv[1:]
 if "--ignore-user-config" in argv:
     print("stub: --ignore-user-config would drop the configured fallback chain", file=sys.stderr)
     raise SystemExit(90)
-if _value(argv, "--provider") != "openai-codex":
-    print("stub: the Codex argv did not pin provider openai-codex", file=sys.stderr)
+if {"--provider", "-m"} & set(argv):
+    print("stub: the argv overrode the model the account config picks", file=sys.stderr)
     raise SystemExit(90)
 prompt = _value(argv, "-z")
 base = Path(__file__).resolve().parent

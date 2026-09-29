@@ -19,7 +19,7 @@ Env: TRIAGE_GATE_DIR, TRIAGE_DB, TRIAGE_APPROVAL_LOG, TRIAGE_MAIL_HOME,
      TRIAGE_CLASSIFY_PROMPT, TRIAGE_REPLY_PROMPT, TRIAGE_CALENDAR_CLI,
      TRIAGE_MAILON_PYTHON,
      INTEROP_RUNTIME, INTEROP_CONFIG, E2E_TEST_MODE, INTEROP_E2E_SECRET
-     (+ shared-client test hooks AUTOPHAGY_HERMES_BIN / AUTOPHAGY_CODEX_MODEL —
+     (+ shared-client test hooks AUTOPHAGY_HERMES_BIN —
      never in production).
 
 There is exactly one model tier (Codex OAuth). When it is unavailable the call

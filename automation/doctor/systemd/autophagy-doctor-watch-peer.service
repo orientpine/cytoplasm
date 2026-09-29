@@ -1,0 +1,17 @@
+[Unit]
+# Peer twin of autophagy-doctor-watch-agent.service — the peer gateway has its own model
+# login, Discord bot and cron state, so it is checked from its own account.
+Description=Autophagy doctor — hourly connection/approval check for the peer account
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=$NODE_PEER_ACCOUNT
+Group=$NODE_PEER_ACCOUNT
+Environment=HOME=$NODE_PEER_HOME
+WorkingDirectory=$NODE_RELEASE_CURRENT
+Environment=PYTHONPATH=$NODE_RELEASE_CURRENT
+Environment=AUTOPHAGY_REPO_ROOT=$NODE_RELEASE_CURRENT
+ExecStart=/usr/bin/python3 $NODE_RELEASE_CURRENT/automation/doctor/cron/doctor_watch.py
+NoNewPrivileges=yes
+ProtectHome=no

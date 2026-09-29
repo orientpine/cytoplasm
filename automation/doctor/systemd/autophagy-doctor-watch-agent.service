@@ -1,0 +1,21 @@
+[Unit]
+# The doctor alarm for installs that do not deploy account-home Hermes crons from an
+# orchestrator (a single-node cytoplasm install). Same wrapper as the Hermes cron route
+# (automation/doctor/deploy.sh); the alarm state lock keeps the two from double-sending.
+Description=Autophagy doctor — hourly connection/approval check for the agent account
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=$NODE_AGENT_ACCOUNT
+Group=$NODE_AGENT_ACCOUNT
+Environment=HOME=$NODE_AGENT_HOME
+WorkingDirectory=$NODE_RELEASE_CURRENT
+Environment=PYTHONPATH=$NODE_RELEASE_CURRENT
+Environment=AUTOPHAGY_REPO_ROOT=$NODE_RELEASE_CURRENT
+ExecStart=/usr/bin/python3 $NODE_RELEASE_CURRENT/automation/doctor/cron/doctor_watch.py
+NoNewPrivileges=yes
+# Every input the check reads (Hermes auth, gws credentials, ~/.env.secrets, cron state) lives
+# under the account's $HOME; ProtectHome=yes would hide it and every tick would report the
+# account as unconnected.
+ProtectHome=no

@@ -15,7 +15,7 @@ prerequisites:
 
 변경 명령은 `/srv/autophagy-skills/live/doctype/scripts/`에서만 실행하며, 낡은 사본은 `STALE-SKILL-COPY-BLOCK`으로 거부한다.
 
-새 예시 서류의 제목·구성·항목을 결정적으로 읽고, 작성 목적·톤·논증 방식을 `openai-codex/gpt-5.4`로
+새 예시 서류의 제목·구성·항목을 결정적으로 읽고, 작성 목적·톤·논증 방식을 계정 Hermes 설정의 주 모델(폴백 포함, `configs/routing-policy.md`)로
 분석해 재사용 가능한 **서류 종류**로 등록한다. 문서의 도메인이 구매/용역이어도 등록·개선·서류 종류화는
 이 스킬이 단독 처리한다. `slot-fill`, `narrative`, `hybrid` 모드를 지원한다.
 `용역지시서`처럼 필드 중심인 양식은 슬롯을 채우고, `업체추천사유서`처럼 근거가 중요한 양식은 에이전트가
@@ -28,9 +28,9 @@ prerequisites:
    메타데이터와 `private:<opaque>` 참조만 남긴다. `--out`은 repo 내부 경로를 거부한다.
 2. 모든 예시/입력/few-shot은 LLM 호출 전에 결정적 민감도 게이트를 통과한다. 한국어 요지 추출과 서술 초안은
    공용 Codex OAuth 클라이언트(`automation/codex_llm.py`, provider `openai-codex`)만 사용한다.
-   `call_codex`는 호출 직전에 경로가 공용 클라이언트이고 주 경로가 Codex OAuth(argv `--provider openai-codex`)로
-   고정됐는지 확인하고, 아니면 `PatentRoutingError`로 fail-closed한다. Codex가 답하지 못하면 Hermes가 계정 설정의
-   `fallback_providers`(xAI Grok, 2026-09-22 소유자 결정)로 넘기며, 그 체인까지 모두 실패하면 `LlmCallError`로 거부한다.
+   `call_codex`는 호출 직전에 경로가 공용 클라이언트이고 argv 가 모델·provider 를 덮지 않는지(`--provider`·`-m` 없음 —
+   모델은 계정 `~/.hermes/config.yaml` 이 정한다) 확인하고, 아니면 `PatentRoutingError`로 fail-closed한다. 주 모델이
+   답하지 못하면 Hermes가 같은 설정의 `fallback_providers`로 넘기며, 그 체인까지 모두 실패하면 `LlmCallError`로 거부한다.
 3. `register-from-example`, 같은 이름의 재등록, `refine`은 모두 최대 버전 + 1의 불변 버전을 추가한다.
    승인본은 사설 example으로 누적되어 이후 서술 작성의 few-shot이 된다. 기존 버전은 수정·삭제하지 않는다.
 4. `--review`는 문서 본문 없이 파일명·SHA256·type/version만 cha owner에게 보낸다. 제출·메일·외부 수집 기능은 없다.
@@ -95,7 +95,7 @@ Codex·민감도 게이트를 그대로 따르므로 본문은 공용 Hermes 경
 ## Runtime and sandbox
 
 Production goes through the shared client `automation/codex_llm.py`, which runs
-`hermes -z … --provider openai-codex -m <model> -t todo` with no client-side retry; when Codex cannot
+`hermes -z … -t todo` (no model, no provider — the account config picks both) with no client-side retry; when the main model cannot
 answer, Hermes falls back along the account's `fallback_providers` chain (`configs/routing-policy.md`). Offline tests point `DOCTYPE_HERMES_BIN` at a deterministic local binary (the skill hands it to
 the shared client as `AUTOPHAGY_HERMES_BIN`). `scripts/scenario.sh` creates examples, private roots,
 stubs, and drafts only under `mktemp`, then removes them.

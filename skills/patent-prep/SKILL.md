@@ -23,7 +23,7 @@ prerequisites:
 ## 절대 규칙
 
 1. `draft`의 모든 LLM 호출은 호출 지점에서 `patent-sensitive` 태그를 누락 시 자동 첨부하고,
-   provider/model을 `openai-codex/gpt-5.4`로 고정한다. 다른 제공자 선택 인자는 없다.
+   모델은 고르지 않고 계정 `~/.hermes/config.yaml` 의 주 모델·폴백을 따른다(`--provider`·`-m` 없음). 다른 제공자 선택 인자는 없다.
 2. Hermes v0.18.2 one-shot CLI에는 호출별 metadata-tag 플래그가 없으므로, 이 스킬은 태그가
    첨부된 호출 계획을 private audit log에 먼저 기록하고 Codex OAuth를 주 경로로 호출한다.
    Codex가 답하지 못하면 Hermes가 계정 설정의 `fallback_providers`(xAI Grok)로 넘기며 — 소유자가

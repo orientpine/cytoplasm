@@ -39,6 +39,18 @@ class OptInComponent:
 
 #: The one registry. `installer.py --with-component <name>` validates against these keys.
 OPT_IN_COMPONENTS: Final[Mapping[str, OptInComponent]] = {
+    # 설치 뒤 연결·승인이 끊기면 매시 점검해 바뀔 때만 소유자에게 알린다(automation/doctor).
+    # Hermes cron 경로(automation/doctor/deploy.sh)와 같은 래퍼라 둘이 겹쳐도 알람 잠금이 한 번만 보낸다.
+    "doctor-watch": OptInComponent(
+        name="doctor-watch",
+        source=Path("automation/doctor/systemd"),
+        units=(
+            "autophagy-doctor-watch-agent.service",
+            "autophagy-doctor-watch-agent.timer",
+            "autophagy-doctor-watch-peer.service",
+            "autophagy-doctor-watch-peer.timer",
+        ),
+    ),
     "managed-sync": OptInComponent(
         name="managed-sync",
         source=Path("automation/managed_sync/systemd"),

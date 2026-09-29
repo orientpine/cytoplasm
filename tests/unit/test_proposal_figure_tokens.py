@@ -98,6 +98,22 @@ def test_a_figure_for_a_section_the_drafts_lack_is_refused(
     assert drafts.read_bytes() == before
 
 
+def test_a_plan_record_missing_a_field_names_the_field_and_the_full_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    version = _version(tmp_path, monkeypatch)
+    record = {"figure_id": "fig-s0-01", "section_id": "0", "source_claim_ids": ["public:c"]}
+    record |= {"prompt": "diagram", "caption": "caption", "band_index": 0}
+    _ = (version / "figures.json").write_text(json.dumps([record]), encoding="utf-8")
+    drafts = _drafts(version, {"0": "본문이다."})
+    before = drafts.read_bytes()
+
+    with pytest.raises(FigureTokenError, match=r"lacks 'png_sha256'.*png_sha256 \(\"\" until `images`\)"):
+        _ = place_figures(version)
+
+    assert drafts.read_bytes() == before
+
+
 def test_a_section_without_claims_takes_its_figures_as_claims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

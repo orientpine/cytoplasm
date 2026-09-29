@@ -313,12 +313,11 @@ grep -q '"provider":"openai-codex"' "$work/llm-calls.jsonl" || fail "routing log
 python3 - "$work/codex-calls.log" "$work/llm-calls.jsonl" <<'PY' || fail "codex routing assertions failed"
 import json, sys
 
-# 모든 호출의 argv 는 주 경로(Codex)를 고정하고, 사용자 설정을 읽어야 한다 —
-# --ignore-user-config 가 붙으면 계정의 fallback_providers 체인이 꺼진다.
+# 모든 호출은 모델을 고르지 않고 계정 설정(주 모델 + fallback_providers)을 따른다 —
+# --provider/-m 이 붙으면 설정을 덮고, --ignore-user-config 가 붙으면 폴백 체인이 꺼진다.
 for line in open(sys.argv[1], encoding="utf-8"):
     argv = json.loads(line)
-    assert "--ignore-user-config" not in argv, argv
-    assert argv[argv.index("--provider") + 1] == "openai-codex", argv
+    assert not {"--ignore-user-config", "--provider", "-m"} & set(argv), argv
 
 # 감사 로그에는 승인 티어만 남고, 강등 표식은 존재조차 하지 않는다.
 records = [json.loads(line) for line in open(sys.argv[2], encoding="utf-8") if line.strip()]

@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, assert_never
 
-from automation import owner_notice
+from automation import owner_notice, release_models
 
 _RELEASE_TAG: Final = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 _DEFAULT_RELEASE_CURRENT: Final = "/srv/autophagy-agent-current"
@@ -206,7 +206,8 @@ class _Sweep:
 
     def _notify(self, sha: str, version: str) -> None:
         completed = subprocess.run(
-            (*_send_command(self.repo), "send", "--version", version, "--head", sha),
+            (*_send_command(self.repo), "send", "--version", version, "--head", sha,
+             "--models", release_models.probe()),
             env={**os.environ, "RELEASE_APPROVAL_MODULE": _MODULE},
             check=False,
         )
@@ -252,7 +253,7 @@ def sweep(state: Path, repo: Path) -> None:
         tick.handle(sha)
 
 
-def send(version: str, head: str) -> int:
+def send(version: str, head: str, models: str = "") -> int:
     """노드에서 도는 절반 — 포인터를 다시 확인하고 목적지는 파사드에 맡긴다."""
     current = os.environ.get("NODE_RELEASE_CURRENT", "").strip() or _DEFAULT_RELEASE_CURRENT
     try:
@@ -268,7 +269,7 @@ def send(version: str, head: str) -> int:
         return 4
     from automation.release_applied_message import applied_message
 
-    content = f"릴리스 {version} 가 적용되었습니다. (HEAD {head[:12]})"
+    content = f"릴리스 {version} 가 적용되었습니다. (HEAD {head[:12]})\n{release_models.render(models)}"
     message = applied_message(version, head, content)
     if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
         delivered = owner_notice.notify_owner(content, message=message)
@@ -286,9 +287,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     sender = commands.add_parser("send", help="소유자 DM 으로 적용 완료를 알린다")
     _ = sender.add_argument("--version", required=True)
     _ = sender.add_argument("--head", required=True)
+    _ = sender.add_argument("--models", default="", help="워크스테이션이 읽은 agent·peer 모델 요약(JSON)")
     arguments = parser.parse_args(argv)
     if arguments.command == "send":
-        return send(str(arguments.version), str(arguments.head))
+        return send(str(arguments.version), str(arguments.head), str(arguments.models))
     try:
         sweep(Path(str(arguments.state)), Path(str(arguments.repo)))
     except Exception as error:  # noqa: BLE001 - 통지 실패가 완결을 막으면 본말전도다

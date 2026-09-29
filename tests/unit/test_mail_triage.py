@@ -79,7 +79,7 @@ def test_call_codex_pins_provider_and_honors_user_config(
     argv = json.loads(argv_log.read_text(encoding="utf-8"))
     assert result.text == "{}"
     assert "--ignore-user-config" not in argv  # 붙으면 Hermes 폴백 체인이 꺼진다
-    assert argv[argv.index("--provider") + 1] == triage_llm.CODEX_PROVIDER
+    assert not {"--provider", "-m"} & set(argv)  # 모델은 계정 설정이 정한다
     assert argv[argv.index("-z") + 1] == "return JSON"
 
 

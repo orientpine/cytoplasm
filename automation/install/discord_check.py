@@ -366,6 +366,11 @@ def _urllib_fetch(token: str) -> Fetch:
     return fetch
 
 
+def probe(token: str, config_path: Path | None) -> tuple[CheckResult, ...]:
+    """`main` 과 같은 GET 전용 검사를 환경변수 대신 인자로 받은 토큰으로 돌린다(doctor 용)."""
+    return run_checks(_urllib_fetch(token), load_channel_ids(config_path, {}))
+
+
 def _retry_after(value: str | None) -> float:
     if value is None:
         return 1.0

@@ -8,7 +8,7 @@ from typing import Final
 
 PATENT_SENSITIVE_TAG: Final = "patent-sensitive"
 CODEX_PROVIDER: Final = "openai-codex"
-CODEX_MODEL: Final = "gpt-5.4"
+CODEX_MODEL: Final = "hermes-config"
 
 
 @dataclass(frozen=True, slots=True)

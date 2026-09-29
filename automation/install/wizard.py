@@ -23,8 +23,11 @@ from typing import Final, Protocol
 from automation.install.profiles import UnknownProfileError, resolve_profile
 from automation.install.wizard_screens import (
     DEFAULT_ORIGIN_URL,
+    DOCTOR_ARGV,
     PROFILE_MENU,
     Answers,
+    approval_preview,
+    doctor_settled,
     installer_argv,
     render_node_toml,
     summarize_plan,
@@ -117,6 +120,7 @@ def _prerequisites(io: Console, key: Path | None) -> bool:
     ]
     for ok, label, hint in rows:
         io.write(f"  [{'통과' if ok else '필요'}] {label}{'' if ok else ' — ' + hint}\n")
+    io.write(approval_preview() + "\n")
     return rows[-1][0]
 
 
@@ -215,7 +219,27 @@ def main(argv: Sequence[str] | None = None, *, io: Console | None = None) -> int
     _keep_log(io, "02-install.log", output)
     _section(io, "⑥ 결과")
     io.write(summarize_verdict(output, returncode=rc) + "\n")
+    if rc == 0:
+        _connect(io, interactive=io.tty and not args.yes)
     return rc
+
+
+def _connect(io: Console, *, interactive: bool) -> None:
+    _section(io, "⑦ 연결·승인 — 사람이 승인해야 하는 것을 doctor 가 하나씩 확인·안내한다")
+    while True:
+        io.write("  $ " + " ".join(DOCTOR_ARGV) + "\n")
+        _, output = io.run(DOCTOR_ARGV)
+        _keep_log(io, "03-doctor.log", output)
+        if doctor_settled(output):
+            io.write("  필수 연결이 모두 통과했다. 남은 [WARN] 은 선택 기능이다 — 필요할 때 위 절차대로 켠다.\n")
+            return
+        if not interactive:
+            io.write("  남은 항목은 위 절차대로 승인한 뒤 python3 -m automation.doctor 로 다시 확인한다.\n")
+            return
+        answer = io.read_line("  위 절차대로 승인·연결한 뒤 Enter 를 누르면 다시 점검한다 (나중에 하려면 q): ")
+        if answer.strip().lower() == "q":
+            io.write("  나중에 python3 -m automation.doctor 로 다시 확인한다. 설치 자체는 끝났다.\n")
+            return
 
 
 def _keep_log(io: Console, name: str, output: str) -> None:

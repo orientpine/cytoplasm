@@ -13,14 +13,14 @@ Routing contract (2026-09-04 provider migration):
   falls back along the account's ``fallback_providers`` chain (xAI Grok since
   2026-09-22, ``configs/routing-policy.md``). Only when that whole chain fails
   does the call raise ``LlmUnavailableError`` and the caller fail closed. The
-  routing log records the pinned primary route, not which member answered.
+  routing log records ``hermes-config`` (the account config decides) and the
+  ``served_*`` pair that actually answered.
 
 Every call appends one masked line to the routing log (provider/model/purpose/
 opaque uid) — the auditable call-count surface for QA.
 
 Test hooks (never set in production units; read by the shared client):
   AUTOPHAGY_HERMES_BIN   overrides the hermes binary.
-  AUTOPHAGY_CODEX_MODEL  overrides the model.
 """
 
 from __future__ import annotations
@@ -107,9 +107,8 @@ def _approved_codex(sensitive: bool) -> ModuleType:
 
 
 def codex_model() -> str:
-    """The model the shared client will use for this call (single source: the client)."""
-    codex = _codex_module()
-    return os.environ.get(codex.MODEL_ENV, "").strip() or codex.DEFAULT_MODEL
+    """The requested-model label: the account's Hermes config picks the model."""
+    return _codex_module().CONFIGURED_MODEL
 
 
 def _log_path() -> Path:

@@ -20,7 +20,7 @@ cli=(python3 -I "$work/scripts/patent_cli.py")
 printf 'Synthetic local response.\n' > "$tmp/response.md"
 draft_out="$("${cli[@]}" draft --slug demo-disclosure --response-file "$tmp/response.md")"
 grep -Fq 'provider=openai-codex' <<<"$draft_out"
-grep -Fq 'model=gpt-5.4' <<<"$draft_out"
+grep -Fq 'model=hermes-config' <<<"$draft_out"
 grep -Fq 'tag_auto_attached=true' <<<"$draft_out"
 test "$(stat -c '%a' "$PATENT_DRAFT_ROOT/demo-disclosure")" = 700
 test "$(stat -c '%a' "$PATENT_DRAFT_ROOT/demo-disclosure/draft.md")" = 600

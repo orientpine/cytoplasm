@@ -123,7 +123,7 @@ def test_patent_sensitive_evidence_routes_draft_to_codex(
     monkeypatch.setattr(proposal_cli.proposal_llm, "run_section_draft", draft)
 
     assert proposal_cli._draft(_args(brief), evidence_pack=_pack(item=sensitive)) == 0
-    assert routes == [("openai-codex", "gpt-5.4", True)]
+    assert routes == [("openai-codex", "hermes-config", True)]
 
 
 def test_assemble_appends_one_deduplicated_sources_block(

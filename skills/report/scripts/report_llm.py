@@ -76,7 +76,7 @@ def generate(prompt: str, route: Route) -> str:
         name = error.__class__.__name__
         raise LlmInvocationError(f"shared Codex client unavailable ({name})") from error
     try:
-        client = CodexClient.from_environment(timeout=LLM_TIMEOUT).with_model(route.model)
+        client = CodexClient.from_environment(timeout=LLM_TIMEOUT)
         served = client.complete_served(prompt)
     except CodexError as error:
         _record_route(route, UNKNOWN, UNKNOWN)

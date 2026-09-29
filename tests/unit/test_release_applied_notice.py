@@ -55,6 +55,17 @@ printf '%s' "$PROBE_OUT"
 exit "${PROBE_RC:-0}"
 """
 
+_MODELS_OUT = (
+    "=== agent\nmodel:\n  default: gpt-6-sol\n  provider: openai-codex\n"
+    "fallback_providers:\n  - provider: xai-oauth\n    model: grok-4.7\n"
+    "=== peer\nmodel:\n  default: gpt-6-sol\n  provider: openai-codex\n"
+    "fallback_providers:\n  - provider: xai-oauth\n    model: grok-4.7\n"
+)
+_MODELS_JSON = (
+    '{"agent": {"fallback": "xai-oauth/grok-4.7", "main": "openai-codex/gpt-6-sol", "max_turns": "500"}, '
+    '"peer": {"fallback": "xai-oauth/grok-4.7", "main": "openai-codex/gpt-6-sol", "max_turns": "500"}}'
+)
+
 _SEND_STUB = """#!/usr/bin/env bash
 printf '%s|%s\\n' "${RELEASE_APPROVAL_MODULE:-unset}" "$*" >> "$SEND_CALLS"
 exit "${SEND_RC:-0}"
@@ -232,6 +243,9 @@ def sweep_env(
     send = _stub(tmp_path / "send-stub", _SEND_STUB)
     monkeypatch.setenv("RELEASE_APPLIED_PROBE_CMD", f"bash {probe}")
     monkeypatch.setenv("RELEASE_APPROVAL_CMD", f"bash {send}")
+    models = _stub(tmp_path / "models-stub", "#!/usr/bin/env bash\nprintf '%s' \"$MODELS_OUT\"\n")
+    monkeypatch.setenv("RELEASE_MODELS_PROBE_CMD", f"bash {models}")
+    monkeypatch.setenv("MODELS_OUT", _MODELS_OUT)
     monkeypatch.setenv("PROBE_CALLS", str(tmp_path / "probe-calls.log"))
     monkeypatch.setenv("SEND_CALLS", str(tmp_path / "send-calls.log"))
     monkeypatch.setenv(
@@ -269,7 +283,7 @@ class TestSweep:
         output = capsys.readouterr().out
         assert f"RELEASE-APPLIED-NOTIFIED v1.2.4 {head[:12]}" in output
         assert _lines(Path(os.environ["SEND_CALLS"])) == [
-            f"automation.release_applied_notice|send --version v1.2.4 --head {head}"
+            f"automation.release_applied_notice|send --version v1.2.4 --head {head} --models {_MODELS_JSON}"
         ]
         marker = sweep_env / "notified" / head
         assert marker.read_text(encoding="utf-8").startswith("v1.2.4 ")
@@ -473,7 +487,10 @@ class TestSendAtTheNode:
 
         # Then: 번호는 인자 그대로 쓰고 목적지는 파사드가 정한다
         assert exit_code == 0
-        assert sent == [f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {_SHA[:12]})"]
+        assert sent == [
+            f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {_SHA[:12]})\n"
+            "모델: 확인 못 함 — 노드의 Hermes 설정을 읽지 못했다"
+        ]
 
     def test_a2_the_notice_lands_in_the_configured_notice_channel(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -509,7 +526,9 @@ class TestSendAtTheNode:
         assert channel == "1500000000000000002"
         from automation.release_applied_message import applied_message
         from automation.interop.owner_message import Ref, render
-        message = applied_message("v1.2.4", _SHA, f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {_SHA[:12]})")
+        message = applied_message(
+            "v1.2.4", _SHA, f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {_SHA[:12]})\n모델: 확인 못 함 — 노드의 Hermes 설정을 읽지 못했다"
+        )
         assert message is not None
         assert body == render(message, destination=Ref(scope="channel", channel_id=channel))
 

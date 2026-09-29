@@ -20,7 +20,7 @@ from typing import Any, Final
 
 
 CODEX_PROVIDER: Final = "openai-codex"
-CODEX_MODEL: Final = "gpt-5.4"
+CODEX_MODEL: Final = "hermes-config"
 _BINARY_ENV: Final = "AUTOPHAGY_HERMES_BIN"
 _RELEASE_ROOT: Final = "/srv/autophagy-agent-current"
 
@@ -106,11 +106,10 @@ def _codex_client(codex: ModuleType, timeout: float) -> Any:
         client = codex.CodexClient.from_environment(_client_environment(), timeout=timeout)
     except codex.CodexError as error:
         raise LlmCallError(f"Codex OAuth tier unavailable: {error}") from None
-    argv = client.argv("")
-    pinned = "--provider" in argv and argv[argv.index("--provider") + 1 :][:1] == [CODEX_PROVIDER]
-    if codex.PROVIDER != CODEX_PROVIDER or not pinned:
-        raise PatentRoutingError("routing gate: only the pinned Codex OAuth tier may receive this document")
-    return client.with_model(CODEX_MODEL)
+    overrides = {"-m", "--model", "--provider"} & set(client.argv(""))
+    if codex.PROVIDER != CODEX_PROVIDER or overrides:
+        raise PatentRoutingError("routing gate: only the account's configured Hermes route may receive this document")
+    return client
 
 
 def call_codex(

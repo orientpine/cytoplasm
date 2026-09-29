@@ -235,3 +235,12 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 ## ASR 후보 평가 후 남긴 것 (2026-09-22)
 
 - **용어집 힌트가 whisper 에 닿지 않는다** — 로컬 전사는 `-mc 0`(`SPEECHTOTEXT_WHISPER_CONTEXT` 기본)으로 돌고 whisper.cpp 는 `n_max_text_ctx > 0` 일 때만 prompt 를 붙여 `--prompt` 가 통째로 버려진다(힌트 유무 출력 바이트 동일, [STS2](qa/STS2/summary.md)). `--carry-initial-prompt`+`-mc 64` 로 강제하면 대리 기준 CER 14.2→19.2%(삭제 급증) → 소유자 교정 정답 3건 이상으로 다시 재서 힌트 경로를 걷어 낼지(문서·`asr_fingerprint` 정리) carry 로 살릴지 정한다. **영향: 없는 기능을 있다고 적은 문서 · 전사 결과 불변 · 심각도 중**.
+
+## doctor 착지 후 남긴 것 (2026-09-29)
+
+- **사용자 정의 주 모델의 연결은 확인하지 않는다** — `custom:<이름>`(peer 의 로컬 LiteLLM)은 `custom_providers` 선언만 보고 PASS 라, 프록시가 죽어도 doctor 는 통과로 적는다 → 온라인 검사에서 그 `base_url` 의 `/models` 를 GET 으로 한 번 부른다(키는 config 에서 읽되 출력하지 않는다). **영향: peer 모델 끊김의 조기 경보만 · 심각도 낮음**.
+
+## 제안서 compose 중단 수리 중 발견한 인접 결함 (2026-09-29)
+
+- **doctype·patent-prep 이 아직 `gpt-5.4` 를 요청해 전부 grok 폴백으로 샌다** — 구독이 `gpt-5.4` 를 더 내주지 않아 `hermes -z --provider openai-codex -m gpt-5.4` 는 `xai-oauth/grok-4.7` 이 답한다(노드 `--usage-file` 실측, `gpt-5.6-sol` 은 Codex 가 답함). `skills/doctype/scripts/doctype_llm.py` `CODEX_MODEL`, `skills/patent-prep/scripts/patent_routing.py` `CODEX_MODEL`(+`scenario.sh` 의 `model=gpt-5.4` 단언), 두 SKILL.md·`skills/report/SKILL.md`·`docs/guide/doctype-usage.md`·`docs/guide/onboarding-kit.md` 의 문구가 그 값이다 → 제안서처럼 공용 `automation/codex_llm.DEFAULT_MODEL` 과 같게 맞추고 동일성 테스트를 둔다(선례 `tests/unit/test_proposal_codex_model.py`). **영향: 두 스킬 호출이 느린 폴백으로 가고 '특허 민감은 Codex 전용' 문구가 사실과 다름(폴백 허용은 2026-09-22 소유자 결정이라 보안 위반은 아님) · 심각도 중**.
+  - ↳ [해소 2026-09-29] 소유자 결정으로 모델을 코드에서 아예 없앴다 — 모든 호출이 `--provider`·`-m` 없이 계정 `~/.hermes/config.yaml` 의 주 모델·폴백을 따르고, `tests/unit/test_model_single_source_conformance.py` 가 코드 속 모델 이름을 막는다.

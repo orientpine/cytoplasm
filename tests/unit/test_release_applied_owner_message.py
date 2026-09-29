@@ -9,7 +9,7 @@ import pytest
 from automation import owner_notice, release_applied_notice as release
 from automation.interop.owner_message import Action, OwnerMessage, Ref, Result
 
-RELEASE = '릴리스 v1.2.4 가 적용되었습니다. (HEAD aaaaaaaaaaaa)'
+RELEASE = '릴리스 v1.2.4 가 적용되었습니다. (HEAD aaaaaaaaaaaa)\n모델: 확인 못 함 — 노드의 Hermes 설정을 읽지 못했다'
 HEAD = 'aaaaaaaaaaaaaaaa'
 
 
@@ -58,7 +58,7 @@ def test_envelope_identifies_release_when_pointer_matches(
     assert message is not None
     assert message == OwnerMessage(
         subject_key='aaaaaaaaaaaaaaaa', subject='릴리스 v1.2.4',
-        fact='릴리스 v1.2.4 가 적용되었습니다. (HEAD aaaaaaaaaaaa)',
+        fact=RELEASE,
         location=Ref(scope='resource', space='unknown', guild_id=None, channel_id=None,
                      message_id=None, url=None, search=('릴리스 검색', 'v1.2.4 aaaaaaaaaaaaaaaa')),
         owner=Action(verb='none', target=None, argument=None),
@@ -85,7 +85,7 @@ def test_notice_destination_is_used_when_notice_channel_is_configured(
     assert channel == '111'
     assert body == (
         '대상: 릴리스 v1.2.4 (aaaaaaaaaaaaaaaa)\n'
-        '사실: 릴리스 v1.2.4 가 적용되었습니다. (HEAD aaaaaaaaaaaa) (실행 완료)\n'
+        '사실: 릴리스 v1.2.4 가 적용되었습니다. (HEAD aaaaaaaaaaaa) 모델: 확인 못 함 — 노드의 Hermes 설정을 읽지 못했다 (실행 완료)\n'
         '위치: 링크 없음 (주소 없음); 검색: 릴리스 검색 / v1.2.4 aaaaaaaaaaaaaaaa\n'
         '인계: 소유자: 조치 없음; 다음: 추가 실행 없음\n'
         '되돌리기: 해당 없음'

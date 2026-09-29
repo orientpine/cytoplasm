@@ -139,9 +139,7 @@ def collect_report(env: Mapping[str, str] | None = None) -> dict[str, object]:
         "draft": "present" if checks["hermes"] == "present" else "blocked",
         "refine": (
             "present"
-            if checks["refine-checkout"] == "present"
-            and checks["codex"] == "present"
-            and checks["codex-auth"] == "present"
+            if checks["refine-checkout"] == "present" and checks["hermes"] == "present"
             else "blocked"
         ),
         "visual-review": "present" if checks["chrome"] == "present" else "blocked",

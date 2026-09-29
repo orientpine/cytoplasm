@@ -1,10 +1,13 @@
 """Single shared Hermes LLM client — the only model call path in this repository.
 
 Every automation, skill, cron and batch caller goes through :class:`CodexClient`.
-The primary route is pinned in argv: provider ``openai-codex``, model ``gpt-5.6-sol``.
-When that tier cannot answer (quota, rate limit, auth, transport), Hermes itself
-switches to the ``fallback_providers`` chain in the account's ``~/.hermes/config.yaml``
-— the same chain the Discord gateway uses (owner decision 2026-09-22: xAI Grok).
+The model is not chosen here. The argv carries neither ``--provider`` nor ``-m``, so
+Hermes answers with the account's own ``~/.hermes/config.yaml``: ``model.provider`` /
+``model.default`` as the main model and, when that cannot answer (quota, rate limit,
+auth, transport), the ``fallback_providers`` chain — the same pair the Discord gateway
+uses (owner decision 2026-09-29: one place decides every model). Pinning a model in
+code once left three skills asking for a model the subscription had stopped serving,
+and every call fell through to the fallback without anyone choosing that.
 That is why the call does NOT pass ``--ignore-user-config``: that flag drops the
 user config and, with it, the fallback chain. This client makes one subprocess call
 and never retries on its own; when the whole Hermes chain fails, the error propagates.
@@ -19,12 +22,12 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 __all__ = [
-    "DEFAULT_MODEL",
+    "CONFIGURED_MODEL",
     "DEFAULT_TIMEOUT",
     "PROVIDER",
     "CodexClient",
@@ -39,12 +42,14 @@ __all__ = [
     "served_route",
 ]
 
+#: Label of the one shared route (the account's Hermes config), not a model choice.
 PROVIDER: Final = "openai-codex"
-DEFAULT_MODEL: Final = "gpt-5.6-sol"
+#: What routing logs record as the requested model: the config decides, the usage
+#: report (``served_model``) says what actually answered.
+CONFIGURED_MODEL: Final = "hermes-config"
 DEFAULT_TIMEOUT: Final = 180.0
 
 BINARY_ENV: Final = "AUTOPHAGY_HERMES_BIN"
-MODEL_ENV: Final = "AUTOPHAGY_CODEX_MODEL"
 
 #: Recorded when Hermes wrote no readable usage report — never a guess.
 UNKNOWN: Final = "unknown"
@@ -64,8 +69,8 @@ class VerifiedRoute:
     """A completer that IS the route the sensitivity rules already permit.
 
     ``configs/sensitivity-rules.yaml`` says the tag ``patent-sensitive`` permits only
-    the shared Hermes route — Codex OAuth (openai-codex) as primary plus the account's
-    configured ``fallback_providers`` chain. A gate therefore has two separate questions
+    the shared Hermes route — the account config's main model plus its configured
+    ``fallback_providers`` chain. A gate therefore has two separate questions
     to answer — "is this text sensitive?" and "is this route permitted?" — and only the
     second one decides whether the call may happen. Wrapping the Codex completer states
     that answer in the type system, so a gate can let permitted text through the one
@@ -89,7 +94,7 @@ def route_is_verified(completer: object) -> bool:
 class Served:
     """One answer plus the route that actually produced it.
 
-    The argv pins the primary, but Hermes may answer from the account's
+    The account config names the main model, but Hermes may answer from its
     ``fallback_providers`` chain. Routing logs that record only the requested
     primary therefore cannot say where a patent-sensitive prompt really went;
     ``provider``/``model`` here come from Hermes' own ``--usage-file`` report.
@@ -123,11 +128,10 @@ class CodexUnavailableError(CodexError):
 
 @dataclass(frozen=True, slots=True)
 class CodexClient:
-    """Non-interactive Codex OAuth caller bound to one binary, home and model."""
+    """Non-interactive Hermes caller bound to one binary and home; the config picks the model."""
 
     binary: str
     home: str
-    model: str = DEFAULT_MODEL
     timeout: float = DEFAULT_TIMEOUT
 
     @classmethod
@@ -141,27 +145,13 @@ class CodexClient:
         home = (source.get("HOME") or "").strip()
         if not home:
             raise CodexUnavailableError("HOME is unset; Codex OAuth credentials cannot be located")
-        model = (source.get(MODEL_ENV) or "").strip() or DEFAULT_MODEL
-        return cls(binary=_resolve_binary(source, home), home=home, model=model, timeout=timeout)
-
-    def with_model(self, model: str) -> CodexClient:
-        return replace(self, model=model)
+        return cls(binary=_resolve_binary(source, home), home=home, timeout=timeout)
 
     def argv(self, prompt: str) -> list[str]:
-        return [
-            self.binary,
-            "-z",
-            prompt,
-            "--provider",
-            PROVIDER,
-            "-m",
-            self.model,
-            "-t",
-            _TASK_MODE,
-        ]
+        return [self.binary, "-z", prompt, "-t", _TASK_MODE]
 
     def complete(self, prompt: str, *, timeout: float | None = None) -> str:
-        """Run one completion (Codex OAuth first) and return its stripped stdout.
+        """Run one completion (the config's main model first) and return its stripped stdout.
 
         Hermes may answer from the configured ``fallback_providers`` chain when Codex
         cannot; this client itself never retries. Raises :class:`CodexUnavailableError`
@@ -216,29 +206,21 @@ class CodexClient:
 def complete(
     prompt: str,
     *,
-    model: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     env: Mapping[str, str] | None = None,
 ) -> str:
     """Convenience one-shot completion for callers that hold no client."""
-    client = CodexClient.from_environment(env, timeout=timeout)
-    if model:
-        client = client.with_model(model)
-    return client.complete(prompt)
+    return CodexClient.from_environment(env, timeout=timeout).complete(prompt)
 
 
 def complete_served(
     prompt: str,
     *,
-    model: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     env: Mapping[str, str] | None = None,
 ) -> Served:
     """One-shot :meth:`CodexClient.complete_served` for callers that hold no client."""
-    client = CodexClient.from_environment(env, timeout=timeout)
-    if model:
-        client = client.with_model(model)
-    return client.complete_served(prompt)
+    return CodexClient.from_environment(env, timeout=timeout).complete_served(prompt)
 
 
 def _resolve_binary(env: Mapping[str, str], home: str) -> str:
