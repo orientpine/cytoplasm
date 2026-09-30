@@ -244,3 +244,12 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 
 - **doctype·patent-prep 이 아직 `gpt-5.4` 를 요청해 전부 grok 폴백으로 샌다** — 구독이 `gpt-5.4` 를 더 내주지 않아 `hermes -z --provider openai-codex -m gpt-5.4` 는 `xai-oauth/grok-4.7` 이 답한다(노드 `--usage-file` 실측, `gpt-5.6-sol` 은 Codex 가 답함). `skills/doctype/scripts/doctype_llm.py` `CODEX_MODEL`, `skills/patent-prep/scripts/patent_routing.py` `CODEX_MODEL`(+`scenario.sh` 의 `model=gpt-5.4` 단언), 두 SKILL.md·`skills/report/SKILL.md`·`docs/guide/doctype-usage.md`·`docs/guide/onboarding-kit.md` 의 문구가 그 값이다 → 제안서처럼 공용 `automation/codex_llm.DEFAULT_MODEL` 과 같게 맞추고 동일성 테스트를 둔다(선례 `tests/unit/test_proposal_codex_model.py`). **영향: 두 스킬 호출이 느린 폴백으로 가고 '특허 민감은 Codex 전용' 문구가 사실과 다름(폴백 허용은 2026-09-22 소유자 결정이라 보안 위반은 아님) · 심각도 중**.
   - ↳ [해소 2026-09-29] 소유자 결정으로 모델을 코드에서 아예 없앴다 — 모든 호출이 `--provider`·`-m` 없이 계정 `~/.hermes/config.yaml` 의 주 모델·폴백을 따르고, `tests/unit/test_model_single_source_conformance.py` 가 코드 속 모델 이름을 막는다.
+
+## 제안서 그림·캡션 겹침 수정 중 발견한 것 (2026-09-30)
+
+- **소유자 뷰어(rhwp)에서 표가 쪽 아래로 넘쳐 잘리고, 그 뒤 그림이 쪽 밖으로 밀린다** — 글자처럼 취급하는 표의 셀 문단에 `linesegarray` 가 없으면 rhwp 는 행을 늘리지 않는다(rhwp 이슈 #7419). 굴착기 제안서 렌더를 rhwp 0.8.6 으로 재면 선행연구·KPI·추진일정 표가 있는 쪽의 글자 200여 개가 쪽 아래(y>1066px)에 그려지고, 이번 수정 뒤에는 그 쪽에 이어지는 그림 6이 쪽 밖(y=1363px)으로 밀려 보이지 않는다. 한/글은 행 높이를 다시 계산하므로 제출본에는 영향이 없다 → 표의 선언 행 높이를 내용으로 추정해 쓸지(`skills/proposal/engine/hwpx/AGENTS.md` 의 "행 높이는 한/글 몫" 규칙과 충돌하므로 소유자 결정 필요) rhwp 의 수정을 기다릴지 정한다. **영향: 소유자 VS Code 보기에서 표 일부·그림 1개가 안 보임 · 한/글 제출본 무관 · 심각도 중**.
+- **시각 검토가 겹침을 잡지 못한다** — `visual-review`(`engine/hwpx/visual_preview.py`)는 브라우저 조판이라 그림이 글을 피해 흐르고 행이 늘어나므로, 한/글·rhwp 에서만 생기는 겹침·표 넘침을 한 번도 보여 주지 못했다(이번 결함이 두 달간 통과한 이유) → rhwp(`@rhwp/core`)로 쪽별 SVG 를 만들어 그림 사각형 안 본문 줄·캡션 줄 충돌·쪽 밖 글자를 세는 검사를 `visual-review` 에 더할지 정한다(노드에 bun/npm 의존이 새로 생긴다). 이번 판정 스크립트는 워크스테이션 임시 폴더에서 돌렸다. **영향: QA 공백 · 심각도 중**.
+
+## v1.14 공개 반출 준비 중 발견한 것 (2026-09-30)
+
+- **공개본의 제안서 문체 자산이 소유자 개인 파일 경로와 이름을 싣고 있다** — `skills/proposal/prompts/voice.md` 의 제목과 「근거와 한계」 출처 줄이 소유자 이름, 홈 아래 개인 문서·노트의 절대 경로와 파일 제목, sha256 을 적고 있고 `skills/proposal/scripts/proposal_prompts.py` 의 출처 주석도 개인 절대 경로다. 두 파일은 공개 반출 제외 원장에 없어 이미 공개본에 실려 있다(「개인화 코드 금지 규칙」의 개인 경로·이름). 이번 사이클은 `skills/proposal/SKILL.md`·`docs/features.md` 의 평가 점수·기준값 표현만 걷었다 → 출처 줄을 경로 없는 서술(문서 종류와 해시만)로 바꾸고(프롬프트 자산이므로 버전 규칙 확인), 공개 대상 트리에서 홈 절대 경로를 찾는 검사를 공개 반출 테스트에 둘지 정한다. **영향: 공개 이력에 이미 남아 되돌릴 수 없고 노출 범위는 경로·파일 제목·이름이다(자격증명·문서 본문 아님) · 심각도 낮음**.

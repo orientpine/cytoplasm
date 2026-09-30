@@ -1,7 +1,7 @@
 ---
 name: proposal
 description: "개인 제안서 워크스페이스에서 섹션 Kanban·초안·인간 기여분·취합·Codex 최종 검토를 안전하게 관리한다. W5-4."
-version: 2.3.1
+version: 2.3.3
 author: autophagy-agents
 license: MIT
 metadata:
@@ -47,7 +47,7 @@ prerequisites:
 | --- | --- | --- | --- |
 | research | 주제·브리프 요청 | `inputs/RESEARCH_BRIEF.md`, `inputs/SYNTHESIS.md` | 웹 수집 허용 구간. `## Verified Claims` 행마다 출처 URL 필수 |
 | corpus | `inputs/SYNTHESIS.md`, `inputs/PLAN.md` | `corpus/*.md`, `corpus/plan-brief.md` | 엔진 `corpus-lint` 통과 필수, exit 3이면 차단. PLAN.md 는 render 경로 가드 통과 필수 |
-| images | corpus, 도해 지시 | `images/*.png`, `figures.json` | 프롬프트에 `no text, no labels, no numerals`, 캡션은 `그림 N. …`. 렌더 시 그림은 문단 중앙 정렬로 최대 142.9mm(엔진 캡 40,500 HWPUNIT)까지 표시된다. 전송기는 `PROPOSAL_IMAGE_TRANSPORT=fake\|live\|codex`이며, `codex`는 Codex CLI OAuth 세션의 내장 `image_gen`으로 생성하므로 OpenAI API 키가 필요 없다. 지출 원장은 전송기별 청구 주체를 기록해 `live`는 `openai-api` USD를 예약하고, `codex`는 `chatgpt-subscription` 건수·USD 0으로 기록하며 `openai-api`만 `PROPOSAL_IMAGE_MONTHLY_CAP_USD`에 센다 |
+| images | corpus, 도해 지시 | `images/*.png`, `figures.json` | 프롬프트에 `no text, no labels, no numerals`. `figures.json` 캡션은 **번호 없는 설명만** 쓴다 — 렌더러가 `그림 N. `을 붙이고, 이미 붙어 오면 걷어 낸다. 렌더 시 그림은 글자처럼 취급되는 한 줄로 문단 중앙 정렬, 최대 142.9mm(엔진 캡 40,500 HWPUNIT)까지 표시되고 캡션은 그 바로 다음 문단이다. 쪽 끝에 들어가지 않는 그림은 다음 쪽으로 넘어가 앞 쪽 하단이 빌 수 있다(본문을 덮는 것보다 낫다는 2026-09-30 결정). 전송기는 `PROPOSAL_IMAGE_TRANSPORT=fake\|live\|codex`이며, `codex`는 Codex CLI OAuth 세션의 내장 `image_gen`으로 생성하므로 OpenAI API 키가 필요 없다. 지출 원장은 전송기별 청구 주체를 기록해 `live`는 `openai-api` USD를 예약하고, `codex`는 `chatgpt-subscription` 건수·USD 0으로 기록하며 `openai-api`만 `PROPOSAL_IMAGE_MONTHLY_CAP_USD`에 센다 |
 | draft | corpus (+`figures.json`) | `out/drafts.json`(+`.planspec.json`, `.pms.json`) | `proposal_cli.py compose` 뒤 `figures` 로 그림 자리 배치 — 엔진 planner·writer·critic·reviser를 Hermes Codex OAuth로 live 실행. 이전 윤문 산출물은 낡으므로 지운다. 끝난 호출은 `out/.llm-resume-cache.json` 에 남아 중단 뒤 재실행이 이어서 끝낸다 |
 | refine | `out/drafts.json` | 변경 시 `out/drafts.refined.json`, 항상 `out/refine-report.json` | 공용 Hermes 경로(계정 설정의 주 모델·폴백) 윤문 — 규칙은 im-not-ai humanize-korean quick-rules, markdown 단계, **렌더 이전**. 결정론 전처리로 그림-주어 문장(`[[FIG:x]]은 …를 나타낸다`)을 주장+괄호 인용(`…를 개발한다 ([[FIG:x]]).`)으로 재작성하고 건수를 `figure_citation_recasts`에 기록. 무변경·호스트 불가 시 refined 파일을 만들지 않고 사유 기록 |
 | render | `out/drafts.refined.json` | `out/proposal.hwpx`, `out/proposal.hwpx.traceability.md` | 엔진 `render`, `--profile 30-page\|10-page`. 근거 추적성(Coverage)은 본문이 아니라 사이드카 md 로만 나간다. `tables.json`에 `kind: "gantt"` 표(행: `[연차, 꼭지, 시작월, 종료월]`, 월은 연차 안 1..12)가 있으면 추진 내용 표를 전 연차로 채운다 — 연차마다 꼭지 정확히 8개, 마지막 연차 종료 전까지 비는 달이 없어야 하며 위반은 렌더 중단 |
@@ -70,6 +70,7 @@ python3 $CLI figures --slug <slug> --json                                 # 그�
 python3 $CLI images  --slug <slug> --json                                 # 그림은 이 명령만 만든다
 python3 $CLI refine  --slug <slug> --json
 python3 $CLI render  --slug <slug> --profile 10-page --json
+#   out/proposal.hwpx.quality.json 의 findings 가 빌 때까지 아래 「평가 감점 점검」대로 고치고 다시 render 한다
 python3 $CLI visual-review --slug <slug> --json                           # 모든 쪽 PNG 를 직접 연다
 python3 $CLI publish --slug <slug> --version <vNNNNNN> --json
 ```
@@ -83,9 +84,25 @@ python3 $CLI publish --slug <slug> --version <vNNNNNN> --json
   v000011 이 좋았던 이유는 코퍼스에 소유자가 정리한 계획 문서(KPI·일정·기술 내용 각 2~4KB)가 있었기 때문이다.
   `corpus` 가 PLAN.md 를 `corpus/plan-brief.md`(public)로 싣는다. KPI 는 한 줄에 하나,
   `<지표>; baseline: 6%; target: 3%; unit: %; weight: 40%; method: …; env: …으로 설정한다` 형식이고 가중치 합은 100,
+  `method` 에는 **반복 시험 횟수와 산정식**을 함께 쓴다(예: `method: 지형 3종 × 각 30회 시행, 성공률 = 완주 사이클 수 ÷ 전체
+  시행 수 × 100`). baseline 은 한 값만 둔다 — 원자료의 소수 자리 값을 따로 적으면 본문이 기준값 둘을 병기한다.
   일정은 `전체 연구 일정은 1-24개월이며, 1-6개월 …, 7-12개월 …` 처럼 월 구간으로 쓴다. 수치는 소유자 확인 전까지 가안으로
   보고하고, 비공개 노트 표지(`obsidian:` 등)가 있으면 render 경로 가드가 거부한다. 없으면 `compose` 가
   `No public KPI evidence … add KPI lines to inputs/PLAN.md` 로 멈춘다.
+- **평가 감점 점검(소유자 평가에서 짚인 감점 사유)**: `render` 는 최종 본문·계획·표지를 결정적으로 읽어
+  `out/proposal.hwpx.quality.json` 에 감점 사유를 남기고 `{"event": "rubric_findings", "count": N}` 을 찍는다.
+  N 이 0 이 아니면 발행하지 말고 코드별로 고친다 — 문구를 손으로 고치는 것이 아니라 입력을 고쳐 다시 만든다.
+  - `KPI_VALUE_DRIFT`(논리적 일관성): 한 지표에 기준값이 둘이다 → PLAN.md 의 baseline 을 하나로 정하고 그 밖의 원자료
+    값을 지운 뒤 `compose`.
+  - `KPI_PROTOCOL_MISSING`(구체성): 반복 시험 횟수·산정식이 없다 → PLAN.md 해당 KPI 의 `method` 에 채우고 `compose`.
+    부수 지표(예: 에너지 절감)도 측정·계산 절차를 PLAN.md 기술 내용에 적는다.
+  - `KPI_RESTATED`·`NUMBER_RESTATED`·`SCHEDULE_RESTATED`(간결성): 같은 목표·수치·월 구간이 여러 절이나 표지와 요약에
+    되풀이된다 → 표지 칸(`cover.json` 의 최종목표·연차목표·기대효과)이 요약 본문과 같은 목록을 싣지 않게 줄이고,
+    본문이 되풀이하면 `compose` 를 다시 돌린다(작성기는 KPI 수치를 요약 1번·2절에만 쓰라는 지시를 받는다).
+  - `TERM_VARIANT`(단어 적절성): 비표준 외래어 표기 — 렌더가 생성 본문·성과지표·키워드·표지를 표준 표기로 바꾸므로
+    남는 것은 근거를 글자 그대로 인용한 구절뿐이다. PLAN.md·SYNTHESIS.md 의 표기를 고쳐 `corpus`·`compose` 를 다시 돌린다.
+    그림 캡션(`figures.json`)과 `tables.json` 은 이 검사 밖이니 같은 표기로 직접 맞춘다.
+  성과지표 표의 머리행은 렌더가 `성과지표 | 현 수준 → 목표 (가중치) | 측정 방법 · 시험 환경 · 설정 근거` 로 쓴다.
 - `render` 는 `images` 가 만들지 않은 그림(레코드에 `model` 출처 없음)을 `UNGENERATED-FIGURES`(exit 5)로 거부한다.
   `--allow-missing-figures` 는 draft preview 로만 렌더하고 `publish` 는 draft preview 를 받지 않는다.
 - `images`(codex 전송기)만 노드 agent 의 **Codex CLI 로그인**(`codex login`, `~/.codex/auth.json`)이 필요하다.
@@ -190,8 +207,13 @@ python3 /srv/autophagy-skills/live/proposal/scripts/proposal_cli.py visual-revie
 시인성이나 가독성을 평가할 때는 XML 수치·문단 길이·쪽수만으로 완료를 주장하지 않는다.
 `visual-review --json`이 돌려준 `pages`를 전부 직접 열어 제목 고립, 그림만 있는 쪽, 표 머리글
 고립, 과도한 공백, 본문·그림 밀도 편차를 확인한다. 이 미리보기는 양식 판형·글꼴·들여쓰기·표·
-그림 크기·캡션·떠있는 그림의 후속 본문 채우기를 재현하는 QA 표면이며, 한/글 정밀 렌더러나
-제출용 PDF를 대신하지 않는다.
+그림 크기·캡션을 재현하는 QA 표면이며, 한/글 정밀 렌더러나 제출용 PDF를 대신하지 않는다.
+이 미리보기는 브라우저 조판이라 그림·캡션이 본문과 겹치는지는 보여 주지 못한다 — 겹침은 한/글이나
+rhwp(VS Code 한글 확장)에서만 드러난다.
+
+배포된 스킬 파일(`/srv/autophagy-skills/live/proposal/…`)은 root 소유 읽기 전용이다. 이 문서나
+엔진이 실제 동작과 다르다는 것을 알게 되면 그 파일을 고치려 하지 말고(Permission denied 로
+거부된다) 소유자에게 무엇이 어긋났는지 보고한다. 수정은 저장소에서 커밋·릴리스로만 반영된다.
 
 ## 지식 근거
 
