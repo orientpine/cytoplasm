@@ -25,9 +25,9 @@ from automation.interop.approval_surface import (
 )
 from automation.release_spec import ReleaseSpec
 
-_OWNER = "280680578314010625"
-_CHANNEL = "1528936606856122421"
-_MESSAGE = "1538547247514525816"
+_OWNER = "280680578404010625"
+_CHANNEL = "1528936606946122421"
+_MESSAGE = "1538547247604525816"
 _DIGEST = "d" * 64
 _APPROVE = quote("✅")
 _CANCEL = quote("⛔")

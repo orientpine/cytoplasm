@@ -33,9 +33,9 @@ from automation.interop.approval_surface import (  # noqa: E402 - direct executi
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 Call: TypeAlias = tuple[str, str]
 
-_GUILD = "1528936606856122421"
-_OWNER_DM = "1526487935975952385"
-_OWNER = "280680578314010625"
+_GUILD = "1528936606946122421"
+_OWNER_DM = "1526487936065952385"
+_OWNER = "280680578404010625"
 _SEED_PATH = Path("public/as-s2.json")
 _SEED: dict[str, JsonValue] = {
     "id": "as-s2",

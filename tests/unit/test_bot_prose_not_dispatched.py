@@ -24,7 +24,7 @@ from automation.interop import hermes_plugin
 class _Source:
     is_bot: bool
     user_id: str = "999"
-    chat_id: str = "1528936606856122421"
+    chat_id: str = "1528936606946122421"
     thread_id: str | None = None
 
 

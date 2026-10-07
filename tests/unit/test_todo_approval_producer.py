@@ -31,10 +31,10 @@ _REPO = Path(__file__).resolve().parents[2]
 _SCRIPTS = _REPO / "skills" / "todo" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 _OWNER = "owner-fixture"
-_AGENT_CHAT_CHANNEL = "1526487935975952390"
-_CHANNEL = "1526487935975952391"
+_AGENT_CHAT_CHANNEL = "1526487936065952390"
+_CHANNEL = "1526487936065952391"
 #: 이 요청 하나가 여는 스레드 — 승인 카드·리마인더·결과가 여기서 끝난다.
-_REQUEST_THREAD = "1526487935975952392"
+_REQUEST_THREAD = "1526487936065952392"
 _ORIGIN_CHANNEL = "200000000000000001"
 _ORIGIN_MESSAGE = "origin-message-1"
 _NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)

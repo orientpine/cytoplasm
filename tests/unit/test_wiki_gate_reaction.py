@@ -17,9 +17,9 @@ sys.path.insert(0, str(_SCRIPTS))
 import wiki_gate  # noqa: E402
 
 OWNER_ID = "owner-1"
-CHANNEL_ID = "1526487935975952385"
+CHANNEL_ID = "1526487936065952385"
 NOTICE_ID = "wiki-request-notice"
-AGENT_CHAT_ID = "1526487935975952400"
+AGENT_CHAT_ID = "1526487936065952400"
 MESSAGE_ID = "message-1"
 NOTE_TEXT = (
     "---\n"

@@ -21,10 +21,10 @@ sys.path.insert(0, str(_REPO / "skills" / "wiki" / "scripts"))
 import wiki_gate  # noqa: E402
 
 OWNER_ID = "owner-live-1"
-CHANNEL_ID = "1526487935975952385"
+CHANNEL_ID = "1526487936065952385"
 SLUG = "single-live"
-AGENT_CHAT_ID = "1526487935975952400"
-REQUEST_THREAD_ID = "1526487935975952401"
+AGENT_CHAT_ID = "1526487936065952400"
+REQUEST_THREAD_ID = "1526487936065952401"
 
 
 def _note(body: str) -> str:

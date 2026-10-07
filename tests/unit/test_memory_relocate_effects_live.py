@@ -418,8 +418,8 @@ def test_probe_effect_with_an_unbound_channel_is_pending_without_touching_discor
     assert result == "pending"
 
 
-AGENT_CHAT_CHANNEL_ID = "1528936606856122430"
-_REQUEST_THREAD_BASE = 1528936606856122440
+AGENT_CHAT_CHANNEL_ID = "1528936606946122430"
+_REQUEST_THREAD_BASE = 1528936606946122440
 
 
 class _ThreadOpeningDirectory:

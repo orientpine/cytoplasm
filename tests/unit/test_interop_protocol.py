@@ -156,14 +156,14 @@ def test_mask_summary_when_directory_path_present_then_masks_path() -> None:
 
 def test_mask_summary_when_secret_and_id_shapes_present_then_masks_them() -> None:
     # Given
-    raw = "deployed with token sk-abcd1234efgh and channel 1526482932175470694"
+    raw = "deployed with token sk-abcd1234efgh and channel 1526482932265470694"
 
     # When
     masked = mask_summary(raw)
 
     # Then
     assert "sk-abcd1234efgh" not in masked
-    assert "1526482932175470694" not in masked
+    assert "1526482932265470694" not in masked
 
 
 def test_mask_summary_when_email_present_then_masks_pii() -> None:

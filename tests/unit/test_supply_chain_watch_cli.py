@@ -195,7 +195,7 @@ def test_main_runs_due_reminders_through_the_existing_gate_api(
 
     class Directory:
         def skill_approvals(self) -> str:
-            return "1528936606856122421"
+            return "1528936606946122421"
 
     class Identity:
         @property
@@ -210,7 +210,7 @@ def test_main_runs_due_reminders_through_the_existing_gate_api(
     ) -> dict[str, str]:
         api_calls.append((method, path, payload))
         if method == "GET":
-            return {"guild_id": "1528936606264856737"}
+            return {"guild_id": "1528936606354856737"}
         return {"id": "sent"}
 
     class Binding:
@@ -227,7 +227,7 @@ def test_main_runs_due_reminders_through_the_existing_gate_api(
         reminder_calls.append((results, gate_dir))
         assert kwargs["decision_of"]("message") == "absent"
         assert kwargs["channel_of"]({"channel_id": "untrusted-channel"}) == "bound-channel"
-        assert kwargs["guild_of"]("channel") == "1528936606264856737"
+        assert kwargs["guild_of"]("channel") == "1528936606354856737"
         kwargs["deliver"]("channel", "body")
         return ()
 

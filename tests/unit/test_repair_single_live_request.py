@@ -15,7 +15,7 @@ from automation.repair.repair_ops_pending import (
     PostingOwnerApproval,
 )
 
-OWNER_ID = "280680578314010625"
+OWNER_ID = "280680578404010625"
 NOW = datetime(2026, 7, 26, 9, 0, tzinfo=UTC)
 TICKET = "t-repair-1"
 

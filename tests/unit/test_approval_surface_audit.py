@@ -14,7 +14,7 @@ JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dic
 
 _REPO = Path(__file__).resolve().parents[2]
 _DRIVER = _REPO / "tests" / "e2e" / "drivers" / "as_legacy_drain_probe.py"
-_GUILD = "1528936606856122421"
+_GUILD = "1528936606946122421"
 
 
 def _record(**updates: JsonValue) -> dict[str, JsonValue]:

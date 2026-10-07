@@ -158,7 +158,7 @@ def test_it_carries_the_approved_binding_so_the_pipeline_does_not_repost(tmp_pat
         json.dumps(
             {
                 "deploy_nonce": "61a5e7de02a844955827b0721690094b",
-                "message_id": "1538547247514525816",
+                "message_id": "1538547247604525816",
                 "hash": "5f" * 32,
                 "kind": "skill-deploy",
             }
@@ -174,5 +174,5 @@ def test_it_carries_the_approved_binding_so_the_pipeline_does_not_repost(tmp_pat
     )
 
     # Then
-    assert "APPROVAL_MESSAGE_ID=1538547247514525816" in result.stdout, result.stdout + result.stderr
+    assert "APPROVAL_MESSAGE_ID=1538547247604525816" in result.stdout, result.stdout + result.stderr
     assert "DEPLOY_NONCE=61a5e7de02a844955827b0721690094b" in result.stdout
