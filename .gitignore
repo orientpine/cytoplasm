@@ -42,3 +42,8 @@ node_modules/
 skills/patent-prep/**/draft.md
 tests/fixtures/patent-export/*.md
 !tests/fixtures/patent-export/synthetic_*.md
+
+# Session evidence and wave QA live in the private ops repository and are linked in by
+# automation/ops_link.sh. No trailing slash: the links are symlinks, which git treats as files.
+/.omo
+/docs/qa
