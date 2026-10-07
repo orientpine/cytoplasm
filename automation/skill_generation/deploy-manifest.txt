@@ -1,3 +1,10 @@
 # 게이트웨이 플러그인은 agent 계정 홈에서 Hermes가 직접 적재한다.
 agent|automation/skill_generation/plugin/__init__.py|.hermes/plugins/05-skill-generation/__init__.py|required
 agent|automation/skill_generation/plugin/plugin.yaml|.hermes/plugins/05-skill-generation/plugin.yaml|required
+# 플러그인 런타임 사본 — 게이트웨이가 옛 interop_runtime 으로 도는 동안 플러그인은 이 트리에서 import 한다.
+# `.hermes/skill-generation/runtime/automation/__init__.py` 는 선언하지도 놓지도 않는다: 정규 패키지가 되면 게이트웨이의 전체 automation 을 가린다.
+agent|automation/skill_generation|.hermes/skill-generation/runtime/automation/skill_generation|v2:tree;activation=gateway
+agent|automation/selfskill_audit|.hermes/skill-generation/runtime/automation/selfskill_audit|v2:tree;activation=gateway
+agent|automation/skill_review.py|.hermes/skill-generation/runtime/automation/skill_review.py|v2:file;activation=gateway
+agent|automation/skill_mount.py|.hermes/skill-generation/runtime/automation/skill_mount.py|v2:file;activation=gateway
+agent|automation/scenario_runner.py|.hermes/skill-generation/runtime/automation/scenario_runner.py|v2:file;activation=gateway

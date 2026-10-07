@@ -36,7 +36,7 @@ class DraftRecord(TypedDict):
 
 def _adapter() -> Any:
     confirm = import_module("calendar_confirm")
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = confirm._interop_runtime()
     sys.path.insert(0, str(runtime))
     try:
         from automation.interop import injection_adapter

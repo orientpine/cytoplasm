@@ -18,6 +18,10 @@ _DEPLOY_ARCHIVE_FILES: Final = re.compile(
     r'deploy_archive_stream\s+"\$repo_root"\s+"\$repo_root/[^\"]+"\s+'
     + r"(?P<files>[A-Za-z0-9_. -]+?)\s+\\\n\s*\|\s*run_agent"
 )
+_DEPLOY_TREE_FILES: Final = re.compile(
+    r'deploy_tree_swap\s+(?:--link\s+|--(?:lock|prefix)\s+\S+\s+)*"\$repo_root/[^\"]+"\s+\S+\s+'
+    + r"(?P<files>(?:[A-Za-z0-9_./-]+\.py[ \t]*)+)"
+)
 
 
 def _runtime_packages_referenced_by_automation() -> frozenset[str]:
@@ -64,7 +68,8 @@ def _deployer_file_list(source: str) -> tuple[str, ...] | None:
     deployer = _REPO / source / "deploy.sh"
     if not deployer.is_file():
         return None
-    match = _DEPLOY_ARCHIVE_FILES.search(deployer.read_text(encoding="utf-8"))
+    source_text = deployer.read_text(encoding="utf-8")
+    match = _DEPLOY_ARCHIVE_FILES.search(source_text) or _DEPLOY_TREE_FILES.search(source_text)
     if match is None:
         return None
     return tuple(match.group("files").split())

@@ -30,6 +30,22 @@ MOUNT되는 기존 4단계 게이트를 유지한다.
 TTL을 1초라도 넘기거나, 공개키 또는 부모가 agent-writable이면 gate가 fail-closed로 거부한다.
 기존 `peer_attest_mode = "discord"` 설치는 종전 bot-id·reply-reference 검증을 그대로 사용한다.
 
+### 기존 discord 설치의 전환
+
+2026-10-06에 소유자는 `#approvals`의 `[skill-attest] … verdict=PASS` 답글이 필요 없다고 판단했다.
+이 설치는 노드 쪽(peer 키·공개키·노드 설정)이 이미 signed로 준비돼 있었다. 그런데 배포를 실제로
+돌리는 릴리스 호스트의 `~/.hermes/node.toml`만 `discord`로 남아 답글이 계속 나왔다. 모드는 배포
+스크립트를 실행하는 머신의 설정이 정한다. 그래서 그 머신의 값을 `signed`로 바꾸면 전환이 끝난다.
+전환 직후 첫 실측 배포에서 peer가 `signed attestation mode requires --channel-id`로 멈췄다.
+`#approvals`를 이름으로 찾는 설치에는 `deploy_approvals_channel_id` 핀이 없는데,
+배포 스크립트는 그 핀만 읽었다(discord 모드는 peer가 길드를 스캔해 이 문제를 가렸다).
+이제는 핀이 없으면 게이트가 카드를 실제로 게시한 대기 레코드의 `channel_id`를 쓴다.
+게이트가 서명을 검증할 때도 같은 값을 쓴다.
+그 수정 뒤에도 `[skill-attest]` 답글이 한 번 더 남았다. peer는 게이트웨이용 봇 토큰을 갖고 있고,
+signed 모드는 토큰이 있으면 전환기 호환을 위해 답글도 게시했기 때문이다. 이제 peer CLI는
+signed 모드에서 Discord에 쓰지 않는다. 게이트는 이 모드에서 서명 레코드만 읽는다.
+절차와 되돌리는 방법은 [install.md §3.1](../guide/install.md#31-기존-discord-설치를-signed로-옮기기)에 있다.
+
 ## 관련
 
 - 계약·검증: `automation/peer_attestation.py`, `automation/peer_signed_attestation.py`

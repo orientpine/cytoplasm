@@ -43,6 +43,9 @@ def _stub_ssh(tmp_path: Path) -> tuple[Path, Path, Path]:
         '  exit 0\n'
         "fi\n"
         'if [[ "$cmd" == *"--format actions"* ]]; then\n'
+        '  if [[ -n "${FAKE_ACTIONS_FILE:-}" ]]; then\n'
+        '    cat "$FAKE_ACTIONS_FILE"; exit "${FAKE_ACTIONS_RC:-1}"\n'
+        '  fi\n'
         '  if [[ -n "${FAKE_DEPLOYED:-}" && -e "$FAKE_DEPLOYED" ]]; then\n'
         '    printf "DEPLOY-ALL: clean\\n"; exit 0\n'
         '  fi\n'
@@ -54,6 +57,10 @@ def _stub_ssh(tmp_path: Path) -> tuple[Path, Path, Path]:
         # 노드가 수렴을 거부한 사유는 리컨실러 저널에만 있다(상태 파일은 횟수만 센다).
         'if [[ "$cmd" == journalctl* ]]; then\n'
         '  printf "%s\\n" "${FAKE_CONVERGE_REFUSAL:-}"; exit 0\n'
+        "fi\n"
+        # 재시동 뒤 세대 대기 — 이 하네스의 게이트웨이는 곧바로 현재 릴리스를 등록한다(줄 없음 = 기다릴 것 없음).
+        'if [[ "$cmd" == *"--format gateways"* ]]; then\n'
+        '  exit 0\n'
         "fi\n"
         'if [[ "$cmd" == *"systemctl --user restart"* ]]; then\n'
         '  printf "active\\n"; exit 0\n'
@@ -85,6 +92,7 @@ def _run(
     converge_seconds: str = "600",
     poll_seconds: str = "0",
     refusal: str = "",
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fake_bin, calls, receipt = _stub_ssh(tmp_path)
     head = subprocess.run(
@@ -109,6 +117,7 @@ def _run(
         "DEPLOY_ALL_CONVERGE_POLL_SECONDS": poll_seconds,
         "DEPLOY_ALL_LOCK_DIR": str(tmp_path / "locks"),
         "HEALTHCHECK_NODE_CONFIG_PATH": str(_EXAMPLE_CONFIG),
+        **(extra_env or {}),
     }
     return subprocess.run(
         ("bash", str(_COMMAND), *arguments),
@@ -332,3 +341,33 @@ def test_a_silent_journal_says_so_instead_of_inventing_a_reason(tmp_path: Path) 
 
     assert result.returncode == 4
     assert "NODE-CONVERGE-REFUSED: 노드 저널에서 거부 사유를 찾지 못했다" in result.stderr
+
+
+def test_owner_lines_are_printed_but_never_executed(tmp_path: Path) -> None:
+    """`ACT|owner|` 는 릴리스가 올릴 수 없는 소유자 조치다 — 보여 주되 실행·실패 집계는 없다."""
+    marker = tmp_path / "executed"
+    trap = tmp_path / "trap.sh"
+    _ = trap.write_text(f'#!/usr/bin/env bash\n: > "{marker}"\n', encoding="utf-8")
+    trap.chmod(0o755)
+    trap_rel = os.path.relpath(trap, _REPO)
+    owner_lines = [
+        f"ACT|owner|release_helper_drift@primary: {trap_rel}",
+        f"ACT|owner|healthcheck_wrapper_current@rag: $(touch {marker})",
+    ]
+    for rc, extra in (("0", []), ("1", ["ACT|restart-gateway|agent+peer"])):
+        actions = tmp_path / f"actions-{rc}"
+        _ = actions.write_text("\n".join([*owner_lines, *extra]) + "\n", encoding="utf-8")
+        case = tmp_path / f"case-{rc}"
+        case.mkdir()
+        result = _run(
+            case,
+            "--apply",
+            extra_env={"FAKE_ACTIONS_FILE": str(actions), "FAKE_ACTIONS_RC": rc},
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert [line for line in result.stdout.splitlines() if line.startswith("ACT|owner|")] == owner_lines
+        assert not marker.exists()
+        assert (case / "receipt.json").exists()
+        calls = (case / "calls.log").read_text(encoding="utf-8")
+        assert calls.count("systemctl --user restart") == (2 if extra else 0)

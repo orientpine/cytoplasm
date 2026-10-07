@@ -97,6 +97,7 @@ def fetch_snapshot() -> dict[str, object]:
         capture_output=True,
         text=True,
         timeout=90,
+        env=dict(os.environ),
     )
     if result.returncode != 0:
         raise RuntimeError(f"spend fetch failed rc={result.returncode}: {redact(result.stderr.strip())[:200]}")

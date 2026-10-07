@@ -58,10 +58,22 @@ _STEPS: Final[Mapping[str, tuple[str, ...]]] = {
     "speech-to-text": (
         "whisper.cpp 를 빌드하고 모델을 받은 뒤 {home}/.env.secrets 에 SPEECHTOTEXT_WHISPER_BIN · SPEECHTOTEXT_WHISPER_MODEL 을 실제 경로로 적는다(skills/speechtotext/SKILL.md)",
     ),
+    "agent-chat-free-response": (
+        "게이트웨이를 재시동하면 시작 단계가 interop config 의 agent_chat_channel_id 를 {home}/.hermes/config.yaml 의 discord.free_response_channels 에 자동으로 더한다(agent·peer 함께 재시동)",
+        "지금 바로 더하려면: sudo -u {account} -H env PYTHONPATH={home}/.hermes/autophagy-import python3 -m automation.interop.free_response --apply 뒤 게이트웨이 재시동",
+        "ignored_channels 에 든 채널은 일부러 막은 것이라 더하지 않는다 — 풀려면 그 목록에서 먼저 뺀다",
+    ),
     "scheduled-jobs": (
         "실패 문구: sudo -u {account} -H {home}/.local/bin/hermes cron list --all",
         "원인 재현: sudo -u {account} -H python3 {home}/.hermes/scripts/<스크립트>",
+        "주 모델 변경 뒤 건너뜀(drift_skip)이면 모델을 고정하지 말고 같은 정의로 다시 만든다: configs/routing-policy.md 「Changing the main model」",
         "고치면 다음 실행에서 통과로 바뀌고, doctor 알람이 해결을 알린다",
+    ),
+    "cron-required-env": (
+        "빠진 이름마다 {home}/.hermes/.env(0600, 소유자 {account}) 에 <이름>=<값> 한 줄을 둔다 — 값은 소유자가 정하고 채팅에 붙여넣지 않는다",
+        "Hermes 가 no-agent 작업 직전에 그 파일을 다시 읽으므로 게이트웨이 재시동은 필요 없다",
+        "값의 뜻은 그 작업의 가이드가 정한다(예: COST_REPORT_SOFT_CAP = 월 누적 지출 경보 기준 USD, docs/guide/cost-report.md)",
+        "무엇을 요구하는지의 정본: 각 배포기 옆 deploy-manifest.txt 의 v2:cron 행 env= 값",
     ),
 }
 

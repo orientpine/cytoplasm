@@ -14,9 +14,16 @@ from typing import Protocol, TypedDict
 
 import pytest
 
+from tests.unit.cron_fixture import JOB_ID, HELPER, declared_cron, listing, listing_only_hermes
+
 REPO = Path(__file__).resolve().parents[2]
 PLUGIN = ".hermes/plugins/00-meeting-gate/__init__.py"
 SOURCE = "skills/meeting/plugin/__init__.py"
+_CRON = declared_cron("skills/meeting")
+_LISTED = listing(_CRON).split("\n")
+_NAME_AT = next(i for i, line in enumerate(_LISTED) if line.startswith("    Name:"))
+_CRON_STDOUT = (f"CRON-CONVERGE-OK name={_CRON.destination} action=unchanged id={JOB_ID}\n"
+                + "\n".join(_LISTED[_NAME_AT:_NAME_AT + 7]) + "\n")  # deploy.sh: grep -A6 <name>
 
 
 class _Location(TypedDict):
@@ -53,9 +60,10 @@ def deployment(tmp_path: Path) -> Deployment:
     for directory in (repo, home, bin_dir, shim):
         directory.mkdir()
     paths = [
-        "skills/meeting/deploy.sh", SOURCE, "skills/meeting/plugin/plugin.yaml",
+        "skills/meeting/deploy.sh", "skills/meeting/deploy-manifest.txt", SOURCE,
+        "skills/meeting/plugin/plugin.yaml",
         "skills/meeting/scripts/meeting_pending_transcript_watch.py",
-        "automation/deploy_push.sh", "automation/deploy_provenance.sh",
+        "automation/deploy_push.sh", "automation/deploy_provenance.sh", HELPER,
         "automation/node_config_sh.py", "automation/node_config.py",
         "configs/node.example.toml",
     ]
@@ -122,7 +130,7 @@ printf '%s\\n' "$2" >> "$HOME/commands.log"
 if [[ "${FAIL_SSH:-}" == 1 ]]; then echo FAKE-SSH-FAIL >&2; exit 42; fi
 sudo() {
   [[ "$1 $2 $3 $4 $5 $6" == "-n -u agent -H bash -lc" ]]
-  if [[ "${DROP_PLUGIN:-}" == 1 && "$7" == *'cat > "$HOME/.hermes/plugins/00-meeting-gate/__init__.py"'* ]]; then
+  if [[ "${DROP_PLUGIN:-}" == 1 && "$7" == *'00-meeting-gate/__init__.py'*'cat > "$tmp"'* ]]; then
     cat >/dev/null; return 0
   fi
   bash -c "$7"
@@ -130,10 +138,10 @@ sudo() {
 export -f sudo
 bash -c "$2"
 ''')
-    _ = (bin_dir / "hermes").write_text('''#!/usr/bin/env bash
-if [[ "${FAIL_CRON:-}" == 1 ]]; then echo FAKE-CRON-FAIL >&2; exit 43; fi
-printf 'Name: meeting-pending-transcript-watch\\n'
-''')
+    _ = (bin_dir / "hermes").write_text(listing_only_hermes(
+        declared_cron("skills/meeting"),
+        prelude='if [[ "${FAIL_CRON:-}" == 1 ]]; then echo FAKE-CRON-FAIL >&2; exit 43; fi\n',
+    ))
     for executable in bin_dir.iterdir():
         executable.chmod(0o755)
 
@@ -163,7 +171,7 @@ def test_changed_plugin_reaches_owner_channel_once(deployment: Deployment, initi
     assert result.returncode == 0, result.stderr
     assert "PLUGIN-CHANGED:" in result.stderr
     assert "[deploy-provenance] OK:" in result.stderr
-    assert result.stdout == "Name: meeting-pending-transcript-watch\n"
+    assert result.stdout == _CRON_STDOUT
     messages = [event["message"] for event in events if "message" in event]
     assert len(messages) == 1, result.stderr
     after = hashlib.sha256((repo / SOURCE).read_bytes()).hexdigest()
@@ -210,12 +218,12 @@ def test_notice_failure_is_loud_without_changing_deploy_result(
     assert result.returncode == 0, result.stderr
     assert marker in result.stderr
     assert "PLUGIN-NOTICE-FAIL:" in result.stderr
-    assert result.stdout == "Name: meeting-pending-transcript-watch\n"
+    assert result.stdout == _CRON_STDOUT
 
 
 @pytest.mark.parametrize("failure,code,marker", [
     ({"DROP_PLUGIN": "1"}, 5, "DEPLOY-BLOCK:"),
-    ({"FAIL_SSH": "1"}, 42, "FAKE-SSH-FAIL"),
+    ({"FAIL_SSH": "1"}, 5, "FAKE-SSH-FAIL"),
 ])
 def test_deploy_error_prevents_notice(
     deployment: Deployment, failure: dict[str, str], code: int, marker: str,
@@ -248,5 +256,5 @@ def test_missing_credentials_are_loud_without_sending(deployment: Deployment) ->
 def test_later_cron_error_is_preserved_after_notice(deployment: Deployment) -> None:
     run, _, _, _ = deployment
     result, events = run(FAIL_CRON="1")
-    assert result.returncode == 43 and "FAKE-CRON-FAIL" in result.stderr
+    assert result.returncode == 4 and "FAKE-CRON-FAIL" in result.stderr
     assert len([event for event in events if "channel" in event]) == 1

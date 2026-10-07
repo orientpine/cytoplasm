@@ -111,8 +111,18 @@ def delete_message(message_id: str, channel_id: str) -> None:
     _api("DELETE", f"/channels/{channel_id}/messages/{message_id}")
 
 
+def _interop_runtime() -> Path:
+    configured = os.environ.get("INTEROP_RUNTIME")
+    if configured:
+        return Path(configured).expanduser()
+    root = Path("~/.hermes/autophagy-import").expanduser()
+    if (root / "automation" / "interop").is_dir():
+        return root
+    return Path("~/.hermes/interop_runtime").expanduser()
+
+
 def _dm_transport(channel_id: str):
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     from automation.interop.discord_transport import DiscordTransport  # noqa: PLC0415
 
@@ -137,7 +147,7 @@ def dm_owner(content: str) -> str:
 
 
 def _origin_notice():
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     from automation.interop import origin_notice  # noqa: PLC0415
 
@@ -222,7 +232,7 @@ def confirm_via_reaction(draft: dict) -> str:
 
 
 def _adapter() -> object:
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     try:
         from automation.interop import injection_adapter

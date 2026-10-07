@@ -60,7 +60,8 @@ deploy_provenance_check "$repo_root" \
   "$repo_root/skills/mail/scripts/mailon_vendor_digest.sh" \
   "$repo_root/skills/mail/scripts/mailon_runtime_drift.sh" \
   "$repo_root/skills/mail/vendor/mailon" \
-  "$repo_root/skills/mail/vendor/requirements.txt" || exit 4
+  "$repo_root/skills/mail/vendor/requirements.txt" \
+  "$repo_root/skills/mail/deploy.sh" "$repo_root/skills/mail/deploy-manifest.txt" || exit 4
 
 # The streak helper both watchers import. It ships first: a wrapper that lands without
 # it still runs (ImportError fallback), but it would keep the old per-tick behaviour.
@@ -95,15 +96,16 @@ push_file "$repo_root/skills/mail/scripts/mail_triage_watch.py" \
 # streak threshold the watcher speaks once when an incident opens and once when it
 # closes, so the delivery target can finally be one that reaches somebody. Measured
 # 2026-08-18: 111 consecutive failures under --deliver local reached nobody at all.
-run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-triage-watch\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --deliver discord --no-agent --script mail_triage_watch.py; else hermes cron create "*/10 * * * *" --name mail-triage-watch --no-agent --script mail_triage_watch.py --deliver discord; fi'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list --all | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-triage-watch\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "*/2 * * * *" --deliver discord --no-agent --script mail_triage_watch.py; else hermes cron create "*/2 * * * *" --name mail-triage-watch --no-agent --script mail_triage_watch.py --deliver discord; fi'
 # Register (or converge) the daily digest cron. --deliver discord routes the
 # no-agent script's stdout to the owner DM, so a failure marker line + exit 1
 # actually reaches cha (the 2026-07-31 incident vanished under --deliver local,
 # which has 0 delivery targets). An already-registered job is converged in
 # place with `edit` (preserving its job id/history); otherwise it is created.
-run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-daily-digest\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --deliver discord --no-agent --script mail_digest_watch.py; else hermes cron create "0 8 * * *" --name mail-daily-digest --no-agent --script mail_digest_watch.py --deliver discord; fi'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-attachment-drive-watch\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --deliver discord --no-agent --script mail_attachment_drive_watch.py; else hermes cron create "*/30 * * * *" --name mail-attachment-drive-watch --no-agent --script mail_attachment_drive_watch.py --deliver discord; fi'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list --all | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-daily-digest\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "0 8 * * *" --deliver discord --no-agent --script mail_digest_watch.py; else hermes cron create "0 8 * * *" --name mail-daily-digest --no-agent --script mail_digest_watch.py --deliver discord; fi'
+source "$repo_root/automation/deploy_cron.sh"
+converge_cron mail-attachment-drive-watch "every 30m" mail_attachment_drive_watch.py discord
+run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all'
 
 # Build + activate the vendored mailon runtime release on the node.
 deploy_vendor_mailon

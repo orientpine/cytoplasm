@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.cron_fixture import HELPER, create_args, declared_cron
+
 REPO = Path(__file__).resolve().parents[2]
 PACKAGE = REPO / "automation/stt_eval"
 
@@ -56,6 +58,8 @@ def deploy_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     (package / "cron").mkdir(parents=True)
     _ = shutil.copyfile(PACKAGE / "deploy.sh", package / "deploy.sh")
     _ = shutil.copyfile(PACKAGE / "cron/stt_eval_capture_watch.py", package / "cron/stt_eval_capture_watch.py")
+    _ = shutil.copyfile(REPO / HELPER, repo / HELPER)
+    _ = shutil.copyfile(REPO / "automation/deploy_push.sh", repo / "automation/deploy_push.sh")
     _ = (repo / "automation/node_config_sh.py").write_text("print('NODE_AGENT_ACCOUNT=fixture-agent; NODE_PEER_ACCOUNT=fixture-peer; NODE_DEPLOY_SSH_HOST=fixture-host')\n")
     _ = (repo / "automation/deploy_provenance.sh").write_text('deploy_provenance_check() { printf "%s\\n" "$@" >> "$HOME/provenance-receipt"; return "${FIXTURE_GUARD_RC:-0}"; }\n')
     home = tmp_path / "home"
@@ -76,11 +80,16 @@ def deploy_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "state = Path(os.environ['HOME'], 'cron-receipt.json')\n"
         "args = sys.argv[1:]\n"
         "if args == ['cron', 'list', '--all']:\n"
-        "    print('Name: stt-eval-capture' if state.exists() else '')\n"
+        "    print(state.with_suffix('.listing').read_text() if state.exists() else 'No scheduled jobs.\\n', end='')\n"
         "else:\n"
         "    assert args[:2] == ['cron', 'create']\n"
         "    assert not state.exists()\n"
         "    state.write_text(json.dumps(args))\n"
+        "    opt = lambda key: args[args.index(key) + 1]\n"
+        "    state.with_suffix('.listing').write_text(\n"
+        "        '\\n Scheduled Jobs\\n\\n  0123456789ab [active]\\n    Name:      ' + opt('--name') + '\\n    Schedule:  ' + args[2]\n"
+        "        + '\\n    Deliver:   ' + opt('--deliver') + '\\n    Script:    ' + opt('--script')\n"
+        "        + '\\n    Mode:      no-agent (script stdout delivered directly)\\n\\n')\n"
     ))
     return package / "deploy.sh", {**os.environ, "HOME": str(home), "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"], "DEPLOY_SSH_HOST": "fixture-host"}
 
@@ -91,9 +100,7 @@ def test_deploy_registers_once_and_preserves_provenance_guard(tmp_path: Path) ->
         result = subprocess.run(["bash", str(script)], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30, check=False)
         assert result.returncode == 0, result.stderr
     home = Path(env["HOME"])
-    assert json.loads((home / "cron-receipt.json").read_text()) == [
-        "cron", "create", "40 3 * * *", "--name", "stt-eval-capture", "--no-agent", "--script", "stt_eval_capture_watch.py", "--deliver", "local",
-    ]
+    assert json.loads((home / "cron-receipt.json").read_text()) == create_args(declared_cron("automation/stt_eval"))
     target = home / ".hermes/scripts/stt_eval_capture_watch.py"
     assert target.read_bytes() == (PACKAGE / "cron/stt_eval_capture_watch.py").read_bytes()
     assert stat.S_IMODE(target.stat().st_mode) == 0o600

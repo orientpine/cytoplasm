@@ -14,6 +14,7 @@ import pytest
 from automation.interop.approval_lease import FileKeyLease
 from automation.interop.approval_surface import ChannelFacts
 from automation.interop.external_effect_gate import ApprovalContext
+from tests.unit.cron_fixture import HELPER_SOURCE, converge_call, declared_cron
 
 if TYPE_CHECKING:
     from todo_approval_model import TodoApprovalRecord
@@ -330,8 +331,8 @@ def test_deploy_installs_unique_no_agent_watcher_behind_provenance_guard() -> No
     assert "deploy_provenance_check" in text
     assert "push_file" in text
     assert ".hermes/scripts/todo_confirm_reaction_watch.py" in text
-    assert "hermes cron create" in text
-    assert "--no-agent" in text
+    assert converge_call(declared_cron("skills/todo")) in text and HELPER_SOURCE in text
+    assert declared_cron("skills/todo").attr("mode") == "no-agent"
 
 
 def test_approval_record_carries_the_execution_parameters(tmp_path: Path) -> None:

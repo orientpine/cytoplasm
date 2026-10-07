@@ -146,6 +146,22 @@ def test_an_explicit_environment_value_wins_over_the_file(tmp_path: Path) -> Non
     assert [row for row in rows if "report-hub" in row]
 
 
+def test_the_dashboard_url_comes_from_the_declaration_file_when_the_environment_is_silent(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "healthcheck.env"
+    _ = env_file.write_text(
+        'HEALTHCHECK_SERVICES="core report-hub"\nHEALTHCHECK_REPORT_HUB_DASHBOARD_URL="http://192.0.2.7:8800/"\n',
+        encoding="utf-8",
+    )
+
+    result = _live_checks(env_file, services=None)
+
+    assert result.returncode == 0, result.stderr
+    auth = [line for line in result.stdout.splitlines() if "dashboard auth" in line]
+    assert len(auth) == 1 and auth[0].endswith("|http://192.0.2.7:8800/")
+
+
 def test_a_missing_file_keeps_every_probe() -> None:
     result = _live_checks(None, services=None)
 

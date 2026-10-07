@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -458,6 +459,242 @@ class TestSweep:
         # Then: 완결기는 통지 때문에 죽지 않는다
         assert exit_code == 0
         assert "RELEASE-APPLIED-SWEEP-FAIL FileNotFoundError" in capsys.readouterr().out
+
+
+_PENDING_RECEIPT = {
+    "version": 2,
+    "release_sha": "",
+    "held": [
+        {"account": "agent", "destination": "plugins/interop/a.py", "reason": "roster-required"},
+        {"account": "peer", "destination": "plugins/interop/b.py", "reason": "roster-required"},
+    ],
+    "pending_owner_actions": [
+        {
+            "probe": "release_helper_drift",
+            "node": "primary",
+            "check": "primary privileged release helpers match release",
+            "status": "FAIL",
+            "guidance": [
+                "re-run the provisioner on the node: "
+                "sudo bash <release>/automation/provision-deploy-converge.sh"
+            ],
+        }
+    ],
+    "pending_unknown": True,
+}
+
+
+def test_notice_carries_pending_owner_actions(
+    sweep_env: Path, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: 적용된 릴리스의 v2 영수증이 보류 2건·위임 프로브 FAIL 1건·확인 불가를 말한다
+    head = _head(repo)
+    _complete(sweep_env, head)
+    receipt = {**_PENDING_RECEIPT, "release_sha": head}
+    monkeypatch.setenv("PROBE_OUT", f"/srv/autophagy-agent-releases/{head}\n{json.dumps(receipt)}\n")
+    argv_log = tmp_path / "send-argv"
+    stub = _stub(tmp_path / "argv-stub", '#!/usr/bin/env bash\nprintf \'%s\\0\' "$@" > "$ARGV_LOG"\n')
+    monkeypatch.setenv("ARGV_LOG", str(argv_log))
+    monkeypatch.setenv("RELEASE_APPROVAL_CMD", f"bash {stub}")
+
+    # When: 워크스테이션 스윕이 노드의 send 를 부르고, 그 인자 그대로 노드가 보낸다
+    assert _sweep(sweep_env, repo) == 0
+    argv = argv_log.read_text(encoding="utf-8").split("\0")[:-1]
+    assert argv[:5] == ["send", "--version", "v1.2.4", "--head", head]
+    store = tmp_path / "releases" / head
+    store.mkdir(parents=True)
+    (tmp_path / "current").symlink_to(store)
+    monkeypatch.setenv("NODE_RELEASE_CURRENT", str(tmp_path / "current"))
+    sent: list[str] = []
+    monkeypatch.setattr(
+        owner_notice, "notify_owner", lambda notice, *, message=None: sent.append(message.fact if message else notice) or True
+    )
+    assert release_applied_notice.main(argv) == 0
+
+    # Then: 사실 줄에 프로브 자신의 안내·묶인 보류·확인 불가가 실린다
+    assert len(sent) == 1
+    fact = sent[0]
+    assert fact.startswith(f"릴리스 v1.2.4 가 적용되었습니다. (HEAD {head[:12]})")
+    assert "sudo bash <release>/automation/provision-deploy-converge.sh" in fact
+    assert "python3 -m automation.group_roster init-local" in fact
+    assert "2건" in fact
+    assert "확인 불가" in fact
+
+
+def _rendered_sends(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    from automation.interop.owner_message import OwnerMessage, Ref, render
+
+    bodies: list[str] = []
+
+    def capture(content: str, *, message: OwnerMessage | None = None) -> bool:
+        assert message is not None
+        bodies.append(render(message, destination=Ref(scope="channel", channel_id="1500000000000000002")))
+        return True
+
+    monkeypatch.setattr(owner_notice, "notify_owner", capture)
+    return bodies
+
+
+def _node_pointer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = tmp_path / "releases" / _SHA
+    store.mkdir(parents=True)
+    (tmp_path / "current").symlink_to(store)
+    monkeypatch.setenv("NODE_RELEASE_CURRENT", str(tmp_path / "current"))
+
+
+def test_new_notices_render_each_pending_item_on_its_own_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _node_pointer(tmp_path, monkeypatch)
+    bodies = _rendered_sends(monkeypatch)
+    pending = ["남은 소유자 조치:", "- 조치 필요 — c (p · n)", "  · run the provisioner", "- 보류 2건 — r"]
+
+    assert release_applied_notice.main(
+        ["send", "--version", "v1.2.4", "--head", _SHA, "--pending", json.dumps(pending)]
+    ) == 0
+
+    assert len(bodies) == 1
+    rendered = bodies[0].splitlines()
+    for line in pending:
+        assert any(row.endswith(line) for row in rendered), line
+
+
+def test_a_long_pending_list_is_split_on_line_boundaries_without_losing_an_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from automation import deploy_receipt
+    from automation.interop.chunker import DISCORD_MESSAGE_LIMIT
+
+    _node_pointer(tmp_path, monkeypatch)
+    bodies = _rendered_sends(monkeypatch)
+    actions = [
+        {"probe": "release_helper_drift", "node": "primary", "check": f"C{index}" + "c" * 298,
+         "status": "FAIL", "guidance": [f"G{index}" + "g" * 298]}
+        for index in range(12)
+    ]
+    pending = deploy_receipt.pending_lines(
+        {"version": 2, "pending_owner_actions": actions, "pending_unknown": False, "held": []}
+    )
+
+    assert release_applied_notice.main(
+        ["send", "--version", "v1.2.4", "--head", _SHA, "--pending", json.dumps(list(pending))]
+    ) == 0
+
+    assert len(bodies) > 1
+    assert all(len(body) <= DISCORD_MESSAGE_LIMIT for body in bodies)
+    delivered = [row for body in bodies for row in body.splitlines()]
+    positions = [next(i for i, row in enumerate(delivered) if row.endswith(line)) for line in pending[1:]]
+    assert positions == sorted(positions)
+
+
+def test_a_header_less_pending_list_keeps_every_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """머리글은 그것이 머리글일 때만 버린다 — 첫 항목을 머리글로 오인해 잃지 않는다."""
+    _node_pointer(tmp_path, monkeypatch)
+    bodies = _rendered_sends(monkeypatch)
+    pending = ["- 보류 1건 — first-item", "- 보류 2건 — second-item"]
+
+    assert release_applied_notice.main(
+        ["send", "--version", "v1.2.4", "--head", _SHA, "--pending", json.dumps(pending)]
+    ) == 0
+
+    rendered = "\n".join(bodies)
+    assert "first-item" in rendered
+    assert "second-item" in rendered
+
+
+def _split_actions() -> list[dict[str, object]]:
+    return [
+        {"probe": "release_helper_drift", "node": "primary", "check": f"C{index}" + "c" * 298,
+         "status": "FAIL", "guidance": [f"G{index}" + "g" * 298]}
+        for index in range(6)
+    ]
+
+
+def _split_pending() -> list[str]:
+    from automation import deploy_receipt
+
+    return list(deploy_receipt.pending_lines(
+        {"version": 2, "pending_owner_actions": _split_actions(), "pending_unknown": False, "held": []}
+    ))
+
+
+def test_a_failed_piece_stops_the_split_send_with_rc_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """조각 2 가 실패하면 3 이후는 보내지 않는다 — 다음 틱의 중복을 늘리지 않는다."""
+    _node_pointer(tmp_path, monkeypatch)
+    attempts: list[str] = []
+
+    def flaky(content: str, *, message: object = None) -> bool:
+        attempts.append(content)
+        return len(attempts) != 2
+
+    monkeypatch.setattr(owner_notice, "notify_owner", flaky)
+
+    assert release_applied_notice.main(
+        ["send", "--version", "v1.2.4", "--head", _SHA, "--pending", json.dumps(_split_pending())]
+    ) == 3
+
+    assert len(attempts) == 2
+
+
+_NODE_SEND = """\
+import json, os, sys
+from automation import owner_notice, release_applied_notice
+calls = []
+def fake(content, *, message=None):
+    calls.append(content)
+    if os.environ.get("FAIL_PIECE") == str(len(calls)):
+        return False
+    with open(os.environ["SENT_LOG"], "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(content) + "\\n")
+    return True
+owner_notice.notify_owner = fake
+raise SystemExit(release_applied_notice.main(sys.argv[1:]))
+"""
+
+
+def test_a_partial_split_send_leaves_no_marker_and_the_next_tick_completes(
+    sweep_env: Path, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """실제 스윕 → 실제 노드 send(자식 프로세스): 마커는 모든 조각이 성공한 뒤에만 남는다."""
+    import sys
+
+    head = _head(repo)
+    _complete(sweep_env, head)
+    receipt = {"version": 2, "release_sha": head, "pending_owner_actions": _split_actions(),
+               "held": [], "pending_unknown": False}
+    pending = _split_pending()
+    monkeypatch.setenv("PROBE_OUT", f"/srv/autophagy-agent-releases/{head}\n{json.dumps(receipt)}\n")
+    script = tmp_path / "node_send.py"
+    _ = script.write_text(_NODE_SEND, encoding="utf-8")
+    monkeypatch.setenv("RELEASE_APPROVAL_CMD", f"{sys.executable} {script}")
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[2]))
+    store = tmp_path / "releases" / head
+    store.mkdir(parents=True)
+    (tmp_path / "current").symlink_to(store)
+    monkeypatch.setenv("NODE_RELEASE_CURRENT", str(tmp_path / "current"))
+    sent_log = tmp_path / "sent.jsonl"
+    monkeypatch.setenv("SENT_LOG", str(sent_log))
+
+    # tick 1: 조각 2 실패 → 조각 1 만 나가고 rc 3, 마커 없음
+    monkeypatch.setenv("FAIL_PIECE", "2")
+    assert _sweep(sweep_env, repo) == 0
+    assert f"RELEASE-APPLIED-SEND-FAIL rc=3 {head[:12]}" in capsys.readouterr().out
+    assert len(_lines(sent_log)) == 1
+    assert not (sweep_env / "notified" / head).exists()
+
+    # tick 2: 전부 나가고 마커가 남는다
+    monkeypatch.setenv("FAIL_PIECE", "")
+    assert _sweep(sweep_env, repo) == 0
+    second = [json.loads(row) for row in _lines(sent_log)[1:]]
+    assert len(second) > 1
+    delivered = "\n".join(second)
+    assert all(line.strip() in delivered for line in pending[1:])
+    assert (sweep_env / "notified" / head).exists()
 
 
 class TestSendAtTheNode:

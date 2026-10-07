@@ -1,1 +1,3 @@
 agent|automation/memory_curator/cron/memory_curator_watch.py|.hermes/scripts/memory_curator_watch.py|required
+agent|automation/memory_curator|.hermes/memory_curator_runtime|v2:tree;policy=retired;reason=wrapper-imports-the-release-tree
+agent|automation/memory_curator/cron/memory_curator_watch.py|memory-curator-watch|v2:cron;schedule=every 30m;script=memory_curator_watch.py;deliver=local;mode=no-agent

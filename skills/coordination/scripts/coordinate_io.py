@@ -31,9 +31,19 @@ class CoordinationError(RuntimeError):
         self.exit_code = exit_code
 
 
+def _interop_runtime() -> Path:
+    configured = os.environ.get("INTEROP_RUNTIME")
+    if configured:
+        return Path(configured).expanduser()
+    root = Path("~/.hermes/autophagy-import").expanduser()
+    if (root / "automation" / "interop").is_dir():
+        return root
+    return Path("~/.hermes/interop_runtime").expanduser()
+
+
 def ensure_runtime() -> None:
     """Make ``automation.interop`` importable from the deployed runtime."""
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     if str(runtime) not in sys.path:
         sys.path.insert(0, str(runtime))
     try:

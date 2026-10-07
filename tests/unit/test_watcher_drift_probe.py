@@ -85,13 +85,37 @@ def _manifest(tmp_path: Path, *rows: str) -> Path:
 _HOME_DEPLOYED: Final = HOME_DEPLOYED_PATTERN
 
 
+def _v2_file_destinations(script: Path) -> frozenset[str]:
+    """그 배포기 디렉터리가 소유한 v2 `file` 선언 중 **그 배포기의 모든 v2 계정**이 선언한 목적지.
+
+    v2 행은 중앙 표에 실리지 않으므로(M3) 선언을 직접 읽는다 — `test_watcher_manifest_declarations.py`
+    와 같은 `automation.deploy_declarations` 다. 배포기는 자기 계정 모두에 같은 경로를 쓰므로 한
+    계정의 행만 빠져도 선언되지 않은 것으로 본다. `policy=retired` 행은 "이 사본은 더 이상 쓰지 않는다"는 선언이라
+    살아 있는 쓰기의 근거가 아니므로 뺀다(릴리스 관측기는 남은 은퇴 경로를 결함으로 본다). legacy 행은 여기서 인정하지 않는다(중앙 표가 판정).
+    """
+    from automation.deploy_declarations import all_declarations
+
+    owner = script.parent.relative_to(_REPO).as_posix()
+    rows = [
+        row
+        for row in all_declarations(_REPO)
+        if row.owner == owner and not row.legacy and row.policy != "retired"
+    ]
+    accounts = {row.account for row in rows}
+    declared: dict[str, set[str]] = {}
+    for row in rows:
+        if row.kind == "file":
+            declared.setdefault(row.destination, set()).add(row.account)
+    return frozenset(destination for destination, have in declared.items() if have == accounts)
+
+
 def test_every_deploy_script_that_writes_a_wrapper_is_in_the_manifest() -> None:
     """`deploy.sh` 가 새 배포물을 홈에 쓰기 시작하면 이 테스트가 먼저 깨진다."""
     destinations = {destination for _, _, destination, _ in _rows()}
     missing: list[str] = []
     for script in sorted(_REPO.glob("skills/*/deploy.sh")) + sorted(_REPO.glob("automation/*/deploy.sh")):
         for written in _HOME_DEPLOYED.findall(script.read_text(encoding="utf-8")):
-            if written not in destinations:
+            if written not in destinations and written not in _v2_file_destinations(script):
                 missing.append(f"{script.relative_to(_REPO)} -> {written}")
     assert not missing, "manifest 에 없는 배포 대상: " + ", ".join(missing)
 

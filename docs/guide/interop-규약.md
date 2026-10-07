@@ -206,6 +206,20 @@ roster principal로 해석하고 `sender_id`와 exact-match한다. 관리자 pri
 - **채널 식별**: 해석은 `automation/interop/approval_directory.py` **한 곳**에서만 이뤄집니다 — 승인 producer가 스스로 채널을 해석하면 conformance 테스트가 빌드를 깨뜨립니다. 디렉터리는 config 키 → 캐시 → guild-scan 순으로 해석하고(다중 매칭 시 fail-closed), 해석된 채널은 **실제 사실을 확인한 뒤**(DM이면 type=1·소유자 수신, 공급망이면 type=0·이름 approvals) 레코드에 영속됩니다. 이후의 모든 읽기·리액션·삭제는 그 저장값을 씁니다. 흐름별 env override(`BUDGET_APPROVALS_CHANNEL_ID` 등)는 호환용으로만 남아 있으며 AS-3.2에서 제거됩니다.
 ---
 
+### 3.5. 소유자 대리 요청 (Owner Proxy)
+봇끼리는 프로토콜(봉투·보고)로만 말하고, 그 밖의 봇 산문은 에이전트 턴을 열지 않는다(`interop_bot_prose`). 유일한 예외는 소유자의 메신저 에이전트(대리 봇)가 소유자가 쓴 원문을 개인 서버 `#agent-chat` 에 옮겨 쓴 글이다. 판정은 `automation/interop/owner_proxy.py` 한 곳이 하고, 게이트웨이 훅은 그것을 부르기만 한다.
+- **형식**: `[<대리 이름> 대리 · 소유자 요청 <원문 메시지 링크>] <본문>`. 글 전체에 Discord 메시지 링크가 정확히 하나여야 하고 본문이 비면 안 된다. 이름은 표시일 뿐이고, 신원은 봇 id 가 정한다.
+- **첨부(2026-10-02)**: 대리 글에 파일을 붙여도 된다. 게이트웨이는 텍스트형 첨부(`.md`·`.txt` 등)의 내용을 `[Content of <파일>]:` 블록으로 만들어 글 **앞에** 붙인다. 그래서 헤더와 링크 개수는 대리 봇이 쓴 content 에서만 본다. 원 메시지의 content 가 게이트웨이 텍스트의 꼬리와 정확히 같을 때만 그 content 를 쓰고, 아니면 예전처럼 텍스트 전체를 검사해 닫힌다. 첨부 안의 헤더 흉내와 링크는 판정에 쓰이지 않는다. 받은 뒤의 턴에는 게이트웨이가 첨부마다 캐시 경로(`~/.hermes/cache/documents/doc_<id>_<파일>`) 안내를 붙인다. 본문 머리말이 텍스트형 첨부 내용을 인라인으로 싣지는 않으므로 에이전트는 그 경로를 읽는다.
+- **사설 설정**: `~/.hermes/interop/config.json` 의 `owner_proxy_bot_id`(대리 봇 사용자 id) 와 `owner_proxy_origin_channel_id`(소유자가 원문을 쓰는 채널 id). 둘 중 하나라도 없으면 경로는 닫혀 있다. 값은 저장소·공개 문서에 적지 않는다. peer 계정에는 두지 않는다.
+- **출처 검증(fail-closed)**: 대리 글이 `agent_chat_channel_id` 채널이나 그 스레드에 있고, 링크의 guild 가 대리 글의 guild 와 같아야 한다. 원문은 snowflake 시각으로 24시간 안이어야 한다. 그런 뒤 Discord API 로 원문 채널과 원문 메시지를 실제로 읽어, 채널이 설정한 원문 채널이거나 그 스레드이고 작성자가 사람인 소유자(`owner_id`)인지 확인한다. 조회가 하나라도 실패하면 버린다.
+- **재사용 금지**: 같은 원문 id 는 한 번만 받는다(`~/.hermes/interop/owner-proxy-ledger.json`). 기록은 다른 검사가 모두 통과한 뒤 턴을 열기 전에 한다. 그 턴이 실패하면 소유자가 새 메시지를 쓰면 된다. 새 메시지는 새 id 다. 원장을 읽을 수 없으면 버린다.
+- **승인은 넓어지지 않는다**: 받은 요청은 소유자 요청으로 처리하지만 외부효과는 여전히 요청별 승인 스레드의 소유자 ✅ 기록이 있어야 실행된다. 대리 봇의 글·반응은 승인이 아니다. 대리 글이 `#agent-chat` 에 있으므로 승인 스레드는 그 글에 매달리고, 스레드의 시작 글이 곧 대리 본문과 원문 링크다. 소유자는 거기서 원문과 대조한다.
+- **응답**: 에이전트는 대리 봇을 멘션하거나 대리 봇에게 질문하지 않는다. 결과와 확인 질문은 그 스레드에 소유자에게 남긴다. 이 지시는 훅이 넘기는 본문 머리말에 실린다.
+- **로그**: `interop owner proxy accepted origin=<id>` 또는 `interop owner proxy rejected reason=<사유>` 뒤에 기존 `interop bot prose skipped` 가 이어진다.
+- **강제**: `tests/unit/test_owner_proxy.py`.
+
+---
+
 ## 4. 테스트 및 준수 (Compliance)
 
 ### 4.1. 테스트 주입 어댑터 (Injection Adapter)

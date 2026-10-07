@@ -141,7 +141,7 @@ def dm_owner(content: str) -> str:
         os.environ["DISCORD_BOT_TOKEN"] = bot_token()
     if not os.environ.get("AUTOPHAGY_OWNER_ID", "").strip():
         os.environ["AUTOPHAGY_OWNER_ID"] = owner_id()
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     if str(runtime) not in sys.path:
         sys.path.insert(0, str(runtime))
     from automation.owner_notice import notify_owner  # noqa: PLC0415
@@ -151,8 +151,18 @@ def dm_owner(content: str) -> str:
     return "OWNER-NOTICE-SENT"
 
 
+def _interop_runtime() -> Path:
+    configured = os.environ.get("INTEROP_RUNTIME")
+    if configured:
+        return Path(configured).expanduser()
+    root = Path("~/.hermes/autophagy-import").expanduser()
+    if (root / "automation" / "interop").is_dir():
+        return root
+    return Path("~/.hermes/interop_runtime").expanduser()
+
+
 def _origin_notice():
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     from automation.interop import origin_notice  # noqa: PLC0415
 
@@ -160,7 +170,7 @@ def _origin_notice():
 
 
 def _thread_transport(channel_id: str):
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     from automation.interop.discord_transport import DiscordTransport  # noqa: PLC0415
 
@@ -324,7 +334,7 @@ def confirm_via_reaction(draft: dict) -> str:
 
 
 def _adapter() -> Any:
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     try:
         from automation.interop import injection_adapter

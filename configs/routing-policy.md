@@ -36,7 +36,7 @@
 
 | Item | Value |
 |---|---|
-| Main model | `model.provider` / `model.default` in `~/.hermes/config.yaml` (2026-09-29: `openai-codex` / `gpt-6-sol`) |
+| Main model | `model.provider` / `model.default` in `~/.hermes/config.yaml` (2026-10-02: `openai-codex` / `gpt-6.1-sol`, reasoning effort `medium`) |
 | Fallback chain | `fallback_providers` in the same file (2026-09-29: `xai-oauth` / `grok-4.7`) |
 | Batch client | `automation.codex_llm.CodexClient` — `hermes -z <prompt> -t todo` (no model, no provider) |
 | First install | `automation/provision-agent.sh` writes the initial block; afterwards only the owner edits it |
@@ -45,6 +45,37 @@
 | Authentication | `hermes auth` — Codex OAuth and xAI Grok OAuth (SuperGrok), both stored for the agent account |
 | Success condition | exit code 0 and non-empty stdout |
 | Unavailable condition | every route in the chain failed (credentials, quota, transport, timeout, or empty output) |
+
+## Changing the main model
+
+The owner changes the pair in one place and then runs every step below in the same session. Step 4
+is the one that was missing: after the 2026-09-29 change one job was skipped every day for nine days
+before anyone saw it.
+
+1. Edit `model:` (and `fallback_providers:` if it changes) in the agent's `~/.hermes/config.yaml`.
+2. `python3 -m automation.model_sync --apply` (operator) so the peer follows the agent block.
+3. Restart the agent and peer gateways together (`docs/guide/operations.md` §2).
+4. **Recreate every unpinned agent-mode cron job.** Hermes stamps each job with the model that was
+   current when it was created. A job that has no pinned model and is not `--no-agent` is then
+   skipped on every run with `[drift_skip:silent]`, and Hermes reports this only once. Do not
+   apply the pin that Hermes suggests (`hermes cron edit <id> --model …`), because that writes the
+   model into a second place and the job falls behind at the next change. For each account
+   (agent, then peer):
+   - List the affected jobs:
+     `python3 -c "import json,pathlib;d=json.loads((pathlib.Path.home()/'.hermes/cron/jobs.json').read_text());[print(j['id'],j['name']) for j in d['jobs'] if not j.get('no_agent') and not j.get('model')]"`
+   - Copy the job's `prompt`, `schedule`, `skills`, `deliver`, `context_from` and
+     `enabled_toolsets` from `~/.hermes/cron/jobs.json` to a file before you remove anything.
+   - `hermes cron remove <id>`, then
+     `hermes cron create "<schedule>" "<prompt>" --name <name> --skill <s> … --deliver <d>`, with
+     no `--model` and no `--provider`. Add `--continuity` if `context_from` was `["self"]`.
+     `hermes cron create` has no option for `enabled_toolsets`; restore the list with Hermes' own
+     locked update, run from `~/.hermes/hermes-agent`:
+     `HERMES_HOME=$HOME/.hermes ./venv/bin/python -c 'from cron import jobs; jobs.update_job("<new id>", {"enabled_toolsets": [...]})'`.
+   - Compare the new entry with the copy. Only `id`, `created_at`, run counters and the model snapshot
+     may differ.
+5. Confirm with `python3 -m automation.doctor` as each account. `정기 작업` reports a
+   `drift_skip` job as broken on its first skip, so a job missed in step 4 shows up at the next
+   hourly doctor alarm instead of after three failures.
 
 ## Verification
 

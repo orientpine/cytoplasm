@@ -1,4 +1,4 @@
-"""Public-release de-identification guards for tracked, non-test sources."""
+"""Public-release de-identification guards for tracked sources (non-test unless a test says so)."""
 
 from __future__ import annotations
 
@@ -32,6 +32,20 @@ _PRIVATE_HOST_DIGESTS: Final = frozenset(
         "6fced41a9fd917ed7f46603f8d0691d0cb6ca32edcb4126e7f6fdee13de17aa1",
         "0da7e438ace623b0ef31a143c2570c632432b726da6c3ece9b0ea1e0686fad5d",
     }
+)
+# Private workstation accounts and the owner's real name are digests for the same reason as the
+# hosts: a public guard must not publish what it forbids. 2026-10-01: the v1.14.0 public tree
+# carried both — a prompt asset, two source comments, feature docs and test fixtures.
+_HOME_DIRECTORY: Final = re.compile(r"/(?:home|Users)/([A-Za-z0-9._-]+)/")
+_PRIVATE_ACCOUNT_DIGESTS: Final = frozenset(
+    {
+        "d602c74b86c96b8e2b64b0500d96506e4bad4e9300e5af7137a4f11724565341",
+        "55e9541d006ea239e5cc53b37d73630351e5612af636bdcfd56829ec84e6dc68",
+    }
+)
+_HANGUL_RUN: Final = re.compile(r"[가-힣]{2,}")
+_PRIVATE_NAME_DIGESTS: Final = frozenset(
+    {"e296cec0fe73da9c83c66badd33180fe65ce129fd89fc5bcd0db66c8393b8cf6"}
 )
 _SYNTHETIC_SNOWFLAKE: Final = (
     b"123456789012345678"  # Synthetic shape fixture, not a real Discord ID.
@@ -96,6 +110,22 @@ def _contains_private_hostname(line: str) -> bool:
         hashlib.sha256(candidate.group().lower().encode()).hexdigest()
         in _PRIVATE_HOST_DIGESTS
         for candidate in _HOST_TOKEN.finditer(line)
+    )
+
+
+def _names_private_account_home(line: str) -> bool:
+    return any(
+        hashlib.sha256(home.group(1).encode()).hexdigest() in _PRIVATE_ACCOUNT_DIGESTS
+        for home in _HOME_DIRECTORY.finditer(line)
+    )
+
+
+def _names_owner(line: str) -> bool:
+    # A Korean name usually carries a particle (`…인지`, `…에게`), so the run's prefixes are checked.
+    return any(
+        hashlib.sha256(run[:size].encode()).hexdigest() in _PRIVATE_NAME_DIGESTS
+        for run in _HANGUL_RUN.findall(line)
+        for size in range(2, min(len(run), 4) + 1)
     )
 
 
@@ -181,6 +211,30 @@ def test_public_non_test_sources_contain_no_personal_or_private_infra_literals()
 
     # Then: the public source set contains no matching personal or infrastructure value.
     assert not findings, "Public PII/infrastructure literals found:\n" + "\n".join(findings)
+
+
+def test_public_files_including_tests_name_no_private_account_or_owner() -> None:
+    # Given: every file the public export ships. Tests count — a comment or fixture in a public
+    #        test is published exactly like a doc line. Vendored trees are skipped because
+    #        automation/public_export_redaction.py de-identifies them at export time.
+    exclusions = _public_export_exclusions()
+    findings: list[str] = []
+
+    # When: each line is checked for a private account's home directory and the owner's name.
+    for relative in _tracked_paths():
+        if _is_private_export_path(relative, exclusions) or "/vendor/" in relative.as_posix():
+            continue
+        source = _REPO / relative
+        if not source.is_file():
+            continue
+        for line_number, line in enumerate(
+            source.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
+            if _names_private_account_home(line) or _names_owner(line):
+                findings.append(f"{relative}:{line_number}")
+
+    # Then: nothing the public repository receives names the owner or a private account.
+    assert not findings, "Private account home or owner name found:\n" + "\n".join(findings)
 
 
 def test_load_bot_ids_returns_none_for_a_symlink(

@@ -15,8 +15,8 @@ is the KST calendar date. The Hermes cron schedule itself follows the agent
 config `timezone: Asia/Seoul` (W1-7 mechanism).
 
 Deployed copy lives at ~/.hermes/scripts/poll_reminders.py (Hermes cron
-sandbox rule) and imports the runtime package copy under
-~/.hermes/reminder_poller_runtime/. Force-run:
+sandbox rule) and imports the runtime generation that the link
+~/.hermes/reminder_poller_runtime/.current points at. Force-run:
 
     hermes cron run <job-id>            # or directly:
     sudo -u agent -H python3 ~/.hermes/scripts/poll_reminders.py
@@ -51,7 +51,7 @@ except ImportError:
     # PYTHONPATH=~/.hermes/interop_runtime (W1-6 hooks), whose `automation`
     # package wins the import and gets cached in sys.modules — a nested
     # automation/reminder_poller runtime copy is unreachable there.
-    sys.path.insert(0, str(Path.home() / ".hermes" / "reminder_poller_runtime"))
+    sys.path.insert(0, os.path.realpath(Path.home() / ".hermes" / "reminder_poller_runtime" / ".current"))
     import poller_core  # pyright: ignore[reportMissingImports] # noqa: F401
     import reminder_store  # pyright: ignore[reportMissingImports] # noqa: F401
 
@@ -100,6 +100,7 @@ def fetch_events(now: datetime) -> list[poller_core.CalendarEvent]:
          json.dumps(params, ensure_ascii=False)],
         capture_output=True, text=True, timeout=GWS_TIMEOUT_S, check=False,
         cwd=str(Path.home()),  # gws writes empty responses to cwd files (W3-1 gotcha)
+        env=dict(os.environ),
     )
     if result.returncode != 0:
         raise RuntimeError(

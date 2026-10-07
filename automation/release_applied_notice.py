@@ -31,15 +31,18 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final, assert_never
+from typing import Final
 
-from automation import owner_notice, release_models
+from automation import deploy_receipt, owner_notice, release_applied_state, release_models
+from automation.interop.chunker import chunk_lines
 
 _RELEASE_TAG: Final = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 _DEFAULT_RELEASE_CURRENT: Final = "/srv/autophagy-agent-current"
 _MODULE: Final = "automation.release_applied_notice"
+#: 남은 소유자 조치 한 조각의 글자 예산. 봉투(약 160자)·적용 문장과 모델 줄·v2 인용 접두사(줄마다
+#: 2자)를 더해도 Discord 한 메시지(2000자)에 들어가도록 잡았다 — 조치 줄 하나는 1000자 미만이다.
+_PENDING_PIECE: Final = 1200
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,8 +99,8 @@ def decide(facts: ReleaseFacts) -> Decision:
     return Applied(facts.version_tags[0])
 
 
-def parse_probe(output: str) -> tuple[str | None, str | None]:
-    """`readlink` 한 줄 + 영수증 JSON → (포인터 sha, 영수증 sha). 판독 불가는 전부 None."""
+def _split_probe(output: str) -> tuple[str | None, object]:
+    """`readlink` 한 줄 + 영수증 JSON → (포인터 sha, 영수증 문서). 판독 불가는 None."""
     brace = output.find("{")
     head = (output if brace < 0 else output[:brace]).strip()
     pointer_line = head.splitlines()[-1].strip() if head else ""
@@ -105,9 +108,14 @@ def parse_probe(output: str) -> tuple[str | None, str | None]:
     if brace < 0:
         return pointer, None
     try:
-        document = json.loads(output[brace:])
+        return pointer, json.loads(output[brace:])
     except ValueError:
         return pointer, None
+
+
+def parse_probe(output: str) -> tuple[str | None, str | None]:
+    """`readlink` 한 줄 + 영수증 JSON → (포인터 sha, 영수증 sha). 판독 불가는 전부 None."""
+    pointer, document = _split_probe(output)
     recorded = document.get("release_sha") if isinstance(document, dict) else None
     return pointer, recorded if isinstance(recorded, str) and recorded else None
 
@@ -125,21 +133,6 @@ def release_tags(repo: Path, sha: str) -> tuple[str, ...]:
     )
 
 
-def _is_ancestor(repo: Path, sha: str, descendant: str) -> bool:
-    return (
-        subprocess.run(
-            ("git", "-C", str(repo), "merge-base", "--is-ancestor", sha, descendant),
-            capture_output=True,
-            check=False,
-        ).returncode
-        == 0
-    )
-
-
-def _log(message: str) -> None:
-    print(f"[release-complete] {message}")
-
-
 def _probe_command() -> list[str]:
     configured = os.environ.get("RELEASE_APPLIED_PROBE_CMD", "").strip()
     if configured:
@@ -155,105 +148,51 @@ def _probe_command() -> list[str]:
     ]
 
 
-def _probe() -> tuple[str | None, str | None]:
+def _probe() -> tuple[str | None, str | None, tuple[str, ...]]:
     """노드 사실을 한 번만 읽는다 — 포인터도 영수증도 노드 전역이라 sha 마다 찌를 이유가 없다."""
     result = subprocess.run(_probe_command(), capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        return None, None
-    return parse_probe(result.stdout)
-
-
-def _send_command(repo: Path) -> list[str]:
-    configured = os.environ.get("RELEASE_APPROVAL_CMD", "").strip()
-    if configured:
-        return shlex.split(configured)
-    return [str(repo / "automation" / "release_approval_remote.sh")]
-
-
-@dataclass(frozen=True, slots=True)
-class _Sweep:
-    """한 틱분의 사실 — 완결 마커 목록을 이 노드 상태에 비추어 판정한다."""
-
-    state: Path
-    repo: Path
-    pointer_sha: str | None
-    receipt_sha: str | None
-
-    def handle(self, sha: str) -> None:
-        facts = ReleaseFacts(
-            sha=sha,
-            version_tags=release_tags(self.repo, sha),
-            pointer_sha=self.pointer_sha,
-            receipt_sha=self.receipt_sha,
-            superseded=self._superseded(sha),
-        )
-        decision = decide(facts)
-        match decision:
-            case Skip(reason):
-                _mark(self.state, "notify-skipped", sha, reason)
-                _log(f"RELEASE-APPLIED-SKIP {reason} {sha[:12]}")
-            case Retry(reason):
-                _log(f"RELEASE-APPLIED-RETRY {reason} {sha[:12]}")
-            case Applied(version):
-                self._notify(sha, version)
-            case unreachable:
-                assert_never(unreachable)
-
-    def _superseded(self, sha: str) -> bool:
-        if self.pointer_sha is None or self.pointer_sha == sha:
-            return False
-        return _is_ancestor(self.repo, sha, self.pointer_sha)
-
-    def _notify(self, sha: str, version: str) -> None:
-        completed = subprocess.run(
-            (*_send_command(self.repo), "send", "--version", version, "--head", sha,
-             "--models", release_models.probe()),
-            env={**os.environ, "RELEASE_APPROVAL_MODULE": _MODULE},
-            check=False,
-        )
-        if completed.returncode != 0:
-            _log(f"RELEASE-APPLIED-SEND-FAIL rc={completed.returncode} {sha[:12]}")
-            return
-        stamp = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _mark(self.state, "notified", sha, f"{version} {stamp}")
-        _log(f"RELEASE-APPLIED-NOTIFIED {version} {sha[:12]}")
-
-
-def _mark(state: Path, kind: str, sha: str, body: str) -> None:
-    directory = state / kind
-    directory.mkdir(parents=True, exist_ok=True)
-    marker = directory / sha
-    _ = marker.write_text(f"{body}\n", encoding="utf-8")
-    marker.chmod(0o600)
-
-
-def _unnotified(state: Path) -> tuple[str, ...]:
-    completed = state / "completed"
-    if not completed.is_dir():
-        return ()
-    return tuple(
-        sorted(
-            entry.name
-            for entry in completed.iterdir()
-            if entry.is_file()
-            and not (state / "notified" / entry.name).exists()
-            and not (state / "notify-skipped" / entry.name).exists()
-        )
-    )
+        return None, None, ()
+    pointer, receipt = parse_probe(result.stdout)
+    return pointer, receipt, deploy_receipt.pending_lines(_split_probe(result.stdout)[1])
 
 
 def sweep(state: Path, repo: Path) -> None:
     """완결된 릴리스 중 아직 통지하지 않은 것만 판정한다. 대상이 없으면 노드도 찌르지 않는다."""
-    candidates = _unnotified(state)
+    candidates = release_applied_state.unnotified(state)
     if not candidates:
         return
-    pointer_sha, receipt_sha = _probe()
-    tick = _Sweep(state=state, repo=repo, pointer_sha=pointer_sha, receipt_sha=receipt_sha)
+    pointer_sha, receipt_sha, pending = _probe()
+    tick = release_applied_state.Sweep(state, repo, pointer_sha, receipt_sha, pending)
     for sha in candidates:
         tick.handle(sha)
 
 
-def send(version: str, head: str, models: str = "") -> int:
+def _pending_facts(encoded: str) -> tuple[str, ...]:
+    """워크스테이션이 영수증에서 만든 남은 소유자 조치 줄 — 목록이 아니면 확인 불가로 말한다.
+
+    한 메시지에 다 들어가지 않으면 공용 줄 단위 분할(`chunk_lines`)로 나눠 이어지는 통지로
+    보낸다. 전송 계층의 청킹은 2000자 지점에서 줄을 자르므로 여기서 먼저 줄 경계로 나눈다.
+    """
+    if not encoded:
+        return ()
+    try:
+        lines = json.loads(encoded)
+    except ValueError:
+        lines = None
+    if not isinstance(lines, list) or not all(isinstance(line, str) for line in lines):
+        return ("남은 소유자 조치: 확인 불가 — 전달된 목록을 읽지 못했다",)
+    body = lines[1:] if lines[:1] == ["남은 소유자 조치:"] else lines
+    items = "\n".join(deploy_receipt.notice_line(line) for line in body)
+    if not items:
+        return ()
+    return chunk_lines(
+        items, limit=_PENDING_PIECE,
+        header=lambda index, total: "남은 소유자 조치:" if total == 1 else f"남은 소유자 조치 ({index}/{total}):",
+    )
+
+
+def send(version: str, head: str, models: str = "", pending: str = "") -> int:
     """노드에서 도는 절반 — 포인터를 다시 확인하고 목적지는 파사드에 맡긴다."""
     current = os.environ.get("NODE_RELEASE_CURRENT", "").strip() or _DEFAULT_RELEASE_CURRENT
     try:
@@ -270,12 +209,17 @@ def send(version: str, head: str, models: str = "") -> int:
     from automation.release_applied_message import applied_message
 
     content = f"릴리스 {version} 가 적용되었습니다. (HEAD {head[:12]})\n{release_models.render(models)}"
-    message = applied_message(version, head, content)
-    if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
-        delivered = owner_notice.notify_owner(content, message=message)
-    else:
-        delivered = owner_notice.notify_owner(content)
-    return 0 if delivered else 3
+    pieces = _pending_facts(pending)
+    facts = (f"{content}\n{pieces[0]}", *pieces[1:]) if pieces else (content,)
+    for fact in facts:
+        message = applied_message(version, head, fact)
+        if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
+            delivered = owner_notice.notify_owner(fact, message=message)
+        else:
+            delivered = owner_notice.notify_owner(fact)
+        if not delivered:
+            return 3  # 첫 실패 조각에서 멈춘다 — 다음 틱이 전부 다시 보낸다(at-least-once)
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -288,13 +232,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     _ = sender.add_argument("--version", required=True)
     _ = sender.add_argument("--head", required=True)
     _ = sender.add_argument("--models", default="", help="워크스테이션이 읽은 agent·peer 모델 요약(JSON)")
+    _ = sender.add_argument("--pending", default="", help="영수증의 남은 소유자 조치 줄(JSON 목록)")
     arguments = parser.parse_args(argv)
     if arguments.command == "send":
-        return send(str(arguments.version), str(arguments.head), str(arguments.models))
+        return send(
+            str(arguments.version), str(arguments.head), str(arguments.models), str(arguments.pending)
+        )
     try:
         sweep(Path(str(arguments.state)), Path(str(arguments.repo)))
     except Exception as error:  # noqa: BLE001 - 통지 실패가 완결을 막으면 본말전도다
-        _log(f"RELEASE-APPLIED-SWEEP-FAIL {type(error).__name__}")
+        release_applied_state.log(f"RELEASE-APPLIED-SWEEP-FAIL {type(error).__name__}")
     return 0
 
 

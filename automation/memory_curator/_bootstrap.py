@@ -1,9 +1,9 @@
 """Make the repo root (with the ``automation`` package) importable.
 
-The deployed runtime is the top-level ``memory_curator`` package under
-``~/.hermes/memory_curator_runtime``.  The classifier reaches ``automation.*``
+A legacy top-level ``memory_curator`` copy (outside the repo) cannot reach
+``automation.*`` on its own.  The classifier reaches ``automation.*``
 (deterministic sensitivity rules, the shared Codex OAuth client), which lives at
-the repo root, not inside the deployed package.  Import this module BEFORE any
+the repo root, not inside such a copy.  Import this module BEFORE any
 ``automation.*`` import so ``python3 -m memory_curator.shadow_cli`` works
 standalone on a node — the no-agent cron wrapper adds the same path for its own
 run, but the owner-run shadow CLI has no such wrapper.

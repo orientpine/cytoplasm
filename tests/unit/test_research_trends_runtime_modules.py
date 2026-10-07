@@ -30,8 +30,8 @@ _WATCHER = _PKG / "research_trends.py"
 _DEPLOY = _PKG / "deploy.sh"
 
 _SELF_PKG = "automation.research_trends"
-#: `deploy_archive_stream <root> "<dir>" a.py b.py ...`
-_STREAM = re.compile(r'deploy_archive_stream[^\n]*?research_trends"((?:\s+[\w.]+\.py)+)')
+#: `deploy_tree_swap "<dir>" <dest> a.py b.py ...`
+_STREAM = re.compile(r'deploy_tree_swap[^\n]*?research_trends"\s+\S+((?:\s+[\w.]+\.py)+)')
 
 
 def _is_type_checking_guard(node: ast.stmt) -> bool:
@@ -66,7 +66,7 @@ def _flat_fallback_imports(source: str) -> set[str]:
 
 def _streamed_modules() -> set[str]:
     match = _STREAM.search(_DEPLOY.read_text(encoding="utf-8"))
-    assert match is not None, "deploy_archive_stream 호출을 찾지 못했다 — 배포 형태가 바뀌었나"
+    assert match is not None, "deploy_tree_swap 호출을 찾지 못했다 — 배포 형태가 바뀌었나"
     return set(match.group(1).split())
 
 

@@ -11,7 +11,8 @@ if [ -z "$host" ]; then
 fi
 
 source "$repo_root/automation/deploy_provenance.sh"
-deploy_provenance_check "$repo_root" "$repo_root/automation/cost-report/send_cost_report.py" || exit 4
+deploy_provenance_check "$repo_root" "$repo_root/automation/cost-report/send_cost_report.py" \
+  "$repo_root/automation/cost-report/deploy.sh" "$repo_root/automation/cost-report/deploy-manifest.txt" || exit 4
 
 run_account() {
   local account="$1" script="$2"
@@ -19,5 +20,8 @@ run_account() {
 }
 
 # 비용 보고는 cron sandbox가 찾는 계정 홈에만 복사해야 다른 계정의 비밀 경계를 넘지 않는다.
-tar -C "$repo_root/automation/cost-report" -czf - send_cost_report.py \
-  | run_account "$NODE_AGENT_ACCOUNT" 'umask 077; mkdir -p "$HOME/.hermes/scripts"; tar -xzf - -C "$HOME/.hermes/scripts"; chmod 600 "$HOME/.hermes/scripts/send_cost_report.py"; sha256sum "$HOME/.hermes/scripts/send_cost_report.py"'
+run_agent() { run_account "$NODE_AGENT_ACCOUNT" "$1"; }
+source "$repo_root/automation/deploy_push.sh"
+push_file "$repo_root/automation/cost-report/send_cost_report.py" '.hermes/scripts/send_cost_report.py'
+source "$repo_root/automation/deploy_cron.sh"
+converge_cron daily-cost-report "0 9 * * *" send_cost_report.py local

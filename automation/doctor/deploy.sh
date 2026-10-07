@@ -18,8 +18,10 @@ run_account() {
   ssh "$host" "sudo -n -u $account -H bash -lc $(printf '%q' "$script")"
 }
 
+source "$repo_root/automation/deploy_push.sh"
+source "$repo_root/automation/deploy_cron.sh"
 for account in "$NODE_AGENT_ACCOUNT" "$NODE_PEER_ACCOUNT"; do
-  tar -C "$repo_root/automation/doctor/cron" -czf - doctor_watch.py \
-    | run_account "$account" 'umask 077; mkdir -p "$HOME/.hermes/scripts"; tar -xzf - -C "$HOME/.hermes/scripts"; chmod 600 "$HOME/.hermes/scripts/doctor_watch.py"'
-  run_account "$account" 'PATH="$HOME/.local/bin:$PATH"; if hermes cron list --all | grep -Eq "Name:[[:space:]]+doctor-watch$"; then exit 0; fi; hermes cron create "17 * * * *" --name doctor-watch --no-agent --script doctor_watch.py --deliver local'
+  run_agent() { run_account "$account" "$1"; }
+  push_file "$repo_root/automation/doctor/cron/doctor_watch.py" '.hermes/scripts/doctor_watch.py'
+  converge_cron doctor-watch "17 * * * *" doctor_watch.py local
 done

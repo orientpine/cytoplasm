@@ -40,6 +40,7 @@
   ↳ **조치(OWNER)**: USD 경보 임계값을 선택해 실제 cron 실행 환경에 전달하거나 이 비용 보고의 사용 중단을 결정한다. 현재 발신자는 설정 파일에서 이 키를 자가 로드하지 않으므로 파일에 추가한 것만으로 적용됐다고 보지 않는다. 값을 지어내거나 cron을 끄지 않았다.
   ↳ **영향**: 일일 지출 통지 누락 · 심각도 중. 이후 스냅샷 경로는 아직 검증하지 않았으므로 키 설정만으로 전체 복구를 약속하지 않는다.
   ↳ 재판정(2026-09-19, D339): OWNER-DECISION — 실제 목록과 키 존재 여부만 읽었으며 원장에 증거를 남겼다.
+  ↳ 처리(2026-10-01): 2026-10-01 09:00 KST 실행이 같은 오류 문구(`cost-report error: 'COST_REPORT_SOFT_CAP'`)로 28회째 연속 실패했다. 조치는 그대로 소유자 몫이다. 출처: 릴리스 수렴 사각지대 계획 todo 27 의 노드 cron 읽기 전용 캡처(2026-10-01 05:01Z).
 
 
 
@@ -179,10 +180,12 @@
 
 - **[OWNER] 에이전트가 만든 게이트웨이 재시동 헬퍼가 상주한다 → 회수하고 재시동은 승인된 노드 런북(agent·peer 함께, 원인 확인 후)으로만 한다.** `~agent/.hermes/scripts/restart-hermes-gateway-once.sh`(95B, 2026-08-14, 내용은 `systemctl --user restart hermes-gateway.service` 한 줄, 리포 소스 없음; 세션 기록상 08-14~16 사이 6회 생성·실행). 「게이트웨이 재시동 규칙」을 우회하는 수단이 남아 있다(심각도: 높음).
   ↳ 재판정(2026-09-19, D021): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ [해소 2026-10-01] 소유자 지시(「남긴 문제 모두 해결」, 항목 판단 위임)로 `~agent/.hermes/quarantine-20261001/` 로 옮겼다 — 삭제가 아니라 이동이고 같은 디렉터리 `INDEX.txt` 에 원경로·크기·sha256·시각이 있다. 옮기기 직전 릴리스 트리 코드 참조·cron 25개·실행 프로세스 어디에도 없음을 다시 확인했고 cron 목록 지문은 전후 같다.
 - **[OWNER] agent 홈에 별도 클론이 있고 로컬 전용 커밋 2건이 있다 → 살릴지 버릴지 결정한다.** `/home/agent/src/autophagy-agents`: 작업트리는 clean 이지만 origin 에 없는 커밋 2건(2026-07-30, 08-02)이 있고 origin/main 보다 크게 뒤처져 있다 — 미러 사건과 같은 계열의 "리포 밖 개발" 흔적이며, 에이전트가 이 경로의 스크립트를 실행하면 낡은 사본 실행이 된다(심각도: 중).
   ↳ 재판정(2026-09-19, D022): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
 - **[OWNER] 소유자 없는 홈 자산 2건의 출처를 판정한다.** `~agent/.hermes/scripts/regression_bank_weekly.py`(1657B, 2026-07-16; 리포 소스·매니페스트·cron 등록 모두 없음)와 `~agent/.hermes/plugins/hermes-achievements/`(JSON 3개 1.3MB, 코드 없음, 2026-08-16). 회수하거나 벤더 산출물로 기록한다(심각도: 낮음).
   ↳ 재판정(2026-09-19, D023): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ [해소 2026-10-01] 두 자산 모두 회수했다 — 같은 격리 디렉터리로 옮겼고(`hermes-achievements` 는 코드 없는 상태 데이터이고 플러그인은 활성 목록에 없다) 참조·cron·프로세스 확인과 INDEX 기록은 위 D021 처리와 같다.
 - **[OWNER] 자가 스킬 5개 중 governed 와 겹치는 것의 승격·폐기를 결정한다.** `meeting-minutes-authoring`(meeting 과 겹침)·`document-publishing`(doctype·report 와 겹침) 등 `~agent/.hermes/skills/{documents,devops}/…` 5개(2026-08-18~28). 결정 전까지 `hermes curator pin/archive` 로 상태를 고정한다(심각도: 중).
   ↳ 재판정(2026-09-19, D024): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
 - **[OWNER] 미러가 agent 자격증명으로는 원격을 읽지 못한다.** `/srv/autophagy-agents` 에서 `git ls-remote origin` 이 `Repository not found` 인데도 `origin/main` ref 는 최신이다(ops 가 fetch). 미러를 읽기 전용 관측소로 고정하면 자연 해소되며, fetch 주체를 운영 가이드에 적는다(심각도: 낮음).
@@ -213,25 +216,30 @@
   봉투의 `sender_id` 자칭을 아무도 막지 않고, 봇 자유 산문 무시(cascade 안전)도 없다.
   agent·peer 양쪽 동일하다.
   ↳ 재판정(2026-09-19, D029): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ 처리(2026-10-01): 배포 경로가 생겼다 — `automation/interop/deploy.sh` 가 선언(`automation/interop/deploy-manifest.txt`)대로 플러그인·가드·드롭인을 agent·peer 에 함께 올리고, 플러그인 본문은 게이트웨이가 고정한 릴리스 세대에서 읽으며 그 세대를 기록한다. 릴리스 판정은 그 기록까지 본다 — `f2ef2ac5`, `43c5617a`, `2b74f092`. 코드·배포기는 준비됐고 노드 반영은 웨이브 6 todo 33(roster 배치 → 묶음 수렴 → agent+peer 쌍 재시동)의 소유자 승인에 달려 있다.
 - **그런데 그냥 배포하면 인터롭이 멈춘다** — 새 코드는 `~/.hermes/roster.yaml` 을 읽고 없으면
   `RosterError` → 모든 봉투를 `roster_unavailable` 로 거부한다. 실측: agent·peer 둘 다 파일이
   없고(`NONE`), 릴리스에 `group_roster` 패키지는 이미 있다. 즉 **roster 배치가 선행 조건**이며
   그 내용(누가 어떤 `sender_id` 인가)은 소유자가 정할 사안이다.
   ↳ 재판정(2026-09-19, D030): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ 처리(2026-10-01): roster 는 손으로 쓰지 않고 노드 신뢰 루트에서 `python3 -m automation.group_roster init-local` 로 만든다 — `521871a7`. 배포기는 두 계정 roster 가 모두 유효할 때만 묶음을 놓고, 아니면 `INTEROP-DEPLOY-HELD` 로 어느 계정에도 놓지 않는다 — `f2ef2ac5`. 코드·배포기는 준비됐고 노드 반영은 웨이브 6 todo 33(roster 배치 → 묶음 수렴 → agent+peer 쌍 재시동)의 소유자 승인에 달려 있다.
 - 조치 순서: ① 소유자가 roster 배치를 결정 → ② 플러그인을 agent·peer 양쪽
   `~/.hermes/plugins/interop-protocol/` 로 미는 배포 경로 신설 → ③ 매니페스트에 2계정 등록 →
   ④ agent·peer 함께 재시동. **순서를 바꾸면 인터롭이 fail-closed 로 막힌다.** 매니페스트 등록을
   먼저 하면 프로브가 FAIL 하며 "deploy.sh 를 돌려라"라는 **잘못된 자동 조치를 유도**하므로,
   등록은 roster 결정과 같은 사이클에 넣는다.
   ↳ 재판정(2026-09-19, D031): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ 처리(2026-10-01): 순서는 코드가 지킨다 — 묶음 행이 `requires=roster` 로 선언돼 roster 가 없으면 판정이 `held`(`roster-required`)로 보류하고 배포기를 부르지 않으므로, 선언이 "deploy.sh 를 돌려라"를 잘못 유도하지 않는다. 계정별 사유는 `3a5d30a4`·`641d3323`, 선언·배포기는 `f2ef2ac5`. 코드·배포기는 준비됐고 노드 반영은 웨이브 6 todo 33(roster 배치 → 묶음 수렴 → agent+peer 쌍 재시동)의 소유자 승인에 달려 있다.
 - **심각도 중** — 방어가 꺼져 있으나 해당 채널 참여자가 제한적이고, 잘못 고치면 인터롭이 멈춘다.
   되돌리기는 쉽다(옛 사본 복구 + 재시동). 증적: 이 세션의 해시·diff·`load_roster` 실측.
   ↳ 재판정(2026-09-19, D032): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ 처리(2026-10-01): 되돌리기가 절차가 됐다 — 배포기가 바꾸기 직전 묶음을 `~/.hermes/interop/rollback/<UTC>-<pid>/` 에 보관하고(`f2ef2ac5`), 복원 절차는 `docs/guide/operations.md` §2 「인터롭 묶음 되돌리기」가 소유한다. 코드·배포기는 준비됐고 노드 반영은 웨이브 6 todo 33(roster 배치 → 묶음 수렴 → agent+peer 쌍 재시동)의 소유자 승인에 달려 있다.
 - **[2026-09-01 실측 추가] agent·peer 두 계정 모두 같은 2026-07-20 사본이다** — `~/.hermes/plugins/interop-protocol/__init__.py` sha256 `d229b105…`(268줄) 양쪽 동일, 리포 `automation/interop/hermes_plugin/__init__.py` 는 288줄(최종 9e481bb1). 배포 경로 신설 시 두 계정을 함께 민다(심각도: 중).
 
 
 
   ↳ 재판정(2026-09-20, D033): OWNER — agent·peer 설치본은 모두 기존 d229b105 지문이고 현재 릴리스 소스와 다르다. roster 선택이 선행한다는 원래 순서를 유지해 플러그인·매니페스트·roster를 바꾸지 않았다.
+  ↳ 처리(2026-10-01): 배포기는 두 계정에 같은 바이트를 함께 올리고 계정마다 선언과 대조한다 — `f2ef2ac5`, `856f8c31`. 설치본 지문은 바뀌지 않았다(노드 반영 전). 코드·배포기는 준비됐고 노드 반영은 웨이브 6 todo 33(roster 배치 → 묶음 수렴 → agent+peer 쌍 재시동)의 소유자 승인에 달려 있다.
 ## 제안서 HWPX 품질 수리 중 남긴 것 (2026-08-26)
 
 > 이 저장소가 지금 손댈 수 없거나 이미 닫힌 항목이다. 원 묶음 헤딩은 회계 가드 대조 키라 그대로 둔다.
@@ -430,6 +438,7 @@ OWNER 체크리스트 1번(`.git` 권한 회수) 조사 중 발견. 권한 자�
   ↳ 재판정(2026-09-20, D063): PARTIAL — 실제 mail-triage-watch·mail-daily-digest는 active·no-agent·deliver=discord이며 최근 실행은 ok였다. 목적지 해석·스킬 전체 배포·07-31 누락분 재전송은 이 관측으로 증명하지 않는다.
 - **[배포 체크리스트·미완료] vendored mailon의 미사용 import 7건은 소스에서 제거됐지만 라이브 mailon 릴리스에는 아직 반영되지 않았다** → 수정 커밋이 `origin/main`에 착지한 뒤 별도 owner-approved mail 재배포를 요청하고 `~/.hermes/mailon-runtime/current`가 새 vendor digest를 가리키는지 확인한다. **동작·보안 문제 없음 · 심각도 낮음(배포 대기)** — 제거된 import는 실행에 쓰이지 않았고 unit 3391건·vendor offline 58건·저장소 전체 Ruff가 통과했으며, 이번 repair-report rollout에서는 승인 게이트가 필요한 외부효과를 수행하지 않는다.
   ↳ 재판정(2026-09-19, D064): NODE-VERIFY — 노드·외부 상태 확인이 선행하며 현재 실측은 미완이다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ 처리(2026-10-01): 이 계획의 사전 점검 실측(todo 1)에서도 노드 메일 런타임은 아직 릴리스 vendor 와 다르다 — `current` 의 src digest `78ee65a2371c687c` · 릴리스 `1854c9815a26af2d`, 드리프트 프로브는 `direction=unknown`. 반영은 아직이다. 달라진 것은 수렴 주체다: 메일 런타임이 `v2:derived` 선언이 되어 릴리스 판정이 vendor·requirements 신원을 대조하고 어긋나면 `skills/mail/deploy.sh` 를 돌린다(`1d08d8c0`), 같은 신원의 재배포는 쓰이는 디렉터리를 지우지 않는 무동작이다(`f5beb7c8`). 노드 수렴은 todo 1(소유자 승인) 또는 다음 릴리스의 전량 반영이다.
 - **[canary 체크리스트·미완료] GLM payload 전달 여부는 worktree에서 증명할 수 없다** → owner 세션에서 비민감 합성 입력으로 비-4xx·유효 JSON·reasoning tokens 0을 확인한다. 기존 proxy가 필드를 버린다는 증거가 생길 때만 `configs/litellm-staging/config.yaml`을 별도 변경한다. **심각도 중** — 현재는 fail-open과 항목 재시도가 동작을 보전하며, 이 PR은 gateway config를 수정하지 않았다.
   ↳ 재판정(2026-09-19, D065): RESOLVED-SOURCE — 소스 수준 해소 근거를 확인했으며 노드 반영은 별도다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
 - **[조사·노드 확인 미완료] 리포 증적상 mail은 pending 0이고 최신 skill-gate 잔재 11종 목록에도 mail·wiki가 없다** → 재배포 직전 노드에서 두 스킬의 실제 pending 상태를 read-only로 다시 확인한다. 성공한 배포는 stage 4 직후 정확한 `(skill, hash, message_id)`만 `consume`하므로 새 요청은 자동 정리되지만, 이미 결정된 구레코드가 발견되면 무조건 덮어쓰지 않고 소유자 판단으로 `skill_gate abandon`을 사용한다. **보안 문제 아님·심각도 낮음** — fail-closed 잔재가 있으면 배포가 멈추는 가용성 문제다.
@@ -522,10 +531,13 @@ OWNER-37이 그 외부 상태 판정만 소유한다.
 
 
   ↳ 재판정(2026-09-20, D079): OWNER — 정상 스윕에서 root 헬퍼 `origin_snapshot.sh` 차이와 memory_curator 런타임 5개 DIFF·`notice.py` ABSENT를 확인했다. 워처 3개는 미배포가 아니라 조회 UNKNOWN이고, 미러 판정은 과거 dirty가 아닌 미릴리스 main과의 차이다. 기존 운영자 수렴 조건을 유지한다([원인·범위](qa/KFX-LIVE/summary.md)).
+  [해소 확인 2026-10-01] memory_curator 런타임 — 워처 래퍼가 홈 사본 대신 릴리스 트리의 패키지를 import 하게 바뀌어 낡은 사본이 실행 경로에서 빠졌고, 그 사본은 `policy=retired` 로 선언됐다 — `1cd0051f`. root 헬퍼 — v1.14.0 컷 전에 소유자가 프로비저너를 다시 돌려 2026-09-30 재측정 `HELPER-DRIFT-PASS`(소유자 조치, 커밋 없음). **잔여**: 워처 3개의 조회 UNKNOWN 은 그대로 남는다.
 ## 후속 과제 스윕 4 착지 후 소유자만 닫을 수 있는 것 (2026-09-03)
 
 - **[OWNER] 중앙 매니페스트(`configs/watcher-deploy-manifest.txt`) 바이트가 바뀌었다 → 노드에서 `automation/healthcheck_probe_wrapper.sh --install` 을 다시 돌리고, 새 배포기 `automation/cost-report/deploy.sh`·`automation/reminder_poller/deploy.sh`·`automation/repair/deploy.sh`·`automation/skill_generation/deploy.sh` 를 한 번씩 실행해 손배포 사본을 선언된 배포본으로 바꾼다.** 그 전까지 `healthcheck_wrapper_current` 프로브가 지문 불일치를 알린다(심각도: 중).
   ↳ 재판정(2026-09-20, D080): OWNER-PROBE-ASSET — 주 노드의 설치된 allowlist 입력 지문과 현재 생성기 지문이 다르다. RAG 노드는 header 조회 자체가 거부/불통으로 남아 부재를 단정하지 않는다. 전량 배포 영수증은 이 운영자 자산을 대신 검증하지 않으며, 재생성은 원래의 소유자 실행 절차로 남긴다([실측](qa/KFX-LIVE/summary.md)).
+  ↳ 재관측(2026-10-01, RCB-1): 릴리스 v1.14.1 반영 뒤에도 두 노드 모두 `healthcheck_wrapper_current` 가 FAIL 이다 — 운영자 계정이 각 노드에서 `bash /srv/autophagy-agent-current/automation/healthcheck_probe_wrapper.sh --install <node>` 를 1회 실행한다. 명령·근거·함께 풀릴 증상은 [RCB-1 소유자 조치](qa/RCB-1/owner-actions.md) ①이 단독으로 소유한다.
+  ↳ 처리(2026-10-02 · 해소): 래퍼와 배포기 둘 다 닫혔다. 래퍼 — 두 노드 모두 헬스체크 틱 `healthcheck-20261002T002001Z` 의 FAIL 뒤 `T002501Z` 부터 `healthcheck probe allowlist matches the checks` 가 PASS 이고, v1.14.4(`1fc11c72`) 위임 프로브도 두 노드 `WRAPPER-PASS` 다. 주 노드 설치본은 `--print <primary-node>` 출력과 바이트가 같아 `--install` 은 무동작이고, 10-01 에 함께 보이던 `WATCHER-DRIFT-UNKNOWN`·수리 티켓 rc 126 도 사라졌다. 배포기 — 네 배포기의 산출물(`send_cost_report.py`·`poll_reminders.py`·`repair_report_consume_watch.py`·`05-skill-generation`)은 중앙 매니페스트의 `required` 행이고, 노드 판정이 「전량 일치, 할 일 없음」, 영수증의 `pending_owner_actions`·`undeclared` 가 빈 목록이다. 근거는 [RCB-1 소유자 조치](qa/RCB-1/owner-actions.md) 「① 해소 확인」.
 - **[OWNER] 08-29~09-01 미러 동결 동안 `checkout_mirrors_origin` 프로브가 실제로 FAIL·수리 티켓을 냈는지, 그리고 이번 릴리스 뒤 `state.json` 의 `mirror_state` 가 노드에서 값을 갖는지 노드 로그로 1회 확인한다.** 리컨실러 문구 보강은 코드로 끝났고 이것은 관측 확인이다(심각도: 낮음).
   ↳ 재판정(2026-09-20, D081): PARTIAL — 기존 상태 API가 mirror_state=behind와 release-backlog를 읽었다. 보이는 시스템 저널은 09-12부터라 08-29~09-01 티켓 발생은 증명하지 못했다. 저장 카운터를 이번 릴리스의 실패 횟수로 해석하지 않는다.
 - **[OWNER] `~/.hermes/selfskill-audit/pending-overlaps.json` 의 미결 겹침(실측: `meeting-minutes-authoring`·`document-publishing` ↔ governed meeting·doctype·report)을 승격(governed 로 제출) 또는 폐기(`hermes curator archive`)로 결정한다.** 원장은 코드가 유지하고 결정만 남았다(심각도: 중).
@@ -1078,6 +1090,8 @@ healthcheck까지 구현했다.
 - **[OWNER] 같은 롤아웃의 deploy_all 미선언 홈 경고가 손으로 설치한 `hermes-achievements` 플러그인, `interop-protocol` 플러그인(agent·peer), 그리고 스크립트 몇 개를 이름 붙여 냈다 → 소유자가 선언(해당 배포기 옆 `deploy-manifest.txt`)할지 제거할지 재고 정한다.** 자동 삭제 근거가 아니라 인벤토리 작업이다. 영향: 드리프트 탐지의 사각지대 목록만, 실행 무영향 · **심각도 낮음**.
 
   ↳ 재판정(2026-09-19, D161): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ [부분 해소 2026-10-01] 스크립트 3개(`regression_bank_weekly.py`·`release_v123_dm_watch.py`·`restart-hermes-gateway-once.sh`)와 `hermes-achievements` 는 release-convergence-blind-spots todo 34 의 격리 관례(`quarantine-<UTC 날짜>/`, 경로 `/`→`__`, INDEX.txt)대로 회수해 그 todo 의 후보에서 빠진다. `deploy_all --plan` 의 미선언 경고는 `interop-protocol` 4줄(agent·peer)만 남고, 그 배포·roster 는 같은 계획의 GAP-5 가 맡는다.
+  ↳ 처리(2026-10-01): 남은 미선언 경고인 `interop-protocol` 플러그인(agent·peer)은 인터롭 배포기 선언에 들어갔다 — `f2ef2ac5`. 노드에 놓는 일은 roster 배치와 함께 웨이브 6 todo 33(소유자 승인)이 하고, 그때 이 경고도 사라진다. 따로, 실행 경로에서 빠진 옛 런타임 사본은 `policy=retired` 로 선언돼 릴리스 판정이 남아 있음(`retired-present`)만 보고한다 — memory_curator `1cd0051f`, reminder_poller `7c6fe009`, repair `fe36a843`. 그 사본들은 지우지 않으며, 실행 경로 밖으로의 격리는 todo 34(웨이브 6, 소유자 승인) 절차다.
 # 후속 과제 스윕 7 — 소유자·관측 인계
 
 ## 라이프로그 전사·화자 품질 교정 착지 후 남긴 것 (2026-09-06) — 소유자·관측
@@ -1751,6 +1765,7 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
   ↳ 재판정(2026-09-19, D220): PARTIAL — 두 계정의 벤더 HEAD는 같고 추적 Python 바이트 지문은 다르다. agent 전용 패치가 차이 일부를 설명하지만 모든 차이가 의도됐다고 추정하지 않는다. root 프로브 권한을 넓히지 않고 계정별 읽기로 비교했다.
 - **무패치 구동 탐지가 healthcheck 에 배선되지 않았다** — 이제 `python3 -m automation.hermes_compat.patch_state` 로 마커 상태를 기계 판정할 수 있고(기능 소개: [hermes-compat 무패치 구동 탐지](기능소개/hermes-compat-무패치-구동-탐지.md)), 매니페스트 notes 가 없는 검사를 있다고 말하던 오류도 제거했다. 다만 아직 사람이 돌려야 돌다 → healthcheck 는 ops 계정으로 도는데 대상은 `~agent/.hermes/hermes-agent` 라 권한 설계가 먼저 필요하다(같은 이유로 mailon 런타임 프로브도 배선이 미완이다). **탐지 공백 · 심각도: 중(지금은 사람이 돌려야 보인다)**.
   [해소 확인 2026-08-25] 마커·신선도·갈라짐 모두 기계 판정이 가능해졌다. **잔여**: ops→agent 권한 설계가 필요한 healthcheck 배선은 OWNER 항목으로 남는다 — `69c4293b`
+  ↳ 처리(2026-10-01): 호환 패치 캐리어가 `automation/hermes_compat/deploy-manifest.txt` 에 `v2:tree;policy=held` 로 선언돼, 릴리스와 다르면 영수증 `held` 와 적용 통지의 「남은 소유자 조치」에 사유(`vendor-patch-carrier-is-owner-deployed`)와 함께 드러난다 — `57caf932`, `66e16e13`. 패치 상태(`patch_state`)의 healthcheck 배선은 그대로 OWNER 로 남는다.
 
   ↳ 재판정(2026-09-19, D221): OWNER-DECISION — 소유자의 내용·보존·권한 선택이 선행한다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
 ## 수리 스윕 3차·개인 서버 대화 채널 후속 과제 (2026-08-17)
@@ -2624,6 +2639,7 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 
   ↳ 재판정(2026-09-19, D327): NODE-VERIFY — 노드·외부 상태 확인이 선행하며 현재 실측은 미완이다. 개별 근거·미결 조건은 재판정 원장의 같은 ID에 보존한다.
+  ↳ 처리(2026-10-02 · 해소): 래퍼 재생성은 끝났다 — v1.14.4(`1fc11c72`)에서 두 노드 래퍼의 입력 지문이 현재 체크 목록에서 계산한 값과 같고(`WRAPPER-PASS`), `healthcheck probe allowlist matches the checks` 는 10-02 `T002501Z` 틱부터 두 노드 모두 PASS 다. `~/.hermes/repair/` 정리는 이 확인의 범위 밖이다. 근거는 [RCB-1 소유자 조치](qa/RCB-1/owner-actions.md) 「① 해소 확인」.
 ## 수리 티켓 유실 사고 수정 중 발견한 인접 결함 (2026-09-09)
 
 > [이관 2026-09-09 · 해소] 설계 판단을 요구한 1건이 같은 날 닫혔다. 아래는 그때의 원문이고 `↳ 처리` 줄이 실제 결정이다.
@@ -2744,6 +2760,7 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 - **일일 비용 보고가 26회 연속 실패 중이다** — `send_cost_report.py` 는 `COST_REPORT_SOFT_CAP`(필수, USD)을 요구하는데 agent `~/.env.secrets` 에 없어 매일 `KeyError` 로 끝난다 → 소유자가 임계값을 정해 그 파일에 한 줄 더한다. **영향: 일일 지출 보고 중단 · 심각도 중**.
 - **`mail-triage-repair-daily` 가 6회 연속 `drift_skip` 이다** — Hermes 가 "global inference config drifted since this job was created" 로 실행을 거부한다(2026-09-22 폴백 변경 뒤로 추정) → 설정 변경이 의도였는지 확인하고 그 잡을 다시 만든다(`hermes cron`). **영향: 메일 분류 보정 중단 · 심각도 중**.
+  ↳ 재관측(2026-10-01, 릴리스 수렴 사각지대 웨이브 6): 2026-09-29 주 모델 변경 이후 Hermes 의 drift 보호가 계속 건너뛰어 관측 시점(2026-10-01) 8회 연속 skip 이었고, 그 잡은 모델이 고정(pin)돼 있지 않다. 소유자 결정은 둘 중 하나다 — `hermes cron edit <job> --provider <p> --model <m>` 로 고정하거나(이것은 모델을 코드·argv 에 적지 않는다는 단일 출처 규칙과 충돌한다), 현재 설정 아래에서 잡을 다시 만든다. 저장소 쪽 소유 결정은 `docs/follow-ups.md` 「릴리스 수렴 사각지대 해소 후 남긴 것」의 같은 잡 불릿이 맡는다.
 - **peer 에는 폴백 모델이 없다** — 주 모델은 `custom:litellm` 이고 `fallback_providers` 가 비어 doctor 가 WARN 으로 남긴다 → 의도면 그대로 두고(첫 알람 1건 뒤 되풀이하지 않는다), 아니면 폴백을 선언·로그인한다. **영향: peer 응답 여유만 · 심각도 낮음**.
 - **중앙 워처 매니페스트가 바뀌어 healthcheck 래퍼를 다시 설치해야 한다** — `configs/watcher-deploy-manifest.txt` 에 doctor-watch 두 줄이 더해져 래퍼 지문이 달라진다 → 릴리스 반영 뒤 노드 소유자가 `automation/provision-healthcheck-probe.sh` 를 1회 실행한다(`healthcheck_wrapper_current` 가 그전까지 알린다). **영향: 헬스체크 래퍼 드리프트 경고 · 심각도 낮음**.
 - **알람의 실제 첫 발송은 릴리스 뒤에 확인한다** — 단위·봉투 렌더까지만 검증했다 → 배포 뒤 첫 정각 점검에서 `#notifications` 에 위 두 정기 작업 고장이 한 건으로 도착하는지 본다. **영향: 검증 공백 · 심각도 낮음**.

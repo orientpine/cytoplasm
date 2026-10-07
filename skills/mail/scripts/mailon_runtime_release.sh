@@ -13,11 +13,18 @@
 #
 # Layout (RUNTIME_ROOT = ~/.hermes/mailon-runtime):
 #   RUNTIME_ROOT/
-#   ├── current -> releases/<digest>
-#   ├── releases/<digest>/{mailon/, data->../../state/data, logs->../../state/logs,
-#   │                      .venv->../../venvs/<py>-<reqhash>, runtime-manifest.json}
+#   ├── current -> releases/<src_digest>-<req_digest>
+#   ├── releases/<src_digest>-<req_digest>/{mailon/, data->../../state/data,
+#   │       logs->../../state/logs, .venv->../../venvs/<py>-<reqhash>, runtime-manifest.json}
 #   ├── state/{data/, logs/}
 #   └── venvs/<py>-<reqhash>/
+#
+# Releases are immutable and never deleted: a stored draft's argv can point at an
+# older release's venv python. A release's identity is the (src_digest, req_digest)
+# pair recorded in its runtime-manifest.json, re-verified against its own mailon/ —
+# legacy directories named releases/<src_digest> are judged the same way, by manifest.
+# Same identity already active -> no change at all. Existing target that fails
+# verification -> refuse (rc 1) and leave it in place for a human to inspect.
 #
 # Usage:
 #   mailon_runtime_release.sh <vendor_dir>
@@ -51,10 +58,43 @@ src_digest="$(mailon_vendor_digest "$vendor_dir/mailon")" \
 req_digest="$(sha256sum "$vendor_dir/requirements.txt" | cut -c1-16)"
 py_tag="$("$python_bin" -c 'import sys;print(f"cp{sys.version_info.major}{sys.version_info.minor}")')"
 venv_key="${py_tag}-${req_digest}"
-release_dir="$runtime_root/releases/$src_digest"
+release_name="${src_digest}-${req_digest}"
+release_dir="$runtime_root/releases/$release_name"
 venv_dir="$runtime_root/venvs/$venv_key"
 state_data="$runtime_root/state/data"
 state_logs="$runtime_root/state/logs"
+
+# Exactly one "<key>": "<16 hex>" line per digest, as written by the manifest below.
+_manifest_field() {
+  local found
+  found="$(sed -nE "s/^[[:space:]]*\"$2\"[[:space:]]*:[[:space:]]*\"([0-9a-f]{16})\"[[:space:]]*,?[[:space:]]*\$/\\1/p" \
+             "$1/runtime-manifest.json" 2>/dev/null)" || return 1
+  [[ -n "$found" && "$found" != *$'\n'* ]] || return 1
+  printf '%s' "$found"
+}
+# A release is ours iff its manifest names this identity AND its mailon/ re-digests to it.
+_verify_release() {
+  [[ -d "$1" && ! -L "$1" ]] || return 1
+  [[ "$(_manifest_field "$1" src_digest)" == "$src_digest" ]] || return 1
+  [[ "$(_manifest_field "$1" req_digest)" == "$req_digest" ]] || return 1
+  [[ "$(mailon_vendor_digest "$1/mailon" 2>/dev/null)" == "$src_digest" ]]
+}
+_activate() {
+  ln -sfn "$1" "$runtime_root/current.tmp.$$"
+  mv -T "$runtime_root/current.tmp.$$" "$runtime_root/current"
+}
+
+# (1) Same identity already active (legacy name included): change nothing.
+if [[ -L "$runtime_root/current" ]]; then
+  active="$(readlink -f "$runtime_root/current")" || active=""
+  if [[ -n "$active" ]] && _verify_release "$active" && [[ -x "$active/.venv/bin/python" ]]; then
+    printf '%s\n' "$active"; exit 0
+  fi
+fi
+
+# Only this run's own temporaries are ever removed, and only if they still exist.
+tmp_venv="" staged=""
+trap '[[ -z "$tmp_venv" ]] || rm -rf "$tmp_venv"; [[ -z "$staged" ]] || rm -rf "$staged"' EXIT
 
 umask 077
 mkdir -p "$runtime_root/releases" "$runtime_root/venvs" "$state_data/mails" \
@@ -82,9 +122,18 @@ import pyotp, dotenv, bs4, lxml  # noqa: F401
 from lxml import etree  # native import must succeed
 PY
   mv "$tmp_venv" "$venv_dir"
+  tmp_venv=""
 fi
 
-# --- release materialisation (staged, then verified) -----------------------
+# (2) Target already exists: verify and switch, or refuse. Never delete or rewrite it.
+if [[ -e "$release_dir" || -L "$release_dir" ]]; then
+  _verify_release "$release_dir" \
+    || fail "existing release $release_name failed verification; refusing to delete it"
+  _activate "$release_dir"
+  printf '%s\n' "$release_dir"; exit 0
+fi
+
+# (3) New release: materialise staged, verify, then move into place.
 staged="$release_dir.staged.$$"
 rm -rf "$staged"
 mkdir -p "$staged"
@@ -94,7 +143,7 @@ _hash_tree() { find "$1" -type f -name '*.py' -print0 | sort -z \
                  | xargs -0 sha256sum | sed "s# $2/# #" | sha256sum; }
 if [[ "$(_hash_tree "$staged/mailon" "$staged")" \
       != "$(_hash_tree "$vendor_dir/mailon" "$vendor_dir")" ]]; then
-  rm -rf "$staged"; fail "staged mailon hash != vendor (provenance mismatch)"
+  fail "staged mailon hash != vendor (provenance mismatch)"
 fi
 ln -s "$state_data" "$staged/data"
 ln -s "$state_logs" "$staged/logs"
@@ -110,10 +159,13 @@ cat > "$staged/runtime-manifest.json" <<JSON
 }
 JSON
 
-# Replace any prior same-digest release, then atomically flip `current`.
-if [[ -e "$release_dir" ]]; then rm -rf "$release_dir"; fi
-mv "$staged" "$release_dir"
-ln -sfn "$release_dir" "$runtime_root/current.tmp.$$"
-mv -T "$runtime_root/current.tmp.$$" "$runtime_root/current"
+_verify_release "$staged" || fail "staged release $release_name failed verification"
+# -n: a release that appeared concurrently is never overwritten; staged then survives
+# the mv and is reported (and cleaned up by the trap) instead of being nested inside.
+mv -T -n "$staged" "$release_dir" 2>/dev/null || true
+[[ ! -e "$staged" ]] \
+  || fail "could not move the staged build to $release_name (it may already exist); refusing to overwrite it"
+staged=""
+_activate "$release_dir"
 
 printf '%s\n' "$release_dir"

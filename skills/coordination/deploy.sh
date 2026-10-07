@@ -24,9 +24,11 @@ source "$repo_root/automation/deploy_push.sh"
 # automation/deploy_provenance.sh for why a silent revert is otherwise inevitable).
 source "$repo_root/automation/deploy_provenance.sh"
 deploy_provenance_check "$repo_root" \
-  "$repo_root/skills/coordination/scripts/confirm_reaction_watch.py" || exit 4
+  "$repo_root/skills/coordination/scripts/confirm_reaction_watch.py" \
+  "$repo_root/skills/coordination/deploy.sh" "$repo_root/skills/coordination/deploy-manifest.txt" || exit 4
 
 push_file "$repo_root/skills/coordination/scripts/confirm_reaction_watch.py" \
   '.hermes/scripts/confirm_reaction_watch.py'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; if hermes cron list | grep -Eq "Name:[[:space:]]+coordination-confirm-watch$"; then exit 0; fi; hermes cron create "*/1 * * * *" --name coordination-confirm-watch --no-agent --script confirm_reaction_watch.py --deliver local'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list'
+source "$repo_root/automation/deploy_cron.sh"
+converge_cron coordination-confirm-watch "*/1 * * * *" confirm_reaction_watch.py local
+run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all'

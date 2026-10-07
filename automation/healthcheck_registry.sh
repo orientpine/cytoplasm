@@ -30,6 +30,24 @@ if [[ ! -v HEALTHCHECK_SERVICES && -r "$HEALTHCHECK_SERVICES_FILE" ]]; then
   HEALTHCHECK_SERVICES="${_declared_value%\"}"
   unset _declared_line _declared_value
 fi
+#: The dashboard listens only on the address its hub.env binds (tailnet), which the node
+#: name may not resolve to — then the probe gets no answer instead of 401. The URL is an
+#: installation value, so it lives in the same root-owned, world-readable file: every
+#: consumer (the cron sweep, the delegated probe, the wrapper generator under any account)
+#: then derives the same probe command, and the allowlist keeps matching. Only an UNSET
+#: variable falls back to the file, as above.
+if [[ ! -v HEALTHCHECK_REPORT_HUB_DASHBOARD_URL && -r "$HEALTHCHECK_SERVICES_FILE" ]]; then
+  while IFS= read -r _declared_line || [[ -n "$_declared_line" ]]; do
+    case "$_declared_line" in
+      HEALTHCHECK_REPORT_HUB_DASHBOARD_URL=*)
+        _declared_value="${_declared_line#HEALTHCHECK_REPORT_HUB_DASHBOARD_URL=}"
+        _declared_value="${_declared_value#\"}"
+        HEALTHCHECK_REPORT_HUB_DASHBOARD_URL="${_declared_value%\"}"
+        ;;
+    esac
+  done < "$HEALTHCHECK_SERVICES_FILE"
+  unset _declared_line _declared_value
+fi
 HEALTHCHECK_DECLARED_SERVICES=()
 if [[ -n "${HEALTHCHECK_SERVICES-}" ]]; then
   # Bind the separators rather than inheriting the caller's IFS. A caller whose IFS held

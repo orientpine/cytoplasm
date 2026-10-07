@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, TypeAlias
 
+from automation.doctor.cron_env import Gap
+from automation.doctor.cron_env import observe as observe_cron_env
 from automation.install.checks import CheckResult
+from automation.interop import free_response
 
 Role: TypeAlias = Literal["agent", "peer"]
 Run: TypeAlias = Callable[[tuple[str, ...], Mapping[str, str]], tuple[int, str]]
@@ -27,6 +30,7 @@ TOKEN_KEY: Final = "DISCORD_BOT_TOKEN"
 DRIVE_KEY: Final = "DRIVE_PUBLISH_ENABLED"
 PATH_KEYS: Final = ("SPEECHTOTEXT_WHISPER_BIN", "SPEECHTOTEXT_WHISPER_MODEL")
 GWS_FILES: Final = ("client_secret.json", "credentials.enc", ".encryption_key")
+_REPO: Final = Path(__file__).resolve().parents[2]
 _ERROR_LIMIT: Final = 120
 _LONG_TOKEN: Final = re.compile(r"Bearer\s+\S+|[A-Za-z0-9_\-]{24,}")
 
@@ -71,6 +75,9 @@ class Facts:
     discord: tuple[CheckResult, ...] | str | None
     model_default: str = ""
     fallback_models: tuple[str, ...] = ()
+    agent_chat_channel: str = ""
+    discord_channels: tuple[tuple[str, ...], tuple[str, ...]] | None = ((), ())
+    cron_env: tuple[tuple[Gap, ...], int] | str | None = None
 
 
 def mask(text: str) -> str:
@@ -193,6 +200,23 @@ def _cron(path: Path) -> tuple[CronJob, ...] | None:
     )
 
 
+def _agent_chat(path: Path) -> str:
+    try:
+        return free_response.agent_chat_channel(path)
+    except (OSError, ValueError):
+        return ""
+
+
+def _discord_channels(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return (), ()
+    except OSError:
+        return None
+    return free_response.configured_channels(text)
+
+
 def _gws_status(binary: str, run: Run) -> GwsStatus | str:
     code, out = run((binary, "auth", "status"), {})
     if code != 0:
@@ -221,6 +245,7 @@ def _gateway(unit: str, run: Run, uid: int) -> str:
 def gather(
     *, account: str, role: Role, home: Path, gateway_unit: str, online: bool,
     run: Run = _run, discord_probe: DiscordProbe = _discord_probe, uid: int | None = None,
+    repo: Path = _REPO,
 ) -> Facts:
     hermes_dir = home / ".hermes"
     secrets = read_env_file(home / ".env.secrets")
@@ -232,6 +257,8 @@ def gather(
     interop_path = hermes_dir / "interop" / "config.json"
     token = (secrets or {}).get(TOKEN_KEY, "")
     provider, custom, fallback, default, fallback_models = _hermes_models(hermes_dir / "config.yaml")
+    cron = _cron(hermes_dir / "cron" / "jobs.json")
+    registered = frozenset(job.name for job in cron or () if job.enabled and not job.paused)
     discord: tuple[CheckResult, ...] | str | None = None
     if online and token:
         try:
@@ -253,8 +280,12 @@ def gather(
         gws_installed=gws_binary is not None,
         gws_files=gws_files,
         gws=_gws_status(gws_binary, run) if online and gws_binary and gws_files else None,
-        cron=_cron(hermes_dir / "cron" / "jobs.json"),
+        cron=cron,
         discord=discord,
         model_default=default,
         fallback_models=fallback_models,
+        agent_chat_channel=_agent_chat(interop_path),
+        discord_channels=_discord_channels(hermes_dir / "config.yaml"),
+        cron_env=observe_cron_env(repo=repo, role=role, registered=registered,
+                                  hermes_env=read_env_file(hermes_dir / ".env"), environ=os.environ),
     )

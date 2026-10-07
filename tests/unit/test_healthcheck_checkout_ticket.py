@@ -277,7 +277,7 @@ def _sweep(
     env["HEALTHCHECK_RELEASE_SOURCE_ROOT"] = str(current)
     receipt = tmp_path / "deploy-all-receipt.json"
     _ = receipt.write_text(
-        f'{{"release_sha":"{current.resolve().name}"}}\n', encoding="utf-8"
+        f'{{"release_sha":"{current.resolve().name}","version":2}}\n', encoding="utf-8"
     )
     env["HEALTHCHECK_DEPLOY_ALL_RECEIPT"] = str(receipt)
     env["HEALTHCHECK_RELEASE_HELPER"] = str(helper)

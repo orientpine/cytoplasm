@@ -9,14 +9,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
 
-from automation.doctor import guides
-from automation.doctor.facts import DRIVE_KEY, GWS_FILES, PATH_KEYS, TOKEN_KEY, Facts, GwsStatus, Role
+from automation.doctor import cron_env, guides
+from automation.doctor.facts import DRIVE_KEY, GWS_FILES, PATH_KEYS, TOKEN_KEY, CronJob, Facts, GwsStatus, Role
 from automation.install.checks import CheckResult, Status
 
 CODEX: Final = "openai-codex"
 CUSTOM_PREFIX: Final = "custom:"
 MAILON_KEYS: Final = ("MAILON_ID", "MAILON_PW", "MAILON_TOTP_SECRET")
 STREAK_FAIL: Final = 3
+#: Hermes 가 모델 고정 없는 agent 모드 잡을 주 모델 변경 뒤 건너뛸 때 오류에 남기는 표식.
+DRIFT_SKIP: Final = "drift_skip"
 _G: Final = "https://www.googleapis.com/auth/"
 GWS_SERVICES: Final = (
     ("캘린더", (f"{_G}calendar",)),
@@ -161,6 +163,22 @@ def _surface(f: Facts) -> Verdict:
     return _ok("승인 채널·소유자·통지 채널 설정됨")
 
 
+def _free_response(f: Facts) -> Verdict:
+    channel = f.agent_chat_channel
+    if not channel:
+        return _ok("해당 없음 — agent-chat 채널 채널 id 가 아직 없다(승인 채널 점검 참조)")
+    if f.discord_channels is None:
+        return _warn("~/.hermes/config.yaml 의 discord 블록을 읽지 못했다 — 무멘션 응답 여부 판정 불가")
+    free, ignored = f.discord_channels
+    if channel in free:
+        return _ok("agent-chat 채널 은 @ 없이도 답한다")
+    if channel in ignored:
+        return _warn("agent-chat 채널 이 discord.ignored_channels 에 있다 — 이 채널에서는 답하지 않는다",
+                     ("ignored_channels",))
+    return _fail("agent-chat 채널 이 discord.free_response_channels 에 없다 — @ 를 달아야만 답한다",
+                 ("free_response_channels",))
+
+
 def _gws(f: Facts) -> Verdict:
     if not f.gws_files:
         return _warn("미연결 — 메일 발송·캘린더·Drive·과제비·할 일 기능이 동작하지 않는다")
@@ -211,20 +229,31 @@ def _stt(f: Facts) -> Verdict:
     return _ok("whisper.cpp 실행 파일·모델 있음")
 
 
+def _broken_detail(job: CronJob) -> str:
+    if DRIFT_SKIP in job.last_error:
+        # Hermes 는 이 건너뜀을 한 번만 알리고 잡을 고칠 때까지 계속 건너뛴다 — 저절로 낫지 않는다.
+        return f"{job.name}(주 모델 변경 뒤 건너뜀, {job.failure_streak}회 연속 — 모델 고정 없이 같은 정의로 다시 만든다)"
+    return f"{job.name}({job.failure_streak}회 연속: {job.last_error})"
+
+
 def _cron(f: Facts) -> Verdict:
     if f.cron is None:
         return _warn("정기 작업 목록이 없다 — 워처가 아직 배포되지 않았다")
     active = [job for job in f.cron if job.enabled and not job.paused]
     failing = [job for job in active if job.last_status == "error"]
-    broken = [job for job in failing if job.failure_streak >= STREAK_FAIL]
+    broken = [job for job in failing if job.failure_streak >= STREAK_FAIL or DRIFT_SKIP in job.last_error]
     if broken:
-        detail = "; ".join(f"{job.name}({job.failure_streak}회 연속: {job.last_error})" for job in broken)
+        detail = "; ".join(_broken_detail(job) for job in broken)
         return _fail(f"{len(broken)}개 반복 실패 — {detail}", tuple(job.name for job in broken))
     stopped = [job for job in f.cron if not job.enabled or job.paused]
     if failing or stopped:
         names = tuple(job.name for job in (*failing, *stopped))
         return _warn(f"최근 실패·중지: {', '.join(names)}", names)
     return _ok(f"{len(active)}개 정상")
+
+
+def _cron_env(f: Facts) -> Verdict:
+    return Verdict(*cron_env.judge(f.cron_env))
 
 
 _BOTH: Final[frozenset[Role]] = frozenset(("agent", "peer"))
@@ -241,8 +270,10 @@ CAPABILITIES: Final = (
                "Discord Developer Portal(토큰·Message Content 인텐트)과 개인 서버 초대",
                "대화·승인 카드·결과 통지 전체", _discord),
     Capability("approval-surface", "승인 채널", _AGENT,
-               "개인 서버 #agent-chat·#notifications 채널 id 와 소유자 id",
+               "개인 서버 agent-chat 채널·#notifications 채널 id 와 소유자 id",
                "메일·캘린더·과제비·할 일 등 모든 승인 요청", _surface),
+    Capability("agent-chat-free-response", "agent-chat 채널 무멘션 응답", _AGENT,
+               "", "agent-chat 채널 에서 @ 없이 에이전트에게 말하기", _free_response),
     Capability("google-workspace", "Google Workspace", _AGENT,
                "Google 동의 화면(OAuth) — 캘린더·Gmail·Drive·Sheets·Tasks",
                "메일 발송·캘린더·Drive 발행·과제비·할 일", _gws),
@@ -254,6 +285,8 @@ CAPABILITIES: Final = (
                "whisper.cpp 설치와 모델 경로", "녹음 → 전사본 → 회의록", _stt),
     Capability("scheduled-jobs", "정기 작업(워처)", _BOTH, "",
                "승인 리액션 처리·리마인더·일일 보고 등 백그라운드 작업", _cron),
+    Capability("cron-required-env", "정기 작업 필수 설정값", _BOTH, "",
+               "그 값을 요구하는 정기 작업(예: 일일 지출 보고)", _cron_env),
 )
 
 

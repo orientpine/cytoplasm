@@ -17,22 +17,24 @@ from typing import Final
 
 import pytest
 
+from automation.deploy_declarations import Declaration, parse_declaration_file
+
 _REPO: Final = Path(__file__).resolve().parents[2]
 _PACKAGE: Final = _REPO / "automation" / "skill_generation"
 _DEPLOY: Final = _PACKAGE / "deploy.sh"
 _RUNTIME_AUTOMATION: Final = ".hermes/skill-generation/runtime/automation"
-_PUSH_TREE: Final = re.compile(
-    r"""^push_tree\s+"\$repo_root/automation/([^"]+)"\s+['"]([^'"]+)['"]""",
-    re.MULTILINE,
-)
+
+
+def _runtime_rows() -> tuple[Declaration, ...]:
+    manifest = _PACKAGE / "deploy-manifest.txt"
+    rows = parse_declaration_file(
+        manifest.relative_to(_REPO).as_posix(), manifest.read_text(encoding="utf-8"),
+    )
+    return tuple(row for row in rows if row.destination.startswith(f"{_RUNTIME_AUTOMATION}/"))
 
 
 def _push_tree_packages() -> frozenset[str]:
-    return frozenset(
-        match.group(1)
-        for match in _PUSH_TREE.finditer(_DEPLOY.read_text(encoding="utf-8"))
-        if match.group(2) == _RUNTIME_AUTOMATION
-    )
+    return frozenset(row.source.removeprefix("automation/") for row in _runtime_rows())
 
 
 def _imported_names(tree: ast.AST) -> tuple[str, ...]:
@@ -79,7 +81,7 @@ def test_runtime_push_trees_cover_imported_automation_packages() -> None:
 
 
 def test_runtime_sources_are_provenance_checked() -> None:
-    # Given: runtime sources are explicit push_tree calls.
+    # Given: runtime sources are the declared runtime rows.
     shipped = _push_tree_packages()
     # When: inspecting the existing provenance check's arguments.
     check = _DEPLOY.read_text(encoding="utf-8").split('deploy_provenance_check "$repo_root"', 1)[1].split("||", 1)[0]
@@ -90,22 +92,25 @@ def test_runtime_sources_are_provenance_checked() -> None:
 
 @pytest.fixture
 def runtime_home(tmp_path: Path) -> Path:
-    """Use the real archive helper locally; never execute deploy.sh or SSH."""
-    destination = tmp_path / _RUNTIME_AUTOMATION
-    destination.mkdir(parents=True)
+    """Stage each declared row with the deployer's own helpers; never execute deploy.sh or SSH."""
+    calls = [
+        f'deploy_tree_swap "$repo_root/{row.source}" {row.destination}' if row.kind == "tree"
+        else f'push_file "$repo_root/{row.source}" {row.destination}'
+        for row in _runtime_rows()
+    ]
     assembled = subprocess.run(
         (
             "bash", "-c",
             "\n".join((
-                'set -euo pipefail; repo="$1"; destination="$2"; shift 2',
-                'source "$repo/automation/deploy_provenance.sh"',
-                'for entry in "$@"; do',
-                'deploy_archive_stream "$repo" "$repo/automation" "$entry" | tar -xzf - -C "$destination"',
-                'done',
+                'set -euo pipefail; repo_root="$1"; home="$2"',
+                'run_agent() { HOME="$home" bash -c "$1"; }',
+                'source "$repo_root/automation/deploy_push.sh"',
+                'source "$repo_root/automation/deploy_tree.sh"',
+                *calls,
             )),
-            "stage-runtime", str(_REPO), str(destination), *sorted(_push_tree_packages()),
+            "stage-runtime", str(_REPO), str(tmp_path),
         ),
-        cwd=tmp_path, capture_output=True, text=True, check=False, timeout=30,
+        cwd=tmp_path, capture_output=True, text=True, check=False, timeout=60,
     )
     assert assembled.returncode == 0, assembled.stdout + assembled.stderr
     return tmp_path

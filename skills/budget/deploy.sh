@@ -23,7 +23,8 @@ source "$repo_root/automation/deploy_push.sh"
 source "$repo_root/automation/deploy_provenance.sh"
 deploy_provenance_check "$repo_root" \
   "$repo_root/skills/budget/scripts/budget_watch.py" \
-  "$repo_root/skills/mail/scripts/watch_failure_streak.py" || exit 4
+  "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
+  "$repo_root/skills/budget/deploy.sh" "$repo_root/skills/budget/deploy-manifest.txt" || exit 4
 
 # 연속 실패 통지 헬퍼 — 워처들이 공유하는 사본 하나(`~/.hermes/scripts/`)이고 소스는
 # skills/mail/scripts 에 산다(사본 신설 금지, 계획 CR-1). mail deploy.sh 와 같은 파일을
@@ -34,5 +35,5 @@ push_file "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
 push_file "$repo_root/skills/budget/scripts/budget_watch.py" \
   '.hermes/scripts/budget_watch.py'
 # Every ordinary failing tick is silent; only incident open/recovery notices reach Discord.
-run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+budget-watch\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --deliver discord --no-agent --script budget_watch.py; else hermes cron create "*/30 * * * *" --name budget-watch --no-agent --script budget_watch.py --deliver discord; fi'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list --all | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+budget-watch\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "*/30 * * * *" --deliver discord --no-agent --script budget_watch.py; else hermes cron create "*/30 * * * *" --name budget-watch --no-agent --script budget_watch.py --deliver discord; fi'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all'

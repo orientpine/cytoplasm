@@ -13,10 +13,18 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 _SCENARIO_TIMEOUT_SECONDS: Final = 30
 
 
+def _interop_runtime() -> Path:
+    configured = os.environ.get("INTEROP_RUNTIME")
+    if configured:
+        return Path(configured).expanduser()
+    root = Path("~/.hermes/autophagy-import").expanduser()
+    if (root / "automation" / "interop").is_dir():
+        return root
+    return Path("~/.hermes/interop_runtime").expanduser()
+
+
 def _environment(home: str, skills_root: Path) -> Mapping[str, str]:
-    interop_runtime = Path(
-        os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")
-    ).expanduser()
+    interop_runtime = _interop_runtime()
     return {
         "HOME": home,
         "PATH": "/usr/bin:/bin",

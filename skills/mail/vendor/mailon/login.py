@@ -131,6 +131,30 @@ def _on_login_page(url: str) -> bool:
     return _LOGIN_PATH in url
 
 
+_OPEN_TIMED_OUT = "Operation timed out"
+
+
+def _open_login_page(browser: AgentBrowser, cfg: Config) -> None:
+    """Open the login page, tolerating only a load timeout that already reached it.
+
+    agent-browser's `open` waits for the full page load under a 25 s action
+    limit, and mailon.kr regularly takes longer while the login form itself is
+    already rendered (2026-10-02: 3 of 6 opens timed out, the form was there
+    6 of 6). Any other failure, or a timeout that never reached the login
+    path, still raises.
+    """
+    log.info("opening login page: %s", cfg.login_url)
+    try:
+        browser.open(cfg.login_url)
+    except BrowserError as error:
+        if _OPEN_TIMED_OUT not in str(error):
+            raise
+        url = browser.current_url()
+        if not _on_login_page(url):
+            raise
+        log.warning("login page open timed out after reaching %s; continuing", url)
+
+
 def login(browser: AgentBrowser, cfg: Config) -> None:
     """Perform a fresh login. Raises LoginError on failure.
 
@@ -143,8 +167,7 @@ def login(browser: AgentBrowser, cfg: Config) -> None:
       5. Submit
       6. Wait for URL change away from /integrated/login
     """
-    log.info("opening login page: %s", cfg.login_url)
-    browser.open(cfg.login_url)
+    _open_login_page(browser, cfg)
     log.info("opened; waiting for DOM")
     try:
         browser.wait_load("domcontentloaded")

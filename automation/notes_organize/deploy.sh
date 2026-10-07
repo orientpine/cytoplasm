@@ -25,7 +25,8 @@ source "$repo_root/automation/deploy_push.sh"
 source "$repo_root/automation/deploy_provenance.sh"
 deploy_provenance_check "$repo_root" \
   "$repo_root/automation/notes_organize/notes_organize.py" \
-  "$repo_root/skills/mail/scripts/watch_failure_streak.py" || exit 4
+  "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
+  "$repo_root/automation/notes_organize/deploy.sh" "$repo_root/automation/notes_organize/deploy-manifest.txt" || exit 4
 
 # Ship the shared incident helper first. The wrapper keeps running if a partial deploy
 # omits it, but notices cannot open or recover until this file is present.
@@ -35,5 +36,5 @@ push_file "$repo_root/automation/notes_organize/notes_organize.py" '.hermes/scri
 run_agent 'grep -qx "timezone: Asia/Seoul" "$HOME/.hermes/config.yaml"'
 # Weekdays provide catch-up after a failed Monday tick. The delivered-week watermark
 # makes every later tick in a successfully consumed week a silent no-op.
-run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+notes-weekly-organize\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "0 8 * * 1-5" --deliver discord --no-agent --script notes_organize.py; else hermes cron create "0 8 * * 1-5" --name notes-weekly-organize --no-agent --script notes_organize.py --deliver discord; fi'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list --all | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+notes-weekly-organize\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "0 8 * * 1-5" --deliver discord --no-agent --script notes_organize.py; else hermes cron create "0 8 * * 1-5" --name notes-weekly-organize --no-agent --script notes_organize.py --deliver discord; fi'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all'

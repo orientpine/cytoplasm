@@ -14,7 +14,7 @@ release_receipt_log() { printf '[release-receipt] %s\n' "$*" >&2; }
 
 probe_release_fully_deployed() { # probe_release_fully_deployed <node> <account> <receipt-path>
   local _node="$1" _account="$2" receipt="$3"
-  local current sha recorded
+  local current sha recorded fields version
 
   current="$(readlink "${HEALTHCHECK_RELEASE_SOURCE_ROOT:-/srv/autophagy-agent-current}" 2>/dev/null)" || {
     release_receipt_log "RECEIPT-UNKNOWN: cannot read the release pointer"
@@ -28,14 +28,32 @@ probe_release_fully_deployed() { # probe_release_fully_deployed <node> <account>
     return 1
   fi
 
-  recorded="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["release_sha"])' "$receipt" 2>/dev/null)" || {
+  # 두 줄: release_sha, 그리고 정수 판 번호(정수가 아니거나 없으면 "-").
+  fields="$(python3 -I -c '
+import json, sys
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+recorded, version = document["release_sha"], document.get("version")
+if not isinstance(recorded, str) or not recorded.strip() or "\n" in recorded:
+    sys.exit(1)
+print(recorded)
+print(version if type(version) is int else "-")
+' "$receipt" 2>/dev/null)" || {
     release_receipt_log "RECEIPT-UNKNOWN: unreadable receipt $receipt"
     return 1
   }
+  recorded="${fields%%$'\n'*}"
+  version="${fields##*$'\n'}"
 
   if [[ "$recorded" != "$sha" ]]; then
     release_receipt_log \
       "RECEIPT-STALE: receipt attests $recorded but the release is $sha — run automation/deploy_all.sh --apply"
+    return 1
+  fi
+  # 판 번호 관문은 이 프로브 하나다. v2 미만·판 번호 없음은 "모름"이 아니라 증명 실패다 —
+  # 옛 영수증은 위임 프로브와 v2 표면을 판정하지 않았다.
+  if [[ ! "$version" =~ ^[0-9]+$ ]] || (( version < 2 )); then
+    release_receipt_log \
+      "RECEIPT-VERSION: receipt version ${version} cannot attest release $sha — run automation/deploy_all.sh --verify"
     return 1
   fi
   release_receipt_log "RECEIPT-PASS: release $sha fully deployed"

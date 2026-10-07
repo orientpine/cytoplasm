@@ -151,6 +151,36 @@ def test_main_when_signed_mode_has_no_token_then_stdout_is_exactly_one_record(
     assert "PEER-ATTEST-PASS" in streams.err
 
 
+def test_main_when_signed_mode_peer_has_token_then_posts_no_discord_reply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: the peer keeps its gateway bot token in its env (sourced by deploy-skill.sh),
+    # which on 2026-10-06 still produced a [skill-attest] reply after the signed switch.
+    request = replace(
+        _request(_skill(tmp_path)),
+        mode=peer_attest.AttestationMode.SIGNED,
+    )
+    private_key = _key(tmp_path)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "peer-gateway-token")
+    monkeypatch.setattr(peer_attest, "_find_tamperable_path", lambda _root: None)
+    monkeypatch.setattr(peer_attest, "_is_trusted_attestor_root", lambda _root: True)
+    monkeypatch.setattr(peer_attest, "_parse_request", lambda _argv: request)
+    monkeypatch.setattr(peer_attest, "_peer_signing_key", lambda: private_key)
+    transport = FakeDiscordTransport()
+    monkeypatch.setattr(peer_attest, "DiscordRestTransport", lambda _token: transport)
+
+    # When: the real CLI boundary runs in signed mode.
+    code = peer_attest.main(())
+
+    # Then: the signed record is emitted and nothing is posted to Discord.
+    streams = capsys.readouterr()
+    assert code == 0
+    assert peer_attestation.parse_signed_attestation(streams.out) is not None
+    assert transport.replies == []
+
+
 def test_parse_request_when_mode_is_signed_then_preserves_configured_variant() -> None:
     # Given: the deploy pipeline passes the install-level mode into the peer CLI.
     arguments = [

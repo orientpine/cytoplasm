@@ -1,0 +1,61 @@
+# Deployer write exemptions — the ledger of tests/unit/test_deploy_write_inventory.py.
+#
+# Format: <deployer path>|<kind>|<target>|<reason>   (one row per write; blank and # lines ignored)
+#   kind = raw          a remote write that is not a shared helper call (push_file,
+#                       deploy_tree_swap, converge_cron); target = a substring that selects
+#                       exactly ONE logical line of that deployer (continuations joined).
+#          dest         a helper destination that no deploy-manifest.txt declares;
+#                       target = the resolved home-relative destination, exactly.
+#          (a third kind covers a deploy.sh without a sibling deploy-manifest.txt, target =
+#           the missing manifest path; since RCB todo 19 every deployer has one, so the
+#           ledger holds no such row and the test's R1 rejects a new deployer without one.)
+#   reason = never empty, permanent, and quotes why the write stays outside the helpers. RCB
+#            todo 28 closed the in-transition rows; test_only_permanent_exemptions_remain pins
+#            what remains, so a new row changes that test in the same commit.
+# A row that matches nothing is a failure (dead exemption): delete your row with the write.
+# Scope: automation/*/deploy*.sh and skills/*/deploy*.sh. automation/deploy-skill.sh is out of
+# scope by the scan's glob, not by a row. This file is edited by one todo at a time.
+automation/hermes_compat/deploy-owner-dm.sh|raw|$compat/staging/automation/hermes_compat\"; tar -xzf|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-owner-dm.sh|raw|cp \"\$HOME/$run_py\" \"\$P/run.py\"|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-owner-dm.sh|raw|tar -xzf - -C \"\$HOME/$compat/appliers\"|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-owner-dm.sh|raw|tar -xzf - -C \"\$HOME/$compat/staging\"|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-owner-dm.sh|raw|xargs -r rm -rf|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-public-message-policy.sh|raw|$compat/staging/automation/hermes_compat\"; tar -xzf|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-public-message-policy.sh|raw|cp \"\$HOME/$run_py\" \"\$P/run.py\"|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-public-message-policy.sh|raw|tar -xzf - -C \"\$HOME/$compat/appliers\"|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-public-message-policy.sh|raw|tar -xzf - -C \"\$HOME/$compat/staging\"|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy-public-message-policy.sh|raw|xargs -r rm -rf|vendor patch apply is an owner action — carrier declared held
+automation/hermes_compat/deploy.sh|raw|tar -xzf - -C \"\$HOME/$dest\"|vendor patch apply is an owner action — carrier declared held
+automation/interop/deploy.sh|raw|cat > "$t" || { rm -f "$t"; exit 1; }|rule-file read check: the running gate code must load the new file from a node mktemp copy before push_file replaces it (permanent)
+automation/interop/deploy.sh|raw|cp -p "$HOME/$f" "$b/$f"|rollback copy of the current drop-in, plugin files and guard to ~/.hermes/interop/rollback/<UTC> before the bundle moves (permanent)
+automation/interop/deploy.sh|raw|cp -p "$f" "$b/.hermes/interop/external-effect-tools.yaml"|rollback copy of a differing home rule file to ~/.hermes/interop/rollback/<UTC> before push_file replaces it, also on roster-held runs (permanent)
+automation/notes_organize/deploy.sh|raw|--name notes-weekly-organize --no-agent|FS3-pinned test tests/unit/test_watcher_deploy_coverage.py fixes this registration text
+automation/rag_stack/deploy.sh|raw|install -m 0644 "$stage/compose.yaml"|RAG node, owner-run — declared held
+automation/regression_bank/deploy_lab_node.sh|raw|'crontab -'|lab-node pre-push harness, not a production deployer — AGENTS.md 배포 provenance 예외
+automation/regression_bank/deploy_lab_node.sh|raw|'crontab -l 2>/dev/null|lab-node pre-push harness, not a production deployer — AGENTS.md 배포 provenance 예외
+automation/regression_bank/deploy_lab_node.sh|raw|; crontab -l"|lab-node pre-push harness, not a production deployer — AGENTS.md 배포 provenance 예외
+automation/regression_bank/deploy_lab_node.sh|raw|cat > ~/.hermes/regression_bank_runtime/bank_state.py|lab-node pre-push harness, not a production deployer — AGENTS.md 배포 provenance 예외
+automation/regression_bank/deploy_lab_node.sh|raw|hermes cron remove $LEGACY_CRON_ID|lab-node pre-push harness, not a production deployer — AGENTS.md 배포 provenance 예외
+automation/regression_bank/deploy_lab_node.sh|raw|install -d -m 700|lab-node pre-push harness, not a production deployer — AGENTS.md 배포 provenance 예외
+automation/regression_bank/deploy_lab_node.sh|raw|rsync -a --delete|lab-node pre-push harness, not a production deployer — AGENTS.md 배포 provenance 예외
+automation/regression_bank/deploy_lab_node.sh|raw|scp "$repo_root/automation/regression_bank/remote_bank_runner.sh"|lab-node pre-push harness, not a production deployer — AGENTS.md 배포 provenance 예외
+automation/research_trends/deploy.sh|raw|--name research-trends --no-agent|FS3-pinned test tests/unit/test_watcher_deploy_coverage.py fixes this registration text
+skills/budget/deploy.sh|raw|--name budget-watch --no-agent|FS3-pinned test tests/unit/test_watcher_deploy_coverage.py fixes this registration text
+skills/mail/deploy.sh|dest|.hermes/mailon-vendor-staging/mailon_runtime_release.sh|derived build staging — declared as v2:derived
+skills/mail/deploy.sh|dest|.hermes/mailon-vendor-staging/mailon_vendor_digest.sh|derived build staging — declared as v2:derived
+skills/mail/deploy.sh|raw|--name mail-daily-digest --no-agent|FS3-pinned test tests/unit/test_watcher_deploy_coverage.py fixes this registration text
+skills/mail/deploy.sh|raw|--name mail-triage-watch --no-agent|FS3-pinned test tests/unit/test_watcher_deploy_coverage.py fixes this registration text
+skills/mail/deploy.sh|raw|rm -f "$HOME/.hermes/scripts/"mail_attachment_drive_sync.py|removes the 2026-08-29 agent-made copy; the governed live mount is the only executable copy
+skills/mail/deploy.sh|raw|rm -rf \"\$HOME/$staging\"|derived build staging — declared as v2:derived
+skills/mail/deploy.sh|raw|tar -C \"\$HOME/$staging\" -xzf -|derived build staging — declared as v2:derived
+#
+# Extraction audit (permanent; RCB todo 28 acceptance). The plan's command
+#   grep -nE 'tar -x' $(git ls-files | grep -E '(^|/)deploy[^/]*\.sh$')
+# also reads files the inventory scan above does not (the frozen deploy-skill.sh and the shared
+# helpers), so their hits are accounted for here, not as rows: these lines start with "#" and the
+# inventory parser never sees them. Format: #audit|<path>|<frozen|helper|comment>|<hits>|<reason>
+# — <path>, <kind> and <hits> are the identity; a hit not covered by a raw row above or by an entry
+# here, and an entry whose hit count no longer matches, both fail tests/unit/test_deploy_write_ledger_closure.py.
+#audit|automation/deploy-skill.sh|frozen|3|skill mount and review staging; the file is frozen and outside the inventory glob
+#audit|automation/deploy_tree.sh|comment|1|describes the in-place extraction the helper replaced
+#audit|automation/deploy_tree_remote.sh|helper|1|deploy_tree_swap extracts into staging, verified before the atomic switch

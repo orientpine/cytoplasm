@@ -26,6 +26,10 @@ import yaml
 _REPO: Final = Path(__file__).resolve().parents[2]
 _WRAPPER: Final = _REPO / "automation" / "merge-pr.sh"
 _WORKFLOW: Final = _REPO / ".github" / "workflows" / "ci.yml"
+#: gh pr diff 이음새가 돌려주는 PR diff — 보상 스캔이 받은 stdin 과 바이트로 대조한다.
+_DIFF: Final = "diff --git a/README.md b/README.md\n+a safe change\n"
+#: 2026-09-30 PR #557 에서 20분 넘게 in_progress 로 멈췄던 외부 앱 체크.
+_STUCK_APP_CHECK: Final = "GitGuardian Security Checks"
 
 
 def _workflow_jobs() -> tuple[str, ...]:
@@ -57,11 +61,16 @@ def _view(
     }
 
 
-def _stubs(tmp_path: Path, views: list[dict[str, object]], *, merge_rc: int = 0) -> tuple[Path, Path, Path]:
+def _stubs(
+    tmp_path: Path, views: list[dict[str, object]], *, merge_rc: int = 0, diff: str | None = _DIFF
+) -> tuple[Path, Path, Path]:
     """gh 와 release-tag 를 주입 이음새로 세운다 — 네트워크 없이 판정 전체를 구동한다."""
     log = tmp_path / "calls.log"
     for index, view in enumerate(views, start=1):
         (tmp_path / f"view-{index}.json").write_text(json.dumps(view), encoding="utf-8")
+    if diff is not None:
+        (tmp_path / "pr.diff").write_text(diff, encoding="utf-8")
+    diff_branch = 'cat "$dir/pr.diff"; exit 0' if diff is not None else "exit 1"
     gh = tmp_path / "gh"
     gh.write_text(
         "#!/usr/bin/env bash\n"
@@ -75,6 +84,9 @@ def _stubs(tmp_path: Path, views: list[dict[str, object]], *, merge_rc: int = 0)
         'fi\n'
         'if [[ "$1 $2" == "pr merge" ]]; then\n'
         f'  printf "merge\\n" >> "{log}"; exit {merge_rc}\n'
+        'fi\n'
+        'if [[ "$1 $2" == "pr diff" ]]; then\n'
+        f'  {diff_branch}\n'
         'fi\n'
         'exit 0\n',
         encoding="utf-8",
@@ -90,6 +102,8 @@ def _run(tmp_path: Path, gh: Path, tag: Path, **extra: str) -> subprocess.Comple
     env = dict(os.environ)
     env.pop("MERGE_PR_ALLOW_UNCHECKED", None)
     env.pop("MERGE_PR_GH", None)
+    env.pop("MERGE_PR_GITLEAKS", None)
+    env.pop("MERGE_PR_EXTERNAL_GRACE_SECONDS", None)
     env.update(
         PATH=f"{gh.parent}:{env['PATH']}",
         MERGE_PR_RELEASE_TAG=str(tag),
@@ -283,3 +297,123 @@ def test_no_source_file_merges_a_pull_request_outside_the_wrapper() -> None:
 
 def test_the_wrapper_ships_executable() -> None:
     assert os.access(_WRAPPER, os.X_OK)
+
+
+def _external_stuck() -> list[dict[str, object]]:
+    """워크플로 잡은 전부 green 이고 외부 앱 체크 하나만 끝나지 않은 모양."""
+    return [*_all_green(), _check(_STUCK_APP_CHECK, status="IN_PROGRESS", conclusion=None)]
+
+
+def _gitleaks(tmp_path: Path, rc: int) -> Path:
+    """받은 stdin 을 남기고 정해진 코드로 끝나는 gitleaks 이음새 — 0 깨끗함, 3 발견."""
+    stub = tmp_path / "gitleaks-stub"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'cat > "{tmp_path}/scanned.diff"\n'
+        f'printf "scan-%s\\n" "$1" >> "{tmp_path}/calls.log"\n'
+        f"exit {rc}\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return stub
+
+
+def test_a_stuck_external_check_merges_once_the_compensating_scan_is_clean(tmp_path: Path) -> None:
+    # Given: every workflow job is green and only an app check stays in progress.
+    gh, tag, log = _stubs(tmp_path, [_view(_external_stuck())])
+    scanner = _gitleaks(tmp_path, 0)
+
+    # When: its grace has already run out.
+    result = _run(
+        tmp_path, gh, tag, MERGE_PR_EXTERNAL_GRACE_SECONDS="0", MERGE_PR_GITLEAKS=str(scanner)
+    )
+
+    # Then: the pull request's diff is scanned first, then merged, and the bypass is announced.
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _calls(log) == ["scan-stdin", "merge"]
+    assert (tmp_path / "scanned.diff").read_text(encoding="utf-8") == _DIFF
+    assert "EXTERNAL-UNSETTLED" in result.stderr
+    assert _STUCK_APP_CHECK in result.stderr
+
+
+def test_a_stuck_external_check_is_refused_when_the_diff_holds_a_secret(tmp_path: Path) -> None:
+    gh, tag, log = _stubs(tmp_path, [_view(_external_stuck())])
+
+    result = _run(
+        tmp_path, gh, tag,
+        MERGE_PR_EXTERNAL_GRACE_SECONDS="0", MERGE_PR_GITLEAKS=str(_gitleaks(tmp_path, 3)),
+    )
+
+    assert result.returncode != 0
+    assert _calls(log) == ["scan-stdin"]
+
+
+def test_a_stuck_external_check_is_refused_without_a_scanner(tmp_path: Path) -> None:
+    gh, tag, log = _stubs(tmp_path, [_view(_external_stuck())])
+
+    result = _run(
+        tmp_path, gh, tag,
+        MERGE_PR_EXTERNAL_GRACE_SECONDS="0", MERGE_PR_GITLEAKS=str(tmp_path / "no-such-gitleaks"),
+    )
+
+    assert result.returncode != 0
+    assert _calls(log) == []
+
+
+def test_a_stuck_external_check_is_refused_when_the_diff_cannot_be_read(tmp_path: Path) -> None:
+    gh, tag, log = _stubs(tmp_path, [_view(_external_stuck())], diff=None)
+
+    result = _run(
+        tmp_path, gh, tag,
+        MERGE_PR_EXTERNAL_GRACE_SECONDS="0", MERGE_PR_GITLEAKS=str(_gitleaks(tmp_path, 0)),
+    )
+
+    assert result.returncode != 0
+    assert _calls(log) == []
+
+
+def test_an_external_check_is_not_bypassed_before_its_grace_runs_out(tmp_path: Path) -> None:
+    # Given: a grace longer than the gate's deadline (2 s in _run).
+    gh, tag, log = _stubs(tmp_path, [_view(_external_stuck())])
+
+    result = _run(
+        tmp_path, gh, tag,
+        MERGE_PR_EXTERNAL_GRACE_SECONDS="3600", MERGE_PR_GITLEAKS=str(_gitleaks(tmp_path, 0)),
+    )
+
+    # Then: nothing is scanned or merged; it times out like any unsettled check.
+    assert result.returncode != 0
+    assert _calls(log) == []
+    assert _STUCK_APP_CHECK in result.stderr
+
+
+def test_a_pending_workflow_job_is_never_compensated_by_the_scan(tmp_path: Path) -> None:
+    pending = [
+        _check(_workflow_jobs()[0], status="IN_PROGRESS", conclusion=None),
+        *_all_green()[1:],
+        _check(_STUCK_APP_CHECK, status="IN_PROGRESS", conclusion=None),
+    ]
+    gh, tag, log = _stubs(tmp_path, [_view(pending)])
+
+    result = _run(
+        tmp_path, gh, tag,
+        MERGE_PR_EXTERNAL_GRACE_SECONDS="0", MERGE_PR_GITLEAKS=str(_gitleaks(tmp_path, 0)),
+    )
+
+    assert result.returncode != 0
+    assert _calls(log) == []
+
+
+def test_a_failing_external_check_is_refused_even_when_the_scan_would_be_clean(
+    tmp_path: Path,
+) -> None:
+    failing = [*_all_green(), _check(_STUCK_APP_CHECK, conclusion="FAILURE")]
+    gh, tag, log = _stubs(tmp_path, [_view(failing)])
+
+    result = _run(
+        tmp_path, gh, tag,
+        MERGE_PR_EXTERNAL_GRACE_SECONDS="0", MERGE_PR_GITLEAKS=str(_gitleaks(tmp_path, 0)),
+    )
+
+    assert result.returncode != 0
+    assert _calls(log) == []

@@ -16,9 +16,11 @@
 | `coordination.py` | 에이전트간 일정 조율 **순수 상태머신**. 가용성 교집합→후보 ≤3→양측 승인→소유자 승인=캘린더 쓰기 게이트. `correlation_id`는 `coord-` 접두사 |
 | `delegation.py` · `report.py` | 위임 봉투 / `#agents-log` 보고 포맷 |
 | `killswitch.py` | `!pause-agents`/`!resume-agents` (소유자만, 영속) |
+| `owner_proxy.py` | 소유자 대리 요청 — `interop_bot_prose` 의 유일한 예외. 사설 설정 `owner_proxy_bot_id`·`owner_proxy_origin_channel_id` 의 봇 하나가 `#agent-chat`(스레드 포함)에 옮겨 쓴 글을, 링크한 원문을 Discord API 로 읽어 소유자 작성·같은 guild·원문 채널(스레드)·24시간·1회(원장)를 모두 확인한 뒤에만 받는다. 확인 불가는 거부. 승인 게이트·✅ 판정은 불변. 규약 [interop §3.5](../../docs/guide/interop-규약.md) |
 | `loop_guard.py` | 봇 연쇄 분당 5회 상한 + 본문 해시 dedup |
 | `gate_driver.py` · `live_peer_driver.py` | 게이트/피어 드라이버 |
 | `production_guard.sh` | 프로덕션 게이트웨이에서 `E2E_TEST_MODE` 거부(부팅 차단) |
+| `free_response.py` | 게이트웨이 드롭인 `ExecStartPre=-…` 가 매 시작마다 `agent_chat_channel_id` 를 같은 계정 `config.yaml` 의 `discord.free_response_channels` 에 정확히 한 번 맞춘다(빠졌을 때만 한 줄 수정, 백업·원자 교체, ignored 우선, 키 없는 peer 는 무동작). doctor 「agent-chat 채널 무멘션 응답」이 같은 `decide`/`configured_channels` 를 읽기 전용으로 쓴다 |
 
 ## 불변식 (변경 전 반드시 확인)
 - **mutation은 owner 승인 레코드 없이는 절대 실행 안 됨.** 승인 판정 로직(`_has_valid_approval`) 변경은 보안 회귀.

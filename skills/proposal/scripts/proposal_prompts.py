@@ -25,7 +25,7 @@ COMPOSITION_PRINCIPLE: Final = (
     "소유자가 이미 보유한 데이터베이스·도구로 직접 수행 가능한 항목을 연구 내용·수행 방법의 "
     "주축으로 배치하고, 외부 의존이 큰 항목은 보조·협력 항목으로 내린다."
 )
-# Copied verbatim from /home/cha/Documents/2026_kimm_docbot/src/kimm_docbot/agents/kimm_domain.py
+# Copied verbatim from src/kimm_docbot/agents/kimm_domain.py in the private kimm-docbot repository.
 FORBIDDEN_EXPRESSIONS: Final = (
     "것 같다",
     "것 같습니다",

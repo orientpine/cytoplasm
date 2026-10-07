@@ -44,7 +44,7 @@ def _v1_meta() -> dict[str, object]:
 def _v2_meta() -> dict[str, object]:
     return {
         **_v1_meta(),
-        "entity": ["차백동", "한국기계연구원"],
+        "entity": ["홍길동", "한국기계연구원"],
         "relations": ["counterpart:김박사", "project:autophagy"],
         "event_date": "2026-08-21",
     }
@@ -63,7 +63,7 @@ def test_v2_keys_are_twin_keys_so_they_require_kind() -> None:
 
 def test_entity_rejects_non_list_and_empty_items() -> None:
     assert wiki_store.validate_meta(_v2_meta()) == []
-    assert any("entity" in e for e in wiki_store.validate_meta({**_v2_meta(), "entity": "차백동"}))
+    assert any("entity" in e for e in wiki_store.validate_meta({**_v2_meta(), "entity": "홍길동"}))
     assert any("entity" in e for e in wiki_store.validate_meta({**_v2_meta(), "entity": ["  "]}))
 
 

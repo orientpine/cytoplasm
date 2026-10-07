@@ -65,6 +65,24 @@ Local fixes
   returns, still fails closed. Regression:
   `tests/unit/test_mailon_editor_frame_reload.py`.
 
+* 2026-10-06 — `mailon/scraper.py`: the inbox folderUid was read only from a
+  rendered mail-list row. On the node the `/mail` page stayed
+  `readyState=interactive` with the sidebar drawn but zero list rows for the
+  whole 90s window (two runs), so every sync died with `could not resolve
+  inbox folderUid from DOM` while the list API answered for that folderUid.
+  When the rows never render, the uid next to the sidebar inbox label is now
+  accepted only if `list_async.json` returns `result:true` for that same
+  folder; otherwise the original error stands. Rendered rows still win.
+  Regression: `tests/unit/test_mailon_inbox_uid_fallback.py`.
+
+* 2026-10-06 — `mailon/scraper.py`, `mailon/main.py`: every sync walked the
+  whole folder list (up to 500 pages). After the inbox grew to 9366 mails and
+  the server slowed to ~2.3s per page, the walk outlived the 900s wrapper
+  timeout and saved nothing. The list is newest-first, so a normal sync now
+  stops at the first page made only of already-saved mails; `sync --full-scan`
+  keeps the old full walk. Regression:
+  `tests/unit/test_mailon_list_early_stop.py`.
+
 The private development repository preserves those bytes. Public-history
 snapshots run `automation/public_export_redaction.py` against the materialized
 copy only, replacing identifying fixture/comment values without changing the

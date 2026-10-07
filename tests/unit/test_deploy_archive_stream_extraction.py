@@ -34,14 +34,29 @@ def _shell_sources() -> list[Path]:
     )
 
 
+# `source "$var/<path>.sh"` / `. "$var/<path>.sh"` — a consumer may extract inside a file it
+# sources (deploy_tree.sh ships its remote half, deploy_tree_remote.sh, to the node).
+_SOURCED = re.compile(r'^\s*(?:source|\.)\s+"?\$\{?\w+\}?/([\w./-]+\.sh)"?', re.MULTILINE)
+
+
 def _consumers() -> list[Path]:
-    """`deploy_archive_stream` 를 호출하는 스크립트(정의 파일 자체는 제외)."""
-    return [
-        path
+    """`deploy_archive_stream` 를 호출하는 스크립트와 그것이 source 하는 파일(정의 파일 자체는 제외)."""
+    found = [
+        path.resolve()
         for path in _shell_sources()
         if "deploy_archive_stream" in path.read_text(encoding="utf-8")
         and path.name != "deploy_provenance.sh"
     ]
+    queue = list(found)
+    while queue:
+        script = queue.pop()
+        for relative in _SOURCED.findall(script.read_text(encoding="utf-8")):
+            for target in (script.parent / relative, _REPO / relative):
+                target = target.resolve()
+                if target.is_file() and target not in found and target.name != "deploy_provenance.sh":
+                    found.append(target)
+                    queue.append(target)
+    return sorted(found)
 
 
 def test_stream_producer_still_compresses() -> None:

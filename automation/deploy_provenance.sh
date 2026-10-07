@@ -167,6 +167,95 @@ personal_provenance_check() { # personal_provenance_check <personal-repo> [appro
   return 0
 }
 
+# The shared deploy helpers. Their functions run on the node (`declare -f`) or carry the
+# transport, so an uncommitted edit to one is uncommitted code in prod even when every payload
+# argument matches (RCB todo 58: a dirty `_converge_cron_remote` installed its own schedule).
+# Listed here instead of discovered because most deployers source deploy_cron.sh AFTER the check.
+DEPLOY_PROVENANCE_SHARED_HELPERS=(
+  automation/deploy_provenance.sh automation/deploy_cron.sh automation/deploy_push.sh
+  automation/deploy_tree.sh automation/deploy_tree_remote.sh
+)
+
+# Origins bash reports for code that never came from a file (bash 5.2, measured): `environment`
+# for a `bash -c` string or an exported function, `main` for an interactive or stdin shell; an
+# empty BASH_SOURCE entry is the top of such a shell. Every other origin must resolve to a file.
+_DEPLOY_PROVENANCE_NON_FILE_ORIGINS=" main environment "
+
+# The cwd this shell had when it first sourced the guard — the base bash used for the deployer's
+# relative BASH_SOURCE. Captured once per shell (a later re-source, e.g. through deploy_tree.sh,
+# keeps it) and never taken from the environment: an inherited value describes another shell.
+if [[ "$(declare -p DEPLOY_PROVENANCE_SOURCE_PWD 2>/dev/null)" != "declare -- "* ]]; then
+  DEPLOY_PROVENANCE_SOURCE_PWD="$PWD"
+  export -n DEPLOY_PROVENANCE_SOURCE_PWD
+fi
+
+# Every file inside <repo_root> whose code this deploy runs besides its named payload: the shared
+# helpers, each script on the call stack (the deployer itself) and the file defining each function
+# already in this shell (helpers sourced before the check). Files outside the checkout — a test
+# driver, a shell rc file — are not repository state and are left out. An origin that cannot be
+# located fails the whole closure (rc 1): dropping it would pass exactly the file it lost.
+_deploy_provenance_closure() { # _deploy_provenance_closure <repo_root> <reference>  -> one path per line
+  local root reference="$2" restore name line origin candidate relative listed on_stack failed=0
+  local pattern='^[^ ]+ [0-9]+ (.+)$'
+  local -a stack=("${BASH_SOURCE[@]}") origins=() found=()
+  root="$(readlink -f "$1")" || { deploy_provenance_log "DEPLOY-BLOCK: cannot resolve $1"; return 1; }
+  for relative in "${DEPLOY_PROVENANCE_SHARED_HELPERS[@]}"; do
+    if [[ -e "$root/$relative" ]]; then found+=("$root/$relative"); continue; fi
+    # Absent from the checkout: fine only when the reference never had it (older trees lack some).
+    # A tracked helper deleted locally is an uncommitted change — the deployer may source it later.
+    listed="$(git -C "$root" ls-tree --name-only "$reference" -- "$relative")" || {
+      deploy_provenance_log "DEPLOY-BLOCK: cannot list $relative in $reference"; return 1; }
+    if [[ -n "$listed" ]]; then
+      deploy_provenance_log "DEPLOY-BLOCK: $relative is in $reference but deleted from the checkout"
+      return 1
+    fi
+  done
+  restore="$(builtin shopt -p extdebug)" || true
+  if ! shopt -s extdebug || ! builtin shopt -q extdebug; then
+    deploy_provenance_log "DEPLOY-BLOCK: cannot enable extdebug to locate the shell's function sources"
+    return 1
+  fi
+  while read -r _ _ name; do
+    [[ -n "$name" ]] || continue
+    line="$(builtin declare -F "$name")"
+    if [[ "$line" =~ $pattern ]]; then
+      origins+=("${BASH_REMATCH[1]}")
+    else
+      deploy_provenance_log "DEPLOY-BLOCK: bash reported no source file for function $name"
+      failed=1; break
+    fi
+  done <<<"$(builtin declare -F)"
+  eval "builtin $restore"
+  (( failed == 0 )) || return 1
+  for origin in "${stack[@]}" "${origins[@]}"; do
+    if [[ -z "$origin" || "$_DEPLOY_PROVENANCE_NON_FILE_ORIGINS" == *" $origin "* ]]; then continue; fi
+    # bash keeps a relative origin as written, against the cwd of the moment it was sourced, and a
+    # later `cd` silently moves that base — any same-name file found now may be a different file.
+    # Only a script on the call stack is accepted relatively, and only while the cwd is still the
+    # one captured when the guard was sourced; otherwise its identity cannot be established.
+    if [[ "$origin" != /* ]]; then
+      on_stack=0
+      for candidate in "${stack[@]}"; do
+        if [[ "$candidate" == "$origin" ]]; then on_stack=1; fi
+      done
+      if (( on_stack == 0 )); then
+        deploy_provenance_log "DEPLOY-BLOCK: a function came from relative $origin, whose directory is unknown"
+        return 1
+      fi
+      if [[ -z "${DEPLOY_PROVENANCE_SOURCE_PWD:-}" || "$PWD" != "$DEPLOY_PROVENANCE_SOURCE_PWD" ]]; then
+        deploy_provenance_log "DEPLOY-BLOCK: the cwd changed since the guard was sourced, so relative $origin cannot be placed"
+        return 1
+      fi
+      origin="$DEPLOY_PROVENANCE_SOURCE_PWD/$origin"
+    fi
+    [[ -f "$origin" ]] && candidate="$(readlink -f "$origin")" || {
+      deploy_provenance_log "DEPLOY-BLOCK: code in this shell came from $origin, which is not a readable file"
+      return 1; }
+    if [[ "$candidate" == "$root"/* ]]; then found+=("$candidate"); fi
+  done
+  printf '%s\n' "${found[@]}" | sort -u
+}
+
 deploy_provenance_check() { # deploy_provenance_check <repo_root> <file-or-dir>...
   local repo_root="$1"
   shift || true
@@ -217,7 +306,21 @@ deploy_provenance_check() { # deploy_provenance_check <repo_root> <file-or-dir>.
     fi
   done
 
-  local relative local_blob reference_blob
+  local closure closure_path relative listed
+  closure="$(_deploy_provenance_closure "$repo_root" "$reference")" || {
+    deploy_provenance_log "DEPLOY-BLOCK: cannot resolve the deploy helpers under $repo_root"; return 1; }
+  listed=$'\n'"$(printf '%s\n' "${targets[@]}")"$'\n'
+  while IFS= read -r closure_path; do
+    [[ -n "$closure_path" ]] || continue
+    relative="$(git -C "$repo_root" -c core.quotepath=false ls-files --full-name --error-unmatch -- "$closure_path" 2>/dev/null)" || {
+      deploy_provenance_log "DEPLOY-BLOCK: $closure_path runs in this deploy but is untracked — commit and push it first"
+      return 1; }
+    [[ "$listed" == *$'\n'"$relative"$'\n'* ]] && continue
+    targets+=("$relative")
+    listed+="$relative"$'\n'
+  done <<<"$closure"
+
+  local local_blob reference_blob
   for relative in "${targets[@]}"; do
     local_blob="$(git -C "$repo_root" hash-object -- "$repo_root/$relative" 2>/dev/null)" || {
       deploy_provenance_log "DEPLOY-BLOCK: cannot hash $relative"; return 1; }

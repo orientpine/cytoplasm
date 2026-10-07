@@ -5,7 +5,8 @@ Deployed to ``~agent/.hermes/scripts/memory_curator_watch.py`` and registered:
     hermes cron create "every 30m" --name memory-curator-watch \
         --no-agent --script memory_curator_watch.py --deliver local
 
-The package is deployed to ``~agent/.hermes/memory_curator_runtime/``.  Each
+The package runs from the release tree as ``automation.memory_curator``: the
+runtime root is resolved once at start so one tick uses one generation.  Each
 tick applies the autonomous, lossless compaction to MEMORY.md/USER.md,
 proposes each durable-judgment entry to the decision twin for cha's owner-DM
 ✅ (idempotent, one live confirm per entry), removes the source only after the
@@ -18,7 +19,7 @@ an overlapping tick exits 0 silently.  The kernel releases the flock when the
 holder exits — even on crash.
 
 No-agent cron env (per the watcher-cron 설계규약): this wrapper self-loads
-``~/.env.secrets`` (``DISCORD_BOT_TOKEN``) and puts the curator runtime plus the
+``~/.env.secrets`` (``DISCORD_BOT_TOKEN``) and puts the runtime root plus the
 wiki gate code — from ``AUTOPHAGY_REPO_ROOT/skills/wiki/scripts``, exactly like
 ``wiki_confirm_reaction_watch.py`` so both use the SAME gate — on ``sys.path``.
 The wiki gate reads its own defaults (``WIKI_ROOT=~/wiki``,
@@ -37,7 +38,6 @@ from pathlib import Path
 from typing import IO, Protocol, runtime_checkable
 
 ENV_SECRETS = Path.home() / ".env.secrets"
-RUNTIME_DIR = Path.home() / ".hermes" / "memory_curator_runtime"
 MEMORY_DIR = Path.home() / ".hermes" / "memories"
 STATE_PATH = Path.home() / ".hermes" / "memory-curator" / "state.json"
 GATE_DIR = Path(os.environ.get("WIKI_GATE_DIR", "~/.hermes/wiki-gate")).expanduser()
@@ -88,21 +88,36 @@ def _load_env_secrets(path: Path = ENV_SECRETS) -> None:
             os.environ[key] = value.strip().strip('"').strip("'")
 
 
-def _install_paths() -> None:
-    """Curator runtime + the wiki gate code the promote effect reuses (same
-    source as the wiki confirm watcher: AUTOPHAGY_REPO_ROOT/skills/wiki/scripts)."""
+def _runtime_root() -> Path:
+    """Resolve the release pointer once, so a flip mid-tick cannot mix generations."""
     override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
     if override:
         repo = Path(override).expanduser()
     else:
         current = Path("/srv/autophagy-agent-current")  # release runtime (DG-4)
         repo = current if current.exists() else Path("/srv/autophagy-agents")
+    return repo.resolve()
+
+
+def _install_paths(repo: Path) -> None:
+    """Runtime root + the wiki gate code the promote effect reuses (same
+    source as the wiki confirm watcher: AUTOPHAGY_REPO_ROOT/skills/wiki/scripts).
+    The root goes first unconditionally: a missing root must fail the import."""
     wiki_scripts = Path(
         os.environ.get("WIKI_SCRIPTS", str(repo / "skills" / "wiki" / "scripts"))
     ).expanduser()
-    for path in (RUNTIME_DIR, wiki_scripts, repo):
-        if path.exists() and str(path) not in sys.path:
-            sys.path.insert(0, str(path))
+    if wiki_scripts.exists() and str(wiki_scripts) not in sys.path:
+        sys.path.insert(0, str(wiki_scripts))
+    if str(repo) not in sys.path:
+        sys.path.insert(0, str(repo))
+
+
+def load_modules() -> tuple[object, object]:
+    """Install the runtime paths and import the curator's effects and watch."""
+    _install_paths(_runtime_root())
+    effects = importlib.import_module("automation.memory_curator.effects")
+    watch = importlib.import_module("automation.memory_curator.watch")
+    return effects, watch
 
 
 def acquire_single_instance_lock(lock_path: Path = LOCK_PATH) -> IO[str] | None:
@@ -122,9 +137,7 @@ if __name__ == "__main__":
     if _lock is None:
         sys.exit(0)
     _load_env_secrets()
-    _install_paths()
-    effects_module = importlib.import_module("memory_curator.effects")
-    watch_module = importlib.import_module("memory_curator.watch")
+    effects_module, watch_module = load_modules()
     if not isinstance(effects_module, _EffectsModule) or not isinstance(
         watch_module, _WatchModule
     ):
@@ -144,8 +157,8 @@ if __name__ == "__main__":
     closure_orphans = 0
     closure_failed = False
     try:
-        state_module = importlib.import_module("memory_curator.state_store")
-        closure_module = importlib.import_module("memory_curator.closure")
+        state_module = importlib.import_module("automation.memory_curator.state_store")
+        closure_module = importlib.import_module("automation.memory_curator.closure")
         closure_effects = importlib.import_module("automation.memory_curator_closure_effects")
         closure_result = closure_module.close_terminal_promotions(
             closure_module.ClosureRequest(
@@ -164,7 +177,7 @@ if __name__ == "__main__":
     # 소유자가 처리한 것은 전부 보이는 위치였고 안 보이는 것만 남아 있었다(2026-08-03).
     reminded = False
     try:
-        state_module = importlib.import_module("memory_curator.state_store")
+        state_module = importlib.import_module("automation.memory_curator.state_store")
         reminded = effects_module.send_pending_reminder(
             state_module.load_state(STATE_PATH),
             gate_dir=GATE_DIR,

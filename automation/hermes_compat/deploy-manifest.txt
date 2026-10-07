@@ -1,0 +1,1 @@
+agent|automation/hermes_compat|.hermes/hermes-compat/automation/hermes_compat|v2:tree;policy=held;reason=vendor-patch-carrier-is-owner-deployed;files=__init__.py,owner_dm_dispatch.py,owner_dm_relatedness.py,owner_dm_signal.py,public_message_policy.py,receipt_apply.py,receipt_ledger.py,receipt_tracker.py

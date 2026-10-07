@@ -10,7 +10,7 @@ from typing import Final
 
 SECRETS_PATH: Final = Path.home() / ".env.secrets"
 RUNTIME_ROOT: Final = Path(
-    os.environ.get("REPAIR_REPORT_RUNTIME", "~/.hermes/repair-report-runtime")
+    os.environ.get("REPAIR_REPORT_RUNTIME", "~/.hermes/repair-report-runtime/.current")
 ).expanduser()
 
 
@@ -30,7 +30,7 @@ def _load_secrets(path: Path = SECRETS_PATH) -> None:
 def main() -> int:
     try:
         _load_secrets()
-        sys.path.insert(0, str(RUNTIME_ROOT))
+        sys.path.insert(0, os.path.realpath(RUNTIME_ROOT))
         from automation.repair.repair_report_consumer import consume_once
 
         print(f"repair report consume watch: {consume_once()}")

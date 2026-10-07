@@ -8,8 +8,8 @@ import pytest
 from skills.proposal.scripts import proposal_prompts
 
 
-# Source copied verbatim from:
-# /home/cha/Documents/2026_kimm_docbot/src/kimm_docbot/agents/kimm_domain.py
+# Source copied verbatim from src/kimm_docbot/agents/kimm_domain.py
+# in the private kimm-docbot repository.
 KIMM_DOMAIN_FORBIDDEN_EXPRESSIONS = (
     "것 같다",
     "것 같습니다",
@@ -40,7 +40,8 @@ class Pack:
 
 def test_assets_exist_and_parse_version_headers() -> None:
     # kimm-style 은 그림 인용 문체 규칙이 실리며 v2 가 되었다 (2026-08-28).
-    expected_versions = {"voice": 1, "composition": 1, "kimm-style": 2}
+    # voice 는 공개본에서 소유자 실명·개인 경로를 걷으며 v2 가 되었다 (2026-10-01).
+    expected_versions = {"voice": 2, "composition": 1, "kimm-style": 2}
     for name, expected_version in expected_versions.items():
         asset = proposal_prompts.load_asset(name)
         assert asset.name == name

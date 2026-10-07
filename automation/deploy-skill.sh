@@ -921,8 +921,8 @@ log "review PASS (recorded hash-bound verdict)"
 
 # ---------- stage 3: request, independent peer attestation, and owner approval (preceded by ops-checkout ff-only sync) ----------
 log "stage 3/4 REQUEST + PEER-ATTEST + APPROVAL (#approvals)"
-# Resolve the shared-guild deploy approvals channel once (fail-open to empty:
-# "" -> peer_attest --channel-id "" -> None -> guild-scan fallback).
+# Resolve the operator's deploy approvals channel pin once (fail-open to empty; once the
+# request is bound, an empty value is filled from the gate's pending record below).
 DEPLOY_APPROVALS_CHANNEL_ID="$(run_as "$NODE_AGENT_ACCOUNT" "python3 -c 'import json,pathlib; print(json.loads(pathlib.Path(\"~/.hermes/interop/config.json\").expanduser().read_text()).get(\"deploy_approvals_channel_id\") or \"\")'" 2>/dev/null || true)"
 
 run_as "$NODE_AGENT_ACCOUNT" "umask 077; mkdir -p \"\$HOME/.hermes/skill-gate\" && cat > \"\$HOME/.hermes/skill-gate/skill_gate.py\"" \
@@ -997,6 +997,13 @@ else
   [[ "${#REQUEST_FIELDS[@]}" == 2 ]] || die "approval request did not return message id and deploy nonce"
   MESSAGE_ID="${REQUEST_FIELDS[0]}"
   DEPLOY_NONCE="${REQUEST_FIELDS[1]}"
+fi
+# No deploy_approvals_channel_id pin: the gate resolved the surface itself and stored the
+# channel it posted to on the bound record. Signed mode signs (and the gate verifies) that
+# exact channel, so read it from there rather than leave peer_attest without --channel-id.
+if [[ -z "$DEPLOY_APPROVALS_CHANNEL_ID" ]]; then
+  BOUND_RECORD="$SKILL"; [[ "$RELEASE_APPROVAL" == 1 ]] && BOUND_RECORD="release"
+  DEPLOY_APPROVALS_CHANNEL_ID="$(run_as "$NODE_AGENT_ACCOUNT" "python3 -c 'import json,pathlib; print(json.loads(pathlib.Path(\"~/.hermes/skill-gate/pending/$BOUND_RECORD.json\").expanduser().read_text()).get(\"channel_id\") or \"\")'" 2>/dev/null || true)"
 fi
 log "approval request posted; peer attestation required"
 PEER_ATTESTED=0

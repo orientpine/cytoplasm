@@ -41,5 +41,6 @@ ssh "$host" 'sudo -n -u ops -H git -C /srv/autophagy-agents pull --ff-only'
 push_file "$repo_root/automation/memory_relocate/cron/memory_relocate_watch.py" '.hermes/scripts/memory_relocate_watch.py'
 
 # Idempotent cron registration (no-agent reaction watcher, every 30m). --all so a paused job is seen.
-run_agent 'PATH="$HOME/.local/bin:$PATH"; if hermes cron list --all | grep -Eq "Name:[[:space:]]+memory-relocate-watch$"; then exit 0; fi; hermes cron create "every 30m" --name memory-relocate-watch --no-agent --script memory_relocate_watch.py --deliver local'
+source "$repo_root/automation/deploy_cron.sh"
+converge_cron memory-relocate-watch "every 30m" memory_relocate_watch.py local
 run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all | grep -A3 memory-relocate-watch || true'

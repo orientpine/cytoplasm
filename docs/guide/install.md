@@ -113,6 +113,29 @@ $EDITOR /tmp/node.toml
 `InstallAssetError`로 거부한다(조용히 잘못 설치하지 않는다).
 
 작성한 파일은 설치기가 각 계정 홈의 `~/.hermes/node.toml`(0600)로 배포한다.
+
+### 3.1 기존 `discord` 설치를 `signed`로 옮기기
+
+`peer_attest_mode = "discord"`로 돌던 설치에서는 스킬 배포 때마다 peer 봇이 `#approvals`에
+`[skill-attest] … verdict=PASS` 답글을 남긴다. `signed`로 옮기면 그 답글이 사라지고, peer는
+서명한 증명을 배포 프로세스 stdout으로만 넘긴다.
+
+1. **노드 준비를 먼저 확인한다.** 설치기를 한 번 다시 돌리면 `peer-attest-key` 단계가 peer 키를
+   만들고 공개키를 게시한다. 이미 있으면 다시 만들지 않는다. 확인할 것: `~peer/.ssh/peer_attest_ed25519`가
+   peer 소유 0600이고, `/etc/autophagy/peer-attest-<peer 계정>.pub`와 그 부모 디렉터리가 `root:root`이며
+   agent가 쓸 수 없어야 한다(공개키 0644). `ssh-keygen -lf`로 두 공개키의 지문이 같은지도 본다.
+   이 조건이 하나라도 어긋나면 게이트는 fail-closed로 거부한다.
+2. **배포를 실행하는 머신의 설정을 바꾼다.** `deploy-skill.sh`·`deploy_all.sh`는 그 스크립트를 돌리는
+   머신의 설정에서 모드를 읽는다. 노드에서는 `/etc/autophagy/node.toml`이 있으면 그것을, 없으면
+   `~/.hermes/node.toml`을 읽는다. 원격 배포 워크스테이션(릴리스 호스트 포함)에도 같은 값을 맞춘다.
+   **노드만 바꾸고 워크스테이션을 두면 discord 답글이 계속 나온다.** 확인 명령:
+   `python3 automation/node_config_sh.py --print-env | grep PEER_ATTEST_MODE`.
+3. **진행 중인 스킬 배포 요청을 정리한 뒤 바꾼다.** 스킬 요청의 승인 해시는 모드에 묶여 있다. 그래서
+   discord 바인딩으로 이미 게시된 요청은 signed로 재게시하면 fail-closed로 거부된다.
+   `skill_gate.py abandon`으로 사유를 남겨 폐기하고 다시 올린다(`docs/qa/SS-1/05-live-migration-evidence.txt`).
+   릴리스 승인 요청은 모드를 저장하지 않으므로 그대로 둬도 된다.
+4. **되돌리기:** 같은 머신들에서 값을 `"discord"`로 되돌린다. peer 봇 토큰이 peer
+   `~/.env.secrets`에 남아 있어야 한다.
 agent·peer 계정에는 각 게이트웨이 user unit의
 `~/.config/systemd/user/<gateway-unit>.d/30-command-sync.conf`(0600)도 배포한다. 이
 drop-in은 `DISCORD_COMMAND_SYNC_POLICY=bulk`를 고정해 게이트웨이 재시동 때 Discord

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -24,7 +23,8 @@ from typing import Final
 if __package__ in (None, ""):  # pragma: no cover - 스크립트로 직접 실행될 때만
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from automation import deploy_all  # noqa: E402
+from automation import deploy_all, deploy_all_gateway, deploy_all_observe  # noqa: E402
+from automation.deploy_declarations import all_declarations  # noqa: E402
 from automation.skill_mount_drift import DriftError, inspect_mounts  # noqa: E402
 from automation.watcher_manifest import (  # noqa: E402
     CENTRAL_MANIFEST,
@@ -35,10 +35,11 @@ from automation.watcher_manifest import (  # noqa: E402
 
 #: 계정·목적지는 sudo 명령에 박히므로 안전하게 인용할 수 없는 값은 관측하지 않는다 —
 #: watcher_drift_probe 와 같은 fail-closed(관측 불가 = "?" = 판정 실패).
-_SAFE: Final = re.compile(r"^[A-Za-z0-9_./-]+$")
+_SAFE: Final = deploy_all_observe.SAFE
 
 HomeReader = Callable[[str, str], str]
 HomeLister = Callable[[str], tuple[str, ...] | str]
+Observer = Callable[[Path], list[str]]
 
 
 def _read_home(account: str, destination: str) -> str:
@@ -105,6 +106,7 @@ def observations(
     live_root: Path,
     home_reader: HomeReader,
     home_lister: HomeLister,
+    observer: Observer | None = None,
 ) -> list[str]:
     """관측 줄을 만든다. 목록을 못 보면 선언 밖 파일 부재를 증명할 수 없어 실패한다."""
     lines: list[str] = [f"OBS|release|{runtime_root.resolve().name}"]
@@ -119,6 +121,7 @@ def observations(
     manifest = runtime_root / CENTRAL_MANIFEST
     rows = parse_rows(manifest.read_text(encoding="utf-8"))
     declared: dict[str, set[str]] = {}
+    v2_files = deploy_all_observe.v2_file_destinations(runtime_root)
     for row in rows:
         declared.setdefault(row.account, set()).add(row.destination)
         source_sha = hashlib.sha256((runtime_root / row.source).read_bytes()).hexdigest()
@@ -133,7 +136,7 @@ def observations(
         if listed == "?":
             raise deploy_all.ObservationError(f"home listing unreadable: {account}")
         for destination in listed:
-            if destination in destinations:
+            if destination in destinations or (account, destination) in v2_files:
                 continue
             deployed = home_reader(account, destination)
             if not deployed or deployed == "?":
@@ -143,8 +146,22 @@ def observations(
             lines.append(
                 f"OBS|undeclared|{account}|{destination}|{deployed[:12]}"
             )
+    lines += (observer or deploy_all_observe.observe_node)(runtime_root)
     lines.append("OBS|end")
     return lines
+
+
+def _gateways(runtime_root: Path) -> int:
+    """재시동 뒤 대기용 — 게이트웨이 세대 줄만. 0 = 기다릴 것 없음 · 1 = stale/unknown · 4 = 관측 불가."""
+    try:
+        lines = deploy_all_observe.observe_node(runtime_root, gateway_only=True)
+        states = deploy_all_gateway.fold((line.split("|") for line in lines), None)
+    except (ManifestError, OSError, deploy_all.ObservationError) as error:
+        print(f"DEPLOY-ALL-UNVERIFIABLE: {error}", file=sys.stderr)
+        return 4
+    for line in lines:
+        print(line)
+    return 1 if deploy_all_gateway.blocking(states) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -156,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         "--live-root", type=Path, default=Path("/srv/autophagy-skills/live")
     )
     parser.add_argument(
-        "--format", choices=("report", "actions", "receipt"), default="report"
+        "--format", choices=("report", "actions", "receipt", "gateways"), default="report"
     )
     parser.add_argument(
         "--strict-undeclared",
@@ -164,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
         help="선언 밖 홈 파일도 drift 로 판정",
     )
     args = parser.parse_args(argv)
+    if args.format == "gateways":
+        return _gateways(args.runtime_root)
     try:
         lines = observations(args.runtime_root, args.live_root, _read_home, _list_home)
         plan = deploy_all.parse_observations(
@@ -177,7 +196,15 @@ def main(argv: list[str] | None = None) -> int:
             print(deploy_all.render_plan(plan), file=sys.stderr)
             return 1
         verified_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        print(deploy_all.render_receipt(plan, verified_at=verified_at), end="")
+        reasons = {
+            (d.kind, d.account, d.destination): d.reason
+            for d in all_declarations(args.runtime_root)
+            if not d.legacy
+        }
+        print(
+            deploy_all.render_receipt(plan, verified_at=verified_at, declared_reasons=reasons),
+            end="",
+        )
         return 0
     if args.format == "actions":
         actions = deploy_all.render_actions(plan)

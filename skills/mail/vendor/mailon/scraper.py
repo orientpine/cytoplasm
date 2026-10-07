@@ -59,7 +59,7 @@ from urllib.parse import urljoin, urlencode
 from bs4 import BeautifulSoup
 
 from .browser import AgentBrowser, BrowserError
-from .folders import _fetch_all_folder_page
+from .folders import _fetch_all_folder_page, _harvest_from_frames
 from .state import StateDB
 from .writer import Attachment, Mail
 
@@ -333,10 +333,40 @@ class InboxScraper:
                          self.folder_uid, attempts)
                 return self.folder_uid
             if time.monotonic() >= deadline:
+                uid = self._resolve_from_inbox_label()
+                if uid:
+                    self.folder_uid = uid
+                    log.warning("inbox folderUid resolved from the sidebar label: %s "
+                                "(list rows never rendered after %d attempt(s))",
+                                uid, attempts)
+                    return uid
                 raise RuntimeError(
                     "could not resolve inbox folderUid from DOM after "
                     f"{attempts} attempt(s)")
             self.browser.wait_ms(int(poll_interval_s * 1000))
+
+    def _resolve_from_inbox_label(self) -> str | None:
+        """Fallback when the mail list never renders (2026-10-06: rows stayed
+        at 0 while the sidebar and its folder data were present). Accept a
+        label-anchored uid only if the list API confirms it is that folder."""
+        for name in ("받은메일함", "Inbox"):
+            uid = _harvest_from_frames(self.browser, name)
+            if uid and self._list_api_confirms(uid):
+                return uid
+        return None
+
+    def _list_api_confirms(self, uid: str) -> bool:
+        saved = (self.folder_uid, self.all_folders)
+        self.folder_uid, self.all_folders = uid, False
+        try:
+            data = self.fetch_list_page(1)
+        except Exception as error:
+            log.warning("list_async check for folderUid %s failed: %s", uid, str(error)[:150])
+            return False
+        finally:
+            self.folder_uid, self.all_folders = saved
+        folder = data.get("folder") or {}
+        return bool(data.get("result")) and str(folder.get("folderUid")) == uid
 
     # ------------------------------------------------------ list API
 
@@ -389,8 +419,15 @@ class InboxScraper:
             raw = json.loads(raw)
         return json.loads(raw)
 
-    def list_inbox(self, max_pages: int = 500) -> list[MailRef]:
-        """Iterate /mail/list_async.json until empty/exhausted; return all MailRefs."""
+    def list_inbox(
+        self, max_pages: int = 500, *, known: frozenset[str] = frozenset(),
+    ) -> list[MailRef]:
+        """Iterate /mail/list_async.json until empty/exhausted; return all MailRefs.
+
+        The list is newest-first, so with `known` (already-saved uids) the walk
+        stops at the first page made only of known mails (2026-10-06: a
+        9366-mail inbox at ~2.3s/page outlived the 900s wrapper timeout).
+        """
         assert self.folder_uid
         refs: list[MailRef] = []
         seen: set[str] = set()
@@ -443,6 +480,9 @@ class InboxScraper:
 
             if page_new == 0:
                 # Duplicates only means we've looped
+                break
+            if known and all(str(item.get("mailUid") or "") in known for item in contents):
+                log.info("page %d holds only already-saved mails; stopping the walk", page)
                 break
             if len(contents) < PAGE_SIZE:
                 # Short page = last page
@@ -701,7 +741,7 @@ class InboxScraper:
 
     def iter_new_mails(
         self, skip_uids: set[str], *, limit: int = 0,
-        state_db: StateDB | None = None,
+        state_db: StateDB | None = None, full_scan: bool = False,
     ) -> Generator[Mail, None, None]:
         """Yield Mail records for every inbox message not in `skip_uids`.
 
@@ -709,7 +749,7 @@ class InboxScraper:
           - skip_uids: messages already fully saved (body + Markdown)
           - state_db: per-attachment tracking for partial-failure retry
         """
-        refs = self.list_inbox()
+        refs = self.list_inbox(known=frozenset() if full_scan else frozenset(skip_uids))
         log.info("total inbox: %d mails (skipping %d already-saved)",
                  len(refs), len(skip_uids))
         new_refs = [r for r in refs if r.uid not in skip_uids]

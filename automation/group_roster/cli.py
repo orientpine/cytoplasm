@@ -11,6 +11,7 @@ from typing import Literal, TypeAlias
 
 import yaml
 
+from . import init_local
 from .editor import RosterEditError, add_member, remove_member, save_roster
 from .parser import load_roster
 from .schema import MemberStatus, Roster, RosterMember
@@ -126,6 +127,9 @@ def _write_peers_seed(path: Path, document: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one roster validation or membership edit command."""
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw[:1] == ["init-local"]:
+        return init_local.main(raw[1:])
     arguments = _argument_parser().parse_args(argv, namespace=_Arguments())
     path = arguments.path
     try:

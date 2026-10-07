@@ -13,11 +13,12 @@
 #   --verify 판정 + 전량 일치면 영수증 기록(수렴 검증만, 배포 없음)
 #   --apply  선택적 --wait-converge 시 노드 릴리스 트리 수렴을 먼저 기다린 뒤
 #            계획된 배포기 실행(스킬은 기존 승인 게이트 그대로) → 플러그인 갱신 시
-#            게이트웨이 재시동(「게이트웨이 재시동 규칙」— 항상 agent+peer 전 세트)
-#            → 전량 재판정 → 영수증
+#            게이트웨이 재시동(「게이트웨이 재시동 규칙」— 항상 agent+peer 전 세트, 배포기가
+#            하나라도 실패하면 재시동하지 않는다) → 게이트웨이가 현재 릴리스 세대를 등록할
+#            때까지 대기(DEPLOY_ALL_GATEWAY_WAIT_SECONDS·_INTERVAL) → 전량 재판정 → 영수증
 #
-# ⑤ root 자산·⑥ RAG·런타임 패키지는 상시 healthcheck 프로브가 소유한다(영수증의
-# delegated 필드) — 여기서 실행하지 않고, 어긋남도 그 프로브가 알린다.
+# ⑤ root 자산·⑥ RAG 는 상시 healthcheck 프로브가 소유한다(영수증의 delegated 필드) —
+# 여기서 실행하지 않는다. 릴리스 시점에 다시 돌린 그 프로브의 실패는 `ACT|owner|` 로 출력만 한다.
 #
 # Exit: 0 ok(영수증 기록) · 1 실행 실패/drift/재판정 실패 · 2 usage · 3 host 미설정 · 4 판정 불가/전제 미충족
 set -uo pipefail
@@ -79,6 +80,25 @@ restart_gateways() { # 「게이트웨이 재시동 규칙」(2026-07-22) — �
     log "restarting $acct gateway"
     ssh "$host" "sudo -n -u $acct -H bash -lc 'export XDG_RUNTIME_DIR=/run/user/\$(id -u); systemctl --user restart hermes-gateway.service && systemctl --user is-active hermes-gateway.service'" < /dev/null \
       || { log "GATEWAY-RESTART-FAIL: $acct"; return 1; }
+  done
+}
+
+#: `systemctl restart` 는 exec 직후 돌아온다 — 게이트웨이가 플러그인을 등록해 세대를 기록하기 전이다.
+#: 그래서 계획 시점의 줄이 아니라 재시동 뒤의 노드 관측으로 stale·unknown 줄이 없어질 때까지 기다린다
+#: (게이트웨이 묶음이 처음 놓이는 실행에서는 계획 시점에 드롭인 행이 stale 이라 줄 자체가 없었다).
+wait_gateway_generation() {
+  local limit="${DEPLOY_ALL_GATEWAY_WAIT_SECONDS:-120}" interval="${DEPLOY_ALL_GATEWAY_WAIT_INTERVAL:-3}" out deadline
+  [[ "$limit" =~ ^[0-9]+$ ]] || limit=120
+  [[ "$interval" =~ ^[0-9]+$ ]] || interval=3
+  deadline=$(( SECONDS + limit ))
+  while :; do
+    out="$(probe gateways)" && ! grep -qE '^OBS[|]gateway[|][^|]*[|](stale|unknown)[|]' <<< "$out" && return 0
+    if (( SECONDS >= deadline )); then
+      log "GATEWAY-GENERATION-TIMEOUT: the gateways did not register the release plugins within ${limit}s"
+      grep -E '^OBS[|]gateway[|]' <<< "$out" | head -n 8 >&2
+      return 1
+    fi
+    sleep "$interval"
   done
 }
 
@@ -173,6 +193,9 @@ case "$mode" in
       log "UNVERIFIABLE: the node cannot judge itself"
       exit 4
     fi
+    # ACT|owner| 는 릴리스가 올릴 수 없는 소유자 조치다(root 자산·RAG) — 보여 주기만 하고
+    # 실행하지도, 실패로 세지도 않는다. clean 이어도(rc 0) 나오므로 분기 전에 출력한다.
+    grep -E '^ACT[|]owner[|]' <<< "$actions" || true
     if (( rc == 0 )); then
       if (( apply_lock_waited )); then
         log "APPLY-LOCK-RECHECK: already fully deployed after waiting for the apply lock"
@@ -201,14 +224,24 @@ case "$mode" in
         restart-gateway)
           restart_needed=1
           ;;
+        owner)
+          ;;
         manual)
           log "MANUAL: $arg — 자동 수렴 대상이 아님"
           failures+=("manual:$arg")
           ;;
       esac
     done 9<<< "$actions"
-    if (( restart_needed )); then
-      restart_gateways || failures+=("gateway-restart")
+    if (( restart_needed )) && ((${#failures[@]})); then
+      skip_cause="deployer failures"
+      printf '%s\n' "${failures[@]}" | grep -qv '^manual:' || skip_cause="unresolved manual items"
+      log "RESTART-SKIPPED: $skip_cause — a partial deploy is not activated"
+    elif (( restart_needed )); then
+      if ! restart_gateways; then
+        failures+=("gateway-restart")
+      elif ! wait_gateway_generation; then
+        failures+=("gateway-generation")
+      fi
     fi
     if ((${#failures[@]})); then
       log "incomplete: ${failures[*]}"

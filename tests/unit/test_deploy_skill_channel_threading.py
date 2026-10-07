@@ -40,3 +40,20 @@ def test_deploy_stage3_call_site_when_attesting_then_passes_resolved_channel_as_
     resolve_idx = script.index('DEPLOY_APPROVALS_CHANNEL_ID="$(run_as "$NODE_AGENT_ACCOUNT"')
     call_idx = script.index(call, resolve_idx)
     assert resolve_idx < call_idx
+
+
+def test_deploy_stage3_when_no_channel_pin_then_attests_on_the_gate_bound_record_channel() -> None:
+    # Given: an install that resolves #approvals by name has no deploy_approvals_channel_id pin,
+    # and signed mode refuses to attest without --channel-id (2026-10-06 live PEER-ATTEST-BLOCK).
+    script = DEPLOY.read_text(encoding="utf-8")
+
+    # When / Then: after the request is bound, an empty channel is read from the gate's
+    # pending record (release.json on the release path) before the first attestation.
+    bound_idx = script.index('if [[ -z "$DEPLOY_APPROVALS_CHANNEL_ID" ]]; then')
+    block = script[bound_idx : script.index("\nfi\n", bound_idx)]
+    assert 'BOUND_RECORD="release"' in block
+    assert "skill-gate/pending/$BOUND_RECORD.json" in block
+    assert 'get(\\"channel_id\\")' in block
+    request_idx = script.index('DEPLOY_NONCE="${REQUEST_FIELDS[1]}"')
+    first_attest = script.index('PEER_ATTEST_BLOB="$(peer_attest "$SKILL" "$DIGEST" "$MESSAGE_ID" "$DEPLOY_NONCE" "$DEPLOY_APPROVALS_CHANNEL_ID")"')
+    assert request_idx < bound_idx < first_attest

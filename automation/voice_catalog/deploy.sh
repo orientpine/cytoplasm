@@ -19,8 +19,10 @@ run_account() {
 }
 
 account="$NODE_AGENT_ACCOUNT"
-tar -C "$repo_root/automation/voice_catalog/cron" -czf - voice_catalog_enroll_watch.py \
-  | run_account "$account" 'umask 077; mkdir -p "$HOME/.hermes/scripts"; tar -xzf - -C "$HOME/.hermes/scripts"; chmod 600 "$HOME/.hermes/scripts/voice_catalog_enroll_watch.py"'
+run_agent() { run_account "$account" "$1"; }
+source "$repo_root/automation/deploy_push.sh"
+push_file "$repo_root/automation/voice_catalog/cron/voice_catalog_enroll_watch.py" '.hermes/scripts/voice_catalog_enroll_watch.py'
 run_account "$account" 'grep -qx "timezone: Asia/Seoul" "$HOME/.hermes/config.yaml"'
-run_account "$account" 'PATH="$HOME/.local/bin:$PATH"; if hermes cron list --all | grep -Eq "Name:[[:space:]]+voice-catalog-enroll$"; then exit 0; fi; hermes cron create "*/10 * * * *" --name voice-catalog-enroll --no-agent --script voice_catalog_enroll_watch.py --deliver local'
+source "$repo_root/automation/deploy_cron.sh"
+converge_cron voice-catalog-enroll "*/10 * * * *" voice_catalog_enroll_watch.py local
 echo "DEPLOY-OK voice-catalog-enroll ($account@$host)"

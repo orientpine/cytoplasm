@@ -167,8 +167,18 @@ def send_owner_dm(owner: str, content: str) -> None:
     _api("POST", f"/channels/{channel_id}/messages", {"content": content})
 
 
+def _interop_runtime() -> Path:
+    configured = os.environ.get("INTEROP_RUNTIME")
+    if configured:
+        return Path(configured).expanduser()
+    root = Path("~/.hermes/autophagy-import").expanduser()
+    if (root / "automation" / "interop").is_dir():
+        return root
+    return Path("~/.hermes/interop_runtime").expanduser()
+
+
 def _origin_notice():
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     from automation.interop import origin_notice  # noqa: PLC0415
 
@@ -176,7 +186,7 @@ def _origin_notice():
 
 
 def _thread_transport(channel_id: str):
-    runtime = Path(os.environ.get("INTEROP_RUNTIME", "~/.hermes/interop_runtime")).expanduser()
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     from automation.interop.discord_transport import DiscordTransport  # noqa: PLC0415
 

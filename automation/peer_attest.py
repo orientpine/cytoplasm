@@ -265,8 +265,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not request.channel_id:
                 print("FATAL: signed attestation mode requires --channel-id", file=sys.stderr)
                 return 2
-            transport = DiscordRestTransport(token) if token else None
-            result = attest_signed(request, SignedAttestContext(_peer_signing_key(), transport))
+            # The gate reads only the signed stdout record in this mode, so a peer token
+            # (kept for the peer gateway) must not add a [skill-attest] reply the owner
+            # decided against on 2026-10-06.
+            result = attest_signed(request, SignedAttestContext(_peer_signing_key(), None))
             if result.signed_record:
                 print(result.signed_record, end="")
             print(

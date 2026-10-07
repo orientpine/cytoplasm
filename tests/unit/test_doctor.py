@@ -49,7 +49,7 @@ def _connected_home(home: Path, *, jobs: list[dict[str, object]] | None = None) 
     }}))
     _ = _write(home / ".hermes" / "config.yaml",
                "model:\n  provider: openai-codex\nfallback_providers:\n  - provider: xai-oauth\n    model: g\n"
-               "timezone: Asia/Seoul\n")
+               "timezone: Asia/Seoul\ndiscord:\n  require_mention: true\n  free_response_channels: '11'\n")
     _ = _write(home / ".hermes" / "interop" / "config.json", json.dumps({
         "agent_chat_channel_id": "11", "owner_id": "22", "owner_notice_channel_id": "33",
     }))
@@ -92,8 +92,27 @@ def test_a_fully_connected_agent_passes_every_check(tmp_path: Path) -> None:
     findings = evaluate(_facts(_connected_home(tmp_path)))
 
     assert {f.key: str(f.status) for f in findings if f.status is not Status.PASS} == {}
-    assert len(findings) == 11
+    assert len(findings) == 13
     assert all(f.steps == () for f in findings)
+
+
+def test_agent_chat_missing_from_free_response_is_broken(tmp_path: Path) -> None:
+    home = _connected_home(tmp_path)
+    _ = _write(home / ".hermes" / "config.yaml", "discord:\n  require_mention: true\n  free_response_channels: '44'\n")
+
+    found = _by_key(evaluate(_facts(home)))["agent-chat-free-response"]
+
+    assert found.status is Status.FAIL and found.subjects == ("free_response_channels",)
+    assert found.steps
+
+
+def test_agent_chat_in_ignored_channels_only_warns(tmp_path: Path) -> None:
+    home = _connected_home(tmp_path)
+    _ = _write(home / ".hermes" / "config.yaml", "discord:\n  ignored_channels: '11,44'\n")
+
+    found = _by_key(evaluate(_facts(home)))["agent-chat-free-response"]
+
+    assert found.status is Status.WARN and found.subjects == ("ignored_channels",)
 
 
 def test_a_repeatedly_failing_job_is_broken_and_named(tmp_path: Path) -> None:
@@ -116,6 +135,17 @@ def test_a_job_that_failed_once_only_warns(tmp_path: Path) -> None:
     job = _by_key(evaluate(_facts(_connected_home(tmp_path, jobs=jobs))))["scheduled-jobs"]
 
     assert job.status is Status.WARN and job.subjects == ("flaky",)
+
+
+def test_a_job_skipped_after_a_model_change_is_broken_on_the_first_skip(tmp_path: Path) -> None:
+    jobs = [{"name": "mail-triage-repair-daily", "enabled": True, "last_status": "error", "failure_streak": 1,
+             "last_error": "RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend"}]
+
+    job = _by_key(evaluate(_facts(_connected_home(tmp_path, jobs=jobs))))["scheduled-jobs"]
+
+    assert job.status is Status.FAIL and job.subjects == ("mail-triage-repair-daily",)
+    assert "다시 만든다" in job.detail
+    assert any("drift_skip" in step for step in job.steps)
 
 
 def test_secret_values_never_reach_the_report(tmp_path: Path) -> None:

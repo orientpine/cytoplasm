@@ -14,6 +14,7 @@ import pytest
 
 from automation.node_asset_renderer import render_asset
 from automation.node_config import NodeConfig, load_node_config
+from tests.unit.cron_fixture import HELPER_SOURCE, converge_call, declared_cron
 
 _REPO = Path(__file__).resolve().parents[2]
 _SYSTEMD = _REPO / "automation" / "managed_sync" / "systemd"
@@ -91,8 +92,8 @@ def test_deploy_script_follows_the_existing_watcher_deployment_convention() -> N
     assert "deploy_provenance_check" in text
     # idempotent cron registration — a second run must not create a second job
     assert "hermes cron list --all" in text
-    assert 'hermes cron create "every 30m" --name managed-sync-watch' in text
-    assert "--no-agent" in text
+    assert converge_call(declared_cron("automation/managed_sync")) in text and HELPER_SOURCE in text
+    assert declared_cron("automation/managed_sync").attr("mode") == "no-agent"
 
 
 # --- D3: neither deployment may activate a release ---------------------------------

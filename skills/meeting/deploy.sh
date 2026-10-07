@@ -24,7 +24,8 @@ deploy_provenance_check "$repo_root" \
   "$repo_root/skills/meeting/scripts/meeting_pending_transcript_watch.py" \
   "$repo_root/skills/meeting/scripts/meeting_deploy_notice.py" \
   "$repo_root/skills/meeting/plugin/__init__.py" \
-  "$repo_root/skills/meeting/plugin/plugin.yaml" || exit 4
+  "$repo_root/skills/meeting/plugin/plugin.yaml" \
+  "$repo_root/skills/meeting/deploy.sh" "$repo_root/skills/meeting/deploy-manifest.txt" || exit 4
 
 push_file "$repo_root/skills/meeting/scripts/meeting_pending_transcript_watch.py" \
   '.hermes/scripts/meeting_pending_transcript_watch.py'
@@ -56,5 +57,6 @@ fi
 # `0 0 * * *` 은 **KST 자정**이다. 노드 TZ 는 Etc/UTC 지만 Hermes 스케줄러가 +09:00 으로
 # 해석한다 — 실측(2026-08-28): daily-cost-report 가 `0 9 * * *` 이고 Next run 이
 # 2026-08-29T09:00:00+09:00 이다. UTC 로 착각해 9시간 옮기지 마라.
-run_agent 'PATH="$HOME/.local/bin:$PATH"; if hermes cron list | grep -Eq "Name:[[:space:]]+meeting-pending-transcript-watch$"; then exit 0; fi; hermes cron create "0 0 * * *" --name meeting-pending-transcript-watch --no-agent --script meeting_pending_transcript_watch.py --deliver discord'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list | grep -A6 "meeting-pending-transcript-watch" || hermes cron list | tail -20'
+source "$repo_root/automation/deploy_cron.sh"
+converge_cron meeting-pending-transcript-watch "0 0 * * *" meeting_pending_transcript_watch.py discord
+run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all | grep -A6 "meeting-pending-transcript-watch" || hermes cron list --all | tail -20'

@@ -29,6 +29,7 @@ HOME_DEPLOYED_PATTERN: Final = re.compile(
 )
 
 DECLARATION_NAME: Final = "deploy-manifest.txt"
+V2_PREFIX: Final = "v2:"
 CENTRAL_MANIFEST: Final = "configs/watcher-deploy-manifest.txt"
 
 _HEADER: Final = """\
@@ -82,6 +83,14 @@ def parse_rows(text: str) -> tuple[Row, ...]:
     return tuple(rows)
 
 
+def read_declaration_text(path: Path) -> str:
+    """선언 파일을 읽는 유일한 곳 — UTF-8 이 아니면 경로를 담은 `ManifestError` 로 바꾼다."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ManifestError(f"declaration is not valid UTF-8: {path.as_posix()}") from error
+
+
 def declaration_files(repo: Path) -> tuple[Path, ...]:
     """결정적 순서의 선언 파일 목록 — automation/* 다음 skills/* (경로 정렬)."""
     return tuple(
@@ -95,11 +104,15 @@ def derive_manifest(repo: Path) -> str:
     sections: list[str] = [_HEADER]
     for declaration in declaration_files(repo):
         relative = declaration.relative_to(repo).as_posix()
-        rows = parse_rows(declaration.read_text(encoding="utf-8"))
+        rows = parse_rows(read_declaration_text(declaration))
         if not rows:
             # 빈 선언은 "선언 없음"과 구분되지 않는다 — 배포물이 없어졌으면 파일을 지운다.
             raise ManifestError(f"declaration has no rows: {relative}")
-        sections.append("\n".join([f"# --- {relative} ---", *(row.line() for row in rows)]))
+        # v2 행(`deploy_declarations`)은 이 표에 싣지 않는다 — 표의 바이트가 헬스체크 허용
+        # 목록 지문에 들어가므로 legacy 행만 투영하고, v2 행만 있는 선언은 섹션을 만들지 않는다.
+        legacy = [row for row in rows if not row.policy.startswith(V2_PREFIX)]
+        if legacy:
+            sections.append("\n".join([f"# --- {relative} ---", *(row.line() for row in legacy)]))
     return "\n\n".join(sections) + "\n"
 
 
@@ -111,30 +124,54 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def check(repo: Path) -> int:
+    """중앙 표가 파생과 같고 모든 선언(v2 포함)이 타입 검사를 통과하면 0."""
+    from automation.deploy_declarations import all_declarations  # 순환 import 회피
+
+    try:
+        _ = all_declarations(repo)
+    except ManifestError as error:
+        print(f"[watcher-manifest] INVALID: {error}", file=sys.stderr)
+        return 1
+    central = repo / CENTRAL_MANIFEST
+    derived = derive_manifest(repo)
+    current = central.read_text(encoding="utf-8") if central.is_file() else ""
+    if current == derived:
+        print(f"[watcher-manifest] OK: {CENTRAL_MANIFEST} matches its declarations")
+        return 0
+    print(
+        f"[watcher-manifest] DRIFT: {CENTRAL_MANIFEST} does not match the declarations —"
+        " run `python3 -m automation.watcher_manifest emit`",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def main(argv: list[str]) -> int:
     repo = _repo_root()
     central = repo / CENTRAL_MANIFEST
     command = argv[0] if argv else ""
     if command == "emit":
-        derived = derive_manifest(repo)
+        from automation.deploy_declarations import all_declarations  # 순환 import 회피
+
+        try:
+            _ = all_declarations(repo)  # check 와 같은 검증을 통과한 뒤에만 쓴다
+            derived = derive_manifest(repo)
+        except ManifestError as error:
+            print(f"[watcher-manifest] INVALID: {error}", file=sys.stderr)
+            return 1
         _ = central.write_text(derived, encoding="utf-8")
         print(f"[watcher-manifest] wrote {CENTRAL_MANIFEST} ({len(parse_rows(derived))} rows)")
         return 0
     if command == "check":
-        derived = derive_manifest(repo)
-        current = central.read_text(encoding="utf-8") if central.is_file() else ""
-        if current == derived:
-            print(f"[watcher-manifest] OK: {CENTRAL_MANIFEST} matches its declarations")
-            return 0
-        print(
-            f"[watcher-manifest] DRIFT: {CENTRAL_MANIFEST} does not match the declarations —"
-            " run `python3 -m automation.watcher_manifest emit`",
-            file=sys.stderr,
-        )
-        return 1
+        return check(repo)
     print("usage: python3 -m automation.watcher_manifest check|emit", file=sys.stderr)
     return 2
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    # `-m` 로 실행하면 이 파일이 `__main__` 으로 한 번, `deploy_declarations` 가 import 하는
+    # 정본 모듈로 또 한 번 로드돼 `ManifestError` 가 둘이 된다 — 정본 객체에서 실행한다.
+    from automation import watcher_manifest as _canonical
+
+    raise SystemExit(_canonical.main(sys.argv[1:]))

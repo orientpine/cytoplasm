@@ -22,8 +22,11 @@ deploy_provenance_check "$repo_root" \
   "$repo_root/automation/regression_bank/bank_state.py" \
   "$repo_root/automation/regression_bank/weekly_bank.py" || exit 4
 
-deploy_archive_stream "$repo_root" "$repo_root/automation/regression_bank" bank_state.py weekly_bank.py \
-  | run_agent 'umask 077; rm -rf "$HOME/.hermes/regression_bank_runtime"; mkdir -p "$HOME/.hermes/regression_bank_runtime"; tar -xzf - -C "$HOME/.hermes/regression_bank_runtime"; chmod 600 "$HOME/.hermes/regression_bank_runtime"/*.py'
+# The runtime is a row of the standing runtime-package table: keep it a real directory
+# (no --link) and ship exactly the declared files, swapped in after staging verification.
+# shellcheck source=automation/deploy_tree.sh
+source "$repo_root/automation/deploy_tree.sh"
+deploy_tree_swap "$repo_root/automation/regression_bank" .hermes/regression_bank_runtime bank_state.py weekly_bank.py
 
 run_agent 'chmod 2711 /srv/autophagy-agents/logs; test -d /srv/autophagy-agents/logs'
 run_agent 'grep -qx "timezone: Asia/Seoul" "$HOME/.hermes/config.yaml"'

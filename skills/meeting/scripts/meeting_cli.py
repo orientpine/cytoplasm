@@ -127,8 +127,18 @@ def _log(record: dict) -> None:
     log_file.chmod(0o600)
 
 
+def _interop_runtime() -> Path:
+    configured = os.environ.get("INTEROP_RUNTIME")
+    if configured:
+        return Path(configured).expanduser()
+    root = Path("~/.hermes/autophagy-import").expanduser()
+    if (root / "automation" / "interop").is_dir():
+        return root
+    return Path("~/.hermes/interop_runtime").expanduser()
+
+
 def _transport(channel_id: str):
-    runtime = _env_path("INTEROP_RUNTIME", "~/.hermes/interop_runtime")
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     from automation.interop.discord_transport import DiscordTransport  # noqa: PLC0415
 
@@ -152,7 +162,7 @@ def _discord_api(method: str, path: str, payload: dict | None = None) -> object:
 
 
 def _origin_notice():
-    runtime = _env_path("INTEROP_RUNTIME", "~/.hermes/interop_runtime")
+    runtime = _interop_runtime()
     sys.path.insert(0, str(runtime))
     from automation.interop import origin_notice  # noqa: PLC0415
 

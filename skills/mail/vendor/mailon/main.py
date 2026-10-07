@@ -182,7 +182,7 @@ def _sync_summary_line(new_count: int, retry_ok: int, retry_fail: int) -> str:
 
 
 def _sync_folder(db: StateDB, scraper: InboxScraper, cfg, limit: int,
-                 project_root: Path) -> int:
+                 project_root: Path, full_scan: bool = False) -> int:
     """Fetch/write/record every new mail of one folder. Returns new-mail count.
 
     uid is a GLOBAL primary key in state.db; a uid already recorded under a
@@ -193,7 +193,7 @@ def _sync_folder(db: StateDB, scraper: InboxScraper, cfg, limit: int,
     skip = db.existing_uids() if scraper.all_folders else db.existing_uids(folder=label)
     log.info("[%s] %d already-saved uids will be skipped", label, len(skip))
     new_count = 0
-    for mail in scraper.iter_new_mails(skip, limit=limit, state_db=db):
+    for mail in scraper.iter_new_mails(skip, limit=limit, state_db=db, full_scan=full_scan):
         if not mail.uid or mail.uid == "None":
             log.warning("skipping mail with empty uid: subject=%r", mail.subject)
             continue
@@ -247,11 +247,12 @@ def cmd_sync(args) -> int:
         scraper.resolve_inbox_folder_uid()
 
         limit = args.limit if args.limit is not None else cfg.max_mails_per_run
+        full_scan = args.full_scan
 
         if all_folders:
-            new_count += _sync_folder(db, scraper, cfg, limit, PROJECT_ROOT)
+            new_count += _sync_folder(db, scraper, cfg, limit, PROJECT_ROOT, full_scan)
         elif "inbox" in folders:
-            new_count += _sync_folder(db, scraper, cfg, limit, PROJECT_ROOT)
+            new_count += _sync_folder(db, scraper, cfg, limit, PROJECT_ROOT, full_scan)
 
         if not all_folders and "sent" in folders:
             sent_uid = resolve_folder_uid(
@@ -263,7 +264,7 @@ def cmd_sync(args) -> int:
                 sent_scraper = InboxScraper(
                     browser, cfg.attachments_dir, folder_label="sent", all_folders=False)
                 sent_scraper.folder_uid = sent_uid
-                new_count += _sync_folder(db, sent_scraper, cfg, limit, PROJECT_ROOT)
+                new_count += _sync_folder(db, sent_scraper, cfg, limit, PROJECT_ROOT, full_scan)
             # unresolvable -> warning already logged; sync stays fail-open
 
         # Retry previously-failed attachments (global, once per run).
@@ -486,6 +487,11 @@ def build_parser() -> argparse.ArgumentParser:
     s_sync.add_argument(
         "--folders", default="inbox,sent",
         help="comma-separated folders to sync: inbox,sent; or all (default: inbox,sent)",
+    )
+    s_sync.add_argument(
+        "--full-scan", action="store_true",
+        help="walk every list page instead of stopping at the first page of "
+             "already-saved mails (picks up older unsaved mails; slow on big folders)",
     )
 
     s_send = sub.add_parser("send", help="compose a mail with an explicit dry-run mode")

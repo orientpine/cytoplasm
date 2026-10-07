@@ -11,13 +11,15 @@ from pathlib import Path
 from typing import Final
 from zoneinfo import ZoneInfo
 
-from automation import group_roster
+from automation import group_roster, owner_notice
+from automation.interop import policy_paths
 from automation.interop.discord_transport import DiscordTransport
 from automation.interop.coordination import CORRELATION_PREFIX, TEAM_NOTICE_PREFIX
 from automation.interop.delegation import InteropEnvelope, format_envelope, parse_envelope, response_for, result_message
 from automation.interop.external_effect_gate import ApprovalContext, DenylistConfigurationError, ToolCall, evaluate_tool_call, load_denylist
 from automation.interop.injection_adapter import InboundEvent, accept_test_event
 from automation.interop.killswitch import PauseStore
+from automation.interop import owner_proxy
 from automation.interop.loop_guard import LoopGuard
 from automation.interop.report import ReportStatus, TaskReport, format_report, parse_report
 
@@ -26,10 +28,9 @@ KST: Final = ZoneInfo("Asia/Seoul")
 LOGGER: Final = logging.getLogger("autophagy.interop")
 LOOP_GUARD: Final = LoopGuard()
 EXTERNAL_EFFECT_APPROVAL_LOG: Final = Path(os.environ.get("EXTERNAL_EFFECT_APPROVAL_LOG", "/srv/autophagy-agents/logs/approvals.jsonl"))
-EXTERNAL_EFFECT_DENYLIST: Final = Path(
-    os.environ.get("EXTERNAL_EFFECT_DENYLIST_PATH", "~/.hermes/interop/external-effect-tools.yaml")
-).expanduser()
+EXTERNAL_EFFECT_DENYLIST: Final = policy_paths.denylist_path()
 ROSTER_ENV: Final = "AUTOPHAGY_ROSTER"
+OWNER_PROXY_LEDGER: Final = Path("~/.hermes/interop/owner-proxy-ledger.json").expanduser()
 
 
 def register(ctx) -> None:
@@ -147,6 +148,9 @@ def pre_gateway_dispatch(event, gateway, session_store, **kwargs):
     # 임계 안으로 보았다. 임계값을 느슨하게 조이는 대신 **첫 홉에서** 끊는다 —
     # 위의 TEAM_NOTICE cascade safety 와 같은 방식이고, 가드는 2차 방어로 남는다.
     if parse_envelope(text) is None and parse_report(text) is None:
+        proxied = owner_proxy.gateway_text(event, text, actor_id, _config_payload, OWNER_PROXY_LEDGER)
+        if proxied is not None:
+            return {"action": "rewrite", "text": proxied}
         LOGGER.warning("interop bot prose skipped (no protocol payload)")
         return {"action": "skip", "reason": "interop_bot_prose"}
 
@@ -219,15 +223,12 @@ def _send_direct_result(
     correlation_id: str, envelope: InteropEnvelope | None = None, channel_id: str | None = None,
 ) -> None:
     """Deliver the delegation receipt through the owner-notice facade (ON-2)."""
-    from automation import owner_notice
-    from automation.owner_notice import notify_owner
-
     content = f"Interop delegation result: {correlation_id}"
     message = result_message(correlation_id, envelope, channel_id)
     if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
-        ok = notify_owner(content, message=message)
+        ok = owner_notice.notify_owner(content, message=message)
     else:
-        ok = notify_owner(content)
+        ok = owner_notice.notify_owner(content)
     if not ok:
         raise RuntimeError("delegation result notice delivery failed")
 
@@ -267,9 +268,16 @@ def _signed_text_and_actor(event) -> tuple[str, str, bool]:
     return "", actor_id, True
 
 
-def _config() -> dict[str, str]:
+def _config_payload() -> dict[str, object]:
     config_path = Path(os.environ.get("INTEROP_CONFIG", "~/.hermes/interop/config.json")).expanduser()
     payload = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("invalid private interop config")
+    return payload
+
+
+def _config() -> dict[str, str]:
+    payload = _config_payload()
     agent_id = payload.get("agent_id")
     channel_id = payload.get("agents_log_channel_id")
     owner_id = payload.get("owner_id")

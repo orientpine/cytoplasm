@@ -55,13 +55,13 @@ def test_ingest_carries_the_v2_subject_keys_into_rag_metadata(tmp_path: Path) ->
             title="지식 계층 결정",
             tags="연구",
             body="본문",
-            extra="entity: [차백동, 한국기계연구원]\nrelations: [counterpart:김박사]\nevent_date: 2026-05-02\n",
+            extra="entity: [홍길동, 한국기계연구원]\nrelations: [counterpart:김박사]\nevent_date: 2026-05-02\n",
         ),
         encoding="utf-8",
     )
     documents, _ = scan_directory(root, "wiki", "wiki", {}, 2000)
     metadata = documents[0].chunks[0].metadata
-    assert metadata["entity"] == "차백동,한국기계연구원"
+    assert metadata["entity"] == "홍길동,한국기계연구원"
     assert metadata["relations"] == "counterpart:김박사"
     assert metadata["event_date"] == "2026-05-02"
 

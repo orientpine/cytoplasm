@@ -49,6 +49,7 @@ _BACKSLASH_FIELD = r'''summary = f"{'\n'.join(rows)}"
 
 def _deployed_sources() -> list[Path]:
     files = sorted(_REPO.glob("skills/*/scripts/*.py"))
+    files += sorted(_REPO.glob("skills/*/plugin/*.py"))
     files += sorted(
         path for path in _REPO.glob("automation/**/*.py") if "__pycache__" not in path.parts
     )

@@ -39,9 +39,11 @@ source "$repo_root/automation/deploy_push.sh"
 
 source "$repo_root/automation/deploy_provenance.sh"
 deploy_provenance_check "$repo_root" \
-  "$repo_root/skills/todo/scripts/todo_confirm_reaction_watch.py" || exit 4
+  "$repo_root/skills/todo/scripts/todo_confirm_reaction_watch.py" \
+  "$repo_root/skills/todo/deploy.sh" "$repo_root/skills/todo/deploy-manifest.txt" || exit 4
 
 push_file "$repo_root/skills/todo/scripts/todo_confirm_reaction_watch.py" \
   '.hermes/scripts/todo_confirm_reaction_watch.py'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; if hermes cron list | grep -Eq "Name:[[:space:]]+todo-confirm-watch$"; then exit 0; fi; hermes cron create "*/1 * * * *" --name todo-confirm-watch --no-agent --script todo_confirm_reaction_watch.py --deliver local'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list'
+source "$repo_root/automation/deploy_cron.sh"
+converge_cron todo-confirm-watch "*/1 * * * *" todo_confirm_reaction_watch.py local
+run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all'

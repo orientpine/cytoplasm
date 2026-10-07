@@ -70,7 +70,9 @@ def test_scoped_deploy_tar_streams_use_the_shared_git_manifest() -> None:
     # When/Then: each tar-producing script delegates file selection to Git.
     for script in scripts:
         text = script.read_text(encoding="utf-8")
-        assert "deploy_archive_stream" in text, f"archive manifest bypass: {script}"
+        assert "deploy_archive_stream" in text or "deploy_tree_swap" in text, (
+            f"archive manifest bypass: {script}"
+        )
 
 
 
@@ -111,3 +113,15 @@ def test_archive_root_entry_does_not_smuggle_ignored_files(tmp_path: Path) -> No
     assert "package/tracked.py" in names
     assert not any("__pycache__" in name for name in names), "root entry recursed into ignored paths"
     assert "package/.env" not in names
+
+
+def test_tree_swap_delegation_still_selects_files_through_git() -> None:
+    # Given: a deployer may delegate its tar stream to deploy_tree_swap (RCB todo 9).
+    text = (ROOT / "automation" / "deploy_tree.sh").read_text(encoding="utf-8")
+
+    # Then: the helper itself streams through the shared Git manifest, in code, not prose.
+    calls = [
+        line for line in text.splitlines()
+        if not line.lstrip().startswith("#") and 'deploy_archive_stream "$repo_root"' in line
+    ]
+    assert calls, "deploy_tree_swap bypasses the shared git archive manifest"

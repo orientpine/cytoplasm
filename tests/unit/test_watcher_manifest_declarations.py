@@ -13,9 +13,12 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import pytest
+
+if TYPE_CHECKING:
+    from automation.deploy_declarations import Declaration
 
 _REPO: Final = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
@@ -30,11 +33,16 @@ from automation.watcher_manifest import (  # noqa: E402
 )
 
 
-def _declared_rows() -> list[tuple[Path, object]]:
+def _declared_rows() -> list[tuple[Path, Declaration]]:
+    """legacy 행과 v2 행을 모두 — v2 file 선언도 선언이다(DEC-30)."""
+    from automation.deploy_declarations import parse_declaration_file
+
     return [
         (declaration, row)
         for declaration in declaration_files(_REPO)
-        for row in parse_rows(declaration.read_text(encoding="utf-8"))
+        for row in parse_declaration_file(
+            declaration.relative_to(_REPO).as_posix(), declaration.read_text(encoding="utf-8")
+        )
     ]
 
 
@@ -49,7 +57,7 @@ def test_the_central_manifest_is_exactly_the_derivation() -> None:
 
 def test_every_home_write_in_a_deploy_script_is_declared() -> None:
     """deploy.sh 가 홈에 쓰는 모든 목적지는 어느 패키지 선언에든 있어야 한다."""
-    declared = {row.destination for _, row in _declared_rows()}
+    declared = {row.destination for _, row in _declared_rows() if row.kind == "file"}
     missing: list[str] = []
     scripts = sorted(_REPO.glob("skills/*/deploy.sh")) + sorted(
         _REPO.glob("automation/*/deploy.sh")
@@ -69,16 +77,19 @@ def test_every_row_lives_with_its_owning_package() -> None:
     """행은 소스를 소유한 패키지의 선언에 있어야 한다 — 재배포 명령 유도와 같은 규칙."""
     for declaration, row in _declared_rows():
         package = declaration.relative_to(_REPO).parent.as_posix()
-        assert row.owning_package == package, (
-            f"{declaration.relative_to(_REPO)} 의 행이 남의 소스를 선언한다: {row.source}"
-        )
+        assert row.owner == package
+        if row.legacy:
+            assert "/".join(row.source.split("/")[:2]) == package, (
+                f"{declaration.relative_to(_REPO)} 의 행이 남의 소스를 선언한다: {row.source}"
+            )
 
 
 def test_every_declared_source_exists() -> None:
+    """file·cron 은 파일을, tree·derived 는 디렉터리를 가리킨다."""
     for declaration, row in _declared_rows():
-        assert (_REPO / row.source).is_file(), (
-            f"{declaration.relative_to(_REPO)} 가 없는 소스를 가리킨다: {row.source}"
-        )
+        source = _REPO / row.source
+        exists = source.is_file() if row.kind in ("file", "cron") else source.is_dir()
+        assert exists, f"{declaration.relative_to(_REPO)} 가 없는 소스를 가리킨다: {row.source}"
 
 
 def test_destinations_are_unique_per_account() -> None:

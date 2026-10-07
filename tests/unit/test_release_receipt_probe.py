@@ -43,7 +43,7 @@ def _release(tmp_path: Path, sha: str) -> None:
 def test_matching_receipt_passes(tmp_path: Path) -> None:
     _release(tmp_path, "aaa111")
     receipt = tmp_path / "receipt.json"
-    _ = receipt.write_text(json.dumps({"release_sha": "aaa111"}), encoding="utf-8")
+    _ = receipt.write_text(json.dumps({"release_sha": "aaa111", "version": 2}), encoding="utf-8")
 
     result = _run(tmp_path, receipt=receipt)
 

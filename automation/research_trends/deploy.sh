@@ -19,6 +19,8 @@ run_agent() {
 # 끝나면서 파일은 그대로였던 실측(2026-08-20)이 이 공유 구현의 이유다.
 # shellcheck source=automation/deploy_push.sh
 source "$repo_root/automation/deploy_push.sh"
+# shellcheck source=automation/deploy_tree.sh
+source "$repo_root/automation/deploy_tree.sh"
 
 # Deploy guard: refuse to push code that origin/main does not have (see the header of
 # automation/deploy_provenance.sh for why a silent revert is otherwise inevitable).
@@ -29,10 +31,11 @@ deploy_provenance_check "$repo_root" \
   "$repo_root/automation/research_trends/topics_import.py" \
   "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
   "$repo_root/configs/sensitivity-rules.yaml" \
-  "$repo_root/prompts/research-trends-v1.md" || exit 4
+  "$repo_root/prompts/research-trends-v1.md" \
+  "$repo_root/automation/research_trends/deploy.sh" "$repo_root/automation/research_trends/deploy-manifest.txt" || exit 4
 
-deploy_archive_stream "$repo_root" "$repo_root/automation/research_trends" research_trends.py research_trends_core.py topics_import.py \
-  | run_agent 'umask 077; rm -rf "$HOME/.hermes/research_trends_runtime"; mkdir -p "$HOME/.hermes/research_trends_runtime"; tar -xzf - -C "$HOME/.hermes/research_trends_runtime"; chmod 600 "$HOME/.hermes/research_trends_runtime"/*.py'
+# 평면 런타임 사본은 실제 디렉터리로 두고 원자적으로 맞바꾼다(상시 프로브가 읽는 배치).
+deploy_tree_swap "$repo_root/automation/research_trends" .hermes/research_trends_runtime research_trends.py research_trends_core.py topics_import.py
 push_file "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
   '.hermes/scripts/watch_failure_streak.py'
 push_file "$repo_root/automation/research_trends/research_trends.py" '.hermes/scripts/research_trends.py'
@@ -41,5 +44,5 @@ push_file "$repo_root/prompts/research-trends-v1.md" '.hermes/research-trends/re
 
 run_agent 'grep -qx "timezone: Asia/Seoul" "$HOME/.hermes/config.yaml"'
 # Weekday catch-up and owner-visible incident delivery converge in one in-place edit.
-run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+research-trends\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "0 9 * * 1-5" --deliver discord --no-agent --script research_trends.py; else hermes cron create "0 9 * * 1-5" --name research-trends --no-agent --script research_trends.py --deliver discord; fi'
-run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; job_id=$(hermes cron list --all | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+research-trends\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "0 9 * * 1-5" --deliver discord --no-agent --script research_trends.py; else hermes cron create "0 9 * * 1-5" --name research-trends --no-agent --script research_trends.py --deliver discord; fi'
+run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all'

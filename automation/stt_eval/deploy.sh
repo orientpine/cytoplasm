@@ -19,7 +19,9 @@ run_account() {
 }
 
 account="$NODE_AGENT_ACCOUNT"
-tar -C "$repo_root/automation/stt_eval/cron" -czf - stt_eval_capture_watch.py \
-  | run_account "$account" 'umask 077; mkdir -p "$HOME/.hermes/scripts"; tar -xzf - -C "$HOME/.hermes/scripts"; chmod 600 "$HOME/.hermes/scripts/stt_eval_capture_watch.py"'
+run_agent() { run_account "$account" "$1"; }
+source "$repo_root/automation/deploy_push.sh"
+push_file "$repo_root/automation/stt_eval/cron/stt_eval_capture_watch.py" '.hermes/scripts/stt_eval_capture_watch.py'
 run_account "$account" 'grep -qx "timezone: Asia/Seoul" "$HOME/.hermes/config.yaml"'
-run_account "$account" 'PATH="$HOME/.local/bin:$PATH"; if hermes cron list --all | grep -Eq "Name:[[:space:]]+stt-eval-capture$"; then exit 0; fi; hermes cron create "40 3 * * *" --name stt-eval-capture --no-agent --script stt_eval_capture_watch.py --deliver local'
+source "$repo_root/automation/deploy_cron.sh"
+converge_cron stt-eval-capture "40 3 * * *" stt_eval_capture_watch.py local

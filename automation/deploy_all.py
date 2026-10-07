@@ -13,22 +13,30 @@ I/O 가 없다 — 관측 줄을 받아 판정을 돌려줄 뿐이다. 관측은
 """
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Final
 
-RECEIPT_VERSION: Final = 1
+from automation import deploy_all_gateway, deploy_all_kinds
+from automation.deploy_all_gateway import GatewayState
+from automation.deploy_all_kinds import (
+    ArtifactState,
+    ObservationError,
+    PendingCheck,
+    defective,
+    owner_actions,
+    render_artifact_lines,
+)
+from automation.deploy_receipt import DELEGATED_SURFACES, RECEIPT_VERSION, render_receipt
 
-#: 표면 ⑤(root 자산)·⑥(RAG)·hermes 런타임 패키지는 이 영수증이 직접 판정하지 않는다 —
-#: 상시 healthcheck 프로브(release_helper_drift · rag_stack_current ·
-#: runtime_packages_current)가 릴리스와 무관하게 계속 대조한다. 여기 적는 이유는
-#: 영수증을 읽는 쪽이 "전량"의 경계를 오해하지 않게 하기 위해서다.
-DELEGATED_SURFACES: Final = ("release-helpers", "runtime-packages", "rag-stack")
-
-
-class ObservationError(RuntimeError):
-    """관측이 불완전하거나 기형이다 — 잘린 관측을 깨끗함으로 읽으면 안 된다."""
+__all__ = [
+    "DELEGATED_SURFACES",
+    "RECEIPT_VERSION",
+    "ArtifactState",
+    "GatewayState",
+    "ObservationError",
+    "PendingCheck",
+    "render_receipt",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +79,11 @@ class Plan:
     home: tuple[HomeState, ...]
     undeclared: tuple[UndeclaredState, ...]
     strict_undeclared: bool = False
+    artifacts: tuple[ArtifactState, ...] = ()
+    pending: tuple[PendingCheck, ...] = ()
+    pending_unknown: bool = False
+    delegated_checked: int = 0
+    gateways: tuple[GatewayState, ...] = ()
 
     @property
     def home_defects(self) -> tuple[HomeState, ...]:
@@ -82,24 +95,28 @@ class Plan:
         return tuple(sorted(names))
 
     @property
+    def deployable_artifacts(self) -> tuple[ArtifactState, ...]:
+        return tuple(a for a in self.artifacts if a.status in deploy_all_kinds.DEPLOYABLE)
+
+    @property
     def packages_to_deploy(self) -> tuple[str, ...]:
-        return tuple(
-            sorted({
-                state.owning_package
-                for state in self.home_defects
-                if state.status in ("stale", "absent")
-            })
-        )
+        home = {s.owning_package for s in self.home_defects if s.status in ("stale", "absent")}
+        return tuple(sorted(home | {a.owner for a in self.deployable_artifacts}))
 
     @property
     def gateway_restart_needed(self) -> bool:
         """플러그인은 게이트웨이 프로세스 시작 시 로드된다 — 파일 배포만으로는 반영이 아니다."""
-        return any(s.destination.startswith(".hermes/plugins/") for s in self.home_defects)
+        return any(
+            s.destination.startswith(".hermes/plugins/") for s in self.home_defects
+        ) or any(a.activation == "gateway" for a in self.deployable_artifacts) or deploy_all_gateway.restart_needed(
+            self.gateways
+        )
 
     @property
     def clean(self) -> bool:
         defects = (
             self.mount_stale or self.mount_unmounted or self.mount_orphaned or self.home_defects
+            or any(defective(a) for a in self.artifacts) or deploy_all_gateway.blocking(self.gateways)
         )
         return not defects and not (self.strict_undeclared and self.undeclared)
 
@@ -116,6 +133,8 @@ def parse_observations(
     mount_orphaned: list[str] = []
     home: list[HomeState] = []
     undeclared: list[UndeclaredState] = []
+    family: list[str] = []
+    gateway_rows: list[list[str]] = []
     for raw in lines:
         line = raw.strip()
         if not line.startswith("OBS|"):
@@ -138,6 +157,10 @@ def parse_observations(
             undeclared.append(UndeclaredState(parts[2], parts[3], parts[4]))
         elif kind == "end" and len(parts) == 2:
             ended = True
+        elif kind == "gateway":
+            gateway_rows.append(parts)
+        elif kind in deploy_all_kinds.FAMILY:
+            family.append(line)
         else:
             raise ObservationError(f"malformed observation: {line[:80]}")
     if not ended:
@@ -148,6 +171,7 @@ def parse_observations(
         raise ObservationError("mounts were not judged")
     if not home:
         raise ObservationError("no home-artifact observations")
+    kinds = deploy_all_kinds.parse_artifact_lines(family)
     return Plan(
         release_sha=release_sha,
         mount_stale=tuple(mount_stale),
@@ -156,13 +180,19 @@ def parse_observations(
         home=tuple(home),
         undeclared=tuple(undeclared),
         strict_undeclared=strict_undeclared,
+        artifacts=kinds.artifacts,
+        pending=kinds.pending,
+        pending_unknown=kinds.pending_unknown,
+        delegated_checked=kinds.delegated_checked,
+        gateways=deploy_all_gateway.fold(gateway_rows, kinds.artifacts),
     )
 
 
 def render_plan(plan: Plan) -> str:
     header = f"DEPLOY-ALL: release {plan.release_sha[:16]}"
     if plan.clean and not plan.undeclared:
-        return f"{header} — 전량 일치, 할 일 없음"
+        return "\n".join([f"{header} — 전량 일치, 할 일 없음", *render_artifact_lines(plan),
+                          *deploy_all_gateway.render_lines(plan.gateways)])
     lines = [header]
     for skill, expected, mounted in plan.mount_stale:
         lines.append(
@@ -190,6 +220,7 @@ def render_plan(plan: Plan) -> str:
             lines.append(
                 f"    {state.account}:{state.destination} sha256={state.sha256_prefix}…"
             )
+    lines += render_artifact_lines(plan) + deploy_all_gateway.render_lines(plan.gateways)
     if plan.gateway_restart_needed:
         lines.append("  GATEWAY-RESTART 필요: 플러그인 갱신은 agent+peer 재시동까지가 반영이다")
     return "\n".join(lines)
@@ -209,32 +240,9 @@ def render_actions(plan: Plan) -> str:
     for state in plan.home_defects:
         if state.status == "unknown":
             lines.append(f"ACT|manual|unreadable:{state.account}:{state.destination}")
+    for art in plan.artifacts:
+        if art.status == "unknown":
+            lines.append(f"ACT|manual|unreadable:{art.kind}:{art.account}:{art.destination}")
+    lines += deploy_all_gateway.actions(plan.gateways) + owner_actions(plan)
     return "\n".join(lines)
 
-
-def render_receipt(plan: Plan, *, verified_at: str) -> str:
-    """전량 반영 영수증 — clean 이 아닌 계획에 서명하는 것을 코드가 거부한다."""
-    if not plan.clean:
-        raise ObservationError("refusing to attest a non-clean deployment")
-    payload = {
-        "version": RECEIPT_VERSION,
-        "release_sha": plan.release_sha,
-        "verified_at": verified_at,
-        "surfaces": {
-            "skill_mounts": "ok",
-            "home_artifacts": {
-                "ok": sum(1 for s in plan.home if s.status == "ok"),
-                "ok_absent_optional": sum(1 for s in plan.home if s.status == "ok-absent"),
-            },
-        },
-        "delegated": list(DELEGATED_SURFACES),
-        "undeclared": [
-            {
-                "account": state.account,
-                "destination": state.destination,
-                "sha256_prefix": state.sha256_prefix,
-            }
-            for state in plan.undeclared
-        ],
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
