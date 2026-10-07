@@ -136,6 +136,8 @@ cmd_run() {
     || die "lint failed — no receipt written"
   record_step unit-tests python3 -m pytest tests/unit -q \
     || die "unit tests failed — no receipt written"
+  record_step public-gate python3 -m automation.public_gate range origin/main HEAD --text-env PR_TEXT \
+    || die "public leak gate failed — no receipt written"
   record_step clean-host "$CONTAINER_RUNNER" run --rm \
     -e PYTHONDONTWRITEBYTECODE=1 -v "$REPO_ROOT:/w:ro" -w /w \
     "$CONTAINER_IMAGE" bash -c "$CLEAN_HOST_SCRIPT" \

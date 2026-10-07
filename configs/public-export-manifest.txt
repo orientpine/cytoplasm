@@ -163,25 +163,6 @@ docs/기능소개/캘린더-승인-카드-누락-백스톱.md
 docs/기능소개/릴리스-승인-메시지-상세-분할.md
 docs/기능소개/스킬-제작-전-기존-스킬-대조.md
 
-# The HWPX render engine internalized from the private kimm-docbot repository
-# (2026-09-08). It is excluded so this change does not silently alter what is
-# public: the engine has never been published, and promoting it is an owner call.
-skills/proposal/engine/
-# Tests whose only input is that private engine — they import skills.proposal.engine at
-# collection/runtime and cannot pass inside the exported tree, where public_export.sh
-# re-runs pytest (2026-09-08 v1.6.0 export replica: ModuleNotFoundError). They are
-# promoted together with the engine when the owner publishes it.
-tests/unit/test_proposal_render.py
-tests/unit/test_proposal_engine_in_tree.py
-tests/unit/test_proposal_pipeline_integrity.py
-tests/unit/test_proposal_writer_guidance.py
-tests/unit/test_proposal_engine_corpus.py
-tests/unit/test_proposal_engine_schedule.py
-tests/unit/test_proposal_hwpx_layer.py
-tests/unit/test_proposal_rubric_check.py
-tests/unit/test_proposal_compose_resume.py
-tests/unit/test_proposal_codex_model.py
-
 # compose 중단·재개 기능 소개: 노드 반복 한도·게이트웨이 재시작 시각 등 운영 세부가 실려 공개 대상이 아니다.
 docs/기능소개/제안서-compose-중단-재개.md
 # 그림·캡션 겹침 수정 기능 소개: 소유자 제안서 제목과 노드 배포 경로가 실려 공개 대상이 아니다.

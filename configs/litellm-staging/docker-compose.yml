@@ -46,7 +46,6 @@ services:
     ports:
       - "127.0.0.1:4000:4000"
     environment:
-      OPENAI_API_KEY: "${OPENAI_API_KEY:?OPENAI_API_KEY must be set in .env}"
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set in .env}"
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}"
       LITELLM_MONTHLY_HARD_CAP: "${LITELLM_MONTHLY_HARD_CAP:?LITELLM_MONTHLY_HARD_CAP must be set in .env}"

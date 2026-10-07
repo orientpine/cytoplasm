@@ -17,7 +17,7 @@ from proposal_config import (  # noqa: E402
     preflight,
 )
 
-SEED_NAME = "(주제1) R&D 연구계획서 양식.hwpx"
+SEED_NAME = "R&D 연구계획서 양식.hwpx"
 
 
 def test_config_declares_no_external_engine_checkout() -> None:

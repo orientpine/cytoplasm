@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Commit messages of a public repository are public; gitleaks scans patches, not messages.
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+exec python3 "$root/automation/public_gate.py" --repo "$root" message "$1"

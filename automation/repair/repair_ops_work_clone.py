@@ -65,8 +65,21 @@ class RepairWorkClone:
                 ssh += f" -o UserKnownHostsFile={known_hosts} -o StrictHostKeyChecking=yes"
             argv += ("-c", f"core.sshCommand={ssh}")
         argv += ("push", "--force-with-lease", "origin", f"HEAD:refs/heads/{branch}")
+        self._refuse_leaks()
         _ = self._run(argv, self.work_clone)
         return branch
+
+    def _refuse_leaks(self) -> None:
+        # The origin is a public repository: the push publishes. The gate runs from the
+        # release runtime, never from the work clone the repair just patched.
+        gate = ("python3", str(Path(__file__).resolve().parents[1] / "public_gate.py"),
+                "--repo", str(self.work_clone), "range", "origin/main", "HEAD")
+        try:
+            verdict = self.runner.run(gate, cwd=self.work_clone)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RepairOpsError(f"public leak gate unavailable: {type(error).__name__}") from error
+        if verdict.returncode != 0:
+            raise RepairOpsError(f"public leak gate refused the push: {redact(verdict.stderr)[:180]}")
 
     def ensure_pull_request(self, ticket_id: str) -> str:
         """Create or reuse the open repair PR; main merge remains owner-only."""

@@ -30,7 +30,7 @@ REQUIRED_BINARIES: Final = (
     "gh",
 )
 _REFINE_PIN: Final = "177e64539cd8b4faf41a2d8c6d187c33d57f79f4"
-_SEED_RELPATH: Final = "resource/(주제1) R&D 연구계획서 양식.hwpx"
+_SEED_RELPATH: Final = "resource/R&D 연구계획서 양식.hwpx"
 ENGINE_ROOT: Final = Path(__file__).resolve().parents[1] / "engine"
 
 

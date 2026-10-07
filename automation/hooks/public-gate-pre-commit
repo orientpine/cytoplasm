@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Installed by automation/ops_link.sh into a public development checkout. A pushed branch
+# of a public repository is published the moment it is pushed, so the leak checks that
+# used to run only at release time (automation/public_export.sh) run here first:
+# gitleaks on the staged patch, then automation/public_gate.py on staged paths and lines.
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+bash "$root/automation/hooks/gitleaks-pre-commit"
+exec python3 "$root/automation/public_gate.py" --repo "$root" staged

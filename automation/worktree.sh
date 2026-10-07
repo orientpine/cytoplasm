@@ -105,6 +105,11 @@ cmd_start() {
   install -d "$WORKTREE_ROOT"
   git -C "$MAIN_ROOT" worktree add --quiet "$dir" -b "$branch" "$fresh" \
     || die "could not create the worktree at $dir"
+  # A public development checkout links its private ops repository into every worktree;
+  # without the link a session would write .omo into the worktree, one `add -f` from public.
+  if git -C "$MAIN_ROOT" config --get autophagy.opsRepo >/dev/null; then
+    (cd "$dir" && bash automation/ops_link.sh) || die "could not link the ops repository into $dir"
+  fi
 
   log "READY $dir  (branch $branch, base ${fresh:0:12})"
   if [[ -n "$stale" && "$stale" != "$fresh" ]]; then

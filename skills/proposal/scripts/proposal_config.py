@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Final
 
 ENGINE_ROOT: Final = Path(__file__).resolve().parents[1] / "engine"
-SEED_RELPATH: Final = "resource/(주제1) R&D 연구계획서 양식.hwpx"
+SEED_RELPATH: Final = "resource/R&D 연구계획서 양식.hwpx"
 
 
 class ConfigError(ValueError):

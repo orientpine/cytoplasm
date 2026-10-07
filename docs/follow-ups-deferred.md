@@ -2771,3 +2771,15 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 - **릴리스 수렴이 진행 중인 에이전트 작업을 끊는다** — 2분 리컨실러는 새 릴리스로 수렴하면 무조건 `autophagy-gateway-pair restart` 를 부른다. Hermes 는 종료할 때 도구 자식 프로세스를 죽이고(`killed 1 tool subprocess(es)`), 유닛도 `KillMode=mixed` 라 남은 것까지 정리된다. 턴은 끝났지만 백그라운드 도구가 도는 상태는 drain 이 세지 않는다(`active_at_start=0`) → 배포기 동결이 풀리면, 재시작 전에 agent 게이트웨이의 도구 자식 프로세스를 보고 유휴가 될 때까지(상한을 두고) 미루는 방안을 검토한다. **BLOCKED(배포기 수정 동결) · 영향: 수 분 넘게 도는 모든 백그라운드 도구 작업 · 심각도 중**.
 - **재시작 뒤 세션이 스스로 이어가지 않는다** — Hermes 는 재시작 때 백그라운드 프로세스 추적과 `notify_on_complete` 약속을 잃어 완료 알림이 오지 않는다. 소유자가 "계속"이라고 말해야 compose 재실행이 일어난다 → Hermes upstream 에서 재시작 전후 백그라운드 작업 인계를 지원하면 채택한다. **BLOCKED(벤더) · 영향: 소유자 재지시 1회 · 심각도 낮음**.
+
+## 공개 배포본 v1.14.6 반출 보류 (2026-10-06)
+
+- **cytoplasm 이 v1.14.0 에 머물러 있다** — v1.14.6 반출이 내보낸 트리 단위 시험 1건(`test_rag_ingest_rules_declared` — HEAD 가 직전 공개 스냅샷이라 `deploy_tree.sh` 가 없었다)으로 `PUBLIC-EXPORT-BLOCK` 됐고, 시험 수정(PR #575)은 v1.14.6 태그 커밋에 없다. 소유자 결정(2026-10-06)으로 이번에는 건너뛴다 → 다음 정기 private 릴리스 태그가 잘리면 그 태그로 `public_export.sh` 를 돌리고 릴리스 노트·`update-trust.pub` 까지 게시한다(manual-maintainer §1.4~1.7). 다른 소스를 이미 잘린 버전 이름으로 내보내지 않는다. **영향: 신규 설치·공개 사용자가 v1.14.0 기준 · 운영 노드 무영향 · 심각도 낮음**.
+  ↳ 처리(2026-10-07 · 해소): private v1.14.9(6728a40a) 태그로 `public_export.sh` 를 돌려 cytoplasm 을 반출했다 — 내보낸 트리 11072 passed, gitleaks 0건(카나리아 선행), 태그 자체 검증 Good, `PUBLIC-EXPORT-OK commit=f304d016`. 릴리스 노트·`update-trust.pub` 게시(v1.14.9 Latest). 증적: 릴리스 호스트 `~/release-logs/export-1149.log`.
+증적: 반출 로그 `~/release-logs/export-1146.log`(릴리스 호스트), PR #575.
+
+## peer attestation signed 전환 후 남긴 것 (2026-10-06)
+
+- **signed 모드의 전체 사슬(답글 없는 서명 → ✅ → MOUNT)을 아직 실측하지 못했다** — 2026-10-06 실측에서 두 결함을 고쳤다(PR #579 승인 채널 id, #580 서명 모드 답글). 그런데 실측에 쓴 hello-autophagy는 digest가 live와 같아, ✅ 뒤 워처가 `retire-done (already-realized)`로 MOUNT 없이 종결했다. #580은 노드 릴리스 런타임에서 돌기 때문에 v1.14.8 반영 뒤에야 효과가 난다 → v1.14.8 반영 뒤 다음 실제 스킬 배포에서 `#approvals`에 `[skill-attest]` 글이 없고 ✅ 뒤 live 심링크가 새 digest를 가리키는지 본다. 더 빨리 보려면 데모 스킬을 한 줄 바꾼 뒤 `deploy-skill.sh hello-autophagy --request-only`를 실행하고 카드 1장에 ✅를 받는다. **영향: 승인 채널 글 소음·검증 공백 · 되돌리기는 릴리스 호스트 `node.toml` 한 줄 · 심각도 낮음**.
+  ↳ 처리(2026-10-07 · 해소): 데모 변경(PR #582, digest 25f24e45)을 담은 v1.14.9 릴리스 승인 경로에서 `PEER-ATTEST-PASS (signed stdout record captured)` → `RELEASE-AUTHORIZED` → `INSTALLED`, live 가 10:32:05Z 부터 `25f24e45…`, #approvals 의 `[skill-attest]` 0건. 같은 변경을 소유자 ✅ 한 카드별 요청은 노드 재개가 `release … is not the origin/main tip`(exit 4)로 막혔다 — 릴리스에 안 들어간 변경은 카드별 ✅ 재개로 MOUNT 될 수 없다. 증적: 릴리스 호스트 `~/release-logs/release-1149.log`, 노드 `autophagy-supply-chain-watch` 저널.
+증적: 릴리스 호스트 `~/release-logs/hello-signed-20261006{,-b}.log`·`release-1148.log`, 노드 `autophagy-supply-chain-watch` 저널(2026-10-06 14:55Z).

@@ -53,6 +53,54 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  # 공개 저장소에서는 브랜치를 push 하는 순간 공개된다. 그래서 막는 곳은 로컬 훅(public-gate-pre-commit·
+  # commit-msg·pre-push)이고, 이 잡은 그 훅을 우회했을 때 잡아내는 두 번째 그물이다. 찾은 값은 로그에
+  # 싣지 않는다(공개 저장소의 Actions 로그는 공개다). 금칙어 목록은 비밀 LEAK_DENYLIST 로만 받고,
+  # 포크 PR 처럼 비밀이 없으면 경로·토폴로지 검사만 돈다.
+  leak-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned gitleaks
+        run: |
+          set -euo pipefail
+          archive=gitleaks_8.30.1_linux_x64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$archive"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Scanner reaches a planted canary
+        run: |
+          set -euo pipefail
+          canary="$(mktemp -d)"
+          probe="AKI""A""QYLPMN5HHHFPZAAA"
+          printf 'aws_access_key_id = "%s"\n' "$probe" > "$canary/canary.txt"
+          if gitleaks dir --no-banner --redact "$canary" >/dev/null 2>&1; then
+            echo "gitleaks missed a planted canary; a zero-finding scan proves nothing" >&2
+            exit 1
+          fi
+
+      - name: Secret scan of the PR commits
+        run: gitleaks git --no-banner --redact --log-opts="origin/main..HEAD" .
+
+      - name: Public leak gate
+        env:
+          LEAK_DENYLIST: ${{ secrets.LEAK_DENYLIST }}
+          PR_TEXT: ${{ github.event.pull_request.title }}
+            ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          if [ -n "${LEAK_DENYLIST:-}" ]; then
+            printf '%s\n' "$LEAK_DENYLIST" > "$RUNNER_TEMP/denylist.txt"
+            export PUBLIC_GATE_DENYLIST="$RUNNER_TEMP/denylist.txt"
+          fi
+          python3 -m automation.public_gate range origin/main HEAD --text-env PR_TEXT
+
   # 설치기 진입점은 제3자가 **아무것도 설치하기 전에** 처음 실행하는 명령이라,
   # 모듈 스코프에서 import하는 것이 그대로 미문서화 전제가 된다. 실제로 한 번
   # 깨졌다 — dcddaa21 이후 roster import가 모듈 스코프로 올라가 순수 dry-run이

@@ -63,11 +63,24 @@ done
 
 The compose `/health` check makes a real provider completion every 10 seconds. The healthcheck now uses the model-free `/health/liveliness` endpoint instead. To apply on the node, ops should copy the updated `docker-compose.yml` into `/home/ops/litellm-gateway/`, then run `systemctl --user restart litellm-gateway.service`; that unit runs `docker compose up -d`. The container restart is an owner/ops decision: as documented in `docs/guide/operations.md`, LiteLLM settings are not changed casually while operating. Afterwards, verify there are no new `litellm-internal-health-check` rows in `LiteLLM_SpendLogs` and that `docker ps` shows the `litellm` container healthy.
 
+### Apply note (2026-10-07)
+
+The `glm-main` alias (`openai/gpt-5.6-luna`, OpenAI API key) was removed and
+`model_list` is now empty. Since 2026-09-29 every model call goes through the
+Hermes main model and `fallback_providers` (`configs/routing-policy.md`), and no
+code, cron job or healthcheck calls `glm-main`; the last spend row was three
+peer calls on 2026-09-28. The node copies of `config.yaml`, `docker-compose.yml`
+and `.env` and the `OPENAI_API_KEY` line of `/home/ops/.env.secrets` were
+changed after `*.bak-openai-20261007` (0600) backups, the `litellm` container
+was recreated, and it reported healthy with `/health/liveliness` 200 and an
+empty `/v1/models`. The gateway, Postgres and virtual keys stay in place.
+
 ## 2. Materialize remote-only secrets and `.env`
 
-This writes no secret to this repository. It requires the existing
-`/home/ops/.env.secrets` to contain `OPENAI_API_KEY`; it adds strong, remote-only
-values for the two secrets that do not yet exist. The master key must begin
+This writes no secret to this repository. It adds strong, remote-only
+values for the two secrets that do not yet exist. Since 2026-10-07 the gateway
+has no provider deployment, so no provider key is needed (see the apply note
+below). The master key must begin
 with `sk-`, as required by LiteLLM.
 
 ```bash
@@ -78,7 +91,6 @@ set -euo pipefail
 secrets=/home/ops/.env.secrets
 test -r "$secrets"
 chmod 600 "$secrets"
-grep -q '^OPENAI_API_KEY=' "$secrets"
 
 if ! grep -q '^LITELLM_MASTER_KEY=' "$secrets"; then
   umask 077
@@ -92,14 +104,12 @@ fi
 set -a
 . "$secrets"
 set +a
-: "${OPENAI_API_KEY:?missing from /home/ops/.env.secrets}"
 : "${LITELLM_MASTER_KEY:?missing from /home/ops/.env.secrets}"
 : "${POSTGRES_PASSWORD:?missing from /home/ops/.env.secrets}"
 case "$LITELLM_MASTER_KEY" in sk-*) ;; *) exit 1 ;; esac
 
 umask 077
 cat > /home/ops/litellm-gateway/.env <<EOF
-OPENAI_API_KEY=$OPENAI_API_KEY
 LITELLM_MASTER_KEY=$LITELLM_MASTER_KEY
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 LITELLM_MONTHLY_HARD_CAP=<monthly-hard-cap>

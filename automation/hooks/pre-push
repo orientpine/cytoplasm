@@ -41,6 +41,21 @@ REFUSAL_EOF
   # protecting anything — AGENTS.md 「릴리스 태그 규칙」 measured 132 consecutive failures
   # from a merge whose tag never got cut.
   [[ "$remote_ref" == refs/heads/* ]] || continue
+
+  # In a public development checkout (automation/ops_link.sh sets this) the push itself
+  # publishes, so the leak gate runs for every branch, main included, and no escape hatch
+  # of the receipt gate below skips it.
+  if [[ "$(git config --get autophagy.publicGate 2>/dev/null)" == "enforce" ]]; then
+    base="refs/remotes/origin/main"
+    if [[ ! "$remote_sha" =~ ^0+$ ]] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+      base="$remote_sha"
+    fi
+    if ! python3 "$git_root/automation/public_gate.py" --repo "$git_root" range "$base" "$local_sha"; then
+      printf '[pre-push] REFUSED — %s would publish private data (see public-gate output above).\n' "$remote_ref" >&2
+      exit 1
+    fi
+  fi
+
   # Landing on main is automation/land.sh's contract, which carries its own guards.
   [[ "$remote_ref" == "refs/heads/main" ]] && continue
 

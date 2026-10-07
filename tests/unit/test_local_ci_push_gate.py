@@ -25,6 +25,10 @@ _LOCAL_CI: Final = _REPO / "automation" / "local_ci.sh"
 _HOOK: Final = _REPO / "automation" / "hooks" / "pre-push"
 _WORKFLOW: Final = _REPO / ".github" / "workflows" / "ci.yml"
 _ZERO: Final = "0" * 40
+_PUBLIC_GATE: Final = tuple(
+    _REPO / "automation" / name
+    for name in ("__init__.py", "public_gate.py", "public_export_redaction.py")
+)
 
 _PASSING_TEST: Final = "def test_ok() -> None:\n    assert True\n"
 _FAILING_TEST: Final = "def test_broken() -> None:\n    assert False\n"
@@ -73,13 +77,13 @@ def _workspace(tmp_path: Path, *, tests_pass: bool = True, lint_clean: bool = Tr
     bookkeeping = repo / ".omo" / "senpi-task" / "tasks"
     bookkeeping.mkdir(parents=True)
     (bookkeeping / "session.json").write_text('{"turn": 1}\n', encoding="utf-8")
-    for source in (_LOCAL_CI, _HOOK):
+    for source in (_LOCAL_CI, _HOOK, *_PUBLIC_GATE):
         target = repo / "automation" / source.relative_to(_REPO / "automation")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         target.chmod(0o755)
     _git(repo.parent, "init", "-q", "-b", "work", str(repo))
-    _commit(repo, "initial")
+    _git(repo, "update-ref", "refs/remotes/origin/main", _commit(repo, "initial"))
     return repo
 
 
@@ -173,7 +177,7 @@ def test_receipt_records_every_step_after_a_clean_run(tmp_path: Path) -> None:
     assert receipt["workflow_sha256"] == hashlib.sha256(
         (repo / ".github" / "workflows" / "ci.yml").read_bytes()
     ).hexdigest()
-    assert [step["name"] for step in receipt["steps"]] == ["lint", "unit-tests", "clean-host"]
+    assert [step["name"] for step in receipt["steps"]] == ["lint", "unit-tests", "public-gate", "clean-host"]
     assert all(step["rc"] == 0 for step in receipt["steps"])
     assert "python:3.12-slim" in log.read_text(encoding="utf-8")
 
