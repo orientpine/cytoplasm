@@ -30,6 +30,7 @@ _ADOPTED: Final[dict[str, str]] = {
     "skills/coordination/scripts/coordination_approval.py::request_confirmation":
         "skills/coordination/scripts/coordination_lifecycle.py",
     "skills/budget/scripts/budget_approval.py::request_approval": "skills/budget/scripts/budget_cli.py",
+    "automation/obsidian_write/note_request_cli.py::cmd_request": "automation/obsidian_write/note_request_cli.py",
 }
 
 _SUPPLY_CHAIN = "공급망 #approvals 표면 — 운영자 스크립트가 쓰고 소유자 대화 답장을 거치지 않는다"
