@@ -66,7 +66,7 @@ def test_subprocess_invocation_is_sandboxed_and_non_interactive(
     _, kwargs = fake.calls[0]
     assert kwargs == {
         "cwd": tempfile.gettempdir(),
-        "env": {"HOME": "/home/agent", "PATH": "/usr/bin:/bin"},
+        "env": {"HOME": "/home/agent", "PATH": "/home/agent/.local/bin:/usr/bin:/bin"},
         "stdin": subprocess.DEVNULL,
         "capture_output": True,
         "text": True,

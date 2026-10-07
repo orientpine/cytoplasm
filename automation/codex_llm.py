@@ -56,6 +56,7 @@ UNKNOWN: Final = "unknown"
 
 _USAGE_FLAG: Final = "--usage-file"
 _TASK_MODE: Final = "todo"
+#: Safe default the child subprocess always gets, regardless of the caller's own PATH.
 _CHILD_PATH: Final = "/usr/bin:/bin"
 _RELATIVE_BINARY: Final = (".local", "bin", "hermes")
 _STDERR_TAIL_LIMIT: Final = 200
@@ -181,7 +182,7 @@ class CodexClient:
             completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
                 argv,
                 cwd=tempfile.gettempdir(),
-                env={"HOME": self.home, "PATH": _CHILD_PATH},
+                env={"HOME": self.home, "PATH": _child_path(self.home)},
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
@@ -221,6 +222,19 @@ def complete_served(
 ) -> Served:
     """One-shot :meth:`CodexClient.complete_served` for callers that hold no client."""
     return CodexClient.from_environment(env, timeout=timeout).complete_served(prompt)
+
+
+def _child_path(home: str) -> str:
+    """Child subprocess PATH: the account's own ``~/.local/bin`` ahead of the safe default.
+
+    ``hermes`` itself (see ``_RELATIVE_BINARY``) and the ``claude`` CLI that the
+    account's configured ``fallback_providers`` chain shells out to both live under
+    ``{home}/.local/bin``. A bare ``/usr/bin:/bin`` cannot find either, so the fallback
+    silently fails to a ``CodexUnavailableError`` even when it is fully configured and
+    would otherwise work. This prepends only that one account-owned directory — never
+    the caller's full inherited PATH and never any other system directory.
+    """
+    return f"{home}/.local/bin:{_CHILD_PATH}"
 
 
 def _resolve_binary(env: Mapping[str, str], home: str) -> str:
