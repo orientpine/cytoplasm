@@ -22,7 +22,10 @@ _EXPORT_MANIFEST: Final = _REPO_ROOT / "configs" / "public-export-manifest.txt"
 #: identifies the exported tree — the only tree where a governed link may point at a
 #: file that was dropped on purpose (2026-09-21: the v1.9.6 export gate failed on 46
 #: such links while every target existed in private).
-_EXPORTED_TREE: Final = not (_REPO_ROOT / "docs" / "qa").is_dir()
+#: A public development checkout links `docs/qa` in from the private ops repository
+#: (automation/ops_link.sh); that symlink is not a tracked tree, so it still counts as exported.
+_QA_DIR: Final = _REPO_ROOT / "docs" / "qa"
+_EXPORTED_TREE: Final = _QA_DIR.is_symlink() or not _QA_DIR.is_dir()
 
 
 @dataclass(frozen=True, slots=True)
