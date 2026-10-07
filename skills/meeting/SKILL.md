@@ -1,7 +1,7 @@
 ---
 name: meeting
 description: "명시적 !meeting 신호가 붙은 회의록(md/txt/pdf 업로드 또는 본문)에서 결정사항/액션아이템/마일스톤을 추출해 연구 회의록 서식의 노트를 쓰고(근거는 하단 부록), 내 Kanban 카드와 milestones.yaml을 갱신하고 타인 항목은 #team에 규약 게시하는 W2-3 스킬. 발표자료(--slides)를 받으면 대명사·모호 지시어를 그 표기로 교정하고, 소유자 Drive 참고자료 폴더의 자료를 자동으로 근거에 더한다. `!meeting` 만 쓰면 아직 회의록이 없는 Drive 전사본을 찾아 만들고(매일 00:00 KST 에 같은 일을 하는 no-agent cron 이 함께 돈다), `--project` 를 주면 Drive 의 과제별 회의록 양식 순서로 본문을 배치하고, 과제별 action-item 데이터베이스(관리번호 10자리)를 갱신해 미결·신규 표로 회의록을 닫는다. 민감도 게이트(constraint 6) 내장."
-version: 1.7.2
+version: 1.7.3
 author: autophagy-agents
 ---
 
@@ -209,6 +209,33 @@ Drive 프리뷰의 지원 여부도 확인되지 않았다.
 [`지식 계층 규약`](../../docs/guide/지식-계층-규약.md)이다.
 
 ## Drive 게시 (회의록)
+
+### 소유자 문서별 비민감 검토 영수증
+
+키워드 오탐을 전역 규칙 변경 없이 교정하려면 **사람이 전사본·근거·발표자료·자동 참고자료 전체를
+검토한 뒤** 운영자가 체크아웃 밖 `/etc/autophagy/meeting-reviews/<gate_sha256>.json`에
+root 소유 영수증을 설치한다. 게이트가 합산한 UTF-8 문자열의 정확한 SHA256은 최초 ingest 뒤
+로컬 0600 `~/.hermes/meeting/logs/ingest-<날짜>.jsonl`의 `review_sha256`에서 읽는다
+(8자리 `ref`나 원본 파일 해시와 **다름**). 영수증은 다음 형식이며 실제 해시·내용은 Git에 두지 않는다:
+
+```json
+{"version":1,"gate_sha256":"<64 lowercase hex>","decision":"non-sensitive","owner":"<검토자 식별>","reason":"<내용을 노출하지 않는 판단 이유>","reviewed_on":"<YYYY-MM-DD>","publication_scope":"meeting-downstream"}
+```
+
+영수증과 모든 상위 디렉터리는 root 소유이며 그룹·기타 사용자 쓰기 권한이 없어야 한다.
+파일은 실행 계정이 읽을 수 있어야 한다(예: root:실행계정그룹 0640, 디렉터리 0750).
+**운영자가 root 권한으로만** 원자적으로 설치·철회한다. 실행 계정이 쓸 수 있는 홈·환경변수·
+CLI 인자로 위치를 바꿀 수 없다. 누락·형식 오류·해시 불일치·신뢰 불가·미래 날짜면
+기존 민감 판정 그대로다. `meeting gate`는 기본 키워드 판정만 보여 주고 영수증을 적용하지 않는다.
+발표자료·근거·참고자료가 바뀌면 새 해시의 영수증을 별도로 발급해야 한다.
+
+승인된 경우 **LLM 전 제공자 라우팅은 여전히 원래 민감 판정**(보수적인 Codex 경로)으로
+실행한다. 이후 회의록 태그·Drive 발행·과제 원장·카드·마일스톤·#team 게시·결과 통지는
+비민감 경로로 전환된다(`publication_scope=meeting-downstream`은 Drive만이 아니다).
+원문 부록은 변경하지 않는다. 따라서 검토자는 #team을 포함한 모든 목적지를 허용할 수
+있는지 먼저 확인해야 한다. Drive는 기존 `automation.drive_outputs`와
+`DRIVE_PUBLISH_ENABLED=1` 옵트인을 그대로 사용한다. 운영 절차는
+`../../docs/guide/drive-publish.md`의 회의록 검토 항목 참조.
 
 민감 회의가 **아닐 때만**, `DRIVE_PUBLISH_ENABLED=1`이면 노트가 cha 본인 Drive의
 `autophagy/회의록/[<과제>/]<YYYY>/<회의일>_회의록-<라벨>.md`에 자동 업로드된다. `--project` 를 주면

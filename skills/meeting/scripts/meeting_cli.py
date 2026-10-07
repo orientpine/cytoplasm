@@ -34,6 +34,7 @@ import meeting_gate
 import meeting_llm
 import meeting_knowledge
 import meeting_reference
+import meeting_review
 import meeting_result_notice
 import meeting_project
 import meeting_slides
@@ -367,22 +368,23 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     )
     reference_notes = meeting_reference.note_labels(references)
     # Slide material joins the gate input: a patent deck must be confined too.
-    gate = meeting_gate.evaluate(
-        "\n".join((extracted.text, evidence_text, meeting_slides.gate_text(decks + references))),
-        rules,
-    )
+    gate_input = "\n".join((extracted.text, evidence_text, meeting_slides.gate_text(decks + references)))
+    gate = meeting_gate.evaluate(gate_input, rules)
+    # Review affects downstream outputs, never conservative provider routing.
+    downstream_sensitive = gate.sensitive and not meeting_review.approved(gate_input)
     ref = hashlib.sha256(extracted.text.encode("utf-8")).hexdigest()[:8]
     record.update(
         {"kind": extracted.kind, "bytes": extracted.input_bytes, "ref": ref,
-         "sensitive": gate.sensitive, "tags": list(gate.tags), "slides": list(slide_notes),
+         "sensitive": downstream_sensitive, "review_sha256": hashlib.sha256(gate_input.encode("utf-8")).hexdigest(),
+         "tags": list(gate.tags) if downstream_sensitive else [], "slides": list(slide_notes),
          "references": list(reference_notes)}
     )
     project = (getattr(args, "project", "") or "").strip() or (pending.project if pending else "")
     # 플러그인(`!meeting`)은 --project 를 넘길 수 없다 — 라벨이 유일한 단서이고,
     # 없는 과제를 지어내지 않도록 실재하는 과제 폴더와 일치할 때만 채택된다.
-    if not project and not gate.sensitive:
+    if not project and not downstream_sensitive:
         project = meeting_project.detect_project(label)
-    board = meeting_project.load_board(project, sensitive=gate.sensitive)
+    board = meeting_project.load_board(project, sensitive=downstream_sensitive)
     open_rows = tuple(row for row in board.records if row.status == meeting_action_db.OPEN)
 
     recorded = (
@@ -423,7 +425,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     # 다른 표기로 남는다. 부록에 실릴 `extracted.text` 는 여기서도 그대로다.
     extraction = _correct_terms(extraction, label=label, project=project)
 
-    sensitive_label = "민감 회의" if gate.sensitive else label
+    sensitive_label = "민감 회의" if downstream_sensitive else label
     items = meeting_action_db.items_from(extraction.todos, extraction.others)
     on = meeting_actions.note_date(extraction, now=now)
     action_id_exhausted = False
@@ -453,7 +455,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
         kind=extracted.kind,
         original_text=extracted.text,
         extraction=extraction,
-        sensitive=gate.sensitive,
+        sensitive=downstream_sensitive,
         ref=ref,
         now=now,
         evidence_footer=evidence_footer,
@@ -474,7 +476,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
             _publish_note(
                 note_path,
                 label=label,
-                sensitive=gate.sensitive,
+                sensitive=downstream_sensitive,
                 on=date.fromisoformat(match.group(1)),
                 project=project,
             )
@@ -491,7 +493,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
             meeting_project.save_board(board, merged.records)
 
     cards = meeting_actions.plan_cards(
-        extraction, sensitive=gate.sensitive, note_name=note_path.name, ref=ref,
+        extraction, sensitive=downstream_sensitive, note_name=note_path.name, ref=ref,
         rules=rules, project=project,
     )
     card_ids: list[str] = []
@@ -510,7 +512,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     milestones_added = meeting_actions.update_milestones(
         _env_path("MEETING_STATE_FILE", "~/state/milestones.yaml"),
         extraction.milestones,
-        sensitive=gate.sensitive,
+        sensitive=downstream_sensitive,
         note_name=note_path.name,
         ref=ref,
         now=now,
@@ -520,7 +522,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     team_post = meeting_actions.format_team_post(
         extraction.others, agent_id=str(config.get("agent_id", "agent")), ref=ref, now=now
     )
-    if team_post and not gate.sensitive:
+    if team_post and not downstream_sensitive:
         if offline_dir is not None:
             (offline_dir / "team-post.txt").write_text(team_post, encoding="utf-8")
         else:
@@ -531,7 +533,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
 
     notice = meeting_actions.format_notify(
         label=label,
-        sensitive=gate.sensitive,
+        sensitive=downstream_sensitive,
         cards=len(cards),
         milestones_added=milestones_added,
         others=len(extraction.others),
@@ -543,7 +545,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     _notify(
         args.notify_channel, notice, offline_dir=offline_dir,
         message_id=str(getattr(args, "notify_message_id", "") or ""),
-        completed=meeting_result_notice.CompletedMeeting(ref, "민감 문서" if gate.sensitive else label),
+        completed=meeting_result_notice.CompletedMeeting(ref, "민감 문서" if downstream_sensitive else label),
     )
 
     record.update(

@@ -109,6 +109,25 @@ kind만 넘긴다. 새 카테고리는 레지스트리에 한 줄 추가로 끝�
 `gate_only` 카테고리(patent)는 일반 발행 경로에서 `TaxonomyError`로 거부된다. 특허 산출물은
 전용 반출 게이트(`patent_export`)만 만질 수 있고, 이 규약은 그 폴더의 **위치**만 정한다.
 
+### 회의록 오탐 검토와 발행
+
+`meeting`의 기본 키워드 게이트는 그대로다. 소유자가 문서의 **전사본·근거·슬라이드·참고자료
+전부**를 비민감으로 검토한 경우에만 root 운영자가 `/etc/autophagy/meeting-reviews/`에
+내용 SHA256별 영수증을 설치할 수 있다. 정본 형식과 신뢰 조건은
+`../../skills/meeting/SKILL.md`의 「소유자 문서별 비민감 검토 영수증」을 따른다.
+최초 ingest의 로컬 0600 `~/.hermes/meeting/logs/ingest-*.jsonl`에서 해당 실행의
+`review_sha256`을 확인한다. 이 값은 게이트에 실제 전달된 **추출 전사 텍스트 + 근거 본문 +
+슬라이드와 참고자료의 게이트 텍스트**를 줄바꿈으로 합친 UTF-8 문자열의 해시다.
+자료 하나라도 변경되면 이전 영수증은 적용되지 않는다. 운영자는 검토자 식별·사유·날짜와
+`publication_scope=meeting-downstream`을 기록하고 root 소유로 원자 설치한다. 검토를
+철회할 때 영수증을 root 권한으로 제거한다. 실행 계정이 쓰는 경로에 영수증을 두지 않는다.
+
+**범위**: 보수적인 LLM provider 선택은 변경하지 않는다. 영수증이 유효하면 생성 회의록의
+`patent-sensitive` 태그를 붙이지 않고, 원문 부록을 그대로 보존한 채 이 파사드로 발행한다.
+동시에 일반 회의처럼 #team·Kanban·마일스톤·과제 원장도 처리한다. Drive 전용 승인으로
+오해하면 안 된다. 발행에는 기존 `DRIVE_PUBLISH_ENABLED=1`이 추가로 필요하며 실패는
+기존 best-effort 규약을 따른다. 미설치·불명확·신뢰 불가 영수증은 원래 민감 경로로 남는다.
+
 `budget`은 발행 파사드가 만드는 파일이 아니라 **살아있는 Google Sheet**가 놓이는 카테고리다.
 과제별×년도별 시트 목록은 repo 밖 레지스트리 `~/.hermes/budget/sheets.json`
 (`BUDGET_SHEETS_FILE` 오버라이드, 형식은 `configs/budget-sheets.example.json`)이 정의하며,
