@@ -22,8 +22,8 @@ from automation.repair.repair_ops_pending import (
 )
 from automation.repair.repair_patch_binding import content_action_hash, load_patch_artifact
 
-OWNER_ID = "280680578314010625"
-CHANNEL = "1528936606856122423"
+OWNER_ID = "280680578404010625"
+CHANNEL = "1528936606946122423"
 TICKET = "t_repair01"
 NOW = datetime(2026, 7, 29, 9, 0, tzinfo=UTC)
 

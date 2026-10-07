@@ -29,12 +29,12 @@ from automation.interop.approval_surface import ChannelFacts  # noqa: E402
 # Production surfaces, used as fixtures: the owner, this bot's DM with them, the
 # guild #approvals channel, and a SECOND approvals channel an older message may
 # still live in — the precedence case the migration exists to serve.
-OWNER_ID: Final = "280680578314010625"
-OWNER_DM_CHANNEL_ID: Final = "1526487935975952385"
-APPROVALS_CHANNEL_ID: Final = "1528936606856122421"
-BOUND_APPROVALS_CHANNEL_ID: Final = "1528936606856122422"
-AGENT_CHAT_CHANNEL_ID: Final = "1526487935975952390"
-AGENT_CHAT_THREAD_ID: Final = "1526487935975952391"
+OWNER_ID: Final = "280680578404010625"
+OWNER_DM_CHANNEL_ID: Final = "1526487936065952385"
+APPROVALS_CHANNEL_ID: Final = "1528936606946122421"
+BOUND_APPROVALS_CHANNEL_ID: Final = "1528936606946122422"
+AGENT_CHAT_CHANNEL_ID: Final = "1526487936065952390"
+AGENT_CHAT_THREAD_ID: Final = "1526487936065952391"
 _BINDING_FIELDS: Final = ("kind", "surface", "channel_id", "policy_version")
 
 

@@ -44,7 +44,7 @@ from automation.interop.approval_surface import ApprovalBinding, ApprovalKind, A
 OWNER_ID = "owner-1"
 POSTED_MESSAGE_ID = "m-9"
 NOW = datetime(2026, 7, 25, 9, 0, tzinfo=UTC)
-REPAIR_BINDING = ApprovalBinding(ApprovalKind.REPAIR, ApprovalSurface.OWNER_DM, "1528936606856122423", POLICY_VERSION)
+REPAIR_BINDING = ApprovalBinding(ApprovalKind.REPAIR, ApprovalSurface.OWNER_DM, "1528936606946122423", POLICY_VERSION)
 
 # The mail draft record gained the resolved approval binding (AS-1.x): `surface`
 # and `policy_version` join the `channel_id` it already carried, so a posted draft

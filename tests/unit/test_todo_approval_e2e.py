@@ -19,8 +19,8 @@ _REPO = Path(__file__).resolve().parents[2]
 _SCRIPTS = _REPO / "skills" / "todo" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 _OWNER = "owner-e2e"
-_AGENT_CHAT_CHANNEL = "1526487935975952390"
-_CHANNEL = "1526487935975952391"
+_AGENT_CHAT_CHANNEL = "1526487936065952390"
+_CHANNEL = "1526487936065952391"
 _TITLE = "통합 승인 과제"
 
 

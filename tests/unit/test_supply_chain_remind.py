@@ -16,8 +16,8 @@ from automation.supply_chain_watch import TickResult
 
 _DISCORD_EPOCH_MS = 1_420_070_400_000
 _POSTED = datetime(2026, 8, 24, 0, 0, tzinfo=UTC)
-_CHANNEL_ID = "1528936606856122421"
-_GUILD_ID = "1528936606264856737"
+_CHANNEL_ID = "1528936606946122421"
+_GUILD_ID = "1528936606354856737"
 _CONFIG = ApprovalReminderConfig(
     initial_delay=timedelta(hours=1),
     repeat_interval=timedelta(hours=1),

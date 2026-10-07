@@ -24,11 +24,11 @@ watch = importlib.import_module("scripts.patent_export_confirm_reaction_watch")
 
 OWNER = "owner-patent-live"
 SLUG = "single-live"
-APPROVALS_CHANNEL = "1528936606856122421"  # digit-only: bindings refuse a placeholder id
-OWNER_DM_CHANNEL = "1526487935975952385"  # the DM this bot opens with the owner
-AGENT_CHAT_CHANNEL = "1526487935975952390"
-AGENT_CHAT_THREAD = "1526487935975952391"
-REQUEST_THREAD = "1526487935975952392"
+APPROVALS_CHANNEL = "1528936606946122421"  # digit-only: bindings refuse a placeholder id
+OWNER_DM_CHANNEL = "1526487936065952385"  # the DM this bot opens with the owner
+AGENT_CHAT_CHANNEL = "1526487936065952390"
+AGENT_CHAT_THREAD = "1526487936065952391"
+REQUEST_THREAD = "1526487936065952392"
 NOW = 1_800_000_000
 
 

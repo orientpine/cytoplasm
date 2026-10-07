@@ -59,7 +59,7 @@ def _spec() -> ReleaseSpec:
     )
 
 
-_MESSAGE_ID = "1538547247514525816"
+_MESSAGE_ID = "1538547247604525816"
 _REFUSAL = "REFUSED: approval request not posted outcome=deferred reason=binding-mismatch"
 
 
@@ -559,11 +559,11 @@ def test_record_persists_every_authorizing_field_and_surface_binding() -> None:
     binding = ApprovalBinding(
         ApprovalKind.RELEASE,
         ApprovalSurface.SKILL_APPROVALS,
-        "1528936606856122421",
+        "1528936606946122421",
         POLICY_VERSION,
     )
 
-    record = spec.new_record("1538547247514525816", binding)
+    record = spec.new_record("1538547247604525816", binding)
 
     assert record["version"] == spec.version
     assert record["head_sha"] == spec.head_sha
@@ -582,10 +582,10 @@ def test_any_record_or_message_change_breaks_the_binding() -> None:
     binding = ApprovalBinding(
         ApprovalKind.RELEASE,
         ApprovalSurface.SKILL_APPROVALS,
-        "1528936606856122421",
+        "1528936606946122421",
         POLICY_VERSION,
     )
-    record = spec.new_record("1538547247514525816", binding)
+    record = spec.new_record("1538547247604525816", binding)
 
     assert not spec.bound(spec.render() + "\nchanged", record)
     assert not spec.bound(spec.render(), {**record, "head_sha": "0" * 40})
@@ -736,10 +736,10 @@ def test_a_stored_record_replays_into_the_same_action_hash() -> None:
     binding = ApprovalBinding(
         ApprovalKind.RELEASE,
         ApprovalSurface.SKILL_APPROVALS,
-        "1528936606856122421",
+        "1528936606946122421",
         POLICY_VERSION,
     )
-    record = spec.new_record("1538547247514525816", binding)
+    record = spec.new_record("1538547247604525816", binding)
 
     replay = spec_from_record(record)
 
@@ -752,10 +752,10 @@ def test_legacy_record_without_version_replays_the_frozen_v1_message() -> None:
     binding = ApprovalBinding(
         ApprovalKind.RELEASE,
         ApprovalSurface.SKILL_APPROVALS,
-        "1528936606856122421",
+        "1528936606946122421",
         POLICY_VERSION,
     )
-    legacy = spec.new_record("1538547247514525816", binding)
+    legacy = spec.new_record("1538547247604525816", binding)
     legacy.pop("render_version", None)
 
     replay = spec_from_record(legacy)

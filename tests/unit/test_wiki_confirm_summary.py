@@ -26,7 +26,7 @@ import wiki_gate  # noqa: E402
 
 from automation.interop.approval_surface import ApprovalSurface  # noqa: E402
 
-CHANNEL_ID = "1526487935975952385"
+CHANNEL_ID = "1526487936065952385"
 SUMMARY = "자체 메모리 → 트윈 승격(principle)\n승인 시 자체 메모리에서 삭제됩니다."
 NOTE_TEXT = (
     "---\n"
