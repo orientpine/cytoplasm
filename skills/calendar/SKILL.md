@@ -1,7 +1,7 @@
 ---
 name: calendar
 description: "cha 본인 Google 캘린더 관리 스킬 (gws CLI). 조회(list)는 게이트 없이 즉시. 생성/수정/삭제는 변경 요약 초안 → 소유자 전용 승인 스레드의 ✅/⛔ 반응 확인(텍스트 실행/취소는 fallback) → 실행 + approvals.jsonl 기록 게이트를 거친다. 모호한 시간은 되묻는다. 라우팅: 상대 미지정 요청은 calendar 소유; 피어가 명시돼도 '정확한 단일 시각'이면 제목 토큰으로 보고 본인 단독 일정=calendar; 피어+범위+조율 의사면 coordination으로 ROUTING-REJECT(exit 4); 의도 모호(피어명만/시각+조율 충돌)는 ROUTING-CLARIFY(exit 4, fail-closed)로 되묻는다. W3-1."
-version: 1.4.2
+version: 1.4.3
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -113,7 +113,8 @@ python3 /srv/autophagy-skills/live/calendar/scripts/calendar_cli.py confirm --dr
 `confirm --draft` 호출은 기존처럼 Discord를 독립 검증하므로 안전하게 호환된다.
 cha가 반응을 사용할 수 없으면 `실행 <draft-id>` 또는 `취소 <draft-id>` DM을 fallback으로
 보낼 수 있다. 텍스트 `실행`도 Discord REST로 소유자/비봇을 독립 검증하며, pending 반응에
-⛔가 있으면 거부된다.
+⛔가 있으면 거부된다. 에이전트는 이 텍스트 fallback 을 먼저 제안하거나 요청하지 않는다 — 답장은 승인 카드
+링크(`APPROVAL-THREAD … url=`)만 안내하고, 채팅 메시지에 ✅ 를 누르라고 쓰지 않는다.
 텍스트 취소는 다음과 같다.
 
 ```bash

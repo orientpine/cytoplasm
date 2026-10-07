@@ -19,7 +19,7 @@ from automation.interop.delegation import InteropEnvelope, format_envelope, pars
 from automation.interop.external_effect_gate import ApprovalContext, DenylistConfigurationError, ToolCall, evaluate_tool_call, load_denylist
 from automation.interop.injection_adapter import InboundEvent, accept_test_event
 from automation.interop.killswitch import PauseStore
-from automation.interop import owner_proxy
+from automation.interop import chat_approval_guard, owner_proxy
 from automation.interop.loop_guard import LoopGuard
 from automation.interop.report import ReportStatus, TaskReport, format_report, parse_report
 
@@ -171,12 +171,15 @@ def response_channel_for(correlation_id: str, *, source_channel_id: str, interop
 
 
 def transform_llm_output(response_text: str, session_id: str, model: str, platform: str, **kwargs) -> str | None:
-    """Silence a response that races with an already-persisted pause command."""
+    """Silence a paused reply; replace any chat-✅ request that cites no approval card."""
     del session_id, model, platform, kwargs
     if _pause_store().is_paused():
         LOGGER.warning("interop paused outbound suppressed")
         return "SILENT"
-    return response_text
+    guarded = chat_approval_guard.guard(response_text)
+    if guarded != response_text:
+        LOGGER.warning("interop chat approval request replaced")
+    return guarded
 
 
 def kanban_task_claimed(**kwargs) -> None:

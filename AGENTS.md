@@ -447,6 +447,16 @@ python3 -m automation.rag_ingest      # 개인 RAG 인제스트
 - **민감도 규칙이 이긴다**: 좌표조차 낼 수 없는 생산자(위키·patent-prep)는 줄을 내지 않고 사유를 conformance 원장에 적는다. 줄에는 id 와 URL 만 실리며 제목·본문은 싣지 않는다.
 - **강제**: `tests/unit/test_approval_thread_pointer_conformance.py` — `approval_conformance_inventory.APPROVAL_PRODUCERS` 의 모든 생산자가 `_ADOPTED`(채택 파일이 공용 헬퍼를 import 해 부른다) 또는 사유 있는 `_EXEMPT` 중 정확히 하나에 있어야 하고, `APPROVAL-THREAD ` 형식 리터럴이 헬퍼 밖에 있으면 RED 다. 새 승인 생산자는 lifecycle conformance 가 인벤토리 등록을 강제하므로 여기서 결정을 피할 수 없다 — 산문이 아니라 코드가 진실이다. [소개](docs/기능소개/승인-요청-답장-스레드-링크.md)
 
+## 승인 경로 완결 규칙 (cha 지시, 2026-10-07)
+
+**게이트 대상 외부효과는 「표준 승인 카드 생산자 + 카드 ✅ 워처 + 실행 영수증」을 한 벌로 갖는다. 그런 경로가 없는 작업에서 에이전트는 즉석 초안을 만들거나 소유자에게 채팅 메시지에 ✅ 를 요청하지 않고, "이 작업은 승인 경로가 없다"고 보고한다.** 채팅 메시지의 ✅ 는 어떤 워처도 읽지 않는다 — 승인은 해시에 묶인 카드의 ✅ 만이다.
+
+- **왜**: 2026-10-07 경로·본문을 받은 Obsidian 노트 저장은 push 직전 게이트는 있었지만 카드를 올릴 명령도, ✅ 를 읽을 워처도 없었다. 에이전트는 초안을 손으로 만들고 "이 메시지에 ✅ 로 승인해 주십시오" 라고 썼고, 소유자가 누른 ✅ 는 아무것도 실행하지 않았다. 게이트만으로는 외부효과가 승인 가능해지지 않는다.
+- **새 외부효과·승인 스킬이 지켜야 할 것**: ① `configs/external-effect-tools.yaml` 에 규칙을 더하면 그 효과의 카드 생산자(공용 `approval_lifecycle` 파사드 경유, 에이전트가 부를 수 있는 요청 명령)를 함께 만든다. ② 생산자마다 ✅ 뒤 실행하는 워처(선언된 no-agent cron 또는 systemd 유닛)와 그것을 덮는 테스트를 둔다. 사람이 실행하는 설계라면 `manual:` 사유를 적는다. ③ 실행 뒤 원격에서 다시 읽어 확인하고 결과를 `origin_notice` 로 같은 스레드에 남긴다. ④ SKILL.md 는 요청 명령만 안내한다 — 텍스트 fallback(`실행 <id>`)이 있어도 에이전트가 먼저 제안하거나 요청하지 않는다. 절차는 [`docs/guide/스킬-제작.md` 「승인 경로 완결」](docs/guide/스킬-제작.md#승인-경로-완결-전-스킬-필수--2026-10-07)이 소유한다.
+- **강제(빌드)**: `tests/unit/test_gated_effect_paths_conformance.py` — denylist 의 모든 규칙이 `GATED_RULES` 에 카드 생산자(또는 사유)를, `APPROVAL_PRODUCERS` 의 모든 생산자가 `PRODUCER_WATCHERS` 에 워처(선언된 cron·트리의 systemd 유닛·`manual:` 사유)와 테스트 파일을 갖지 않으면 RED 다.
+- **강제(런타임)**: 게이트웨이 `transform_llm_output` 훅이 `automation/interop/chat_approval_guard.py` 로 모든 답장을 검사한다. 승인 카드 링크 없이 ✅ 를 요청하는 줄은 "이 작업은 표준 승인 경로를 거치지 않았다" 안내로 바뀐다(회귀 `tests/unit/test_chat_approval_guard.py`). 대리 요청 본문(`owner_proxy.dispatch_text`)에도 같은 지시가 붙는다.
+- **점검표**: [docs/guide/승인-경로-점검표.md](docs/guide/승인-경로-점검표.md)
+
 ## 후속 과제 기록 규칙 (cha 지시, 2026-07-26)
 
 **작업 중 발견했으나 이번 범위에서 처리하지 않은 사항은, 요청 사항을 마무리한 뒤 `docs/features.md`에 후속 과제로 기록한다 — 기록까지 마쳐야 작업이 종결된다.**

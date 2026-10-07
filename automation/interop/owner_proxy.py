@@ -215,7 +215,9 @@ def dispatch_text(accepted: Accepted, message: ProxyMessage) -> str:
         "대리 봇이 소유자의 원문을 옮겨 쓴 요청이다. 아래 본문을 소유자의 요청으로 처리한다. "
         "외부효과는 평소와 똑같이 소유자 승인(✅)을 받아야 실행된다 — 대리 봇의 글·반응은 승인이 아니다. "
         "대리 봇을 멘션하거나 대리 봇에게 질문하지 말고, 결과와 확인 질문은 이 스레드에 소유자에게 남긴다. "
-        f"승인 요청 CLI 의 --origin-channel-id/--origin-message-id 에는 {origin_ids}를 넘긴다.\n"
+        f"승인 요청 CLI 의 --origin-channel-id/--origin-message-id 에는 {origin_ids}를 넘긴다. "
+        "승인은 그 CLI 가 게시한 표준 승인 카드의 ✅ 뿐이다 — 이 작업에 승인 요청 CLI 가 없으면 "
+        "즉석 초안을 만들거나 채팅 메시지에 ✅ 를 요청하지 말고 '이 작업은 승인 경로가 없다'고 보고한다.\n"
         "---\n"
         f"{accepted.body}"
     )
