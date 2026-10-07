@@ -41,5 +41,6 @@ pull-only 캐시라 쓰기에 사용하면 변경이 유실되거나 읽기 경�
 - 구현: `automation/obsidian_write/config.py`, `note.py`, `gate_binding.py`, `writer.py`
 - 검증: `tests/unit/test_obsidian_write_gate.py`, `tests/unit/test_obsidian_write_writer.py`,
   `docs/qa/RTS-2/a3-obsidian.txt`, `docs/qa/RTS-2/a4-gate.txt`
-- 승인 결합: `ApprovalKind.OBSIDIAN_WRITE`는 owner DM으로 라우팅되며, 실제 채널 해석은
+- 승인 결합: `ApprovalKind.OBSIDIAN_WRITE`는 요청별 승인 스레드로 라우팅되며, 실제 채널 해석은
   공용 `approval_directory.py`만 수행한다.
+- 경로·본문이 주어진 일반 저장 요청의 생산자·워처: [Obsidian 노트 저장 요청](obsidian-노트-저장-요청과-링크-확인.md)

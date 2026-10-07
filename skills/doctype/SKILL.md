@@ -1,7 +1,7 @@
 ---
 name: doctype
 description: "문서(.docx/.hwpx/.md/.txt)의 ‘등록/스킬화/저장/개선/문서종류화’ 액션은 주제와 무관하게 항상 doctype이 수행한다. 작성/초안(draft)은 레지스트리에 등록된 이름으로 요청될 때만 doctype 소유이며, 미등록된 제안서 작성은 proposal, 개인 노트 기반 보고서/슬라이드/대본은 report, 발명신고서/선행기술은 patent-prep 스킬로 넘긴다."
-version: 1.3.9
+version: 1.3.10
 author: autophagy-agents
 license: MIT
 metadata:
@@ -104,6 +104,22 @@ stubs, and drafts only under `mktemp`, then removes them.
 Obsidian 저장은 `OBSIDIAN_WRITE_CONFIG`(기본 `~/.hermes/obsidian-write/config.json`)가 가리키는 설정의 전용 `clone_dir`, 읽기 가능한 `ssh_key_path`(쓰기 전용 deploy key), `repo_url`, `branch`를 사용한다. 쓰기 클론은 RAG 읽기 미러와 달라야 하며, key·승인 레코드가 없으면 push 전에 fail-closed한다.
 
 Obsidian 쓰기의 소유자 승인 요청은 cha의 agent-chat 채널 아래 **요청 전용 스레드**에서 열린다 — 스레드 이름은 `옵시디언 · <pending-id>`로 **레코드 id 하나뿐**이며, 노트 제목·경로·본문은 이름에 들어가지 않는다(내용은 스레드 안 승인 본문에만 있다). 대기 레코드는 그 스레드를 `approval_thread_id`로 기록한다.
+
+## Obsidian 노트 저장 요청 (경로·본문을 받은 저장)
+
+"Obsidian에 이 노트를 만들어/저장해 줘"처럼 **경로와 본문이 주어진** 저장 요청(대리 요청 포함)은 아래 명령 하나로만 승인을 받는다. 초안을 손으로 만들거나 소유자에게 **채팅 메시지에 ✅를 눌러 달라고 요구하지 않는다** — 채팅 메시지의 ✅는 아무것도 실행하지 않는다. 승인은 이 명령이 올리는 표준 승인 카드의 ✅ 하나뿐이고, ✅ 뒤 워처(`obsidian-note-watch`, 2분)가 정확히 그 경로·본문을 쓰고 push 한 뒤 원격에서 다시 읽어 해시를 확인하고, 영수증을 같은 스레드에 남긴다.
+
+1. **링크 먼저**: 본문을 쓰기 전에 recall(검색 인덱스)로 관련 노트를 찾고, `[[ ]]` 링크는 **실제로 볼트에 있는 노트 제목**으로만 단다. 볼트에 없는 개념은 링크하지 않고 평문으로 쓴다.
+2. 본문을 파일로 저장한 뒤(예: `~/.hermes/tmp/note.md`) 릴리스 런타임에서 실행한다:
+   ```bash
+   cd /srv/autophagy-agent-current && python3 -m automation.obsidian_write request \
+     --relpath '<볼트 전체 경로, 예: 000_PARA/Resource/012_X/2026-10-07_제목.md>' \
+     --body-file ~/.hermes/tmp/note.md \
+     --origin-channel-id <지시 메시지 채널 id> --origin-message-id <지시 메시지 id>
+   ```
+   `--relpath` 는 소유자가 준 경로를 **줄이지 않고 그대로** 넘긴다(`000_PARA/`·`001_KIMM_PARA/` 로 시작해야 한다). 본문 첫 줄이 `# 제목` 이면 그것이 노트 제목이 되고 본문에서 빠진다(아니면 `--title`, 그것도 없으면 파일 이름).
+3. 출력의 `APPROVAL-THREAD … url=<링크>` 를 답장에 그대로 싣고, 전체 경로를 줄이지 않고 적는다. `LINK-UNRESOLVED [[x]]` 가 있으면 링크를 고치거나 평문으로 바꿔 **같은 경로로 다시 요청**한다(같은 경로의 새 요청은 소유자가 아직 누르지 않은 이전 카드를 대체한다). `RELATED [[x]]` 는 넣을 만한 관련 노트 후보다.
+4. 결과 확인은 `python3 -m automation.obsidian_write status` — `status=written` 과 `remote=`·`sha256=` 이 영수증이다. `NOTE-REQUEST-REFUSED reason=owner-decided` 는 이전 카드가 이미 결정됐다는 뜻이다(워처가 처리한다).
 
 Drive 저장은 공용 `automation.drive_outputs` 파사드를 통해 `autophagy/문서/<YYYY>/<YYYY-MM-DD>_<원제목>.<확장자>`에 이름+부모 기준 upsert한다. 날짜는 최초 저장일로 고정되므로 같은 문서를 다시 저장해도 사본이 아니라 기존 파일이 갱신된다. owner-only permission과 재다운로드 SHA-256를 모두 확인해야 성공이다. 규약 정본: `docs/guide/drive-publish.md`.
 
