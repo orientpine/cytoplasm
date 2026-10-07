@@ -2783,3 +2783,8 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 - **signed 모드의 전체 사슬(답글 없는 서명 → ✅ → MOUNT)을 아직 실측하지 못했다** — 2026-10-06 실측에서 두 결함을 고쳤다(PR #579 승인 채널 id, #580 서명 모드 답글). 그런데 실측에 쓴 hello-autophagy는 digest가 live와 같아, ✅ 뒤 워처가 `retire-done (already-realized)`로 MOUNT 없이 종결했다. #580은 노드 릴리스 런타임에서 돌기 때문에 v1.14.8 반영 뒤에야 효과가 난다 → v1.14.8 반영 뒤 다음 실제 스킬 배포에서 `#approvals`에 `[skill-attest]` 글이 없고 ✅ 뒤 live 심링크가 새 digest를 가리키는지 본다. 더 빨리 보려면 데모 스킬을 한 줄 바꾼 뒤 `deploy-skill.sh hello-autophagy --request-only`를 실행하고 카드 1장에 ✅를 받는다. **영향: 승인 채널 글 소음·검증 공백 · 되돌리기는 릴리스 호스트 `node.toml` 한 줄 · 심각도 낮음**.
   ↳ 처리(2026-10-07 · 해소): 데모 변경(PR #582, digest 25f24e45)을 담은 v1.14.9 릴리스 승인 경로에서 `PEER-ATTEST-PASS (signed stdout record captured)` → `RELEASE-AUTHORIZED` → `INSTALLED`, live 가 10:32:05Z 부터 `25f24e45…`, #approvals 의 `[skill-attest]` 0건. 같은 변경을 소유자 ✅ 한 카드별 요청은 노드 재개가 `release … is not the origin/main tip`(exit 4)로 막혔다 — 릴리스에 안 들어간 변경은 카드별 ✅ 재개로 MOUNT 될 수 없다. 증적: 릴리스 호스트 `~/release-logs/release-1149.log`, 노드 `autophagy-supply-chain-watch` 저널.
 증적: 릴리스 호스트 `~/release-logs/hello-signed-20261006{,-b}.log`·`release-1148.log`, 노드 `autophagy-supply-chain-watch` 저널(2026-10-06 14:55Z).
+
+## 공개 우선 전환 준비 중 남긴 것 (2026-10-07)
+
+- **수리 push 의 누출 게이트가 노드에서는 금칙어 없이 돈다** — `RepairWorkClone.push_branch` 는 `public_gate range` 를 돌리지만 노드에는 ops 저장소가 없어 금칙어 목록이 없고 경로·토폴로지 검사만 돈다(`PUBLIC-GATE-DENYLIST-UNSET`). 실명·과제명이 섞인 수리 패치는 막지 못한다 → 금칙어 목록 사본을 노드 비공개 루트(`/srv/autophagy-private/`)에 두고 수리 유닛 환경에 `PUBLIC_GATE_DENYLIST` 를 선언한다(목록 갱신 경로 포함). **영향: 노드 관찰 유래 패치의 실명 누출 가능성 · 심각도 중(노드 전환 F 전에 닫을 것)**.
+  ↳ 처리(2026-10-07 · 해소): 노드 비공개 루트에 금칙어 목록 사본을 두고 수리 유닛 환경에 `PUBLIC_GATE_DENYLIST` 를 선언했다. 실제 id 를 담은 시험 커밋이 수리 push 경로에서 REFUSED 되는 것을 확인했다. 목록 갱신은 아직 손으로 한다(운영 저장소의 목록을 고치면 CI 비밀과 노드 사본을 함께 갱신).
