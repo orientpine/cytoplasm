@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from typing import Final
 
+from automation.interop.thread_pointer import MARKER
+
 _CHECK: Final = r"(?:✅|:white_check_mark:)"
 _ASK: Final = re.compile(
     rf"{_CHECK}[^\n]{{0,24}}(?:승인|눌러|반응|달아|확인)[^\n]{{0,24}}"
@@ -23,7 +25,7 @@ _ASK: Final = re.compile(
     rf"|(?:react|approve)[^\n]{{0,40}}{_CHECK}|{_CHECK}[^\n]{{0,40}}(?:to approve|this message)",
     re.IGNORECASE,
 )
-_CARD_LINK: Final = re.compile(r"https://(?:\w+\.)?discord(?:app)?\.com/channels/\d+/\d+|APPROVAL-THREAD ")
+_CARD_LINK: Final = re.compile(rf"https://(?:\w+\.)?discord(?:app)?\.com/channels/\d+/\d+|{re.escape(MARKER)}\s")
 NOTICE: Final = (
     "⚠ 이 작업은 표준 승인 경로를 거치지 않았습니다 — 승인 카드가 게시되지 않았으므로 "
     "채팅 메시지의 ✅는 승인으로 처리되지 않고 아무것도 실행되지 않습니다. "
