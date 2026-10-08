@@ -95,6 +95,7 @@ _EXEMPT: Final[Mapping[str, str]] = {
     "skills/coordination/scripts/coordination_lifecycle.py::finish": "피어 조율 완료 통지이며 승인 메시지 포인터를 만들지 않는다.",
     "skills/coordination/scripts/coordination_lifecycle.py::send_owner_dm": "조율 완료 알림 DM이며 승인 게이트가 아니다.",
     "skills/mail/scripts/triage_confirm.py::dm_owner": "승인 결과 안내 DM이며 draft message_id를 쓰지 않는다.",
+    "skills/mail/scripts/triage_confirm.py::post_in": "다이제스트 메일 카드를 머리글 스레드에 올린다 — 승인 카드가 아니며 draft message_id를 쓰지 않는다.",
     "skills/mail/scripts/triage_confirm.py::notify_result": "발송/취소 결과 안내(원 채널 스레드, 소유자 DM 폴백)이며 승인 요청 메시지를 저장하지 않는다.",
     "automation/interop/origin_notice.py::resolve_thread_id": "결과 통지용 원 채널 스레드 해석·생성 공유 구현이며 승인 메시지를 게시하지 않는다.",
     "automation/interop/origin_notice.py::deliver": "결과 통지 공유 배달기(원 채널 스레드, 호출자 폴백)이며 승인 요청 메시지를 저장하지 않는다.",

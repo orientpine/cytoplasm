@@ -48,16 +48,31 @@ CREATE TABLE IF NOT EXISTS digest_items (
     summary TEXT NOT NULL,
     note TEXT NOT NULL,
     recv_date TEXT NOT NULL,
+    reply_key TEXT NOT NULL DEFAULT '',
+    message_id TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (run_id, item_no)
 );
 CREATE INDEX IF NOT EXISTS idx_digest_items_uid ON digest_items (uid);
 """
+# Columns added after the first release: (name, DDL) appended in place on old DBs.
+_DIGEST_ITEM_ADDED_COLUMNS = (
+    ("reply_key", "reply_key TEXT NOT NULL DEFAULT ''"),
+    ("message_id", "message_id TEXT NOT NULL DEFAULT ''"),
+)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     connection.executescript(_SCHEMA)
+    present = {row[1] for row in connection.execute("PRAGMA table_info(digest_items)")}
+    for name, ddl in _DIGEST_ITEM_ADDED_COLUMNS:
+        if name not in present:
+            try:
+                connection.execute(f"ALTER TABLE digest_items ADD COLUMN {ddl}")
+            except sqlite3.OperationalError as error:  # a concurrent connection added it first
+                if "duplicate column" not in str(error):
+                    raise
     return connection
 
 
@@ -128,7 +143,8 @@ def record_digest_run(db_path: Path, sent_at: str, items: list[dict[str, int | s
             connection.executemany(
                 "INSERT INTO digest_items "
                 "(run_id, item_no, uid, subject, sender_masked, sensitive, category, "
-                "flags, summary, note, recv_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "flags, summary, note, recv_date, reply_key, message_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         run_id,
@@ -142,6 +158,8 @@ def record_digest_run(db_path: Path, sent_at: str, items: list[dict[str, int | s
                         item["summary"],
                         item["note"],
                         item["recv_date"],
+                        str(item.get("reply_key") or ""),
+                        str(item.get("message_id") or ""),
                     )
                     for item in items
                 ],
@@ -196,6 +214,24 @@ def latest_digest_items(
         }
         for row in rows
     ]
+
+
+def digest_item_by_reply_key(db_path: Path, reply_key: str) -> dict[str, int | str] | None:
+    """The newest digest item shown with this reply key, or None."""
+    if not reply_key or not db_path.exists():
+        return None
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT run_id, item_no, uid, message_id FROM digest_items "
+            "WHERE reply_key = ? ORDER BY run_id DESC LIMIT 1",
+            (reply_key,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "run_id": int(row[0]), "item_no": int(row[1]),
+        "uid": str(row[2]), "message_id": str(row[3]),
+    }
 
 
 def consecutive_send_failures(db_path: Path) -> int:
