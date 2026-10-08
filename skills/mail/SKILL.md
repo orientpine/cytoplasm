@@ -1,7 +1,7 @@
 ---
 name: mail
 description: "기관메일(mailon.kr) 스킬. 메일 작성·발송 지시에서 수신자가 이메일 주소가 아니라 사람 이름이면(예: '홍길동 박사님께 메일') 반드시 먼저 resolve로 이름→이메일 해석(기관 웹메일 자동완성 기반, READ-ONLY) — 메일함 검색만으로 포기하거나 주소를 추측·유추하는 것은 금지. 읽기: list/get/classify/status/resolve 래퍼(W4-1, READ-ONLY). 파이프라인(W4-2): 수신메일 민감도 게이트→분류(Codex OAuth 단일 티어)→다이제스트(08:00 KST)→소유자 지시 기반 회신 초안(Codex OAuth)→현재 승인 표면의 소유자 게이트→mailon 발송→approvals.jsonl. 새 메일 작성(compose)도 동일 watch·해시 바인딩 게이트를 경유한다. 발송은 반드시 승인 게이트 경유 — 직접 send 금지. 민감 회신은 승인 메시지 한 건에 전문과 sha256을 함께 표시한다. 승인 표면은 `approval_surface.py` 정책과 draft의 저장된 바인딩으로 결정되며, 폐지 표면의 미결정 초안은 승인 없이 만료된다. 회신·후속메일은 메일 클라이언트의 회신처럼 원문(헤더+본문)을 발송 본문 하단에 인용한다(draft 기본, --reply-all 로 전체회신, compose --in-reply-to <uid> 로 후속메일)."
-version: 1.7.14
+version: 1.8.0
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -24,7 +24,7 @@ prerequisites:
 
 - **`/srv/autophagy-agents/skills/mail/...` 을 실행하지 않는다.** 그 체크아웃은 관측용 미러이지 런타임이 아니다 — 2026-09-01 실측: 원문 인용 릴리스가 04:22Z 에 마운트됐는데 87분 뒤의 회신 초안이 미러(121커밋 뒤처짐, 08-29부터 dirty 로 동결)에서 만들어져 인용 없이 나갔다. 커밋됨 ≠ 배포됨 ≠ **실행됨**.
 - **`~/.hermes/skills/mail/...` 은 존재하지 않는다**(SS-1 반전 이후 그 루트는 자가 스킬 전용). 없는 경로를 찾아 다른 사본을 뒤지지 말고 위 live 경로를 쓴다.
-- 코드가 강제한다: `mail_runtime.governed_copy_refusal` — 이 호스트에 배포본 마운트가 있으면 다른 사본의 mutating 서브커맨드(`draft`·`compose`·`process`·`digest`·`watch`·`confirm`·`discard`·`sign`)는 `GATE-REFUSED STALE-SKILL-COPY-BLOCK …`(exit 3)으로 멈추고 올바른 경로를 알려 준다. 읽기 전용(`mode`·`list-drafts`·`digest-items`·`evidence`)은 막지 않는다. 이 메시지를 보면 경로를 고쳐 다시 실행하면 된다 — 우회 옵션은 없다.
+- 코드가 강제한다: `mail_runtime.governed_copy_refusal` — 이 호스트에 배포본 마운트가 있으면 다른 사본의 mutating 서브커맨드(`draft`·`reply-request`·`compose`·`process`·`digest`·`watch`·`confirm`·`discard`·`sign`)는 `GATE-REFUSED STALE-SKILL-COPY-BLOCK …`(exit 3)으로 멈추고 올바른 경로를 알려 준다. 읽기 전용(`mode`·`list-drafts`·`digest-items`·`evidence`)은 막지 않는다. 이 메시지를 보면 경로를 고쳐 다시 실행하면 된다 — 우회 옵션은 없다.
 
 ## 장문 승인 카드
 
@@ -129,8 +129,8 @@ Hermes cron(`mail-triage-watch`, no_agent)이 `watch`를 돌린다. 이 루프�
 
 ### 2. 다이제스트 루프 (매일 08:00 KST)
 신규 cron `mail-daily-digest`(`0 8 * * *`, no_agent)가 `digest`를 실행한다.
-- 마지막 다이제스트 이후 수신된 메일을 Discord Markdown 카드 형식(### N. 제목, 상태 배지, 인용문 요약, KST 수신 시각, 코드 스타일 UID/발신 해시, 실제 발신자·Cc)으로 요약하여 cha에게 DM으로 전송한다. 실제 발신자·Cc는 소유자 DM projection에만 포함되고 저장 row에는 남지 않는다. 배지는 중요도와 속성에 따라 한글·이모지(🔴 중요/🔵 일반/🗑️ 스팸, ↩️ 회신 필요, 📅 일정, 💳 예산, 🔒 민감, 👀 참조(CC))로 표시된다.
-- **DM 전송**: 공유 interop 전송기(DiscordTransport)를 통해 2,000자 이하 순서 보장 청크로 분할 발송된다(429 Retry-After 대응). 다이제스트 등 `dm_owner`를 쓰는 모든 표면에 동일 적용. 발송/취소 **결과 통지**는 그 요청의 승인 스레드(`approval_thread_id`)로 게시되며, 없으면 origin 바인딩의 원 채널 스레드로 간다(§4).
+- 마지막 다이제스트 이후 수신된 메일을 채널에는 머리글 메시지(건수·회신 방법) **하나만** 올리고, 메일별 카드는 그 머리글에 단 스레드 안에 **메일 1건 = Discord 메시지 1건**으로 보낸다(2026-10-08 소유자 지시 — 글자 수 청크가 카드를 중간에서 자르던 문제). 스레드는 공용 `origin_notice.resolve_thread_id` 로 열며, 열 수 없으면(DM 폴백 등) `DIGEST-THREAD-FAIL` 마커 후 같은 채널에 이어 올린다. 머리글은 ✅ 를 요청하지 않는다 — 초안의 승인은 그 초안의 정식 승인 카드로만 받는다(「승인 경로 완결 규칙」). 카드는 `### N. 제목` → `-# ↩️ 이 메시지에 답장하면 회신 초안 · 회신 키 \`MMDD-HHMM-N\`` → 배지 → 인용문 요약 → `수신 시각 · 발신 <이름>` → `참조 A, B, C 외 N명` 순서다. 이름은 헤더의 따옴표·역슬래시 이스케이프와 RFC 2047 인코딩을 한 번만 풀어 보여 주고(`scripts/mail_contacts.py`), 이름이 없을 때만 주소를 쓴다. 참조에서 소유자 자신은 빠진다. UID·발신 해시는 화면에 없고 `digest_items`(회신 키·Discord 메시지 id 포함)에만 있다. 실제 발신자·Cc는 소유자 DM projection에만 포함되고 저장 row에는 남지 않는다. 배지는 중요도와 속성에 따라 한글·이모지(🔴 중요/🔵 일반/🗑️ 스팸, ↩️ 회신 필요, 📅 일정, 💳 예산, 🔒 민감, 👀 참조(CC))로 표시된다.
+- **DM 전송**: 메시지마다 `dm_owner` 를 한 번씩 부른다(제목 200자·요약 1,200자에서 잘라 메시지가 2,000자를 넘지 않는다). 공유 interop 전송기(DiscordTransport)가 순서를 보장하고 429 Retry-After 에 대응한다. 다이제스트 등 `dm_owner`를 쓰는 모든 표면에 동일 적용. 발송/취소 **결과 통지**는 그 요청의 승인 스레드(`approval_thread_id`)로 게시되며, 없으면 origin 바인딩의 원 채널 스레드로 간다(§4).
 - **동기화 폴백**: mailon 동기화(`list --sync`) 실패 시 로컬 `state.db` 기준으로 폴백 발송하며, DM 최상단에 "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)" 경고를 부착한다. `--no-sync` 명시 실행의 실패는 폴백 없이 fail-closed.
 - **실패 처리**: 모든 digest 실패(빌드 단계 LLM 실패, DM 전송 실패)는 기록 없이 단일 행·레닥션된 구조화 마커 `DIGEST-FAIL stage=<build|deliver|runner> retry_safe=<true|false> code=<...>`로 종료하며(주소·본문·토큰 미포함), 다음 tick에 재시도한다(DM-first/record-after 불변식 유지 — cursor는 전달 성공 후에만 기록). 워처는 `retry_safe=true` 마커만 인틱 재시도한다(전달 실패는 일부 청크가 이미 나갔을 수 있어 `retry_safe=false`). cron은 `--deliver discord`로 등록되어, no-agent 스크립트의 **stdout**(성공=빈 stdout=무음, 실패=마커 1행+exit 1)이 소유자 DM으로 전달된다 — `--deliver local`(전달 대상 0개)이었던 2026-07-31에는 실패가 소유자에게 도달하지 못했다.
 - **항목 단위 fail-open (분류)**: 한 메일의 분류 LLM 호출이 실패(모델 timeout 또는 파싱 불가한 비-JSON 응답)해도 다이제스트 전체가 중단되지 않는다. 해당 항목은 보수적으로 `🔴 중요` + `⚠️ 분류 실패` 배지로 표면화되고(플래그는 모두 미부여 — 조작된 판정으로 캘린더 초안을 위임하지 않음), 나머지 메일은 정상 전달·기록된다. 요약 실패가 `(요약 실패)` fallback으로 항목을 유지하는 것과 동일한 취지이며, 요약도 분류와 같이 **1회 재시도**한 뒤에야 fallback으로 내려간다 — 재시도까지 실패한 건은 `llm-calls.jsonl`에 `purpose=digest_summary_failed` 한 줄로 예외 클래스와 레닥션·클립된 메시지, 불투명 uid만 남겨(제목·발신자·본문·주소 등 메일 내용은 절대 기록하지 않음) no-agent cron이 stderr를 버려도 원인을 추적할 수 있게 한다. 분류도 재시도 소진 시 `purpose=classify_failed`로 같은 방식으로 기록한다. (분류가 파싱은 되나 bool을 문자열로 준 경우 `"false"`가 참으로 새는 버그도 함께 차단 — `_json_bool` 엄격 파싱.)
@@ -147,7 +147,17 @@ Hermes cron(`mail-triage-watch`, no_agent)이 `watch`를 돌린다. 이 루프�
 - `scripts/mail_search.py`는 제목·발신자·본문·스레드·첨부파일의 순수 읽기 점수와 To/Cc 역할, `mass_notice`/`direct_inquiry` 접촉 유형을 계산하며 외부효과나 저장을 수행하지 않는다.
 
 ### 3. 소유자 지시 기반 초안 생성
-cha가 다이제스트를 보고 지시를 내리면(예: "3번 메일, 참석 가능하다고 회신해줘"), 에이전트는 다음 절차를 따른다:
+**메일별 답장 (2026-10-08, 소유자 지시)**: cha 가 다이제스트 스레드의 메일 메시지에 Discord **답장(Reply)** 을 달면 메시지 앞에 `[Replying to: "### N. … 회신 키 MMDD-HHMM-N …"]` 가 붙어 온다. 그러면 번호 변환 없이 그 회신 키로 바로 실행한다:
+
+```bash
+python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py reply-request --key <회신 키> --author-id <답장한 사용자 id> --instruction "<답장 본문>" [--reply-all]
+```
+
+- 답장 본문이 곳 회신 요지다. 내부에서 아래 `draft` 와 **같은 초안·승인 카드 경로**를 타므로 발송은 여전히 승인 스레드 카드의 ✅ 뒤 `watch` 가 한다. 답장에는 출력의 `APPROVAL-THREAD … url=` 링크를 싣는다.
+- 소유자가 아닌 사람의 답장은 `REPLY-REQUEST-IGNORED not-owner`(exit 2)로 무시된다. 모르는 키는 `REPLY-REQUEST-UNKNOWN`(exit 3) — 키를 지어내지 말고 아래 번호 경로로 간다.
+- 같은 메일에 초안이 이미 있으면 `초안이 이미 있음`(exit 2)으로 막히고, 두 답장이 동시에 와도 잠금 아래에서 하나만 초안이 된다. 다시 쓰는 절차는 `draft` 의 중복 거부와 같다(이전 초안 폐기 후 재요청).
+
+번호로 지시하면(예: "3번 메일, 참석 가능하다고 회신해줘"), 에이전트는 다음 절차를 따른다:
 1. `digest-items` 명령으로 번호(N)를 실제 `uid`로 변환한다.
 2. `draft --uid <uid> --instruction "<지시문>" [--reply-all]` 명령을 실행하여 초안을 생성하고 현재 mail-reply 승인 스레드에 게시한다. 답장에는 출력의 `APPROVAL-THREAD … url=` 링크를 그대로 싣는다(§4-2).
 3. 초안은 `prompts/reply-draft-v2.md`를 사용하며, 항상 승인된 Codex OAuth 티어에서 생성된다.
@@ -200,6 +210,9 @@ python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py digest
 
 # 다이제스트 아이템 확인 (N -> uid 변환용)
 python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py digest-items
+
+# 다이제스트 메일 메시지에 단 소유자 답장 → 그 메일의 회신 초안
+python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py reply-request --key 1008-0800-3 --author-id <사용자 id> --instruction "참석 가능하다고 회신"
 
 # 소유자 지시 기반 초안 생성
 python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py draft --uid <uid> --instruction "참석 가능하다고 회신해줘" [--with-evidence]
