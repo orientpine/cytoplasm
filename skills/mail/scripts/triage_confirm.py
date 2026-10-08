@@ -135,15 +135,39 @@ def dm_owner(content: str) -> str:
     다이제스트 본문과 결과 통지 폴백이 이 경로를 탄다. 통지는 도달이 우선이므로
     (승인 게이트와 달리) 채널 해석 실패는 조용히 기존 폴백 경로로 내려간다.
     """
+    sent = _dm_transport(_owner_channel()).send(content)
+    return sent[-1].message_id
+
+
+def _owner_channel() -> str:
     import triage_approval
 
     directory = triage_approval.approval_directory()
     try:
-        channel_id = directory.agent_chat()
+        return directory.agent_chat()
     except Exception:  # noqa: BLE001 — 통지는 도달 우선: 미설정/해석 실패는 DM 폴백
-        channel_id = directory.owner_dm()
-    sent = _dm_transport(channel_id).send(content)
-    return sent[-1].message_id
+        return directory.owner_dm()
+
+
+def digest_thread(header_message_id: str, name: str) -> str:
+    """Thread hung on the digest header (shared origin_notice helper), or '' to post flat.
+
+    Best-effort: a DM channel cannot hold threads and an old interop runtime may lack
+    the helper — the mail messages then follow the header in the same channel.
+    """
+    if not header_message_id:
+        return ""
+    try:
+        origin_notice = _origin_notice()
+        origin = origin_notice.OriginRef(channel_id=_owner_channel(), message_id=header_message_id)
+        return origin_notice.resolve_thread_id(_api, origin, name)
+    except Exception as error:  # noqa: BLE001 — 스레드는 편의, 도달이 우선
+        print(f"DIGEST-THREAD-FAIL err={type(error).__name__}", file=sys.stderr)
+        return ""
+
+
+def post_in(channel_id: str, content: str) -> str:
+    return _dm_transport(channel_id).send(content)[-1].message_id
 
 
 def _origin_notice():

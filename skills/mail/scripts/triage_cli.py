@@ -177,6 +177,32 @@ def cmd_evidence(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reply_request(args: argparse.Namespace) -> int:
+    """Owner reply on a digest mail message → that mail's reply draft (same draft gate).
+
+    The gateway shows the agent the replied-to message text, which carries the
+    ``회신 키``; the key maps to the uid through ``digest_items``. Only the owner's
+    reply counts, and one mail gets one draft: the uid check runs under a lock so
+    two replies racing on the same mail cannot both pass ``has_draft_for``.
+    """
+    import fcntl
+
+    if str(args.author_id).strip() != triage_confirm.owner_id():
+        raise triage_gate.GateError("REPLY-REQUEST-IGNORED not-owner — 소유자 답장만 회신 요청으로 받는다", 2)
+    item = triage_store.digest_item_by_reply_key(triage_gate.db_path(), args.key.strip())
+    if item is None:
+        raise triage_gate.GateError(f"REPLY-REQUEST-UNKNOWN key={args.key} — 다이제스트에 없는 회신 키", 3)
+    print(f"REPLY-REQUEST key={args.key.strip()} item={item['item_no']}")
+    lock_dir = triage_gate.gate_dir()
+    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (lock_dir / "reply-request.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return cmd_draft(argparse.Namespace(
+            uid=str(item["uid"]), instruction=args.instruction, attachment=[],
+            no_post=args.no_post, with_evidence=args.with_evidence, reply_all=args.reply_all,
+        ))
+
+
 def cmd_digest(args: argparse.Namespace) -> int:
     if triage_mode.effective_mode() == "no-go":
         raise triage_gate.GateError("mail-mode=no-go — 다이제스트 비활성(W4-1N 분기)", 3)
@@ -443,6 +469,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="전체회신 — 원문의 받는 사람·참조 전원을 Cc 에 넣는다 (소유자·발신자 제외)",
     )
     draft.set_defaults(func=cmd_draft)
+
+    reply = sub.add_parser(
+        "reply-request",
+        help="다이제스트 메일 메시지에 단 소유자 답장 → 그 메일의 회신 초안 (draft 승인 경로 재사용)",
+    )
+    reply.add_argument("--key", required=True, help="답장 대상 메시지의 회신 키 (예: 1008-0800-3)")
+    reply.add_argument("--author-id", required=True, help="답장한 Discord 사용자 id")
+    reply.add_argument("--instruction", required=True, help="답장 본문 = 회신 요지")
+    reply.add_argument("--no-post", action="store_true", help="초안만 만들고 승인 메시지 게시 생략")
+    reply.add_argument("--with-evidence", action="store_true", help="상대·주제 관련 개인 근거 사용")
+    reply.add_argument("--reply-all", action="store_true", help="전체회신")
+    reply.set_defaults(func=cmd_reply_request)
 
     compose = sub.add_parser(
         "compose", help="새 메일 작성 초안 — 소유자 확정 게이트 (같은 watch cron 재사용)"

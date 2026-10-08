@@ -224,8 +224,8 @@ def test_owner_digest_shows_real_sender_and_cc_without_persisting_them(
     # Then: the owner sees sender+Cc, while persistence retains only the sender hash.
     assert "Synthetic Sender <sender@example.invalid>" in dm_item["sender"]
     assert dm_item["cc"] == ("copy@example.invalid",)
-    assert "Synthetic Sender <sender@example.invalid>" in rendered
-    assert "copy@example.invalid" in rendered
+    assert "발신 Synthetic Sender" in rendered
+    assert "참조 copy@\u200bexample.invalid" in rendered
     stored = json.dumps(store_item, ensure_ascii=False)
     assert "sender@example.invalid" not in stored
     assert "copy@example.invalid" not in stored
@@ -454,8 +454,8 @@ def test_build_item_owner_dm_keeps_real_sender_and_cc_private(
     # Then: only the owner projection contains real sender/Cc; storage stays redacted.
     assert dm_item["sender"] == "발신자 <sender@inst.example>"
     assert dm_item["cc"] == "참조자 <copy@inst.example>"
-    assert "발신자 <sender@inst.example>" in rendered
-    assert "참조자 <copy@inst.example>" in rendered
+    assert "발신 발신자" in rendered and "sender@inst.example" not in rendered
+    assert "참조 참조자" in rendered
     assert "sender" not in store_item and "cc" not in store_item
     assert store_item["sender_masked"] == triage_core.mask_value(detail["sender"])
 
@@ -562,11 +562,12 @@ def test_render_digest_dm_card_format() -> None:
     assert "🔴 중요 · ↩️ 회신 필요" in lines
     assert "🔵 일반 · 🔒 민감 · 📅 일정" in lines
     assert "> 요약 · First summary" in lines
-    assert "수신 07-18 18:01 · `UID uid-1` · 발신(마스킹) `sha256:sender1`" in lines
+    assert "수신 07-18 18:01" in lines
+    assert "UID" not in text and "sha256" not in text
     assert "🗓️ 일정 초안 `calendar:abc123`" in lines
-    assert "---" in lines  # 카드와 푸터 구분선
+    assert "---" in lines  # 머리글과 회신 안내 구분선
     assert "N번 메일" in text
-    assert "✅" in lines[-1] and "⛔" in lines[-1]
+    assert "✅" not in text.split("### 1.")[0] and "승인 카드" in text
 
 
 def test_render_digest_dm_empty_says_no_new_mail() -> None:
@@ -625,12 +626,9 @@ def test_render_digest_dm_recv_time_kst_variants() -> None:
     lines_broken = triage_digest.render_digest_dm([broken], kst_now=_KST_NOW).splitlines()
     lines_empty = triage_digest.render_digest_dm([empty], kst_now=_KST_NOW).splitlines()
     # Then: parseable dates show KST, unparseable ones omit 수신 without crashing
-    meta = "`UID uid-x` · 발신(마스킹) `sha256:senderx`"
-    assert f"수신 07-18 18:01 · {meta}" in lines_zulu
-    assert f"수신 07-18 18:01 · {meta}" in lines_naive
-    assert meta in lines_broken
-    assert meta in lines_empty
-    assert not any("수신" in line for line in lines_broken)
+    assert "수신 07-18 18:01" in lines_zulu
+    assert "수신 07-18 18:01" in lines_naive
+    assert not any(line.startswith("수신") for line in lines_broken + lines_empty)
 
 
 def test_render_digest_dm_badge_maps() -> None:
@@ -753,10 +751,10 @@ def test_run_digest_one_bad_classify_still_completes_and_delivers(
     rc = triage_digest.run_digest(limit=10, sync=False, dry_run=False)
 
     assert rc == 0
-    assert len(sent) == 1
-    assert "### 1. Subject uid-bad" in sent[0]
-    assert "### 2. Subject uid-good" in sent[0]
-    assert "⚠️ 분류 실패" in sent[0]  # the bad item is flagged, not dropped
+    assert len(sent) == 3  # header + one message per mail
+    assert sent[1].startswith("### 1. Subject uid-bad")
+    assert sent[2].startswith("### 2. Subject uid-good")
+    assert "⚠️ 분류 실패" in sent[1]  # the bad item is flagged, not dropped
     assert "DIGEST run=" in capsys.readouterr().out
     # Both mails are recorded so neither is re-digested next tick.
     assert triage_store.digested_uids(db) == {"uid-bad", "uid-good"}
@@ -831,9 +829,9 @@ def test_cmd_digest_sends_dm_then_records_run(
     monkeypatch.setattr(sys, "argv", ["triage_cli", "digest", "--no-sync"])
     # When: the digest command runs
     rc = triage_cli.main()
-    # Then: one DM precedes a persisted run
+    # Then: the header and the one mail message precede a persisted run
     assert rc == 0
-    assert len(sent) == 1
+    assert len(sent) == 2
     assert "DIGEST run=" in capsys.readouterr().out
     with sqlite3.connect(db) as connection:
         assert connection.execute("SELECT COUNT(*) FROM digest_runs").fetchone() == (1,)

@@ -144,8 +144,8 @@ def _run_digest(
     """성공하는 한 틱을 돌리고 소유자 메시지 본문을 돌려준다."""
     sent = _prepare_digest(monkeypatch, tmp_path, uids=uids, sensitive=sensitive)
     assert triage_digest.run_digest(limit=10, sync=False, dry_run=False) == 0
-    assert len(sent) == 1
-    return sent[0]
+    assert sent and sent[0].startswith("## 📬")  # 머리글 뒤에 메일당 메시지 하나씩
+    return "\n\n".join(sent)
 
 
 # --- ⓐ 공유 클라이언트 오류의 타입 구분 -------------------------------------------

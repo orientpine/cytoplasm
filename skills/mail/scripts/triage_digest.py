@@ -27,8 +27,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+import mail_contacts
 import triage_confirm
-import triage_approval
 import triage_core
 import triage_gate
 import triage_llm
@@ -61,18 +61,30 @@ _CLASSIFY_FALLBACK = triage_core.Classification(
     reason="classification_unavailable",
 )
 _MARKDOWN_ESCAPE = re.compile(r"([\\*_~`|\[\]])")
+# Per-message budget: Discord rejects >2000 chars, and the gateway shows the agent
+# only the first 500 chars of a replied-to message, so the reply key sits right
+# under the (clipped) subject heading.
+_SUBJECT_LIMIT = 200
+_SUMMARY_LIMIT = 1200
 
 
 def _footer() -> str:
-    instruction = triage_approval.reaction_instruction(
-        {"kind": "reply", "surface": "owner-dm"},
-        name_surface=True,
-    )
+    """How to reply. Never asks for a ✅ here — approval is the draft's own card."""
     return (
         "---\n"
-        '💬 회신 지시 · "N번 메일, …라고 회신해줘"라고 말하면 초안을 만듭니다\n'
-        f"초안이 만들어지면 {instruction}"
+        "💬 회신 지시 · 스레드의 메일 메시지에 **답장(Reply)** 으로 요지를 적으면 "
+        '그 메일의 회신 초안을 만듭니다 ("N번 메일, …라고 회신해줘"도 됩니다)\n'
+        "초안은 정식 승인 카드(요청별 승인 스레드)로 올라오고, 에이전트 답장에 그 카드 링크가 실립니다"
     )
+
+
+def thread_name(kst_now: datetime, count: int) -> str:
+    return f"📬 기관메일 다이제스트 {kst_now.astimezone(ZoneInfo('Asia/Seoul')):%m-%d %H:%M} · {count}건"
+
+
+def reply_key(kst_now: datetime, item_no: int) -> str:
+    """Visible per-mail reply handle, e.g. ``1008-0800-3`` (stored in digest_items)."""
+    return f"{kst_now.astimezone(ZoneInfo('Asia/Seoul')):%m%d-%H%M}-{item_no}"
 
 
 def select_new_mails(
@@ -186,7 +198,7 @@ def build_item(
         for line in body.split("---", 2)[1].splitlines():
             key, separator, value = line.partition(":")
             if separator and key.strip().lower() == "cc":
-                cc_display = value.strip().strip("'\"")
+                cc_display = mail_contacts.yaml_scalar(value)
                 break
     if role == "cc" and cls.reply_needed:  # 참조 수신 — 회신 대상 아님 (owner 2026-07-19)
         cls = replace(cls, reply_needed=False)
@@ -239,15 +251,8 @@ def _sanitize_inline(text: str) -> str:
     return _MARKDOWN_ESCAPE.sub(r"\\\1", flat).replace("@", "@\u200b")
 
 
-def _sanitize_contact(text: str) -> str:
-    flat = _MARKDOWN_ESCAPE.sub(r"\\\1", " ".join(text.split()))
-    flat = re.sub(
-        r"@(everyone|here)\b",
-        lambda matched: f"@\u200b{matched.group(1)}",
-        flat,
-        flags=re.IGNORECASE,
-    )
-    return flat.replace("<@", "<@\u200b")
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _recv_kst(recv_date: str) -> str:
@@ -270,38 +275,56 @@ def _badge_line(item: dict) -> str:
     return " · ".join(badges)
 
 
-def render_digest_dm(dm_items: list[dict], *, kst_now: datetime) -> str:
-    """Render the owner digest as Discord Markdown cards (pinned format).
+def render_item(item: dict, *, kst_now: datetime) -> str:
+    """One mail as one Discord message: heading, reply key, badges, summary, people.
 
-    Card per mail: ``### N. 제목`` heading, Korean emoji badge line, blockquote
-    summary, KST receive time + inline-code UID/masked sender, optional calendar
-    note — then a ``---`` separator and the reply-instruction footer. Mail-derived
-    text (subject/summary) is markdown-escaped and mention-neutralized.
+    Internal identifiers (uid, sender hash) stay in ``digest_items`` — the reader
+    sees names only, and Cc collapses to ``A, B, C 외 N명`` without the owner.
+    """
+    subject = _clip(_sanitize_inline(str(item["subject"])), _SUBJECT_LIMIT)
+    lines = [
+        f"### {item['item_no']}. {subject}",
+        f"-# ↩️ 이 메시지에 답장하면 회신 초안 · 회신 키 `{reply_key(kst_now, int(item['item_no']))}`",
+        _badge_line(item),
+        f"> 요약 · {_clip(_sanitize_inline(str(item['summary'])), _SUMMARY_LIMIT)}",
+    ]
+    people = [_recv_kst(str(item["recv_date"]))]
+    sender = mail_contacts.sender_label(str(item.get("sender") or ""))
+    if sender:
+        people.append(f"발신 {_sanitize_inline(sender)}")
+    people = [part for part in people if part]
+    if people:
+        lines.append(" · ".join(people))
+    raw_cc = item.get("cc") or ""
+    cc = mail_contacts.cc_label(
+        tuple(raw_cc) if isinstance(raw_cc, (tuple, list)) else str(raw_cc),
+        owner=triage_recipient.owner_address(),
+    )
+    if cc:
+        lines.append(f"참조 {_sanitize_inline(cc)}")
+    if item["note"]:
+        note = str(item["note"]).replace("`", "'")
+        lines.append(f"🗓️ 일정 초안 `{note}`")
+    return "\n".join(lines)
+
+
+def render_digest_parts(dm_items: list[dict], *, kst_now: datetime) -> list[str]:
+    """The digest as Discord messages: a header (with the reply how-to), then one per mail.
+
+    Splitting on mail boundaries means no card is ever cut mid-line by the
+    transport's 2000-char chunker, and each mail message is a reply target.
     """
     stamp = kst_now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M")
-    lines = ["## 📬 기관메일 다이제스트", f"{stamp} KST · 신규 {len(dm_items)}건"]
+    header = ["## 📬 기관메일 다이제스트", f"{stamp} KST · 신규 {len(dm_items)}건"]
     if not dm_items:
-        lines.extend(["", "신규 메일 없음"])
-        return "\n".join(lines)
-    for item in dm_items:
-        lines.append("")
-        lines.append(f"### {item['item_no']}. {_sanitize_inline(str(item['subject']))}")
-        lines.append(_badge_line(item))
-        lines.append(f"> 요약 · {_sanitize_inline(str(item['summary']))}")
-        received = _recv_kst(str(item["recv_date"]))
-        meta = f"`UID {item['uid']}` · 발신(마스킹) `{item['sender_masked']}`"
-        lines.append(f"{received} · {meta}" if received else meta)
-        sender = str(item.get("sender") or "")
-        cc = str(item.get("cc") or "")
-        if sender:
-            lines.append(f"발신 · {_sanitize_contact(sender)}")
-        if cc:
-            lines.append(f"참조(CC) · {_sanitize_contact(cc)}")
-        if item["note"]:
-            note = str(item["note"]).replace("`", "'")
-            lines.append(f"🗓️ 일정 초안 `{note}`")
-    lines.extend(["", _footer()])
-    return "\n".join(lines)
+        return ["\n".join([*header, "", "신규 메일 없음"])]
+    header_text = "\n".join([*header, "메일별 카드는 이 메시지의 스레드에 이어집니다.", "", _footer()])
+    return [header_text, *(render_item(item, kst_now=kst_now) for item in dm_items)]
+
+
+def render_digest_dm(dm_items: list[dict], *, kst_now: datetime) -> str:
+    """The whole digest as one text (dry-run preview); messages are blank-line joined."""
+    return "\n\n".join(render_digest_parts(dm_items, kst_now=kst_now))
 
 
 def _fail_marker(stage: str, code: str, error: BaseException) -> str:
@@ -360,19 +383,30 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
             raise triage_gate.GateError(_fail_marker("build", "llm_call_failed", error), 4) from error
         dm_items.append(dm_item)
         store_items.append(store_item)
-    body = render_digest_dm(dm_items, kst_now=kst_now)
+    parts = render_digest_parts(dm_items, kst_now=kst_now)
     if sync_failed:
-        body = "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)\n" + body
+        parts[0] = "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)\n" + parts[0]
     if dry_run:
-        print(body)
-        print(f"DIGEST dry-run items={len(dm_items)}")
+        print("\n\n".join(parts))
+        print(f"DIGEST dry-run items={len(dm_items)} messages={len(parts)}")
         return 0
-    try:
-        triage_confirm.dm_owner(body)  # Delivery first — failure leaves every mail undigested
+    try:  # Delivery first — failure leaves every mail undigested
+        message_ids = [triage_confirm.dm_owner(parts[0])]
+        thread_id = (
+            triage_confirm.digest_thread(message_ids[0], thread_name(kst_now, len(dm_items)))
+            if len(parts) > 1 else ""
+        )
+        message_ids.extend(
+            triage_confirm.post_in(thread_id, part) if thread_id else triage_confirm.dm_owner(part)
+            for part in parts[1:]
+        )
     except Exception as error:  # noqa: BLE001 — cron alert needs one structured marker
         raise triage_gate.GateError(
             _fail_marker("deliver", "discord_delivery_failed", error), 4
         ) from error
+    for store_item, message_id in zip(store_items, message_ids[1:], strict=True):
+        store_item["reply_key"] = reply_key(kst_now, int(store_item["item_no"]))
+        store_item["message_id"] = str(message_id or "")
     run_id = triage_store.record_digest_run(db, triage_core.utc_now(), store_items)
     print(f"DIGEST run={run_id} items={len(dm_items)}")
     return 0
