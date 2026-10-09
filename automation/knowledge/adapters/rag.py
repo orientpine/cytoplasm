@@ -7,12 +7,9 @@ from pathlib import Path
 from typing import Mapping
 
 from automation.knowledge.core import (
-    SENSITIVE_MARKER,
     analyze_entity_intent,
     grounded_rows,
     merge_entity_rows,
-    primary_route_is_glm_free,
-    visible_rows,
 )
 from automation.knowledge.pack import EvidenceItem, KnowledgeQuery
 from automation.knowledge.plan import QueryPlan
@@ -62,24 +59,14 @@ def fetch_rag(query: KnowledgeQuery, plan: QueryPlan, env: Mapping[str, str]) ->
         else:
             found = client.search_memory(search_text, limit=query.limit)
         rows = [dict(row) for row in found]
-        allowed = primary_route_is_glm_free(env)
-        rows, excluded, released = visible_rows(rows, allowed, SENSITIVE_MARKER)
         hits = grounded_rows(query.text, rows)
         if not hits and _enabled(env, "KNOWLEDGE_ENTITY_FALLBACK"):
             if intent.matches:
                 fallback_query = " ".join(intent.entity_hints)
                 auxiliary = [dict(row) for row in client.search_memory(fallback_query, limit=query.limit)]
-                auxiliary, more_excluded, more_released = visible_rows(auxiliary, allowed, SENSITIVE_MARKER)
-                excluded += more_excluded
-                released += more_released
                 rows = merge_entity_rows(rows, auxiliary, intent.entity_hints)
                 hits = grounded_rows(fallback_query, rows)
     except (OSError, ValueError, McpUnreachableError, McpFatalError) as error:
         return RagFetch((), "unavailable", (f"rag 계층 불가({error.__class__.__name__})",))
-    notes: list[str] = []
-    if excluded:
-        notes.append(f"rag {excluded}건 민감 제외")
-    if released:
-        notes.append(f"rag {released}건 patent-sensitive sentinel 포함")
     items = tuple(item_from_rag(row, grounded) for row, grounded in hits)
-    return RagFetch(items, "hit" if items else "no_memory", tuple(notes))
+    return RagFetch(items, "hit" if items else "no_memory", ())

@@ -26,7 +26,6 @@ _SCANNED_SUFFIXES: Final = (".py", ".sh", ".json", ".yaml", ".toml")
 _ALLOWED: Final = {
     "automation/provision-agent.sh": "writes the first ~/.hermes/config.yaml — the seed of the one place",
     "automation/openclaw-arm64-smoke.sh": "configures a different product (openclaw) in a smoke test",
-    "skills/recall/scripts/scenario.sh": "a sample Hermes config file the scenario reads, not a call",
     "skills/speechtotext/scripts/stt_client.py": "audio transcription API, not a Hermes chat model",
 }
 

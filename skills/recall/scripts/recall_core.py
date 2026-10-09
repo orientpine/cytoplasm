@@ -1,4 +1,4 @@
-"""recall-v1 response assembly; grounding and sensitivity live in knowledge core."""
+"""recall-v1 response assembly with shared grounding."""
 
 from __future__ import annotations
 
@@ -18,13 +18,12 @@ GROUNDING_RATIO = knowledge_core.GROUNDING_RATIO
 EXCERPT_CHARS = 200
 _METADATA_KEYS = (
     "source_type", "title", "path", "task_id", "message_id", "session_id", "created",
-    "updated", "day", "folder", "sensitivity", "channel", "first_message_id",
+    "updated", "day", "folder", "channel", "first_message_id",
     "last_message_id", "report_agent", "agent_id", "role", "project", "interest_tags", "tags",
 )
 
 EntityIntent = knowledge_core.EntityIntent
 analyze_entity_intent = knowledge_core.analyze_entity_intent
-visible_rows = knowledge_core.visible_rows
 merge_entity_rows = knowledge_core.merge_entity_rows
 tokenize = knowledge_core.tokenize
 grounding_ratio = knowledge_core.grounding_ratio

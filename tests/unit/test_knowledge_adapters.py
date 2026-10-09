@@ -27,20 +27,20 @@ def test_doc_date_uses_only_explicit_metadata_or_supported_path() -> None:
     assert derive_doc_date({}, "meeting-about-2026.md") == (None, "none")
 
 
-def test_wiki_adapter_loads_scripts_and_excludes_sensitive_notes() -> None:
+def test_wiki_adapter_loads_all_matching_notes_without_rules() -> None:
     result = fetch_wiki(
         KnowledgeQuery("배양", purpose="judgment", sources=frozenset({"wiki", "twin"})),
         _NOW,
         {
             "WIKI_SCRIPTS": str(_REPO / "skills" / "wiki" / "scripts"),
             "WIKI_ROOT": str(_FIXTURES / "wiki_vault"),
-            "KNOWLEDGE_SENSITIVITY_RULES": str(_FIXTURES / "sensitivity-rules.yaml"),
         },
     )
     assert result.wiki_status == "hit"
     assert result.twin_status == "conflict"
-    assert all("민감" not in item.title for item in (*result.wiki_items, *result.twin_items))
-    assert any("민감 제외" in note for note in result.notes)
+    assert any("특허" in item.title for item in result.wiki_items)
+    assert any("특허" in item.title for item in result.twin_items)
+    assert result.notes == ()
 
 
 def test_missing_wiki_scripts_is_fail_closed_unavailable() -> None:

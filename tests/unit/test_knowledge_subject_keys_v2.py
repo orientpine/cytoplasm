@@ -43,7 +43,6 @@ def _vault(tmp_path: Path, name: str, text: str) -> dict[str, str]:
     return {
         "WIKI_SCRIPTS": str(_REPO / "skills" / "wiki" / "scripts"),
         "WIKI_ROOT": str(vault),
-        "KNOWLEDGE_SENSITIVITY_RULES": str(_FIXTURES / "sensitivity-rules.yaml"),
     }
 
 
