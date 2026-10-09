@@ -21,12 +21,10 @@ sys.path.insert(0, str(SKILL / "scripts"))
 import meeting_actions  # noqa: E402
 import meeting_cli  # noqa: E402
 import meeting_extract  # noqa: E402
-import meeting_gate  # noqa: E402
 import meeting_llm  # noqa: E402
 import meeting_minutes  # noqa: E402
 
 NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
-RULES = meeting_gate.load_rules(REPO / "configs" / "sensitivity-rules.yaml")
 
 
 def _load_plugin():
@@ -91,7 +89,6 @@ def test_recorded_extraction_meets_thresholds():
 def test_full_offline_pipeline_on_fixture(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -116,29 +113,8 @@ def test_full_offline_pipeline_on_fixture(tmp_path, monkeypatch, capsys):
     assert (tmp_path / "plan/team-post.txt").read_text().startswith("```json")
 
 
-# --- sensitivity gate ---------------------------------------------------------
-
-
-def test_gate_clean_fixture_not_sensitive():
-    text = (FIXTURES / "meeting-clean.md").read_text(encoding="utf-8")
-    assert meeting_gate.evaluate(text, RULES).sensitive is False
-
-
-def test_gate_patent_fixture_sensitive():
-    text = (FIXTURES / "meeting-patent.md").read_text(encoding="utf-8")
-    verdict = meeting_gate.evaluate(text, RULES)
-    assert verdict.sensitive is True
-    assert "patent-sensitive" in verdict.tags
-
-
-def test_gate_english_patterns():
-    verdict = meeting_gate.evaluate("Discussed the patent claims for PCT.", RULES)
-    assert verdict.sensitive is True
-
-
 def test_rules_and_prompt_copies_in_sync():
     for canonical, copy in [
-        ("configs/sensitivity-rules.yaml", "skills/meeting/configs/sensitivity-rules.yaml"),
         ("prompts/meeting-extraction-v4.md", "skills/meeting/prompts/meeting-extraction-v4.md"),
     ]:
         assert (REPO / canonical).read_bytes() == (REPO / copy).read_bytes()
@@ -153,15 +129,6 @@ def test_prompt_template_excludes_doc_header():
     assert template.startswith("아래 회의록을 읽어라.")
     prompt = meeting_llm.build_prompt(template, meeting_text="본문", my_names="cha")
     assert "버전 파일명" not in prompt and "치환해" not in prompt
-
-
-def test_fallback_parser_matches_yaml():
-    raw = (REPO / "configs/sensitivity-rules.yaml").read_text(encoding="utf-8")
-    fallback = meeting_gate._parse_rules_fallback(raw)
-    spec = fallback["tags"]["patent-sensitive"]
-    rule = RULES[0]
-    assert tuple(spec["keywords"]) == rule.keywords
-    assert len(spec["patterns"]) == len(rule.patterns)
 
 
 # --- refusals -----------------------------------------------------------------
@@ -211,15 +178,28 @@ def test_unsupported_extension(tmp_path):
     assert exc.value.exit_code == 5
 
 
-# --- patent routing + sanitization ---------------------------------------------
+# --- patent-keyword meetings are ordinary meetings ---------------------------------------------
 
 
-def test_extraction_refuses_any_route_other_than_codex_oauth():
-    """민감 텍스트를 다른 티어로 보내려는 호출은 프롬프트가 나가기 전에 거부된다."""
-    with pytest.raises(meeting_llm.PatentRoutingError):
-        meeting_llm.call_codex("x", sensitive=True, provider="third-party-tier")
-    with pytest.raises(meeting_llm.PatentRoutingError):
-        meeting_llm.call_codex("x", sensitive=False, provider="third-party-tier")
+def test_patent_keyword_meeting_takes_the_same_model_route_as_any_meeting(monkeypatch):
+    """민감 판정이 없다 — 특허 낱말이 든 회의도 같은 호출, 같은 인자로 모델에 간다."""
+    calls: list[tuple[tuple, dict]] = []
+    recorded = (FIXTURES / "recorded-clean.json").read_text(encoding="utf-8")
+
+    def call(*args, **kwargs):
+        calls.append((args, kwargs))
+        return recorded
+
+    monkeypatch.setattr(meeting_llm, "call_codex", call)
+    for fixture in ("meeting-clean.md", "meeting-patent.md"):
+        _, provider = meeting_llm.extract(
+            (FIXTURES / fixture).read_text(encoding="utf-8"),
+            prompt_path=REPO / "prompts/meeting-extraction-v3.md",
+            my_names="cha",
+        )
+        assert provider == meeting_llm.CODEX_PROVIDER
+    assert [kwargs for _, kwargs in calls] == [{}, {}]
+    assert "청구항" in calls[1][0][0], "특허 낱말이 든 본문도 그대로 모델에 간다"
 
 
 def test_extraction_fails_closed_when_codex_credentials_are_missing(tmp_path, monkeypatch):
@@ -235,7 +215,6 @@ def test_extraction_fails_closed_when_codex_credentials_are_missing(tmp_path, mo
     with pytest.raises(meeting_llm.ExtractionUnavailableError):
         meeting_llm.extract(
             "회의 본문",
-            sensitive=False,
             prompt_path=REPO / "prompts/meeting-extraction-v3.md",
             my_names="cha",
         )
@@ -252,7 +231,6 @@ def test_ingest_fails_visibly_when_the_codex_tier_is_unavailable(tmp_path, monke
     monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -274,95 +252,52 @@ def test_ingest_fails_visibly_when_the_codex_tier_is_unavailable(tmp_path, monke
     assert not list((tmp_path / "notes").glob("*.md")), "실패했는데 회의록이 생기면 안 된다"
 
 
-def test_sensitive_cards_and_milestones_sanitized(tmp_path):
-    raw = (FIXTURES / "recorded-patent.json").read_text(encoding="utf-8")
-    extraction = meeting_llm.parse_extraction(raw)
-    cards = meeting_actions.plan_cards(
-        extraction, sensitive=True, note_name="n.md", ref="deadbeef"
-    )
-    assert len(cards) == len(extraction.todos)
-    state = tmp_path / "milestones.yaml"
-    meeting_actions.update_milestones(
-        state, extraction.milestones, sensitive=True, note_name="n.md",
-        ref="deadbeef", now=NOW,
-    )
-    public = " ".join(card.title + card.body for card in cards) + state.read_text()
-    for banned in ("특허", "출원", "청구항", "claim", "변리사", "선행기술", "기술이전"):
-        assert banned not in public
-    assert meeting_actions.format_team_post(
-        extraction.others, agent_id="a", ref="deadbeef", now=NOW
-    ) is not None  # caller suppresses it for sensitive docs (cli guard)
-
-# --- item-level card recheck (sensitive docs) -----------------------------------
+def test_patent_keyword_meeting_publishes_cards_milestones_and_team_post(
+    tmp_path, monkeypatch, capsys
+):
+    """특허 낱말이 든 회의도 카드·마일스톤·#team 게시가 일반 회의와 똑같다."""
+    monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
+    monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
+    monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
+    monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
+    monkeypatch.setenv("MEETING_CONFIG", str(tmp_path / "absent.json"))
+    rc = meeting_cli.main([
+        "ingest", "--file", str(FIXTURES / "meeting-patent.md"),
+        "--recorded-response", str(FIXTURES / "recorded-patent.json"),
+        "--offline", "--notify-channel", "TEST",
+    ])
+    assert rc == 0
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert "sensitive" not in result
+    cards = (tmp_path / "plan/kanban-plan.jsonl").read_text(encoding="utf-8")
+    assert "청구항(claim) 초안 작성 (마감 2026-07-28)" in cards
+    assert "[민감" not in cards
+    state = (tmp_path / "state/milestones.yaml").read_text(encoding="utf-8")
+    assert "특허 출원서 제출" in state
+    assert "선행기술 조사" in (tmp_path / "plan/team-post.txt").read_text(encoding="utf-8")
+    notify = (tmp_path / "plan/notify.txt").read_text(encoding="utf-8")
+    assert "회의록 처리 완료: meeting-patent" in notify
+    note = next((tmp_path / "notes").glob("*.md")).read_text(encoding="utf-8")
+    assert "patent-sensitive" not in note
+    assert "# 발명 회의" in note.split(meeting_minutes.APPENDIX_HEADING)[0]
 
 
 def _todo(title, deadline, basis):
     return meeting_llm.ActionItem(title=title, deadline=deadline, basis=basis)
 
 
-def test_sensitive_clean_item_gets_informative_card():
-    card = meeting_actions.sanitize_card(
-        _todo("주간 보고서 정리", "2026-08-01", "회의에서 합의"),
-        sensitive=True, seq=1, note_name="n.md", ref="deadbeef", rules=RULES,
-    )
-    assert card.title == "[민감회의] 주간 보고서 정리 (마감 2026-08-01)"
-    assert card.body.startswith("근거: 회의에서 합의")
-    assert "출처: ~/notes/meetings/n.md" in card.body
-    assert card.idempotency_key == "meeting:deadbeef:todo:1"
-    assert not meeting_gate.evaluate(card.title + "\n" + card.body, RULES).tags
-
-
-def test_sensitive_item_hit_stays_masked_byte_identical():
-    item = _todo("청구항 초안 작성", "2026-07-28", "청구항 초안은 차가 7/28까지")
-    with_rules = meeting_actions.sanitize_card(
-        item, sensitive=True, seq=2, note_name="n.md", ref="deadbeef", rules=RULES
-    )
-    legacy = meeting_actions.sanitize_card(
-        item, sensitive=True, seq=2, note_name="n.md", ref="deadbeef"
-    )
-    assert with_rules == legacy
-    assert with_rules.title == "[민감] 회의 액션아이템 2"
-    assert "청구항" not in with_rules.title + with_rules.body
-
-
-def test_sensitive_recheck_covers_deadline_and_basis():
-    card = meeting_actions.sanitize_card(
-        _todo("미팅 준비", "2026-08-05", "변리사 미팅은 8/5"),
-        sensitive=True, seq=1, note_name="n.md", ref="deadbeef", rules=RULES,
-    )
-    assert card.title == "[민감] 회의 액션아이템 1"
-    assert "변리사" not in card.title + card.body
-
-
-def test_sensitive_rules_none_fail_closed():
-    card = meeting_actions.sanitize_card(
-        _todo("주간 보고서 정리", "2026-08-01", "회의에서 합의"),
-        sensitive=True, seq=1, note_name="n.md", ref="deadbeef", rules=None,
-    )
-    assert card.title == "[민감] 회의 액션아이템 1"
-
-
-def test_informative_title_prefix_inside_clip():
-    card = meeting_actions.sanitize_card(
-        _todo("가" * 120, None, "근거"),
-        sensitive=True, seq=1, note_name="n.md", ref="deadbeef", rules=RULES,
-    )
-    assert card.title.startswith("[민감회의] ")
-    assert len(card.title) <= 80
-
-
-def test_plan_cards_mixed_items_and_passthrough():
+def test_plan_cards_keep_titles_and_idempotency_keys():
     extraction = meeting_llm.Extraction(
         todos=(
             _todo("주간 보고서 정리", "2026-08-01", "회의에서 합의"),
             _todo("기술이전 검토 자료 정리", None, "기술이전 가능성 검토"),
         )
     )
-    cards = meeting_actions.plan_cards(
-        extraction, sensitive=True, note_name="n.md", ref="deadbeef", rules=RULES
-    )
-    assert cards[0].title.startswith("[민감회의] ")
-    assert cards[1].title == "[민감] 회의 액션아이템 2"
+    cards = meeting_actions.plan_cards(extraction, note_name="n.md", ref="deadbeef")
+    assert [card.title for card in cards] == [
+        "주간 보고서 정리 (마감 2026-08-01)", "기술이전 검토 자료 정리",
+    ]
     assert [card.idempotency_key for card in cards] == [
         "meeting:deadbeef:todo:1",
         "meeting:deadbeef:todo:2",
@@ -376,7 +311,7 @@ def test_note_filename_uses_the_extracted_meeting_date(tmp_path):
 
     note = meeting_actions.write_note(
         tmp_path, label="회의", kind="md", original_text="원문", extraction=extraction,
-        sensitive=False, ref="deadbeef", now=NOW,
+        ref="deadbeef", now=NOW,
     )
 
     assert note.name == "2026-07-01-meeting-deadbeef.md"
@@ -391,7 +326,7 @@ def test_note_filename_falls_back_to_processing_date_without_meeting_date(
     )
     note = meeting_actions.write_note(
         tmp_path, label="회의", kind="md", original_text="원문", extraction=extraction,
-        sensitive=False, ref="deadbeef", now=NOW,
+        ref="deadbeef", now=NOW,
     )
 
     assert note.name == "2026-07-15-meeting-deadbeef.md"
@@ -403,11 +338,11 @@ def test_rerunning_a_meeting_ref_updates_one_canonical_note(tmp_path):
     )
     first = meeting_actions.write_note(
         tmp_path, label="회의", kind="md", original_text="첫 원문", extraction=extraction,
-        sensitive=False, ref="deadbeef", now=NOW,
+        ref="deadbeef", now=NOW,
     )
     second = meeting_actions.write_note(
         tmp_path, label="회의", kind="md", original_text="갱신 원문", extraction=extraction,
-        sensitive=False, ref="deadbeef", now=NOW.replace(day=16),
+        ref="deadbeef", now=NOW.replace(day=16),
     )
 
     assert first == second
@@ -417,7 +352,6 @@ def test_rerunning_a_meeting_ref_updates_one_canonical_note(tmp_path):
 def test_owner_action_card_plan_blocks_dispatch_after_creation():
     card = meeting_actions.sanitize_card(
         _todo("참석자 단체 채팅방 만들기", None, "담당자 미정"),
-        sensitive=False,
         seq=1,
         note_name="n.md",
         ref="deadbeef",
@@ -441,11 +375,11 @@ def test_note_keeps_original_detail(tmp_path):
     extraction = meeting_llm.parse_extraction(raw)
     original = (FIXTURES / "meeting-patent.md").read_text(encoding="utf-8")
     note = meeting_actions.write_note(
-        tmp_path, label="민감 회의", kind="md", original_text=original,
-        extraction=extraction, sensitive=True, ref="deadbeef", now=NOW,
+        tmp_path, label="발명 회의", kind="md", original_text=original,
+        extraction=extraction, ref="deadbeef", now=NOW,
     )
     content = note.read_text(encoding="utf-8")
-    assert "청구항" in content and "patent-sensitive" in content
+    assert "청구항" in content and "patent-sensitive" not in content
     assert note.stat().st_mode & 0o777 == 0o600
 
 
@@ -470,10 +404,10 @@ def test_milestones_dedupe(tmp_path):
         (FIXTURES / "recorded-clean.json").read_text(encoding="utf-8")
     ).milestones
     first = meeting_actions.update_milestones(
-        state, items, sensitive=False, note_name="n.md", ref="r1", now=NOW
+        state, items, note_name="n.md", ref="r1", now=NOW
     )
     second = meeting_actions.update_milestones(
-        state, items, sensitive=False, note_name="n.md", ref="r1", now=NOW
+        state, items, note_name="n.md", ref="r1", now=NOW
     )
     assert first == len(items) and second == 0
     assert state.read_text().count("  - title: ") == len(items)
@@ -710,7 +644,6 @@ def test_explicit_meeting_command_calls_every_artifact_producer(tmp_path, monkey
     """
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -746,7 +679,6 @@ def test_explicit_meeting_command_still_creates_offline_outputs(tmp_path, monkey
     monkeypatch.setattr(plugin, "_config", lambda: {"owner_id": "OWNER1"})
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -835,7 +767,6 @@ def test_plugin_fail_closed_after_trigger(monkeypatch):
 def _meeting_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -1010,7 +941,6 @@ def test_cli_notify_falls_back_to_the_channel_when_helper_is_unavailable(monkeyp
 def _run_meeting_ingest(tmp_path, monkeypatch, fixture, response, *, publish=None):
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -1071,14 +1001,15 @@ def test_meeting_drive_publish_disabled_makes_zero_runner_calls(tmp_path, monkey
     assert calls == []
 
 
-def test_sensitive_meeting_skips_drive_publish(tmp_path, monkeypatch, capsys):
+def test_patent_keyword_meeting_is_published_to_drive(tmp_path, monkeypatch, capsys):
+    """민감 차단이 없다 — 특허 낱말이 든 회의록도 Drive 에 한 번 발행된다."""
     calls = []
     assert _run_meeting_ingest(
         tmp_path, monkeypatch, "meeting-patent.md", "recorded-patent.json",
         publish=lambda *args, **kwargs: calls.append((args, kwargs)),
     ) == 0
-    assert calls == []
-    assert capsys.readouterr().out.count("DRIVE-PUBLISH-SKIP reason=sensitive") == 1
+    assert [args[:2] for args, _ in calls] == [("meeting", "회의록-meeting-patent")]
+    assert "DRIVE-PUBLISH-SKIP" not in capsys.readouterr().out
 
 
 def test_drive_facade_import_failure_does_not_block_local_save(tmp_path, monkeypatch, capsys):
@@ -1133,29 +1064,9 @@ def test_note_is_published_under_the_meeting_label(tmp_path: Path, monkeypatch) 
     note = tmp_path / "2026-08-26-meeting-3efbec52.md"
     note.write_text("# 회의 요약\n", encoding="utf-8")
 
-    meeting_cli._publish_note(note, label="킥오프 회의", sensitive=False, on=date(2026, 8, 26))
+    meeting_cli._publish_note(note, label="킥오프 회의", on=date(2026, 8, 26))
 
     assert calls == [("meeting", "회의록-킥오프 회의", date(2026, 8, 26))]
-
-
-def test_sensitive_meeting_is_never_published(tmp_path: Path, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("DRIVE_PUBLISH_ENABLED", "0")
-    from datetime import date
-
-    if str(REPO) not in sys.path:
-        sys.path.insert(0, str(REPO))
-    from automation import drive_outputs
-
-    def explode(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("a sensitive meeting must never reach Drive")
-
-    monkeypatch.setattr(drive_outputs, "publish_best_effort", explode)
-    note = tmp_path / "2026-08-26-meeting-aaaaaaaa.md"
-    note.write_text("# 회의 요약\n", encoding="utf-8")
-
-    meeting_cli._publish_note(note, label="특허 회의", sensitive=True, on=date(2026, 8, 26))
-
-    assert "DRIVE-PUBLISH-SKIP reason=sensitive" in capsys.readouterr().out
 
 
 def test_note_is_published_under_its_project(tmp_path: Path, monkeypatch) -> None:
@@ -1175,10 +1086,10 @@ def test_note_is_published_under_its_project(tmp_path: Path, monkeypatch) -> Non
     note.write_text("# 회의 요약\n", encoding="utf-8")
 
     meeting_cli._publish_note(
-        note, label="킥오프", sensitive=False, on=date(2026, 8, 26), project="해양고신뢰성"
+        note, label="킥오프", on=date(2026, 8, 26), project="합성과제"
     )
 
-    assert calls == [("회의록-킥오프", "해양고신뢰성")]
+    assert calls == [("회의록-킥오프", "합성과제")]
 
 
 # --- 산출물 출처는 정본 회의록이다 (2026-08-26 소유자 지시) -----------------------
@@ -1191,7 +1102,7 @@ def _rendered_note(original_text: str) -> str:
     )
     return meeting_minutes.render(
         label="출처 규약", kind="md", extraction=extraction,
-        original_text=original_text, sensitive=False, ref="deadbeef", now=NOW,
+        original_text=original_text, ref="deadbeef", now=NOW,
     )
 
 
@@ -1226,7 +1137,7 @@ def test_card_points_at_the_finalized_minutes_first():
     """카드의 출처는 Drive 정본을 먼저 가리켜야 한다 — 로컬 노트는 전사본을 안고 있다."""
     card = meeting_actions.sanitize_card(
         _todo("공정표 템플릿 작성", "2026-09-02", "템플릿을 잡아 드리겠다"),
-        sensitive=False, seq=1, note_name="n.md", ref="deadbeef",
+        seq=1, note_name="n.md", ref="deadbeef",
         project="해양고신뢰성",
     )
 
@@ -1240,10 +1151,10 @@ def test_card_without_project_keeps_the_existing_body():
     """과제명을 모르면 기존 본문 그대로 — 없는 경로를 지어내지 않는다."""
     item = _todo("공정표 템플릿 작성", "2026-09-02", "템플릿을 잡아 드리겠다")
     with_default = meeting_actions.sanitize_card(
-        item, sensitive=False, seq=1, note_name="n.md", ref="deadbeef"
+        item, seq=1, note_name="n.md", ref="deadbeef"
     )
     explicit_empty = meeting_actions.sanitize_card(
-        item, sensitive=False, seq=1, note_name="n.md", ref="deadbeef", project=""
+        item, seq=1, note_name="n.md", ref="deadbeef", project=""
     )
 
     assert with_default == explicit_empty
@@ -1256,7 +1167,7 @@ def test_plan_cards_forwards_the_project_to_every_card():
         todos=(_todo("가", None, "나"), _todo("다", None, "라"))
     )
     cards = meeting_actions.plan_cards(
-        extraction, sensitive=False, note_name="n.md", ref="deadbeef",
+        extraction, note_name="n.md", ref="deadbeef",
         project="해양고신뢰성",
     )
 
@@ -1317,7 +1228,6 @@ def test_the_minutes_body_is_corrected_and_the_appendix_transcript_is_not(
     monkeypatch.setenv("TERM_CORRECTION_LOG", str(log))
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -1366,7 +1276,6 @@ def test_the_transcript_handed_to_the_note_is_the_uncorrected_one(tmp_path, monk
     monkeypatch.setenv("TERM_CORRECTION_LOG", str(tmp_path / "corrections.jsonl"))
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))

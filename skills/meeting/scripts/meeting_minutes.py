@@ -98,8 +98,8 @@ def _suffix(marker: str) -> str:
     return f" {marker}" if marker else ""
 
 
-def _frontmatter(*, label: str, sensitive: bool, stamp: str) -> list[str]:
-    tags = ["meeting", "w2-3"] + (["patent-sensitive"] if sensitive else [])
+def _frontmatter(*, label: str, stamp: str) -> list[str]:
+    tags = ["meeting", "w2-3"]
     return [
         "---",
         f"title: {_yaml_str(f'회의: {label}')}",
@@ -117,14 +117,13 @@ def _header(
     label: str,
     kind: str,
     extraction: Extraction,
-    sensitive: bool,
     ref: str,
     now: datetime,
     slide_notes: tuple[str, ...],
     reference_notes: tuple[str, ...] = (),
 ) -> list[str]:
     meeting = extraction.meeting
-    heading = label if sensitive else (meeting.title.strip() or label)
+    heading = meeting.title.strip() or label
     rows = [("일시", meeting.date or now.strftime("%Y-%m-%d"))]
     for name, value in (("장소", meeting.place), ("참석", ", ".join(meeting.attendees)),
                         ("발표자료", ", ".join(slide_notes)), ("참고자료", ", ".join(reference_notes))):
@@ -255,7 +254,6 @@ def render(
     kind: str,
     extraction: Extraction,
     original_text: str,
-    sensitive: bool,
     ref: str,
     now: datetime,
     evidence_footer: str = "",
@@ -266,7 +264,7 @@ def render(
 ) -> str:
     bases = _Bases()
     header = _header(
-        label=label, kind=kind, extraction=extraction, sensitive=sensitive,
+        label=label, kind=kind, extraction=extraction,
         ref=ref, now=now, slide_notes=slide_notes, reference_notes=reference_notes,
     )
     if template is None:
@@ -294,7 +292,7 @@ def render(
             body += action_sections
         header = header[:2]
     lines = [
-        *_frontmatter(label=label, sensitive=sensitive, stamp=now.isoformat(timespec="seconds")),
+        *_frontmatter(label=label, stamp=now.isoformat(timespec="seconds")),
         *header, *body,
         *_appendix(bases, evidence_footer=evidence_footer, original_text=original_text),
     ]

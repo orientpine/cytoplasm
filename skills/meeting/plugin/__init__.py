@@ -43,7 +43,7 @@ ENV_SECRETS: Final = Path("~/.env.secrets").expanduser()
 #: API 키가 아니라 HOME 아래 저장소에 있으므로, 여기에 넣을 게이트웨이 키는 없다.
 _CHILD_CREDENTIALS: Final = frozenset({"DISCORD_BOT_TOKEN"})
 
-ACK_MESSAGE: Final = "회의록 접수 — 민감도 게이트 통과 후 처리 중입니다 (수 분 내 결과 통지)."
+ACK_MESSAGE: Final = "회의록 접수 — 처리 중입니다 (수 분 내 결과 통지)."
 ERROR_MESSAGE: Final = (
     "회의록 처리 시작에 실패했습니다. 안전을 위해 본문은 에이전트로 전달하지 않았습니다. "
     "잠시 후 다시 시도해 주세요."
@@ -246,7 +246,7 @@ def _thread_for(chat_id: str, message_id: str) -> str:
 
     게이트웨이 플러그인 프로세스는 INTEROP_RUNTIME 경로를 보장받지 못하므로
     `automation.interop.origin_notice`의 앵커 규칙(메시지 스레드 우선, 400=재사용)을
-    여기서 같은 의미로 적용한다 — 이름은 민감도 판정 전이므로 내용 없는 고정값.
+    여기서 같은 의미로 적용한다 — 이름은 내용을 읽기 전이므로 내용 없는 고정값.
     """
     try:
         thread = _discord_post(

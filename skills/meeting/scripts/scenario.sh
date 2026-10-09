@@ -12,7 +12,6 @@ cd "$work"
 
 export MEETING_NOTES_DIR="$work/notes"
 export MEETING_STATE_FILE="$work/state/milestones.yaml"
-export MEETING_RULES_FILE="$skill_dir/configs/sensitivity-rules.yaml"
 export MEETING_PROMPT_FILE="$skill_dir/prompts/meeting-extraction-v4.md"
 export MEETING_LOG_DIR="$work/logs"
 export MEETING_PLAN_DIR="$work/plan"
@@ -39,31 +38,16 @@ head -1 "$work/plan/team-post.txt" | grep -q '```json' || { echo "FAIL team post
 grep -q '회의록 처리 완료' "$work/plan/notify.txt" || { echo "FAIL notify"; exit 1; }
 grep -q '"verdict": "hit"' "$work/notes/"*.evidence.json || { echo "FAIL evidence sidecar"; exit 1; }
 
-echo "[3] patent md ingest -> sensitive, sanitized card/state, NO team post"
+echo "[3] patent-keyword md ingest -> handled like any meeting (cards, milestones, team post)"
 rm -rf "$work/plan" && mkdir -p "$work/plan"
 rm -f "$work/state/milestones.yaml"
-python3 "$cli" ingest --file "$fx/meeting-patent.md" \
-  --recorded-response "$fx/recorded-patent.json" --offline --notify-channel SANDBOX \
-  | grep -q '"sensitive": true' || { echo "FAIL not sensitive"; exit 1; }
-for banned in 특허 출원 청구항 claim 변리사 기술이전 선행기술; do
-  if grep -qi "$banned" "$work/plan/kanban-plan.jsonl" "$work/state/milestones.yaml" "$work/plan/notify.txt"; then
-    echo "FAIL sanitization leak: $banned"; exit 1
-  fi
-done
-[ ! -f "$work/plan/team-post.txt" ] || { echo "FAIL sensitive team post exists"; exit 1; }
-grep -q '청구항' "$work/notes/"*.md || { echo "FAIL original detail missing from note"; exit 1; }
-
-echo "[4] route fail-closed guard (extraction refuses a non-Codex route)"
-python3 - "$skill_dir" <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1] + "/scripts")
-import meeting_llm
-try:
-    meeting_llm.call_codex("x", sensitive=True, provider="third-party-tier")
-except meeting_llm.PatentRoutingError:
-    sys.exit(0)
-sys.exit(1)
-PY
+out=$(python3 "$cli" ingest --file "$fx/meeting-patent.md" \
+  --recorded-response "$fx/recorded-patent.json" --offline --notify-channel SANDBOX)
+echo "$out" | tail -1 | grep -q '"sensitive"' && { echo "FAIL sensitivity verdict still reported"; exit 1; }
+grep -q '청구항(claim) 초안 작성' "$work/plan/kanban-plan.jsonl" || { echo "FAIL card title masked"; exit 1; }
+grep -q '특허 출원서 제출' "$work/state/milestones.yaml" || { echo "FAIL milestone masked"; exit 1; }
+head -1 "$work/plan/team-post.txt" | grep -q '```json' || { echo "FAIL team post suppressed"; exit 1; }
+if grep -q 'patent-sensitive' "$work/notes/"*.md; then echo "FAIL sensitivity tag on note"; exit 1; fi
 
 echo "[5] 30MiB reject"
 dd if=/dev/zero of="$work/big.md" bs=1 count=1 seek=31457279 status=none
@@ -82,7 +66,7 @@ python3 "$cli" ingest --file "$work/text.pdf" \
   --recorded-response "$fx/recorded-clean.json" --offline \
   | grep -q '"provider": "recorded"' || { echo "FAIL pdf ingest"; exit 1; }
 
-echo "[8] slides deck labels the note, keeps the body clean, and joins the gate"
+echo "[8] slides deck labels the note and keeps the body clean"
 rm -rf "$work/notes" "$work/plan" && mkdir -p "$work/plan"
 printf '# 킥오프\n과제명: AUTOPHAGY-2026 자율 연구 에이전트\n' > "$work/deck.md"
 python3 "$cli" ingest --file "$fx/meeting-clean.md" --slides "$work/deck.md" \
@@ -93,11 +77,5 @@ grep -q '^## 부록 · 근거와 원문$' "$note" || { echo "FAIL appendix bound
 awk '/^## 부록 · 근거와 원문$/{exit} /근거:/{leak=1} END{exit leak?1:0}' "$note" \
   || { echo "FAIL inline evidence leaked into the minutes body"; exit 1; }
 grep -q '^- \[근1\] ' "$note" || { echo "FAIL evidence not defined in the appendix"; exit 1; }
-
-rm -rf "$work/notes"
-printf '청구항 1항의 범위를 넓힌다\n' > "$work/patent-deck.md"
-python3 "$cli" ingest --file "$fx/meeting-clean.md" --slides "$work/patent-deck.md" \
-  --recorded-response "$fx/recorded-clean.json" --offline \
-  | grep -q '"sensitive": true' || { echo "FAIL patent slides bypassed the gate"; exit 1; }
 
 echo "SCENARIO-PASS"

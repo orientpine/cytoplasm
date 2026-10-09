@@ -94,7 +94,6 @@ def _render(extraction: meeting_llm.Extraction) -> str:
         kind="md",
         extraction=extraction,
         original_text="[00:03:12] 화자1 · 김민수\n저는 김민수입니다.",
-        sensitive=False,
         ref="a1b2c3d4",
         now=NOW,
     )
@@ -142,7 +141,6 @@ def test_ingest_prints_speakers_in_the_final_json_line(tmp_path, monkeypatch, ca
     for name, value in (
         ("MEETING_NOTES_DIR", tmp_path / "notes"),
         ("MEETING_STATE_FILE", tmp_path / "state/milestones.yaml"),
-        ("MEETING_RULES_FILE", REPO / "configs/sensitivity-rules.yaml"),
         ("MEETING_PROMPT_FILE", SKILL / "prompts/meeting-extraction-v6.md"),
         ("MEETING_LOG_DIR", tmp_path / "logs"),
         ("MEETING_PLAN_DIR", tmp_path / "plan"),
@@ -173,7 +171,6 @@ def test_ingest_prints_an_empty_speaker_list_when_the_transcript_has_none(
     for name, value in (
         ("MEETING_NOTES_DIR", tmp_path / "notes"),
         ("MEETING_STATE_FILE", tmp_path / "state/milestones.yaml"),
-        ("MEETING_RULES_FILE", REPO / "configs/sensitivity-rules.yaml"),
         ("MEETING_PROMPT_FILE", SKILL / "prompts/meeting-extraction-v6.md"),
         ("MEETING_LOG_DIR", tmp_path / "logs"),
         ("MEETING_PLAN_DIR", tmp_path / "plan"),

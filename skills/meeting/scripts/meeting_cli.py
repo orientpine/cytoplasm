@@ -1,4 +1,4 @@
-"""Meeting ingest CLI (W2-3): file/body -> gate -> LLM -> Kanban/milestones/#team.
+"""Meeting ingest CLI (W2-3): file/body -> LLM -> Kanban/milestones/#team.
 
 Deterministic pipeline wrapper. All content stays out of argv/logs; the
 routing log records metadata only (filenames, counts, provider), never text.
@@ -30,7 +30,6 @@ import meeting_governed
 import meeting_actions
 import meeting_evidence
 import meeting_extract
-import meeting_gate
 import meeting_llm
 import meeting_knowledge
 import meeting_reference
@@ -56,12 +55,9 @@ def _drive_title(label: str) -> str:
 
 
 def _publish_note(
-    note_path: Path, *, label: str, sensitive: bool, on: date, project: str = ""
+    note_path: Path, *, label: str, on: date, project: str = ""
 ) -> None:
     """Best-effort Drive publication — never touches the local note or the exit code."""
-    if sensitive:
-        print("DRIVE-PUBLISH-SKIP reason=sensitive")
-        return
     root = str(runtime_root())
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -347,16 +343,9 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
         _log(record)
         return refusal.exit_code
 
-    rules = meeting_gate.load_rules(
-        _env_path(
-            "MEETING_RULES_FILE",
-            "/srv/autophagy-skills/live/meeting/configs/sensitivity-rules.yaml",
-        )
-    )
     pack = evidence_pack
     if args.with_evidence and pack is None:
         pack = meeting_knowledge.collect(label, extracted.text, extracted.text)
-    evidence_text = "\n".join(item.content for item in getattr(pack, "items", ()))
     decks = tuple(
         meeting_slides.extract_deck(Path(path))
         for path in (getattr(args, "slides", None) or ())
@@ -366,23 +355,17 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
         meeting_reference.query(label, getattr(args, "project", "") or "", extracted.text)
     )
     reference_notes = meeting_reference.note_labels(references)
-    # Slide material joins the gate input: a patent deck must be confined too.
-    gate = meeting_gate.evaluate(
-        "\n".join((extracted.text, evidence_text, meeting_slides.gate_text(decks + references))),
-        rules,
-    )
     ref = hashlib.sha256(extracted.text.encode("utf-8")).hexdigest()[:8]
     record.update(
         {"kind": extracted.kind, "bytes": extracted.input_bytes, "ref": ref,
-         "sensitive": gate.sensitive, "tags": list(gate.tags), "slides": list(slide_notes),
-         "references": list(reference_notes)}
+         "slides": list(slide_notes), "references": list(reference_notes)}
     )
     project = (getattr(args, "project", "") or "").strip() or (pending.project if pending else "")
     # 플러그인(`!meeting`)은 --project 를 넘길 수 없다 — 라벨이 유일한 단서이고,
     # 없는 과제를 지어내지 않도록 실재하는 과제 폴더와 일치할 때만 채택된다.
-    if not project and not gate.sensitive:
+    if not project:
         project = meeting_project.detect_project(label)
-    board = meeting_project.load_board(project, sensitive=gate.sensitive)
+    board = meeting_project.load_board(project)
     open_rows = tuple(row for row in board.records if row.status == meeting_action_db.OPEN)
 
     recorded = (
@@ -393,7 +376,6 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     try:
         extraction, provider = meeting_llm.extract(
             extracted.text,
-            sensitive=gate.sensitive,
             prompt_path=_env_path(
                 "MEETING_PROMPT_FILE",
                 "/srv/autophagy-skills/live/meeting/prompts/meeting-extraction-v6.md",
@@ -404,7 +386,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
             slides=meeting_reference.merged_prompt(meeting_slides.prompt_block(decks), references),
             open_actions=meeting_action_db.prompt_block(open_rows),
         )
-    except (meeting_llm.ExtractionParseError, meeting_llm.PatentRoutingError, OSError) as error:
+    except (meeting_llm.ExtractionParseError, OSError) as error:
         notice = "회의록 추출 실패: LLM 응답을 해석하지 못했습니다. 다시 시도해 주세요."
         print(notice)
         _notify(
@@ -423,7 +405,6 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     # 다른 표기로 남는다. 부록에 실릴 `extracted.text` 는 여기서도 그대로다.
     extraction = _correct_terms(extraction, label=label, project=project)
 
-    sensitive_label = "민감 회의" if gate.sensitive else label
     items = meeting_action_db.items_from(extraction.todos, extraction.others)
     on = meeting_actions.note_date(extraction, now=now)
     action_id_exhausted = False
@@ -449,11 +430,10 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     )
     note_path = meeting_actions.write_note(
         _env_path("MEETING_NOTES_DIR", "~/notes/meetings"),
-        label=sensitive_label,
+        label=label,
         kind=extracted.kind,
         original_text=extracted.text,
         extraction=extraction,
-        sensitive=gate.sensitive,
         ref=ref,
         now=now,
         evidence_footer=evidence_footer,
@@ -474,12 +454,11 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
             _publish_note(
                 note_path,
                 label=label,
-                sensitive=gate.sensitive,
                 on=date.fromisoformat(match.group(1)),
                 project=project,
             )
     except Exception:
-        # A malformed date or unavailable gate/publisher is fail-closed; local save stands.
+        # A malformed date or unavailable publisher skips the upload; local save stands.
         print("DRIVE-PUBLISH-SKIP reason=gate-unavailable")
 
     if merged is not None:
@@ -491,8 +470,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
             meeting_project.save_board(board, merged.records)
 
     cards = meeting_actions.plan_cards(
-        extraction, sensitive=gate.sensitive, note_name=note_path.name, ref=ref,
-        rules=rules, project=project,
+        extraction, note_name=note_path.name, ref=ref, project=project,
     )
     card_ids: list[str] = []
     if offline_dir is not None:
@@ -510,7 +488,6 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     milestones_added = meeting_actions.update_milestones(
         _env_path("MEETING_STATE_FILE", "~/state/milestones.yaml"),
         extraction.milestones,
-        sensitive=gate.sensitive,
         note_name=note_path.name,
         ref=ref,
         now=now,
@@ -520,7 +497,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     team_post = meeting_actions.format_team_post(
         extraction.others, agent_id=str(config.get("agent_id", "agent")), ref=ref, now=now
     )
-    if team_post and not gate.sensitive:
+    if team_post:
         if offline_dir is not None:
             (offline_dir / "team-post.txt").write_text(team_post, encoding="utf-8")
         else:
@@ -531,7 +508,6 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
 
     notice = meeting_actions.format_notify(
         label=label,
-        sensitive=gate.sensitive,
         cards=len(cards),
         milestones_added=milestones_added,
         others=len(extraction.others),
@@ -543,7 +519,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     _notify(
         args.notify_channel, notice, offline_dir=offline_dir,
         message_id=str(getattr(args, "notify_message_id", "") or ""),
-        completed=meeting_result_notice.CompletedMeeting(ref, "민감 문서" if gate.sensitive else label),
+        completed=meeting_result_notice.CompletedMeeting(ref, label),
     )
 
     record.update(
@@ -559,7 +535,7 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
     )
     _log(record)
     output = {key: record[key] for key in
-              ("exit", "ref", "sensitive", "provider", "codex_called", "todos",
+              ("exit", "ref", "provider", "codex_called", "todos",
                "milestones", "others", "cards", "milestones_added", "note", "team_posted",
                "evidence_count", "layers", "slides", "actions_new", "actions_open",
                "actions_closed", "project")}
@@ -570,19 +546,6 @@ def cmd_ingest(args: argparse.Namespace, evidence_pack: object | None = None) ->
         for speaker in extraction.speakers
     ]
     print(json.dumps(output, ensure_ascii=False))
-    return 0
-
-
-def cmd_gate(args: argparse.Namespace) -> int:
-    rules = meeting_gate.load_rules(
-        _env_path(
-            "MEETING_RULES_FILE",
-            "/srv/autophagy-skills/live/meeting/configs/sensitivity-rules.yaml",
-        )
-    )
-    extracted = meeting_extract.extract_file(Path(args.file))
-    gate = meeting_gate.evaluate(extracted.text, rules)
-    print(json.dumps({"sensitive": gate.sensitive, "tags": list(gate.tags)}, ensure_ascii=False))
     return 0
 
 
@@ -625,10 +588,6 @@ def main(argv: list[str] | None = None) -> int:
     evidence.add_argument("--limit", type=int, default=8)
     evidence.add_argument("--json", action="store_true")
     evidence.set_defaults(func=meeting_evidence.command)
-
-    gate = subparsers.add_parser("gate", help="민감도 게이트 단독 평가")
-    gate.add_argument("--file", required=True)
-    gate.set_defaults(func=cmd_gate)
 
     args = parser.parse_args(argv)
     if args.command == "ingest":

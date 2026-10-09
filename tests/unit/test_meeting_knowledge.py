@@ -49,7 +49,6 @@ def _args(tmp_path: Path, response: str) -> argparse.Namespace:
 def _environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(ROOT / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(ROOT / "prompts/meeting-extraction-v3.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -120,21 +119,3 @@ def test_evidence_preview_json_exposes_only_count_and_layers(
     assert json.loads(capsys.readouterr().out) == {
         "evidence_count": 1, "layers": _pack().layers,
     }
-
-
-def test_sensitive_evidence_is_included_in_pre_llm_non_glm_route(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _environment(tmp_path, monkeypatch)
-    routes: list[bool] = []
-    original = meeting_cli.meeting_llm.extract
-
-    def capture(*args: Any, **kwargs: Any) -> tuple[Any, str]:
-        routes.append(bool(kwargs["sensitive"]))
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(meeting_cli.meeting_llm, "extract", capture)
-    response = json.dumps({"decisions": [], "todos": [], "milestones": [], "others": []})
-    sensitive = _item(content="[[PATENT-SENSITIVE-RECALL]] patent filing", sensitivity="patent-sensitive")
-    assert meeting_cli.cmd_ingest(_args(tmp_path, response), evidence_pack=_pack(item=sensitive)) == 0
-    assert routes == [True]

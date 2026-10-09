@@ -75,11 +75,6 @@ def test_meeting_plugin_default_when_env_absent_then_uses_live_cli() -> None:
     assert f'_LIVE_CLI: Final = "{_LIVE_ROOT}/meeting/scripts/meeting_cli.py"' in source
 
 
-def test_meeting_rules_defaults_when_env_absent_then_both_use_live_config() -> None:
-    source = _source("skills/meeting/scripts/meeting_cli.py")
-    assert source.count(f'"{_LIVE_ROOT}/meeting/configs/sensitivity-rules.yaml"') == 2
-
-
 def test_meeting_prompt_default_when_env_absent_then_uses_live_prompt() -> None:
     source = _source("skills/meeting/scripts/meeting_cli.py")
     assert f'"{_LIVE_ROOT}/meeting/prompts/meeting-extraction-v6.md"' in source
@@ -116,7 +111,6 @@ def test_coordination_remote_e2e_defaults_when_run_on_node_then_use_live_clis() 
         ("skills/coordination/scripts/coordinate_io.py", "CALENDAR_SCRIPTS", "calendar_scripts()", "skills/coordination/scripts"),
         ("skills/mail/scripts/triage_transport.py", "TRIAGE_CALENDAR_CLI", "_env_path('TRIAGE_CALENDAR_CLI', 'wrong')", "skills/mail/scripts"),
         ("skills/meeting/plugin/__init__.py", "MEETING_CLI", "_CLI_PATH", "skills/meeting/plugin"),
-        ("skills/meeting/scripts/meeting_cli.py", "MEETING_RULES_FILE", "_env_path('MEETING_RULES_FILE', 'wrong')", "skills/meeting/scripts"),
         ("skills/meeting/scripts/meeting_cli.py", "MEETING_PROMPT_FILE", "_env_path('MEETING_PROMPT_FILE', 'wrong')", "skills/meeting/scripts"),
         ("skills/patent-prep/scripts/patent_export_confirm_reaction_watch.py", "PATENT_SCRIPTS", "_SCRIPTS", "skills/patent-prep"),
     ),

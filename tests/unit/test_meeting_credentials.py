@@ -89,7 +89,7 @@ def test_a_missing_codex_credential_fails_the_child_visibly(
 
     # When
     with pytest.raises(meeting_llm.ExtractionUnavailableError) as failure:
-        _ = meeting_llm.call_codex("회의 본문", sensitive=False)
+        _ = meeting_llm.call_codex("회의 본문")
 
     # Then
     assert "No Codex credentials stored" in str(failure.value)

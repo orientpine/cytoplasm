@@ -144,7 +144,7 @@ def test_meeting_schema_and_minutes_exclude_zero() -> None:
                            ((meeting.SpeakerRef("화자0", "UNKNOWN"), meeting.SpeakerRef("화자1")),
                             ["- 화자: 화자1=미상"])):
         document = minutes.render(label="합성", kind="md", extraction=meeting.Extraction(speakers=refs),
-                                  original_text="가.", sensitive=False, ref="fixture", now=datetime(2026, 9, 7))
+                                  original_text="가.", ref="fixture", now=datetime(2026, 9, 7))
         assert [line for line in document.splitlines() if line.startswith("- 화자:")] == expected
 
 

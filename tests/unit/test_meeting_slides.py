@@ -143,22 +143,6 @@ def test_prompt_block_drops_unreadable_decks(tmp_path):
     assert meeting_slides.prompt_block((broken,)) == ""
 
 
-def test_gate_and_prompt_admit_exactly_the_same_decks(tmp_path):
-    readable = meeting_slides.extract_deck(_pptx(tmp_path / "d.pptx", [["과제 개요"]]))
-    broken = meeting_slides.extract_deck(tmp_path / "gone.pdf")
-    decks = (broken, readable)
-
-    gate = meeting_slides.gate_text(decks)
-    prompt = meeting_slides.prompt_block(decks)
-    gated = {deck.name for deck in decks if deck.text and deck.text in gate}
-    prompted = {deck.name for deck in decks if deck.name in prompt}
-
-    assert gated == prompted == {"d.pptx"}, "프롬프트로 나가는 자료는 예외 없이 게이트를 지나야 한다"
-    assert broken.text == "" and broken.status != "ok"
-    assert meeting_slides.gate_text((broken,)) == ""
-    assert meeting_slides.prompt_block((broken,)) == ""
-
-
 def test_prompt_block_truncates_and_says_so(tmp_path):
     path = tmp_path / "long.md"
     path.write_text("가" * (meeting_slides.MAX_PROMPT_CHARS + 500), encoding="utf-8")
@@ -194,13 +178,12 @@ def test_v4_prompt_carries_the_conservative_pronoun_rules():
         assert "```" not in body, "v1/v2 가 폐기된 이유 — 펜스/스키마 블록은 에코를 부른다"
 
 
-# --- fail-closed: 발표자료도 민감도 게이트에 합산된다 --------------------------
+# --- ingest: 발표자료는 노트에 표기되고 회의록 생성을 막지 않는다 ---------------
 
 
 def _offline_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v4.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -220,24 +203,13 @@ def _ingest(tmp_path, capsys, *extra: str) -> dict[str, object]:
     return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
 
-def test_patent_material_in_the_deck_alone_makes_the_meeting_sensitive(
-    tmp_path, monkeypatch, capsys
-):
-    _offline_env(tmp_path, monkeypatch)
-    deck = tmp_path / "deck.md"
-    deck.write_text("청구항 1항의 범위를 넓힌다", encoding="utf-8")
-    result = _ingest(tmp_path, capsys, "--slides", str(deck))
-    assert result["sensitive"] is True, "발표자료가 게이트를 우회해 무통제로 새는 경로가 열렸다"
-
-
-def test_clean_deck_keeps_the_meeting_non_sensitive_and_labels_it(
+def test_deck_is_labeled_in_the_note(
     tmp_path, monkeypatch, capsys
 ):
     _offline_env(tmp_path, monkeypatch)
     deck = tmp_path / "kickoff.md"
     deck.write_text("# 과제 개요\n실증 사이트는 A동", encoding="utf-8")
     result = _ingest(tmp_path, capsys, "--slides", str(deck))
-    assert result["sensitive"] is False
     assert result["slides"] == ["kickoff.md (1쪽)"]
     note = next((tmp_path / "notes").glob("*.md")).read_text(encoding="utf-8")
     assert "| 발표자료 | kickoff.md (1쪽) |" in note
@@ -257,8 +229,3 @@ def test_ingest_without_slides_is_unchanged(tmp_path, monkeypatch, capsys):
     assert result["slides"] == []
     note = next((tmp_path / "notes").glob("*.md")).read_text(encoding="utf-8")
     assert "발표자료" not in note
-
-
-def test_extraction_still_refuses_a_non_codex_route_for_sensitive_slide_material():
-    with pytest.raises(meeting_llm.PatentRoutingError):
-        meeting_llm.call_codex("청구항", sensitive=True, provider="third-party-tier")

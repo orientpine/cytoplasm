@@ -23,7 +23,6 @@ import meeting_slides  # noqa: E402
 def _offline_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MEETING_NOTES_DIR", str(tmp_path / "notes"))
     monkeypatch.setenv("MEETING_STATE_FILE", str(tmp_path / "state/milestones.yaml"))
-    monkeypatch.setenv("MEETING_RULES_FILE", str(REPO / "configs/sensitivity-rules.yaml"))
     monkeypatch.setenv("MEETING_PROMPT_FILE", str(REPO / "prompts/meeting-extraction-v4.md"))
     monkeypatch.setenv("MEETING_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("MEETING_PLAN_DIR", str(tmp_path / "plan"))
@@ -107,17 +106,6 @@ def test_transcript_word_reaches_the_shelf_through_ingest(
     assert asked and "센서" in asked[0].split()
 
 
-def test_patent_text_in_a_reference_alone_makes_the_meeting_sensitive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _offline_env(tmp_path, monkeypatch)
-    _shelf(monkeypatch, _deck("청구항 1항의 범위를 넓힌다"))
-
-    result = _ingest(capsys)
-
-    assert result["sensitive"] is True, "참고자료가 게이트를 우회해 GLM 으로 새는 경로가 열렸다"
-
-
 def test_reference_is_named_in_the_note_apart_from_the_deck(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -126,10 +114,9 @@ def test_reference_is_named_in_the_note_apart_from_the_deck(
     deck = tmp_path / "kickoff.md"
     deck.write_text("# 과제 개요", encoding="utf-8")
 
-    result = _ingest(capsys, "--slides", str(deck))
+    _ingest(capsys, "--slides", str(deck))
     note = next((tmp_path / "notes").glob("*.md")).read_text(encoding="utf-8")
 
-    assert result["sensitive"] is False
     assert "| 발표자료 | kickoff.md (1쪽) |" in note
     assert "| 참고자료 | 굴착 오차 관리기준.pdf (2쪽) |" in note
 
@@ -178,7 +165,6 @@ def test_a_failing_shelf_never_blocks_the_minutes(
     result = _ingest(capsys)
 
     assert result["exit"] == 0
-    assert result["sensitive"] is False
 
 
 def test_collect_turns_reference_documents_into_decks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,4 +197,3 @@ def test_collect_turns_reference_documents_into_decks(monkeypatch: pytest.Monkey
     assert [deck.name for deck in decks] == ["관리기준.pdf"]
     assert decks[0].text == "굴착 오차는 10 mm 이하."
     assert decks[0].slide_count == 3
-    assert meeting_slides.gate_text(decks) == "굴착 오차는 10 mm 이하."

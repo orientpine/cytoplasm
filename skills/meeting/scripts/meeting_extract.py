@@ -1,7 +1,6 @@
 """Deterministic text extraction for meeting inputs (md/txt/pdf).
 
-Runs BEFORE any LLM. Size gate first, then extraction, then the caller must
-run the sensitivity gate (meeting_gate) on the returned text before routing.
+Runs BEFORE any LLM. Size gate first, then extraction.
 """
 
 from __future__ import annotations
