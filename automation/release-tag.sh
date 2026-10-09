@@ -67,6 +67,9 @@ main() {
 
   ensure_signed_tag "$REPO_ROOT" "$head" \
     || release_tag_block "no signed release tag at $head — the reconciler will skip every tick"
+  # 릴리스 = 태그 + 노트. 초안은 ~/.hermes/release-notes/<sha>.md(release_note_draft_path).
+  ensure_release_note "$REPO_ROOT" "$(released_tag_at "$REPO_ROOT" "$head")" "$head" \
+    || release_tag_block "RELEASE-NOTE-FAIL: the tag is cut but has no GitHub Release note — automation/release-note.sh <tag> --notes-file <note.md>"
 
   # 사후조건 ①: 태그가 정말 그 커밋으로 peel 되는가(원격에서 다시 읽는다).
   git -C "$REPO_ROOT" fetch --quiet origin --tags || true

@@ -221,6 +221,8 @@ case "$decision_rc" in
         bash "${RELEASE_LOCAL_CI:-$SCRIPT_DIR/local_ci.sh}" verify "$head" || exit 1
         git -C "$WORKTREE" checkout --quiet --detach "$head" || exit 1
         ensure_signed_tag "$WORKTREE" "$head" "$bound_version" || exit 1
+        # 릴리스 = 태그 + 노트. 초안은 release.sh 가 승인 요청 전에 ~/.hermes/release-notes 에 두었다.
+        ensure_release_note "$WORKTREE" "$bound_version" "$head" || exit 11
         read -r -a deploy_cmd <<< "${RELEASE_COMPLETE_DEPLOY_CMD:-$WORKTREE/automation/deploy_all.sh}"
         "${deploy_cmd[@]}" --apply --wait-converge
       fi

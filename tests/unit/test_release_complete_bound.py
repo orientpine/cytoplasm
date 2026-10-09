@@ -42,6 +42,12 @@ if [[ "$*" == *" tag -s "* ]]; then
 fi
 exec /usr/bin/git "$@"
 '''
+#: Release 노트는 이미 게시된 것으로 답한다 — 완결기가 태그 뒤 노트 단계를 부르는지만 본다.
+_GH = '''#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_CALLS"
+[[ "$1 $2" == "release view" ]] || exit 97
+printf '{"body":"note","assets":[{"name":"update-trust.pub"}]}\\n'
+'''
 _CI = '''#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$CI_CALLS"
 exit "${CI_RC:-0}"
@@ -78,6 +84,7 @@ def scenario(tmp_path: Path) -> Scenario:
     binary = tmp_path / "bin"
     binary.mkdir()
     _stub(binary / "git", _GIT)
+    gh = _stub(tmp_path / "gh", _GH)
     ci = _stub(tmp_path / "ci", _CI)
     key = tmp_path / "key.pub"
     key.write_text("test signing boundary", encoding="utf-8")
@@ -92,6 +99,8 @@ def scenario(tmp_path: Path) -> Scenario:
         "UPDATE_TRUST_SIGNING_KEY": str(key),
         "GATE_DIR": str(gate), "NOTICES": str(tmp_path / "notices"),
         "TAG_CALLS": str(tmp_path / "tags"), "CI_CALLS": str(tmp_path / "ci-calls"),
+        "RELEASE_GH": str(gh), "RELEASE_NOTE_REPO": "example/repo",
+        "GH_CALLS": str(tmp_path / "gh-calls"),
     })
 
 
@@ -109,6 +118,7 @@ def test_tags_and_deploys_bound_sha_when_approved_ancestor_is_behind_tip(scenari
     # Then: only the bound SHA is tagged, deployed and marked complete.
     assert result.returncode == 0, result.stdout + result.stderr
     assert _lines(scenario.root / "tags") == [f"{scenario.bound}|v1.2.3"]
+    assert any(line.startswith("release view v1.2.3 ") for line in _lines(scenario.root / "gh-calls"))
     assert _lines(scenario.root / "ci-calls") == [f"verify {scenario.bound}"]
     assert _lines(scenario.root / "deploy-calls.log") == [
         f"{scenario.state / 'worktree'}|{scenario.bound}|--apply --wait-converge",

@@ -88,6 +88,45 @@ esac
 """
 
 
+#: GitHub Release 표면의 가짜. 릴리스마다 $GH_STATE/<tag>.json 에 본문·자산(파일 이름과 내용)을
+#: 남기고, release view 는 그 파일을 되읽는다 — 게시 뒤 read-back 이 실제로 도는지 보려면
+#: 상태가 있어야 한다. GH_CREATE_RC 로 게시 실패를 만든다.
+_GH_STUB: Final = """#!/usr/bin/env bash
+set -uo pipefail
+printf 'gh %s\\n' "$*" >> "$CALLS"
+[[ "$1" == release ]] || exit 98
+verb="$2"; tag="$3"; shift 3
+state="$GH_STATE/$tag.json"
+case "$verb" in
+  view) [[ -f "$state" ]] || exit 1; cat "$state" ;;
+  create)
+    (( GH_CREATE_RC == 0 )) || exit "$GH_CREATE_RC"
+    asset="$1"; notes=""; title=""; latest=""
+    while (( $# )); do
+      case "$1" in
+        --notes-file) notes="$2"; shift ;;
+        --title) title="$2"; shift ;;
+        --latest=*) latest="${1#--latest=}" ;;
+      esac
+      shift
+    done
+    python3 -c '
+import json, pathlib, sys
+asset, notes, title, latest, out = sys.argv[1:]
+pathlib.Path(out).write_text(json.dumps({"title": title, "latest": latest,
+    "body": pathlib.Path(notes).read_text(encoding="utf-8"),
+    "assets": [{"name": pathlib.Path(asset).name,
+                "content": pathlib.Path(asset).read_text(encoding="utf-8")}]}), encoding="utf-8")
+' "$asset" "$notes" "$title" "$latest" "$state"
+    ;;
+  *) exit 97 ;;
+esac
+"""
+
+#: 모든 릴리스는 노트 초안을 갖는다 — 없으면 release.sh 가 승인 전에 멈춘다.
+_NOTE: Final = "# 메일 다이제스트 형식 개편\n\n## 바뀐 것\n- 다이제스트가 메일 한 통에 메시지 하나를 쓴다.\n"
+
+
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ("git", "-C", str(cwd), *args),
@@ -143,6 +182,8 @@ def _run(
     record_version: str = "",
     helper_probe: str = "pass",
     allow_helper_drift: str = "0",
+    note: str | None = _NOTE,
+    gh_create_rc: str = "0",
 ) -> subprocess.CompletedProcess[str]:
     # 낡은 pending 요청이 있는 세계는 stale_head 를 준 테스트에서만 존재한다 —
     # marker 가 없으면 stub 의 request 는 예전 그대로 성공한다.
@@ -166,6 +207,14 @@ def _run(
     helper_probe_stub = tmp_path / "helper-probe-stub"
     _ = helper_probe_stub.write_text(_HELPER_PROBE_STUB, encoding="utf-8")
     helper_probe_stub.chmod(0o755)
+    gh = tmp_path / "gh-stub"
+    _ = gh.write_text(_GH_STUB, encoding="utf-8")
+    gh.chmod(0o755)
+    gh_state = tmp_path / "gh-state"
+    gh_state.mkdir(exist_ok=True)
+    if note is not None:
+        _ = (tmp_path / "note.md").write_text(note, encoding="utf-8")
+        arguments = (*arguments, "--notes-file", str(tmp_path / "note.md"))
     env = {
         **os.environ,
         "RELEASE_REPO_ROOT": str(work),
@@ -190,6 +239,12 @@ def _run(
         "ABANDON_UNBLOCKS": abandon_unblocks,
         "ABANDON_RC": abandon_rc,
         "RECORD_VERSION": record_version,
+        "RELEASE_GH": str(gh),
+        "RELEASE_NOTE_REPO": "example/repo",
+        "RELEASE_NOTES_DIR": str(tmp_path / "release-notes"),
+        "GH_STATE": str(gh_state),
+        "GH_CREATE_RC": gh_create_rc,
+        "HOME": str(tmp_path),
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
     }
@@ -556,3 +611,92 @@ def test_helper_drift_can_be_waived_for_a_deliberate_release(tmp_path: Path) -> 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "RELEASE_ALLOW_HELPER_DRIFT=1" in result.stderr
     assert "refs/tags/v1.0.0^{}" in _origin_tags(work)
+
+
+# ── 릴리스 = 태그 + Release 노트 (2026-10-09) ──────────────────────────────────────
+
+
+def _published(tmp_path: Path, tag: str) -> dict[str, object]:
+    import json
+
+    path = tmp_path / "gh-state" / f"{tag}.json"
+    assert path.exists(), f"no GitHub Release for {tag}"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_an_approved_release_publishes_its_note_with_the_tag(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+
+    result = _run(tmp_path, work, decisions="0", arguments=("--no-deploy",))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    release = _published(tmp_path, "v1.0.0")
+    assert release["title"] == "v1.0.0 — 메일 다이제스트 형식 개편"
+    assert release["latest"] == "true"
+    body = str(release["body"])
+    assert "다이제스트가 메일 한 통에 메시지 하나를 쓴다" in body
+    assert "## 포함된 PR" in body
+    assert "지문: `SHA256:" in body
+    assets = release["assets"]
+    assert isinstance(assets, list) and len(assets) == 1
+    # 서명키 경로가 개인키여도 올라가는 것은 유도한 공개키다.
+    assert assets[0]["name"] == "update-trust.pub"
+    assert str(assets[0]["content"]).startswith("ssh-ed25519 ")
+    gh_calls = [line for line in _call_lines(tmp_path) if line.startswith("gh release create")]
+    assert len(gh_calls) == 1
+
+
+def test_a_release_without_a_note_draft_is_refused_before_any_approval_traffic(
+    tmp_path: Path,
+) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+
+    result = _run(tmp_path, work, decisions="2 7 0", note=None)
+
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert "no release note draft" in result.stderr
+    assert "request" not in _calls(tmp_path)
+    assert "refs/tags/v" not in _origin_tags(work)
+
+
+def test_a_note_draft_without_a_title_line_is_refused(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+
+    result = _run(tmp_path, work, decisions="0", note="본문만 있고 제목 줄이 없다\n")
+
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert "RELEASE-NOTE-FAIL" in result.stderr
+    assert "refs/tags/v" not in _origin_tags(work)
+
+
+def test_a_failed_note_fails_the_release_and_a_rerun_publishes_it(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+    head = _git(work, "rev-parse", "HEAD")
+
+    first = _run(tmp_path, work, decisions="0", gh_create_rc="1")
+
+    assert first.returncode == 11, first.stdout + first.stderr
+    assert "RELEASE-NOTE-FAIL" in first.stderr
+    assert f"{head}\trefs/tags/v1.0.0^{{}}" in _origin_tags(work)
+    assert "deploy-all" not in _calls(tmp_path)
+
+    second = _run(tmp_path, work, decisions="0", note=None)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "## 포함된 PR" in str(_published(tmp_path, "v1.0.0")["body"])
+
+
+def test_a_previous_tag_without_a_release_note_blocks_the_next_release(
+    tmp_path: Path,
+) -> None:
+    """v1.16.0·v1.17.0 의 모양 — 노트 없이 남은 태그는 다음 릴리스가 먼저 잡는다."""
+    _origin, work = _origin_with_commits(tmp_path)
+    _git(work, "tag", "-a", "v1.0.0", "-m", "release: v1.0.0", "HEAD~1")
+    _git(work, "push", "origin", "v1.0.0")
+
+    result = _run(tmp_path, work, decisions="2 7 0")
+
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert "RELEASE-NOTE-MISSING: v1.0.0" in result.stderr
+    assert "automation/release-note.sh v1.0.0" in result.stderr
+    assert "request" not in _calls(tmp_path)
