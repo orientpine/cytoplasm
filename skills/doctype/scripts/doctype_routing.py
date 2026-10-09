@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias
 
-Destination: TypeAlias = Literal["obsidian", "drive", "local", "none", "gated"]
+Destination: TypeAlias = Literal["obsidian", "drive", "local", "none"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,11 +95,7 @@ def classify_save_request(
     request: str,
     *,
     has_file_artifact: bool,
-    sensitivity: frozenset[str] = frozenset(),
 ) -> SaveRoute:
-    if sensitivity:
-        return SaveRoute(("gated",), "sensitive-gated", False)
-
     text = request.casefold()
     save_intent = _contains_any(text, _SAVE_CUES)
     personal_note = _contains_any(text, _PERSONAL_NOTE_CUES)

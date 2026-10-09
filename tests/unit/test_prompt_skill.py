@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
+import pytest
 
 from skills.prompt.scripts import prompt_schema, prompt_store
 
@@ -17,7 +17,6 @@ def _store(tmp_path: Path) -> prompt_store.PromptStore:
             canonical_root=tmp_path / "canonical",
             overlay_root=tmp_path / "overlay",
             private_root=tmp_path / "private",
-            rules_file=REPO / "configs" / "sensitivity-rules.yaml",
         ),
         clock=lambda: NOW,
     )
@@ -40,7 +39,6 @@ def _seed(
         tags=("fixture",),
         created=NOW,
         updated=NOW,
-        sensitivity="none",
         body_ref="inline",
     )
     _ = path.write_text(prompt_schema.compose_entry(metadata, body), encoding="utf-8")
@@ -125,27 +123,22 @@ def test_add_when_id_exists_creates_next_immutable_version(tmp_path: Path) -> No
     assert first.path.read_bytes() != second.path.read_bytes()
 
 
-def test_add_when_classifier_matches_writes_private_body_and_metadata_stub(tmp_path: Path) -> None:
+@pytest.mark.parametrize("body", ["ordinary asset", "특허 patent 기밀"])
+def test_add_keywords_uses_same_inline_overlay(tmp_path: Path, body: str) -> None:
     # Given
     store = _store(tmp_path)
-    body = (REPO / "skills" / "meeting" / "fixtures" / "meeting-patent.md").read_text(
-        encoding="utf-8"
-    )
 
     # When
-    result = store.add(_draft("classified-entry", body))
+    result = store.add(_draft("keyword-entry", body))
 
     # Then
-    metadata, stub_body = prompt_schema.parse_entry(result.path.read_text(encoding="utf-8"))
-    assert result.entry.metadata.sensitivity == "patent-sensitive"
-    assert metadata.sensitivity == "patent-sensitive"
-    assert metadata.body_ref.startswith("private:")
-    assert stub_body == ""
-    assert result.private_path is not None
-    assert result.private_path.parent.stat().st_mode & 0o777 == 0o700
-    assert hashlib.sha256(result.private_path.read_bytes()).hexdigest() == hashlib.sha256(
-        body.encode("utf-8")
-    ).hexdigest()
+    metadata, stored_body = prompt_schema.parse_entry(result.path.read_text(encoding="utf-8"))
+    assert metadata.body_ref == "inline"
+    assert stored_body == body + "\n"
+    assert store.get("keyword-entry").body == body + "\n"
+    assert result.path.parent.stat().st_mode & 0o777 == 0o700
+    assert result.path.stat().st_mode & 0o777 == 0o600
+    assert not store.paths.private_root.exists()
 
 
 def test_index_when_legacy_file_exists_exposes_read_only_adapter(tmp_path: Path) -> None:
@@ -163,3 +156,38 @@ def test_index_when_legacy_file_exists_exposes_read_only_adapter(tmp_path: Path)
     assert entry.source == "legacy"
     assert entry.metadata.version == 7
     assert legacy.read_text(encoding="utf-8") == original
+
+
+def test_old_separate_body_is_read_without_moving_or_rewriting_files(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    path = _seed(store.paths.overlay_root, "old-entry", 1, "")
+    opaque = "a" * 32
+    original = path.read_text().replace(
+        "body_ref: inline", f"sensitivity: retired\nbody_ref: private:{opaque}"
+    )
+    path.write_text(original)
+    store.paths.private_root.mkdir()
+    body_path = store.paths.private_root / f"{opaque}.md"
+    body_path.write_text("stored original\n")
+
+    entry = store.get("old-entry")
+
+    assert entry.body == "stored original\n"
+    assert path.read_text() == original
+    assert body_path.read_text() == "stored original\n"
+
+
+@pytest.mark.parametrize("entry_id", ["../escape", "/absolute", "a/b"])
+def test_add_refuses_unsafe_identifiers(tmp_path: Path, entry_id: str) -> None:
+    store = _store(tmp_path)
+    with pytest.raises(prompt_schema.PromptSchemaError):
+        store.add(_draft(entry_id, "body"))
+    assert not store.paths.overlay_root.exists()
+
+
+def test_old_body_reference_cannot_traverse_private_root(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    path = _seed(store.paths.overlay_root, "old-entry", 1, "")
+    path.write_text(path.read_text().replace("body_ref: inline", "body_ref: private:../escape"))
+    with pytest.raises(prompt_schema.PromptSchemaError):
+        store.get("old-entry")

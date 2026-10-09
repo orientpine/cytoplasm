@@ -17,7 +17,6 @@ sys.path.insert(0, str(SCRIPTS.parents[1]))
 report_cli = import_module("report.scripts.report_cli")
 report_core = import_module("report.scripts.report_core")
 report_llm = import_module("report.scripts.report_llm")
-report_sensitivity = import_module("report.scripts.report_sensitivity")
 
 
 def _write_note(path: Path, title: str, body: str, timestamp: int) -> None:
@@ -83,31 +82,6 @@ def test_organize_notes_writes_a_private_weekly_index(tmp_path: Path) -> None:
     assert (index.stat().st_mode & 0o777) == 0o600
 
 
-def test_sensitive_notes_route_only_to_openai_codex(tmp_path: Path) -> None:
-    rules = report_sensitivity.load_rules(ROOT / "configs" / "sensitivity-rules.yaml")
-    note = tmp_path / "sensitive.md"
-    _write_note(note, "Private", "patent filing planning", 10)
-    selected = report_core.select_notes(tmp_path, limit=1)
-
-    route = report_sensitivity.route_notes(selected, rules)
-
-    assert route.provider == "openai-codex"
-    assert route.model == "hermes-config"
-    assert route.sensitive is True
-
-
-def test_plain_notes_route_to_the_same_single_codex_tier(tmp_path: Path) -> None:
-    """민감 판정은 그대로지만 고를 두 번째 티어가 없다 — 평범한 노트도 같은 경로다."""
-    rules = report_sensitivity.load_rules(ROOT / "configs" / "sensitivity-rules.yaml")
-    _write_note(tmp_path / "plain.md", "Plain", "weekly cell culture logs", 10)
-    selected = report_core.select_notes(tmp_path, limit=1)
-
-    route = report_sensitivity.route_notes(selected, rules)
-
-    assert (route.provider, route.model) == ("openai-codex", "hermes-config")
-    assert route.sensitive is False
-
-
 def test_report_publish_calls_use_weekly_bundle_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     report_path = tmp_path / "source.md"
     report_path.write_text("# Weekly\n\n## 자료 범위\n\nScope.\n\n## 핵심 내용\n\nAnalysis.\n", encoding="utf-8")
@@ -123,7 +97,6 @@ def test_report_publish_calls_use_weekly_bundle_contract(tmp_path: Path, monkeyp
 
     import automation.drive_outputs as drive_outputs
     monkeypatch.setattr(drive_outputs, "publish_best_effort", publish)
-    monkeypatch.setenv("REPORT_RULES_PATH", str(ROOT / "configs" / "sensitivity-rules.yaml"))
     period = date(2026, 8, 10)
     assert report_cli._report(SimpleNamespace(
         notes_root=str(tmp_path / "notes"), outputs_root=str(tmp_path / "outputs"), query="",
@@ -208,12 +181,9 @@ def test_report_child_authenticates_through_codex_oauth_home_without_any_key(
     )
     _ = binary.chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
-    route = report_sensitivity.Route(
-        provider="openai-codex", model="hermes-config", sensitive=False, tags=()
-    )
 
     # When
-    result = report_llm.generate("prompt", route)
+    result = report_llm.generate("prompt")
 
     # Then
     assert result == "draft"
@@ -237,30 +207,11 @@ def test_report_refuses_instead_of_downgrading_when_codex_credentials_are_missin
     )
     _ = binary.chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
-    route = report_sensitivity.Route(
-        provider="openai-codex", model="hermes-config", sensitive=False, tags=()
-    )
 
     # When / Then
     with pytest.raises(report_llm.LlmInvocationError) as failure:
-        _ = report_llm.generate("prompt", route)
+        _ = report_llm.generate("prompt")
     assert "No Codex credentials stored" in str(failure.value)
-
-
-def test_report_refuses_a_route_that_is_not_the_codex_oauth_tier(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """민감도 게이트의 fail-closed 층은 남는다 — 승인된 경로 외에는 호출 자체가 없다."""
-    # Given
-    monkeypatch.setenv("HOME", str(tmp_path))
-    route = report_sensitivity.Route(
-        provider="third-party-tier", model="other", sensitive=True, tags=("patent-sensitive",)
-    )
-
-    # When / Then
-    with pytest.raises(report_llm.LlmInvocationError):
-        _ = report_llm.generate("prompt", route)
-    assert not (tmp_path / ".hermes" / "report" / "logs" / "llm-calls.jsonl").exists()
 
 
 def test_cli_runs_as_main_from_hash_named_deploy_layout(tmp_path: Path) -> None:

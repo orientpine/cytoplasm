@@ -15,7 +15,6 @@ _KEYS: Final = (
     "tags",
     "created",
     "updated",
-    "sensitivity",
     "body_ref",
 )
 _ID_RE: Final = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -23,7 +22,6 @@ _TIMESTAMP_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _PRIVATE_REF_RE: Final = re.compile(r"^private:[0-9a-f]{32}$")
 _CATEGORIES: Final = frozenset(("task", "research-background"))
 _MODELS: Final = frozenset(("openai-codex", "any"))
-_SENSITIVITIES: Final = frozenset(("none", "patent-sensitive"))
 
 
 class PromptSchemaError(ValueError):
@@ -40,7 +38,6 @@ class PromptMetadata:
     tags: tuple[str, ...]
     created: str
     updated: str
-    sensitivity: str
     body_ref: str
 
 
@@ -103,12 +100,13 @@ def _header_values(header: str) -> dict[str, str | tuple[str, ...]]:
         if key in values:
             raise PromptSchemaError(f"duplicate frontmatter key: {key}")
         values[key] = _tags(raw) if key == "tags" else _scalar(raw)
+    values.pop("sensitivity", None)  # Older entries remain readable without rewriting them.
     expected: set[str] = set(_KEYS)
     actual: set[str] = set(values)
     if actual != expected or len(values) != len(_KEYS):
         missing = sorted(expected - actual)
         extra = sorted(actual - expected)
-        raise PromptSchemaError(f"frontmatter must have exactly 10 keys missing={missing} extra={extra}")
+        raise PromptSchemaError(f"frontmatter keys mismatch missing={missing} extra={extra}")
     return values
 
 
@@ -125,7 +123,6 @@ def _metadata(values: dict[str, str | tuple[str, ...]]) -> PromptMetadata:
     entry_id = validate_identifier(str(values["id"]))
     category = str(values["category"])
     model = str(values["model"])
-    sensitivity = str(values["sensitivity"])
     body_ref = str(values["body_ref"])
     purpose = str(values["purpose"])
     if category not in _CATEGORIES:
@@ -134,14 +131,10 @@ def _metadata(values: dict[str, str | tuple[str, ...]]) -> PromptMetadata:
         raise PromptSchemaError("unsupported model")
     if not purpose:
         raise PromptSchemaError("purpose must not be empty")
-    if sensitivity not in _SENSITIVITIES:
-        raise PromptSchemaError("unsupported sensitivity")
     _timestamp("created", str(values["created"]))
     _timestamp("updated", str(values["updated"]))
-    if sensitivity == "none" and body_ref != "inline":
-        raise PromptSchemaError("non-sensitive entries must use body_ref: inline")
-    if sensitivity == "patent-sensitive" and not _PRIVATE_REF_RE.fullmatch(body_ref):
-        raise PromptSchemaError("sensitive entries require an opaque private body_ref")
+    if body_ref != "inline" and not _PRIVATE_REF_RE.fullmatch(body_ref):
+        raise PromptSchemaError("body_ref must be inline or an opaque private reference")
     return PromptMetadata(
         id=entry_id,
         version=int(raw_version),
@@ -151,7 +144,6 @@ def _metadata(values: dict[str, str | tuple[str, ...]]) -> PromptMetadata:
         tags=raw_tags,
         created=str(values["created"]),
         updated=str(values["updated"]),
-        sensitivity=sensitivity,
         body_ref=body_ref,
     )
 
@@ -180,7 +172,6 @@ def compose_entry(metadata: PromptMetadata, body: str) -> str:
             "tags": metadata.tags,
             "created": metadata.created,
             "updated": metadata.updated,
-            "sensitivity": metadata.sensitivity,
             "body_ref": metadata.body_ref,
         }
     )
@@ -197,7 +188,6 @@ def compose_entry(metadata: PromptMetadata, body: str) -> str:
         "tags: [" + ", ".join(checked.tags) + "]",
         f"created: {checked.created}",
         f"updated: {checked.updated}",
-        f"sensitivity: {checked.sensitivity}",
         f"body_ref: {checked.body_ref}",
         "---",
     )

@@ -1,12 +1,12 @@
 ---
 name: report
-description: "개인 노트를 민감도 게이트 뒤 보고서·reveal.js 슬라이드·발표 대본으로 생성한다. 모든 산출물은 agent 전용 outputs에만 저장한다. W5-3."
-version: 1.0.6
+description: "개인 노트로 보고서·reveal.js 슬라이드·발표 대본을 생성한다. 모든 입력은 같은 모델·발행 경로를 사용한다. W5-3."
+version: 1.1.0
 author: autophagy-agents
 license: MIT
 metadata:
   hermes:
-    tags: [Private-Notes, Report, RevealJS, Sensitivity-Gate]
+    tags: [Private-Notes, Report, RevealJS]
 prerequisites:
   commands: [python3, hermes]
 ---
@@ -19,8 +19,7 @@ prerequisites:
 
 ## 절대 규칙
 
-1. `!report`는 선택된 **모든** 노트를 결정적 민감도 게이트로 먼저 검사한다.
-   `patent-sensitive` 적중 시 GLM을 절대 호출하지 말고 공유 Hermes 경로(계정 설정의 주 모델·폴백)만 쓴다.
+1. `!report`는 모든 노트와 근거를 공유 Hermes 경로(계정 설정의 주 모델·폴백)로 처리한다.
 2. 노트·보고서·슬라이드·대본 본문을 Discord 공개 채널, repo 또는 docs/qa에 붙이지
    않는다. CLI 출력의 경로·provider·건수만 응답에 사용한다.
 3. `!slides`, `!script`는 이미 `~/outputs/`에 있는 보고서에서만 파생 산출물을 만든다.
@@ -47,7 +46,7 @@ python3 /srv/autophagy-skills/live/report/scripts/report_cli.py script \
 ```
 
 `!report`가 `자료 부족`을 반환하면 노트를 먼저 추가하거나 `--query`를 넓힌다.
-민감 적중의 provider 결과만 DM으로 알려 주고, 원문·매칭어·본문은 표시하지 않는다.
+기존 데이터는 그대로.
 
 ## 지식 근거 규칙
 
@@ -57,12 +56,12 @@ python3 /srv/autophagy-skills/live/report/scripts/report_cli.py script \
 경유한다. 보고서의 `## 근거`는 파사드 `sources` 형식만 쓰며 원본 팩은 같은
 `report-*.evidence.json`(0600)에 보관한다. 팩 밖 `[En]` 인용은 제거하고,
 근거가 없으면 "근거 없음", 조회 불가면 "근거 수집 불가"를 표시한 뒤 생성을
-계속한다. 근거 본문도 기존 민감도 라우팅 입력에 포함한다.
+계속한다.
 
 ## Sandbox
 
 `scripts/scenario.sh`은 더미 시크릿과 임시 노트만 써서 보고서·슬라이드·대본의 구조,
-빈 노트 처리, 민감 입력의 codex 전용 라우팅, `KNOWLEDGE_FAKE_PACK` 오프라인
+빈 노트 처리, 키워드 입력의 동일 처리, `KNOWLEDGE_FAKE_PACK` 오프라인
 근거·0600 사이드카를 검증한다.
 
 ## Drive 게시 (최종본)

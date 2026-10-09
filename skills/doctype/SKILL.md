@@ -1,12 +1,12 @@
 ---
 name: doctype
 description: "문서(.docx/.hwpx/.md/.txt)의 ‘등록/스킬화/저장/개선/문서종류화’ 액션은 주제와 무관하게 항상 doctype이 수행한다. 작성/초안(draft)은 레지스트리에 등록된 이름으로 요청될 때만 doctype 소유이며, 미등록된 제안서 작성은 proposal, 개인 노트 기반 보고서/슬라이드/대본은 report, 발명신고서/선행기술은 patent-prep 스킬로 넘긴다."
-version: 1.3.10
+version: 1.4.0
 author: autophagy-agents
 license: MIT
 metadata:
   hermes:
-    tags: [Document-Type, Private-Store, Versioned-Registry, Sensitivity-Gate, Codex-Narrative]
+    tags: [Document-Type, Private-Store, Versioned-Registry, Codex-Narrative]
 prerequisites:
   commands: [python3, hermes]
 ---
@@ -26,10 +26,8 @@ prerequisites:
 1. 예시·승인본·초안의 **본문은 저장·노출 금지**이며 `DOCTYPE_PRIVATE_ROOT`(기본
    `~/.hermes/doctype/private/`, 0700/0600)에만 보관한다. registry의 canonical/overlay에는 본문 없는
    메타데이터와 `private:<opaque>` 참조만 남긴다. `--out`은 repo 내부 경로를 거부한다.
-2. 모든 예시/입력/few-shot은 LLM 호출 전에 결정적 민감도 게이트를 통과한다. 한국어 요지 추출과 서술 초안은
-   공용 Codex OAuth 클라이언트(`automation/codex_llm.py`, provider `openai-codex`)만 사용한다.
-   `call_codex`는 호출 직전에 경로가 공용 클라이언트이고 argv 가 모델·provider 를 덮지 않는지(`--provider`·`-m` 없음 —
-   모델은 계정 `~/.hermes/config.yaml` 이 정한다) 확인하고, 아니면 `PatentRoutingError`로 fail-closed한다. 주 모델이
+2. 한국어 요지 추출과 서술 초안은 공용 클라이언트(`automation/codex_llm.py`)를 사용한다.
+   모델은 계정 `~/.hermes/config.yaml` 이 정한다. 주 모델이
    답하지 못하면 Hermes가 같은 설정의 `fallback_providers`로 넘기며, 그 체인까지 모두 실패하면 `LlmCallError`로 거부한다.
 3. `register-from-example`, 같은 이름의 재등록, `refine`은 모두 최대 버전 + 1의 불변 버전을 추가한다.
    승인본은 사설 example으로 누적되어 이후 서술 작성의 few-shot이 된다. 기존 버전은 수정·삭제하지 않는다.
@@ -89,8 +87,8 @@ python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" list
 python3 "/srv/autophagy-skills/live/doctype/scripts/doctype_cli.py" show --name "<종류>"
 ```
 
-바이너리 `.hwp`와 잘못된 컨테이너는 표준 `CONVERSION-REQUEST`로 거부한다. 모든 경로는 E5의
-Codex·민감도 게이트를 그대로 따르므로 본문은 공용 Hermes 경로(Codex 주 경로 + 설정된 폴백 체인) 밖으로 나가지 않는다.
+바이너리 `.hwp`와 잘못된 컨테이너는 표준 `CONVERSION-REQUEST`로 거부한다.
+모든 문서는 같은 공용 Hermes 경로와 저장 목적지 규칙을 따른다. 기존 데이터는 그대로.
 
 ## Runtime and sandbox
 
@@ -132,7 +130,6 @@ Drive 저장은 공용 `automation.drive_outputs` 파사드를 통해 `autophagy
 3. 보고서·공고문·안내문·계획서 등 파일 산출물을 생성·저장하라고 하면서 목적지를 말하지 않으면 cha 본인 Google Drive를 기본 목적지로 사용한다. 공개·링크 공유 권한 없이 비공개로 업로드하고, 재다운로드 SHA-256과 owner-only permissions를 확인한다.
 4. 단순 대화 답변·아이디어 작성처럼 파일 저장 의도가 없는 요청은 외부 저장으로 확대 해석하지 않는다.
 5. 같은 이름의 파일은 중복 생성하지 않고 결정적 경로에서 갱신한다. 한쪽만 성공하면 완료로 보고하지 않고 부분 실패를 명시한다.
-6. `patent-sensitive` 등 별도 반출 게이트가 있는 문서는 전용 정책을 우선하며, 일반 Drive 기본값만으로 반출 승인을 간주하지 않는다.
 
 판정 불가 시 동작: **모호하면 저장하지 않고 되묻는다** — `SAVE-CLARIFY reason=... candidates=...`를 출력하고 **exit 5**로 종료하며 외부 저장 부작용은 0건이다. 선택된 목적지는 `doctype_save.save_artifact()`가 실행한다. Obsidian 목적지는 RAG 미러가 아닌 **분리된 쓰기 클론**에서 소유자 승인 게이트를 거쳐 commit·push하고 원격 read-back 해시로 검증한다(SI-5 개정). Drive 목적지는 private upsert 후 owner-only permission과 재다운로드 SHA-256를 검증한다. 어느 한쪽이라도 실패하면 `DOCTYPE-REFUSED`로 실패하며 성공을 보고하지 않는다.
 

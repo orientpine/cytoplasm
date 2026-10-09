@@ -6,13 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .topics_sensitivity import TagRule, evaluate, load_rules as _load_rules
-
 DEFAULT_STATE_PATH = Path.home() / ".hermes" / "state" / "research-topics.yaml"
-GENERALIZATION_GUIDANCE = (
-    "민감 연구어는 등록하지 않았고 외부 arXiv 조회로 전송되지 않습니다. "
-    "구체적 권리·출원 맥락 대신 일반 연구 분야명으로 바꿔 보세요."
-)
 _TOPIC_LINE = re.compile(r"^  - (.+)$")
 
 
@@ -30,17 +24,6 @@ class TopicDecision:
     duplicate: bool = False
     guidance: str = ""
     topic: str = ""
-
-
-def default_rules_path() -> Path:
-    source_path = Path(__file__).resolve().parents[3] / "configs" / "sensitivity-rules.yaml"
-    if source_path.exists():
-        return source_path
-    return Path.home() / ".hermes" / "sensitivity-rules.yaml"
-
-
-def load_rules(path: Path | None = None) -> tuple[TagRule, ...]:
-    return _load_rules(path or default_rules_path())
 
 
 def normalize_topic(topic: str) -> str:
@@ -86,17 +69,13 @@ def _write_topics(path: Path, topics: tuple[str, ...]) -> None:
     os.replace(temporary, path)
 
 
-def validate_suggestion(topic: str, rules: tuple[TagRule, ...]) -> TopicDecision:
+def validate_suggestion(topic: str) -> TopicDecision:
     normalized = normalize_topic(topic)
-    if evaluate(normalized, rules).sensitive:
-        return TopicDecision(accepted=False, guidance=GENERALIZATION_GUIDANCE)
     return TopicDecision(accepted=True, topic=normalized)
 
 
-def add_topic(path: Path, topic: str, rules: tuple[TagRule, ...]) -> TopicDecision:
-    decision = validate_suggestion(topic, rules)
-    if not decision.accepted:
-        return decision
+def add_topic(path: Path, topic: str) -> TopicDecision:
+    decision = validate_suggestion(topic)
     existing = _read_topics(path)
     if any(item.casefold() == decision.topic.casefold() for item in existing):
         return TopicDecision(accepted=True, duplicate=True, topic=decision.topic)

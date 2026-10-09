@@ -35,7 +35,6 @@ from skills.proposal.scripts import proposal_llm  # noqa: E402
 import triage_llm  # noqa: E402
 
 report_llm = import_module("report.scripts.report_llm")
-report_sensitivity = import_module("report.scripts.report_sensitivity")
 patent_llm = import_module("scripts.patent_llm")
 
 FALLBACK = {"provider": "xai-oauth", "model": "grok-4.7"}
@@ -119,7 +118,7 @@ def test_doctype_log_records_the_served_route(
     monkeypatch.setenv("DOCTYPE_HERMES_BIN", str(_stub(tmp_path / "hermes", "draft")))
     monkeypatch.setenv("DOCTYPE_LLM_LOG", str(log))
 
-    text = doctype_llm.call_codex("prompt", purpose="narrative", sensitive=True, opaque_id="d1")
+    text = doctype_llm.call_codex("prompt", purpose="narrative", opaque_id="d1")
 
     record = _last(log)
     assert text == "draft"
@@ -149,11 +148,8 @@ def test_report_log_records_the_served_route(
     _stub(tmp_path / ".local" / "bin" / "hermes", "draft")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("AUTOPHAGY_HERMES_BIN", raising=False)
-    route = report_sensitivity.Route(
-        provider="openai-codex", model="gpt-5.6-sol", sensitive=True, tags=("patent-sensitive",)
-    )
 
-    text = report_llm.generate("prompt", route)
+    text = report_llm.generate("prompt")
 
     record = _last(tmp_path / ".hermes" / "report" / "logs" / "llm-calls.jsonl")
     assert text == "draft"

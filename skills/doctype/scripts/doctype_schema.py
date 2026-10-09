@@ -18,7 +18,6 @@ _KEYS: Final = frozenset(
         "fields",
         "gist",
         "tone",
-        "sensitivity",
         "template_ref",
         "examples",
         "created",
@@ -77,7 +76,6 @@ class DocTypeMetadata:
     fields: tuple[Field, ...]
     gist: str
     tone: str
-    sensitivity: str
     template_ref: ExampleRef | None
     examples: tuple[ExampleRef, ...]
     created: str
@@ -164,9 +162,6 @@ def _metadata(raw: object) -> DocTypeMetadata:
         raise DocTypeSchemaError("version must be a positive integer")
     sections = _sections(raw.get("sections"))
     fields = _fields(raw.get("fields"), frozenset(item.key for item in sections))
-    sensitivity = _text(raw.get("sensitivity"), "sensitivity")
-    if sensitivity not in ("none", "patent-sensitive"):
-        raise DocTypeSchemaError("unsupported sensitivity")
     template_raw = raw.get("template_ref")
     template = None if template_raw is None else _example(template_raw)
     examples_raw = raw.get("examples")
@@ -184,7 +179,6 @@ def _metadata(raw: object) -> DocTypeMetadata:
         fields=fields,
         gist=_text(raw.get("gist"), "gist"),
         tone=_text(raw.get("tone"), "tone"),
-        sensitivity=sensitivity,
         template_ref=template,
         examples=examples,
         created=_timestamp("created", _text(raw.get("created"), "created")),
@@ -198,6 +192,8 @@ def parse_entry(text: str) -> DocTypeMetadata:
         raw = json.loads(text)
     except json.JSONDecodeError as error:
         raise DocTypeSchemaError("invalid document-type metadata JSON") from error
+    if isinstance(raw, dict):
+        raw.pop("sensitivity", None)  # Read old versions without rewriting stored data.
     return _metadata(raw)
 
 

@@ -14,7 +14,6 @@ export DOCTYPE_REPO_ROOT="$work/metadata-repo"
 export DOCTYPE_OVERLAY_ROOT="$work/overlay"
 export DOCTYPE_PRIVATE_ROOT="$work/private"
 export DOCTYPE_LLM_LOG="$work/logs/llm-calls.jsonl"
-export DOCTYPE_RULES_FILE="$script_dir/../configs/sensitivity-rules.yaml"
 mkdir -p "$work/metadata-repo"
 
 cat > "$work/hermes-unavailable" <<'PY'
@@ -93,10 +92,10 @@ grep -q '수행 역량을 갖추었으며' "$work/drafts/vendor.md" || fail "stu
 cli refine --name "업체추천사유서" --approved "$work/drafts/vendor.md" --note "승인본을 few-shot으로 추가" > "$work/refine.out" || fail "refine"
 grep -q 'REFINED .*version=2 .*examples=2' "$work/refine.out" || fail "version did not bump"
 
-canary="SENSITIVE-CANARY-$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
-printf '# 민감 예시\n\n특허 출원 검토 %s\n' "$canary" > "$work/sensitive.md"
-cli register-from-example --name "민감서류" --example "$work/sensitive.md" > "$work/sensitive.out" || fail "sensitive reroute"
-grep -q 'sensitivity=patent-sensitive' "$work/sensitive.out" || fail "sensitivity metadata"
+canary="BODY-CANARY-$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
+printf '# 검토 예시\n\n특허 patent 기밀 %s\n' "$canary" > "$work/keywords.md"
+cli register-from-example --name "검토서류" --example "$work/keywords.md" > "$work/keywords.out" || fail "keyword register"
+grep -q 'REGISTERED .*version=1 .*mode=narrative' "$work/keywords.out" || fail "keyword metadata"
 # 2026-09-04 공급자 이관: 강등할 2차 티어가 없다. 유일한 티어가 불가하면 거부가 유일한 답이다.
 python3 - "$script_dir" "$work/hermes-unavailable" "$work/logs/llm-calls.jsonl" <<'PY' || fail "codex unavailable fail closed"
 import os
@@ -109,7 +108,7 @@ import doctype_llm
 
 before = os.path.getsize(log)
 try:
-    doctype_llm.call_codex("never send", purpose="failclosed-probe", sensitive=True, timeout=60.0)
+    doctype_llm.call_codex("never send", purpose="failclosed-probe", timeout=60.0)
 except doctype_llm.LlmCallError:
     pass
 else:
@@ -123,9 +122,8 @@ grep -R -q "$canary" "$work/metadata-repo" "$work/overlay" && fail "document bod
 python3 - "$work/logs/llm-calls.jsonl" <<'PY' || fail "masked audit log contract"
 import json, sys
 records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-assert records and all(set(item) == {"model", "opaque_id", "provider", "purpose", "sensitive", "served_model", "served_provider", "timestamp"} for item in records)
+assert records and all(set(item) == {"model", "opaque_id", "provider", "purpose", "served_model", "served_provider", "timestamp"} for item in records)
 assert all(item["provider"] == "openai-codex" for item in records)
-assert any(item["sensitive"] for item in records)
 PY
 
 grep '^REGISTERED ' "$work/register.out"

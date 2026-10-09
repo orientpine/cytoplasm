@@ -1,7 +1,7 @@
 ---
 name: prompt
-description: "버전형 프롬프트 자산을 canonical·overlay·legacy 계층에서 결정적으로 검색·조회·추가한다. 민감 본문은 agent 전용 private 저장소에만 두고 Codex OAuth 단일 경로를 강제한다. W5-1."
-version: 1.0.3
+description: "버전형 프롬프트 자산을 canonical·overlay·legacy 계층에서 결정적으로 검색·조회·추가한다. 모든 새 본문은 동일한 overlay 형식으로 저장한다. W5-1."
+version: 1.1.0
 author: autophagy-agents
 license: MIT
 metadata:
@@ -31,16 +31,10 @@ python3 /srv/autophagy-skills/live/prompt/scripts/prompt_cli.py add \
 `add` only writes `~/.hermes/prompt-library/entries/<id>/v<N>.md`; an existing id
 creates the next immutable version. Canonical and legacy files are read-only.
 
-## Sensitive entries
-
-When `get` reports `routing_tags=patent-sensitive`, never post its body publicly and
-never send it anywhere but the Codex OAuth tier. Use `get --write-body <new-600-file>`,
-then make the single outbound use through the shared client
-(`automation/codex_llm.py`, provider `openai-codex`) with the routing tag at the start
-of the request: `<routing-tags>patent-sensitive</routing-tags>`. The private body
-is only under `~/prompts-private/` (700); the overlay keeps a metadata-only stub.
+모든 새 본문은 overlay에 inline으로 저장하며 내용에 따라 저장소나 호출 경로를 바꾸지 않는다.
+기존 데이터는 그대로. 이전에 분리 저장한 본문은 기존 불투명 참조로 읽으며 이동하거나 재처리하지 않는다.
 
 ## Sandbox
 
-`scripts/scenario.sh` is offline and verifies version increments, metadata-only
-private split, legacy read-only indexing, and isolated imports.
+`scripts/scenario.sh` is offline and verifies version increments, keyword parity,
+legacy read-only indexing, file permissions, and isolated imports.

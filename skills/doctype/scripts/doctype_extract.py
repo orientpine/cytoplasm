@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Final
 
-from skills.doctype.scripts import doctype_llm, doctype_schema, doctype_sensitivity, doctype_store
+from skills.doctype.scripts import doctype_llm, doctype_schema, doctype_store
 
 
 _HEADING: Final = re.compile(r"^\s*(?:#{2,6}\s+|(?:\d+|[가-힣])[.)]\s+)(.+?)\s*$")
@@ -43,7 +43,6 @@ class ExtractedType:
     fields: tuple[doctype_schema.Field, ...]
     gist: str
     tone: str
-    sensitivity: str
     source: SourceDocument
     template_from_example: bool
 
@@ -57,7 +56,6 @@ class ExtractedType:
             fields=self.fields,
             gist=self.gist,
             tone=self.tone,
-            sensitivity=self.sensitivity,
             example=doctype_store.ExampleUpload(self.source.data, self.source.format),
             template_from_example=self.template_from_example,
         )
@@ -188,20 +186,18 @@ def _semantic_prompt(source: SourceDocument, prior: doctype_schema.DocTypeMetada
 
 def extract(
     path: Path,
-    rules_file: Path,
     *,
     mode_override: str | None = None,
     prior: doctype_schema.DocTypeMetadata | None = None,
     note: str = "",
 ) -> ExtractedType:
-    """Gate before Codex, then combine semantic analysis with deterministic layout facts."""
+    """Combine semantic analysis with deterministic layout facts."""
     source = read_document(path)
-    verdict = doctype_sensitivity.evaluate(source.text, doctype_sensitivity.load_rules(rules_file))
     deterministic_sections, fields = _deterministic_structure(source.text)
     opaque_id = hashlib.sha256(source.data).hexdigest()[:16]
     payload = _json_object(
         doctype_llm.call_codex(
-            _semantic_prompt(source, prior, note), purpose="gist-extract", sensitive=verdict.sensitive, opaque_id=opaque_id
+            _semantic_prompt(source, prior, note), purpose="gist-extract", opaque_id=opaque_id
         )
     )
     gist = payload.get("gist")
@@ -219,7 +215,6 @@ def extract(
         fields=fields,
         gist=gist.strip(),
         tone=tone.strip(),
-        sensitivity="patent-sensitive" if verdict.sensitive else "none",
         source=source,
         template_from_example=template,
     )

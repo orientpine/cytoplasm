@@ -23,7 +23,6 @@ fi
 export PROMPT_REPO_ROOT="$repo_root"
 export PROMPT_OVERLAY_ROOT="$work/overlay"
 export PROMPT_PRIVATE_ROOT="$work/private"
-export PROMPT_RULES_FILE="$repo_root/configs/sensitivity-rules.yaml"
 export PROMPT_MEETING_SCRIPTS="$repo_root/skills/meeting/scripts"
 
 cli() { python3 -I "$script_dir/prompt_cli.py" "$@"; }
@@ -47,14 +46,13 @@ cli get scenario-entry --version 1 --write-body "$work/get-version-1.md" > /dev/
 cmp -s "$work/entry-v1.md" "$work/get-version-1.md" || fail "versioned get"
 
 canary="prompt-canary-$(date +%s)-$$"
-cp "$repo_root/skills/meeting/fixtures/meeting-patent.md" "$work/classified-body.md"
+printf '특허 patent 기밀\n' > "$work/classified-body.md"
 printf '\n%s\n' "$canary" >> "$work/classified-body.md"
 classified="$(cli add --id classified-entry --category task --purpose "private asset" --model any --tags "sandbox,private" --body-file "$work/classified-body.md")"
-printf '%s' "$classified" | grep -q 'sensitivity=patent-sensitive' || fail "classifier split"
+printf '%s' "$classified" | grep -q 'body_ref=inline' || fail "keyword inline"
 stub="$PROMPT_OVERLAY_ROOT/classified-entry/v1.md"
 [[ -f "$stub" ]] || fail "metadata stub absent"
-[[ "$(grep -F -c "$canary" "$stub" || true)" -eq 0 ]] || fail "canary in metadata stub"
-private_name="$(python3 -I - "$stub" "$script_dir" <<'PY'
+python3 -I - "$stub" "$script_dir" <<'PY'
 import sys
 from pathlib import Path
 
@@ -62,21 +60,18 @@ sys.path.insert(0, sys.argv[2])  # scripts dir: the live mount has no `skills` p
 import prompt_schema
 
 metadata, body = prompt_schema.parse_entry(Path(sys.argv[1]).read_text(encoding="utf-8"))
-assert body == ""
-print(metadata.body_ref.removeprefix("private:") + ".md")
+assert metadata.body_ref == "inline"
+assert "특허 patent 기밀" in body
 PY
-)"
-private_body="$PROMPT_PRIVATE_ROOT/$private_name"
-[[ "$(stat -c %a "$PROMPT_PRIVATE_ROOT")" == "700" ]] || fail "private root mode"
-cmp -s "$work/classified-body.md" "$private_body" || fail "private body split"
+[[ "$(stat -c %a "$(dirname "$stub")")" == "700" ]] || fail "overlay root mode"
+[[ "$(stat -c %a "$stub")" == "600" ]] || fail "overlay file mode"
 cli get classified-entry --write-body "$work/classified-get.md" > "$work/classified-get.out"
 cmp -s "$work/classified-body.md" "$work/classified-get.md" || fail "private get"
-grep -q 'routing_tags=patent-sensitive' "$work/classified-get.out" || fail "routing tag"
 
 legacy_before="$(sha256sum "$repo_root/prompts/meeting-extraction-v1.md" | cut -d' ' -f1)"
 cli get meeting-extraction --version 1 > "$work/legacy.out"
 legacy_after="$(sha256sum "$repo_root/prompts/meeting-extraction-v1.md" | cut -d' ' -f1)"
 [[ "$legacy_before" == "$legacy_after" ]] || fail "legacy modified"
 
-printf 'SCENARIO-PASS versions=2 private_split=true legacy_read_only=true secret_len=%s account=%s\n' \
+printf 'SCENARIO-PASS versions=2 keywords=inline legacy_read_only=true secret_len=%s account=%s\n' \
   "${#secret}" "$(whoami)"

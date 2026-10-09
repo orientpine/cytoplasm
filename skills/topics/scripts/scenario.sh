@@ -23,19 +23,12 @@ work="$(mktemp -d)"
 trap 'cd / && rm -rf "$work"' EXIT
 cd "$work"
 
-cat > "$work/rules.yaml" <<'YAML'
-tags:
-  patent-sensitive:
-    keywords:
-      - restricted-marker
-    patterns: []
-YAML
 cat > "$work/evidence-pack.json" <<'JSON'
 {"version":"knowledge-v1","query":{"text":"autophagy flux","purpose":"synthesize","sources":["rag","wiki","twin"],"tags":[],"limit":8,"caller":"topics"},"verdict":"hit","items":[{"id":"E1","store":"rag","source_type":"note","ref":"research/flux.md","title":"관련 노트","doc_date":"2026-08-18","date_basis":"path","score":0.9,"grounded":true,"authority":null,"expired":null,"sensitivity":null,"content":"flux note","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"layers":{"rag":"hit","wiki":"none","twin":"none"},"notes":[]}
 JSON
 
 cli() {
-  TOPICS_STATE_FILE="$work/research-topics.yaml" TOPICS_RULES_PATH="$work/rules.yaml" \
+  TOPICS_STATE_FILE="$work/research-topics.yaml" \
     AUTOPHAGY_REPO_ROOT="$repo_root" KNOWLEDGE_FAKE_PACK="$work/evidence-pack.json" \
     python3 -I "$script_dir/topics_cli.py" "$@"
 }
@@ -45,10 +38,11 @@ cli list | grep -qx -- '- autophagy flux' || fail "list"
 cli list --with-evidence | grep -q "$evidence_pattern" || fail "evidence list"
 grep -q "\"verdict\": \"$evidence_verdict\"" "$work/research-topics.evidence.json" \
   || fail "evidence sidecar"
-cli suggest "restricted-marker analysis" | grep -q '^TOPIC-SUGGEST-REFUSED ' || fail "suggest gate"
-cli add "restricted-marker analysis" | grep -q '^TOPIC-REFUSED ' || fail "add gate"
-grep -q 'restricted-marker' "$work/research-topics.yaml" && fail "sensitive topic persisted"
+cli suggest "특허 patent 기밀" | grep -qx 'TOPIC-SUGGEST 특허 patent 기밀' || fail "keyword suggestion"
+cli add "특허 patent 기밀" | grep -qx 'TOPIC-ADDED 특허 patent 기밀' || fail "keyword add"
+cli list | grep -qx -- '- 특허 patent 기밀' || fail "keyword persisted"
+cli remove "특허 patent 기밀" | grep -qx 'TOPIC-REMOVED' || fail "keyword remove"
 cli remove "autophagy flux" | grep -qx 'TOPIC-REMOVED' || fail "remove"
 cli list | grep -qx 'TOPICS-EMPTY 등록된 주제가 없습니다.' || fail "empty list"
 
-printf 'SCENARIO-PASS legs=add+list+remove+sensitivity account=%s\n' "$(whoami)"
+printf 'SCENARIO-PASS legs=add+list+remove+keywords account=%s\n' "$(whoami)"

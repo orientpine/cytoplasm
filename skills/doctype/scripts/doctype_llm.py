@@ -1,12 +1,4 @@
-"""Fail-closed Codex OAuth routing for private document-type extraction and drafting.
-
-Every call goes through the shared client in ``automation.codex_llm``: Codex OAuth
-(provider ``openai-codex``) is pinned as the primary in argv, and Hermes may answer
-from the account's configured ``fallback_providers`` chain when Codex cannot (owner
-decision 2026-09-22). The routing gate proves the resolved route IS that shared
-client with the Codex primary pinned, argv included, and refuses before transport
-otherwise — a completer that names any other primary never receives the document.
-"""
+"""Shared account-model client for document-type extraction and drafting."""
 from __future__ import annotations
 
 import fcntl
@@ -16,17 +8,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Final
+from typing import Final
 
 
 CODEX_PROVIDER: Final = "openai-codex"
 CODEX_MODEL: Final = "hermes-config"
 _BINARY_ENV: Final = "AUTOPHAGY_HERMES_BIN"
 _RELEASE_ROOT: Final = "/srv/autophagy-agent-current"
-
-
-class PatentRoutingError(RuntimeError):
-    """The resolved route is not the shared client with Codex pinned, so nothing is sent."""
 
 
 class LlmCallError(RuntimeError):
@@ -44,7 +32,6 @@ def _log_call(
     served_provider: str,
     served_model: str,
     purpose: str,
-    sensitive: bool,
     opaque_id: str,
 ) -> None:
     """Append only masked routing facts; prompt and completion bodies are forbidden."""
@@ -56,7 +43,6 @@ def _log_call(
         "opaque_id": opaque_id,
         "provider": provider,
         "purpose": purpose,
-        "sensitive": sensitive,
         "served_model": served_model,
         "served_provider": served_provider,
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -100,30 +86,17 @@ def _client_environment() -> dict[str, str]:
     return environment
 
 
-def _codex_client(codex: ModuleType, timeout: float) -> Any:
-    """Build the pinned client and prove the route before any document text moves."""
-    try:
-        client = codex.CodexClient.from_environment(_client_environment(), timeout=timeout)
-    except codex.CodexError as error:
-        raise LlmCallError(f"Codex OAuth tier unavailable: {error}") from None
-    overrides = {"-m", "--model", "--provider"} & set(client.argv(""))
-    if codex.PROVIDER != CODEX_PROVIDER or overrides:
-        raise PatentRoutingError("routing gate: only the account's configured Hermes route may receive this document")
-    return client
-
-
 def call_codex(
     prompt: str,
     *,
     purpose: str = "unspecified",
-    sensitive: bool = False,
     opaque_id: str = "-",
     timeout: float = 600.0,
 ) -> str:
-    """Use the mandatory Codex OAuth tier and log only masked routing facts."""
+    """Use the account model chain and log only body-free routing facts."""
     codex = _codex()
-    client = _codex_client(codex, timeout)
     try:
+        client = codex.CodexClient.from_environment(_client_environment(), timeout=timeout)
         served = client.complete_served(prompt)
     except codex.CodexError as error:
         raise LlmCallError(f"Codex one-shot failed: {error}") from None
@@ -133,7 +106,6 @@ def call_codex(
         served_provider=served.provider,
         served_model=served.model,
         purpose=purpose,
-        sensitive=sensitive,
         opaque_id=opaque_id,
     )
     return served.text

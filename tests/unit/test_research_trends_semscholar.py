@@ -466,13 +466,7 @@ def test_dry_run_produces_merged_report_with_both_source_tags(
         return _FakeResponse(ATOM.encode("utf-8"))
 
     monkeypatch.setattr(research_trends, "urlopen", fake_urlopen)
-    monkeypatch.setattr(research_trends.topics_registry, "load_rules", lambda *a, **k: ())
     monkeypatch.setattr(research_trends.topics_registry, "list_topics", lambda *a, **k: ("SLAM",))
-    monkeypatch.setattr(
-        research_trends.topics_sensitivity,
-        "evaluate",
-        lambda topic, rules: types.SimpleNamespace(sensitive=False),
-    )
 
     def _boom(report: str) -> None:
         raise AssertionError("_send_dm must not run under DRY_RUN")

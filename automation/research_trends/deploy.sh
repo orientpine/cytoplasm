@@ -30,7 +30,6 @@ deploy_provenance_check "$repo_root" \
   "$repo_root/automation/research_trends/research_trends_core.py" \
   "$repo_root/automation/research_trends/topics_import.py" \
   "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
-  "$repo_root/configs/sensitivity-rules.yaml" \
   "$repo_root/prompts/research-trends-v1.md" \
   "$repo_root/automation/research_trends/deploy.sh" "$repo_root/automation/research_trends/deploy-manifest.txt" || exit 4
 
@@ -39,7 +38,6 @@ deploy_tree_swap "$repo_root/automation/research_trends" .hermes/research_trends
 push_file "$repo_root/skills/mail/scripts/watch_failure_streak.py" \
   '.hermes/scripts/watch_failure_streak.py'
 push_file "$repo_root/automation/research_trends/research_trends.py" '.hermes/scripts/research_trends.py'
-push_file "$repo_root/configs/sensitivity-rules.yaml" '.hermes/sensitivity-rules.yaml'
 push_file "$repo_root/prompts/research-trends-v1.md" '.hermes/research-trends/research-trends-v1.md'
 
 run_agent 'grep -qx "timezone: Asia/Seoul" "$HOME/.hermes/config.yaml"'

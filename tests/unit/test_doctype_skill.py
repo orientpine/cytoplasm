@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from automation import codex_llm
 from skills.doctype.scripts import (
     doctype_cli,
     doctype_extract,
@@ -15,6 +14,7 @@ from skills.doctype.scripts import (
     doctype_llm,
     doctype_routing,
     doctype_save,
+    doctype_schema,
     doctype_store,
     make_fixtures,
 )
@@ -56,7 +56,6 @@ def _store(tmp_path: Path) -> doctype_store.DocTypeStore:
             canonical_root=tmp_path / "repo" / "doctype" / "library",
             overlay_root=tmp_path / "overlay",
             private_root=tmp_path / "private",
-            rules_file=REPO / "skills" / "doctype" / "configs" / "sensitivity-rules.yaml",
         ),
         clock=lambda: "2026-07-17T00:00:00Z",
     )
@@ -66,18 +65,18 @@ def _prepared_cli(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    sensitive: bool = False,
+    keywords: bool = False,
 ) -> tuple[doctype_store.DocTypeStore, Path, Path]:
     monkeypatch.setenv("DOCTYPE_HERMES_BIN", str(_codex_stub(tmp_path)))
     monkeypatch.setenv("DOCTYPE_LLM_LOG", str(tmp_path / "logs" / "calls.jsonl"))
     _, example = make_fixtures.make(tmp_path / "examples")
-    if sensitive:
+    if keywords:
         _ = example.write_text(
-            example.read_text(encoding="utf-8") + "\n특허 출원 검토\n",
+            example.read_text(encoding="utf-8") + "\n특허 patent 기밀\n",
             encoding="utf-8",
         )
     store = _store(tmp_path)
-    extracted = doctype_extract.extract(example, store.paths.rules_file, mode_override="narrative")
+    extracted = doctype_extract.extract(example, mode_override="narrative")
     _ = store.add(extracted.draft("vendor-reason", "업체추천사유서"))
     monkeypatch.setattr(doctype_cli, "_store", lambda: store)
     inputs = tmp_path / "inputs.json"
@@ -104,12 +103,12 @@ def test_register_generate_and_refine_when_narrative_example_is_approved(
     _, example = make_fixtures.make(tmp_path / "examples")
     store = _store(tmp_path)
 
-    extracted = doctype_extract.extract(example, store.paths.rules_file, mode_override="narrative")
+    extracted = doctype_extract.extract(example, mode_override="narrative")
     first = store.add(extracted.draft("vendor-reason", "업체추천사유서"))
     inputs = {"업체명": "합성 수행사", "사업명": "합성 과업"}
     draft = doctype_generate.generate(store, first.entry, inputs, tmp_path / "drafts" / "vendor.md")
     refined = doctype_extract.extract(
-        draft.path, store.paths.rules_file, mode_override="narrative", prior=first.entry.metadata
+        draft.path, mode_override="narrative", prior=first.entry.metadata
     )
     second = store.add_version(refined.draft("vendor-reason", "업체추천사유서"))
 
@@ -122,31 +121,21 @@ def test_register_generate_and_refine_when_narrative_example_is_approved(
     assert "합성 수행사" not in second.path.read_text(encoding="utf-8")
 
 
-def test_sensitive_example_when_registered_never_leaves_the_codex_tier_or_logs_body(
+def test_keyword_example_when_registered_uses_normal_metadata_and_body_free_logs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     canary = "PRIVATE-CANARY-" + secrets.token_hex(4)
-    source = tmp_path / "sensitive.md"
-    _ = source.write_text(f"## 검토\n특허 출원 검토 {canary}\n", encoding="utf-8")
+    source = tmp_path / "keywords.md"
+    _ = source.write_text(f"## 검토\n특허 patent 기밀 {canary}\n", encoding="utf-8")
     monkeypatch.setenv("DOCTYPE_HERMES_BIN", str(_codex_stub(tmp_path)))
     log = tmp_path / "logs" / "calls.jsonl"
     monkeypatch.setenv("DOCTYPE_LLM_LOG", str(log))
     store = _store(tmp_path)
 
-    extracted = doctype_extract.extract(source, store.paths.rules_file)
-    result = store.add(extracted.draft("sensitive-reason", "민감서류"))
-
-    # A route whose primary is not the pinned Codex OAuth provider (here: argv naming
-    # another provider) must be refused before a byte of the document leaves the node.
-    monkeypatch.setattr(
-        codex_llm.CodexClient,
-        "argv",
-        lambda self, prompt: [self.binary, "-z", prompt, "--provider", "custom:other"],
-    )
-    with pytest.raises(doctype_llm.PatentRoutingError):
-        doctype_llm.call_codex("must fail before transport", sensitive=True)
+    extracted = doctype_extract.extract(source)
+    result = store.add(extracted.draft("keyword-reason", "검토서류"))
     records = _log_records(log)
-    assert result.entry.metadata.sensitivity == "patent-sensitive"
+    assert "sensitivity" not in json.loads(result.path.read_text(encoding="utf-8"))
     assert result.private_path.read_text(encoding="utf-8").endswith(canary + "\n")
     assert all(record.get("provider") == "openai-codex" for record in records)
     assert all(canary not in line for line in log.read_text(encoding="utf-8").splitlines())
@@ -161,7 +150,7 @@ def test_slot_fill_when_service_order_has_only_fields_avoids_narrative_calls(
     service, _ = make_fixtures.make(tmp_path / "examples")
     store = _store(tmp_path)
 
-    extracted = doctype_extract.extract(service, store.paths.rules_file, mode_override="slot-fill")
+    extracted = doctype_extract.extract(service, mode_override="slot-fill")
     registered = store.add(extracted.draft("service-order", "용역지시서"))
     result = doctype_generate.generate(
         store,
@@ -299,21 +288,12 @@ def test_draft_when_route_is_obsidian_never_calls_drive(
     assert "drive=" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize(
-    ("save_request", "sensitive"),
-    [
-        pytest.param("보고서는 만들어줘. 저장하지 마", False, id="none"),
-        pytest.param("Drive에 보고서를 저장해줘", True, id="gated"),
-    ],
-)
 def test_draft_when_route_forbids_drive_never_calls_publish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    save_request: str,
-    sensitive: bool,
 ) -> None:
     # Given
-    _, _, inputs = _prepared_cli(tmp_path, monkeypatch, sensitive=sensitive)
+    _, _, inputs = _prepared_cli(tmp_path, monkeypatch)
     save_calls: list[tuple[Path, doctype_routing.SaveRoute]] = []
 
     def save(file: Path, route: doctype_routing.SaveRoute) -> None:
@@ -322,20 +302,22 @@ def test_draft_when_route_forbids_drive_never_calls_publish(
     monkeypatch.setattr(doctype_save, "save_from_environment", save)
 
     # When
-    exit_code = doctype_cli.cmd_draft(_draft_args(tmp_path, inputs, save_request))
+    exit_code = doctype_cli.cmd_draft(_draft_args(tmp_path, inputs, "보고서는 만들어줘. 저장하지 마"))
 
     # Then
     assert exit_code == 0
     assert save_calls == []
 
 
+@pytest.mark.parametrize("keywords", [False, True])
 def test_draft_when_route_contains_drive_keeps_current_publish_behavior(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    keywords: bool,
 ) -> None:
     # Given
-    _, _, inputs = _prepared_cli(tmp_path, monkeypatch)
+    _, _, inputs = _prepared_cli(tmp_path, monkeypatch, keywords=keywords)
     save_calls: list[tuple[Path, doctype_routing.SaveRoute]] = []
 
     def save(file: Path, route: doctype_routing.SaveRoute) -> None:
@@ -352,3 +334,26 @@ def test_draft_when_route_contains_drive_keeps_current_publish_behavior(
         (tmp_path / "drafts" / "vendor.md", doctype_routing.SaveRoute(("drive",), "default-drive", False))
     ]
     assert "drive=verified" in capsys.readouterr().out
+
+
+def test_old_metadata_is_read_without_rewriting_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _, _ = _prepared_cli(tmp_path, monkeypatch)
+    entry = store.get("vendor-reason")
+    raw = json.loads(entry.path.read_text())
+    raw["sensitivity"] = "retired"
+    original = json.dumps(raw)
+    entry.path.write_text(original)
+
+    selected = store.get("vendor-reason")
+
+    assert selected.metadata == entry.metadata
+    assert entry.path.read_text() == original
+
+
+@pytest.mark.parametrize("entry_id", ["../escape", "/absolute", "a/b"])
+def test_registry_refuses_unsafe_identifiers(tmp_path: Path, entry_id: str) -> None:
+    store = _store(tmp_path)
+    with pytest.raises(doctype_schema.DocTypeSchemaError):
+        store.get(entry_id)

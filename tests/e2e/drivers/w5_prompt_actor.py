@@ -50,7 +50,8 @@ def main() -> int:
             "PROMPT_REPO_ROOT": str(root),
             "PROMPT_OVERLAY_ROOT": str(overlay),
             "PROMPT_PRIVATE_ROOT": str(private),
-            "PROMPT_RULES_FILE": str(root / "configs/sensitivity-rules.yaml"),
+            "HOME": str(work),
+            "AUTOPHAGY_SKILL_LIVE_ROOT": str(root / "skills"),
             "PROMPT_MEETING_SCRIPTS": str(root / "skills/meeting/scripts"),
         }
         added = _run(
@@ -75,18 +76,18 @@ def main() -> int:
         overlay_text = overlay_files[0].read_text(encoding="utf-8") if overlay_files else ""
         obs: dict[str, bool | int | str | None] = {
             "add_exit": added.returncode,
-            "classified": "sensitivity=patent-sensitive" in added.stdout,
+            "inline": "body_ref=inline" in added.stdout,
             "private_path_created": len(private_files) == 1,
-            "private_dir_mode": f"{stat.S_IMODE(private.stat().st_mode):04o}" if private.exists() else "",
+            "overlay_dir_mode": f"{stat.S_IMODE(overlay_files[0].parent.stat().st_mode):04o}" if overlay_files else "",
             "overlay_body_empty": marker not in overlay_text,
-            "overlay_is_metadata_only": "body_ref: private:" in overlay_text,
+            "overlay_inline": "body_ref: inline" in overlay_text,
             "repo_body_absent": marker not in subprocess.run(
                 ["git", "grep", "-n", marker], cwd=root, capture_output=True, check=False, text=True, timeout=30
             ).stdout,
             "git_history_body_absent": not _git_has(root, marker),
             "error": None,
         }
-        print("OBS-JSON: " + json.dumps({"classified_private_split": obs}, sort_keys=True))
+        print("OBS-JSON: " + json.dumps({"keyword_inline_storage": obs}, sort_keys=True))
     return 0
 
 

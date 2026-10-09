@@ -4,7 +4,6 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -13,9 +12,6 @@ sys.path.insert(0, str(ROOT))
 
 from automation.knowledge.pack import EvidenceItem, EvidencePack, KnowledgeQuery, Verdict  # noqa: E402
 from skills.report.scripts import report_cli  # noqa: E402
-
-RULES = ROOT / "configs" / "sensitivity-rules.yaml"
-
 
 def _item(*, content: str = "건설 로보틱스 실증 성과", sensitivity: str | None = None) -> EvidenceItem:
     return EvidenceItem(
@@ -51,7 +47,7 @@ def test_hit_pack_adds_prompt_evidence_validates_citations_and_writes_private_si
     args = _args(tmp_path)
     prompts: list[str] = []
 
-    def generate(prompt: str, route: Any) -> str:
+    def generate(prompt: str) -> str:
         prompts.append(prompt)
         return "실증 성과를 반영한다 [E1]. 허위 인용 [E9]."
 
@@ -82,7 +78,7 @@ def test_non_hit_pack_adds_deterministic_verdict_and_continues_generation(
     args = _args(tmp_path)
     calls = 0
 
-    def generate(prompt: str, route: Any) -> str:
+    def generate(prompt: str) -> str:
         nonlocal calls
         calls += 1
         assert message in prompt
@@ -97,25 +93,26 @@ def test_non_hit_pack_adds_deterministic_verdict_and_continues_generation(
     assert message in output.read_text(encoding="utf-8")
 
 
-def test_patent_sensitive_evidence_routes_report_to_codex(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("content", ["weekly evidence", "특허 patent 기밀"])
+def test_keyword_evidence_uses_same_generation_and_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str
 ) -> None:
     args = _args(tmp_path)
-    monkeypatch.setenv("REPORT_RULES_PATH", str(RULES))
-    routes: list[tuple[str, str, bool]] = []
-    sensitive = _item(
-        content="[[PATENT-SENSITIVE-RECALL]] patent filing planning",
-        sensitivity="patent-sensitive",
-    )
+    prompts: list[str] = []
+    publications: list[Path] = []
 
-    def generate(prompt: str, route: Any) -> str:
-        routes.append((route.provider, route.model, route.sensitive))
-        return "민감 보고 [E1]"
+    def generate(prompt: str) -> str:
+        prompts.append(prompt)
+        return "보고 [E1]"
 
     monkeypatch.setattr(report_cli.report_llm, "generate", generate)
+    monkeypatch.setattr(report_cli, "_publish_report", lambda output, *_: publications.append(output))
 
-    assert report_cli._report(args, evidence_pack=_pack(item=sensitive)) == 0
-    assert routes == [("openai-codex", "hermes-config", True)]
+    assert report_cli._report(args, evidence_pack=_pack(item=_item(content=content))) == 0
+    assert len(prompts) == 1 and content in prompts[0]
+    assert len(publications) == 1
+    sidecar = json.loads(publications[0].with_suffix(".evidence.json").read_text())
+    assert "sensitivity" not in sidecar["items"][0]
 
 
 def test_evidence_json_preview_exposes_only_count_and_layers(

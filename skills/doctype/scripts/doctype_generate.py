@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from skills.doctype.scripts import doctype_extract, doctype_llm, doctype_schema, doctype_sensitivity, doctype_store
+from skills.doctype.scripts import doctype_extract, doctype_llm, doctype_schema, doctype_store
 
 
 class GenerationError(RuntimeError):
@@ -130,19 +130,17 @@ def generate(
     inputs: dict[str, str],
     output: Path,
 ) -> DraftResult:
-    """Gate all private context, author narrative sections via Codex, then write privately."""
+    """Author narrative sections through the shared client, then write privately."""
     target = ensure_private_output(store, output)
     values = _required_values(entry.metadata, inputs)
     examples = _few_shot(store, entry.metadata)
-    gate_text = "\n".join((*values.values(), examples))
-    verdict = doctype_sensitivity.evaluate(gate_text, doctype_sensitivity.load_rules(store.paths.rules_file))
     narratives: dict[str, str] = {}
     for section in entry.metadata.sections:
         if _is_narrative(entry.metadata.mode, section):
             prompt = _narrative_prompt(entry.metadata, section, inputs, examples)
             opaque = hashlib.sha256(f"{entry.metadata.id}:{entry.metadata.version}:{section.key}".encode()).hexdigest()[:16]
             narratives[section.key] = doctype_llm.call_codex(
-                prompt, purpose="narrative-draft", sensitive=verdict.sensitive, opaque_id=opaque
+                prompt, purpose="narrative-draft", opaque_id=opaque
             )
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if _fill_template(store, entry.metadata, values, target):
