@@ -12,7 +12,6 @@ from automation.plaud_sync.lifelog_extract import (
     parse_extraction,
     summarize,
 )
-from automation.codex_llm import VerifiedRoute
 from automation.plaud_sync.lifelog_extract_live import build_extractor
 from automation.plaud_sync.lifelog_model import (
     ExtractionSkipped,
@@ -57,16 +56,12 @@ def _payload(**overrides: object) -> str:
 def _prepare_repo(
     tmp_path: Path,
     *,
-    rules: bool = True,
     template: bool = True,
     summary_template: bool = True,
 ) -> Path:
     root = tmp_path / "repo"
     (root / "configs").mkdir(parents=True)
     (root / "prompts").mkdir(parents=True)
-    if rules:
-        source = (_REPO_ROOT / "configs" / "sensitivity-rules.yaml").read_text(encoding="utf-8")
-        (root / "configs" / "sensitivity-rules.yaml").write_text(source, encoding="utf-8")
     if template:
         (root / "prompts" / "lifelog-extraction-v5.md").write_text(_TEMPLATE, encoding="utf-8")
     if summary_template:
@@ -264,30 +259,6 @@ def test_extract_wraps_a_transport_failure_in_lifelog_extract_error() -> None:
         extract(_recording(), template=_TEMPLATE, complete=complete)
 
 
-def test_build_extractor_skips_patent_sensitive_recordings_without_calling_the_llm(
-    tmp_path: Path,
-) -> None:
-    # Given
-    root = _prepare_repo(tmp_path)
-    extractor = build_extractor({}, repo_root=root, complete=_never_called)
-
-    # When
-    outcome = extractor(_recording(summary="특허 출원 일정 회의"))
-
-    # Then
-    assert outcome == ExtractionSkipped("민감도 게이트")
-
-
-def test_build_extractor_skips_when_the_rules_file_is_absent(tmp_path: Path) -> None:
-    # Given
-    root = _prepare_repo(tmp_path, rules=False)
-    extractor = build_extractor({}, repo_root=root, complete=_never_called)
-
-    # When
-    outcome = extractor(_recording())
-
-    # Then
-    assert outcome == ExtractionSkipped("민감도 규칙 없음")
 
 
 def test_build_extractor_skips_when_codex_oauth_is_unavailable(tmp_path: Path) -> None:
@@ -841,27 +812,3 @@ def test_live_reference_drop_report_does_not_turn_failed_calls_into_extractions(
         _ = extractor(_recording())
     captured = capsys.readouterr()
     assert captured.out == captured.err == ""
-
-
-def test_build_extractor_runs_patent_sensitive_text_through_the_permitted_codex_route(
-    tmp_path: Path,
-) -> None:
-    # Given: the rules permit the Codex OAuth route for patent-sensitive text, and this
-    # completer IS that route. Refusing it suppressed the owner's own private lifelog
-    # note as "추출:: 생략 (민감도 게이트)" (2026-09-09 owner decision).
-    root = _prepare_repo(tmp_path)
-    seen: list[str] = []
-
-    def complete(prompt: str) -> str:
-        seen.append(prompt)
-        return _payload()
-
-    extractor = build_extractor({}, repo_root=root, complete=VerifiedRoute(complete))
-
-    # When: a patent-sensitive recording is extracted.
-    outcome = extractor(_recording(summary="특허 출원 일정 회의"))
-
-    # Then: the permitted route ran and the note keeps its extracted fields.
-    assert isinstance(outcome, LifelogExtraction)
-    assert outcome.people == ("김철수",)
-    assert len(seen) == 1

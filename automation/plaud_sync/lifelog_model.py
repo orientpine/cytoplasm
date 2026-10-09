@@ -57,7 +57,7 @@ class ExtractionSkipped:
     """Extraction was deliberately not attempted; 'reason' is owner-facing Korean.
 
     The note is still frozen — with the reason on its 한눈에 line — because the
-    skip is permanent for this recording (sensitivity gate, no LLM configured).
+    skip is permanent for this recording (no LLM configured).
     A *transient* failure is not a skip: it raises LifelogExtractError and the
     recording waits for the next poll instead of freezing a degraded note.
     """
