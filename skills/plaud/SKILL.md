@@ -118,7 +118,7 @@ python3 /srv/autophagy-skills/live/meeting/scripts/meeting_cli.py ingest \
   --file ~/.hermes/plaud-sync/transcripts/<노트 stem>.md --label <회의 라벨> [--project <과제명>]
 ```
 
-회의록 도메인(민감도 게이트·칸반·통지·Drive 발행·관리번호)은 meeting 스킬이 그대로 소유한다 — 여기서
+회의록 도메인(칸반·통지·Drive 발행·관리번호)은 meeting 스킬이 그대로 소유한다 — 여기서
 재구현하지 않는다. `--file`은 전사 텍스트를 넘길 뿐 원음을 외부 전사 API로 보내지 않는다.
 다만 위 보관 옵트인을 켰다면 원음의 owner-only Drive 사본이 있을 수 있다.
 

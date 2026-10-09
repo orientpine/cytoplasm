@@ -38,9 +38,8 @@ author: autophagy-agents
 
 ## 전사 백엔드 — 로컬이 기본인 이유
 
-회의록의 민감도 게이트는 **텍스트**만 본다. 즉 외부 전사 API를 쓰면 특허·민감 회의의
-**원음이 게이트를 거치기 전에** 공유 프로바이더로 나간다. 그래서 로컬 whisper.cpp 가
-해석되면 그것을 쓴다.
+외부 전사 API를 쓰면 회의 **원음**이 노드 밖 공유 프로바이더로 나간다. 그래서 로컬
+whisper.cpp 가 해석되면 그것을 쓴다.
 
 | `SPEECHTOTEXT_BACKEND` | 동작 |
 |---|---|
@@ -513,7 +512,7 @@ sherpa-onnx/
 
 ## 관련
 
-- 회의록 생성 본체: [`meeting`](../meeting/SKILL.md) — 민감도 게이트·칸반·통지·Drive 발행 소유
+- 회의록 생성 본체: [`meeting`](../meeting/SKILL.md) — 칸반·통지·Drive 발행 소유
 - 발행 규약: [`drive-publish`](../../docs/guide/drive-publish.md)
 - 워처 규약: [`watcher-cron-설계규약`](../../docs/guide/watcher-cron-설계규약.md)
 - 이번 개선: [전사 정확도 사용 중 개선 루프](../../docs/기능소개/전사-정확도-사용중-개선-루프.md)
