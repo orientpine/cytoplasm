@@ -1,15 +1,13 @@
-"""Patent-safe evidence gathering for inferred decision-twin candidates."""
+"""Evidence gathering for inferred decision-twin candidates."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Protocol
 
-_PATENT_SENSITIVITY: Final = "patent-sensitive"
 
 
 @dataclass(frozen=True, slots=True)
 class EvidenceMetadata:
-    sensitivity: str | None = None
     source_type: str = ""
 
 
@@ -45,7 +43,7 @@ class NoEligibleEvidenceError(Exception):
     query: str
 
     def __str__(self) -> str:
-        return f"no non-sensitive evidence is available for query {self.query!r}"
+        return f"no evidence is available for query {self.query!r}"
 
 
 class RecallSearchClient(Protocol):
@@ -53,15 +51,13 @@ class RecallSearchClient(Protocol):
 
 
 def gather_context(request: GatherRequest, search_client: RecallSearchClient) -> DistillationContext:
-    """Exclude every patent-sensitive item before serializing any LLM prompt."""
+    """Gather all supplied evidence before serializing the LLM prompt."""
     recalled = tuple(
         EvidenceExcerpt(result.source, result.content, result.metadata)
         for result in search_client.search(request.query)
     )
     candidates = recalled + request.conversation_excerpts + request.meeting_excerpts
-    evidence = tuple(
-        item for item in candidates if item.metadata.sensitivity != _PATENT_SENSITIVITY
-    )
+    evidence = candidates
     if not evidence:
         raise NoEligibleEvidenceError(request.query)
     return DistillationContext(request.query, evidence)

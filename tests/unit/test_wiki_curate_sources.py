@@ -25,7 +25,7 @@ def test_obsidian_notes_become_source_notes(tmp_path: Path) -> None:
     (root / ".hidden").mkdir()
     (root / ".hidden" / "skip.md").write_text(_NOTE, encoding="utf-8")
 
-    notes = read_obsidian_notes(root, classifier=lambda text: frozenset())
+    notes = read_obsidian_notes(root)
     assert [note.ref for note in notes] == ["projects/kimm.md"]
     note = notes[0]
     assert note.title == "KIMM 협업"
@@ -33,15 +33,7 @@ def test_obsidian_notes_become_source_notes(tmp_path: Path) -> None:
     assert note.event_date == "2026-05-02"
     assert note.tags == ("연구", "협업")
     assert note.body.strip() == "조건을 합의했다."
-    assert note.sensitivity is None
 
-
-def test_the_classifier_decides_sensitivity(tmp_path: Path) -> None:
-    root = tmp_path / "obsidian"
-    root.mkdir()
-    (root / "patent.md").write_text(_NOTE, encoding="utf-8")
-    notes = read_obsidian_notes(root, classifier=lambda text: frozenset({"patent-sensitive"}))
-    assert notes[0].sensitivity == "patent-sensitive"
 
 
 def test_wiki_bodies_become_dedup_digests(tmp_path: Path) -> None:

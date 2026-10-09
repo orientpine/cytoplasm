@@ -13,7 +13,6 @@ Clock: TypeAlias = Callable[[], datetime]
 REVIEW_AFTER_DAYS = 180
 """Every proposal must carry a review date; this is the single place it comes from."""
 
-_SENSITIVE = "patent-sensitive"
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +21,6 @@ class SourceNote:
     title: str
     body: str
     tags: tuple[str, ...]
-    sensitivity: str | None
     event_date: str | None
     entities: tuple[str, ...]
 
@@ -77,8 +75,6 @@ def select_candidates(
     for note in sorted(notes, key=_order):
         if len(picked) >= limit:
             break
-        if note.sensitivity == _SENSITIVE:
-            continue
         if note.ref in existing_origins:
             continue
         body = note.body.strip()

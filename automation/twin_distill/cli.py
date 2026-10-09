@@ -204,13 +204,10 @@ def _load_rows(path: Path) -> tuple[EvidenceExcerpt, ...]:
             raise InvocationInputError("evidence row content must be a non-empty string")
         if not isinstance(metadata, dict):
             raise InvocationInputError("evidence row metadata must be an object")
-        sensitivity = metadata.get("sensitivity")
         source_type = metadata.get("source_type", "")
-        if sensitivity is not None and not isinstance(sensitivity, str):
-            raise InvocationInputError("evidence sensitivity must be a string")
         if not isinstance(source_type, str):
             raise InvocationInputError("evidence source_type must be a string")
-        rows.append(EvidenceExcerpt(source, content, EvidenceMetadata(sensitivity, source_type)))
+        rows.append(EvidenceExcerpt(source, content, EvidenceMetadata(source_type)))
     return tuple(rows)
 
 

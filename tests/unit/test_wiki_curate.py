@@ -7,7 +7,7 @@ WHY: Obsidian 에는 사람이 쓴 원천 노트가 2,500건 있는데 위키에
 여기서 고정하는 불변식 넷:
 1. 같은 내용이 이미 위키에 있으면 후보에서 빠진다(저장측 이중 인덱싱 차단 — 조회측은
    `automation/knowledge/rank.py` 가 이미 sha256 로 접는다).
-2. patent-sensitive 원천은 후보가 되지 않는다.
+2. 원천은 내용과 관계없이 후보가 된다.
 3. 주당 상한을 넘겨 제안하지 않는다(ISO 주 경계는 주입 시계로 판정한다).
 4. `review_after` 없는 초안은 만들지 않는다.
 """
@@ -28,11 +28,10 @@ from automation.wiki_curate.state import StateRefused, remaining_quota, record_p
 _CLOCK = datetime(2026, 8, 21, tzinfo=timezone.utc)
 
 
-def _note(ref: str, body: str = "합의한 조건을 적는다.", *, sensitivity: str | None = None,
-          event_date: str | None = "2026-05-02", entities: tuple[str, ...] = ("김박사",)) -> SourceNote:
+def _note(ref: str, body: str = "합의한 조건을 적는다.", *, event_date: str | None = "2026-05-02", entities: tuple[str, ...] = ("김박사",)) -> SourceNote:
     return SourceNote(
         ref=ref, title=f"{ref} 제목", body=body, tags=("연구",),
-        sensitivity=sensitivity, event_date=event_date, entities=entities,
+        event_date=event_date, entities=entities,
     )
 
 
@@ -52,10 +51,10 @@ def test_selection_is_deterministic_and_newest_event_first() -> None:
     assert first == second
 
 
-def test_patent_sensitive_sources_never_become_candidates() -> None:
-    notes = (_note("secret", "특허 초안", sensitivity="patent-sensitive"), _note("ok"))
+def test_keyword_sources_become_candidates() -> None:
+    notes = (_note("keyword", "특허 patent 기밀 초안"), _note("ok"))
     picked = select_candidates(notes, existing_digests=frozenset(), limit=10, clock=lambda: _CLOCK)
-    assert [c.source_ref for c in picked] == ["ok"]
+    assert [c.source_ref for c in picked] == ["keyword", "ok"]
 
 
 def test_content_already_represented_in_the_wiki_is_skipped() -> None:

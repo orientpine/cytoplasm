@@ -30,21 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--obsidian-root", type=Path, required=True)
     parser.add_argument("--wiki-root", type=Path, default=Path("~/wiki"))
     parser.add_argument("--wiki-scripts", type=Path, default=DEFAULT_WIKI_SCRIPTS)
-    parser.add_argument("--sensitivity-rules", type=Path,
-                        default=Path("~/.hermes/rag-ingest/sensitivity-rules.yaml"))
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     parser.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE)
     parser.add_argument("--cap", type=int, default=DEFAULT_CAP, help="주당 제안 상한")
     parser.add_argument("--emit", action="store_true",
                         help="실제로 draft 게이트에 넘긴다 (기본은 계획만 출력)")
     return parser
-
-
-def _classifier(rules_path: Path):
-    from automation.rag_ingest.sensitivity import classify, load_rules
-
-    rules = load_rules(rules_path)
-    return lambda text: frozenset(classify(text, rules))
 
 
 def _runner(argv: list[str]) -> int:
@@ -55,11 +46,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     from automation.twin_distill.llm import CodexLlmClient, LlmConfigurationError
 
-    try:
-        classifier = _classifier(args.sensitivity_rules.expanduser())
-    except Exception as error:  # noqa: BLE001 - fail closed: cannot tell sensitive from not
-        print(f"CURATE-BLOCK: 민감도 규칙을 읽을 수 없어 중단한다: {error}", file=sys.stderr)
-        return 4
     cli_path = args.wiki_scripts.expanduser() / "wiki_cli.py"
     if not cli_path.is_file():
         print(f"CURATE-BLOCK: 위키 draft 게이트가 없다: {cli_path}", file=sys.stderr)
@@ -71,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         return 4
 
     plan = run_curation(
-        sources=read_obsidian_notes(args.obsidian_root.expanduser(), classifier=classifier),
+        sources=read_obsidian_notes(args.obsidian_root.expanduser()),
         existing_digests=read_wiki_digests(args.wiki_root.expanduser()),
         existing_origins=read_wiki_origins(args.wiki_root.expanduser()),
         state_path=args.state.expanduser(),
