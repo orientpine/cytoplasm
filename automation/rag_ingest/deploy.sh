@@ -34,16 +34,13 @@ source "$repo_root/automation/deploy_push.sh"
 source "$repo_root/automation/deploy_tree.sh"
 # shellcheck source=automation/deploy_provenance.sh
 source "$repo_root/automation/deploy_provenance.sh"
-deploy_provenance_check "$repo_root" "$repo_root/automation/rag_ingest" \
-  "$repo_root/configs/sensitivity-rules.yaml" || exit 4
+deploy_provenance_check "$repo_root" "$repo_root/automation/rag_ingest" || exit 4
 
 # The runtime stays a real directory: the standing runtime package probe snapshots it and
 # recall imports from it on every search. deploy_tree_swap stages and verifies the tree,
 # then swaps it in atomically under the watcher's own flock; a busy ingest returns rc 6
 # after DEPLOY_TREE_LOCK_WAIT seconds (default 300) and leaves the live package untouched.
 deploy_tree_swap --lock .hermes/rag-ingest/watch.lock "$repo_root/automation/rag_ingest" .hermes/rag_ingest_runtime/rag_ingest
-
-push_file "$repo_root/configs/sensitivity-rules.yaml" '.hermes/rag-ingest/sensitivity-rules.yaml'
 
 push_file "$repo_root/automation/rag_ingest/cron/rag_ingest_watch.py" '.hermes/scripts/rag_ingest_watch.py'
 
