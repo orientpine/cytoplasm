@@ -1,4 +1,4 @@
-"""화자 수 질의의 실행 경계 — 옵트인·민감도 게이트·자르기."""
+"""화자 수 질의의 실행 경계 — 옵트인·자르기."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ def test_the_question_is_opt_in() -> None:
     assert stt_speaker_ask.resolve({}, repo_root=REPO, complete=lambda _p: "3") is None
 
 
-def test_an_unreadable_prompt_or_gate_asks_nothing(
+def test_an_unreadable_prompt_asks_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """준비물이 없으면 묻지 않는다(fail-closed) — 게이트 없이 모델을 부르지 않는다."""
+    """준비물이 없으면 묻지 않는다(fail-closed) — 프롬프트 없이 모델을 부르지 않는다."""
     assert stt_speaker_ask.resolve(_ON, repo_root=tmp_path, complete=lambda _p: "3") is None
     assert "RECOUNT-FAIL" in capsys.readouterr().err
 
@@ -43,20 +43,6 @@ def test_a_clean_draft_is_asked_through_the_shipped_prompt() -> None:
     assert "{{TRANSCRIPT}}" not in seen[0]
 
 
-def test_a_patent_sensitive_draft_never_reaches_the_model(
-    capsys: pytest.CaptureFixture[str]
-) -> None:
-    """화자 수를 세자고 특허 내용을 내보낼 수는 없다 — 초안 단계에서 걸러 낸다."""
-
-    def complete(_prompt: str) -> str:
-        raise AssertionError("특허 민감 전사본이 모델로 갔다")
-
-    ask = stt_speaker_ask.resolve(_ON, repo_root=REPO, complete=complete)
-    assert ask is not None
-
-    assert ask("[00:00:00] 화자1\n이 특허 출원 건은 다음 주에 냅니다.") == ""
-    assert "RECOUNT-SKIP patent-sensitive" in capsys.readouterr().err
-
 
 def test_a_long_draft_is_clipped_before_it_is_sent() -> None:
     """상한을 넘긴 초안은 잘라 보낸다 — 두 초안의 프롬프트 길이가 같아야 한다."""
@@ -73,24 +59,3 @@ def test_a_long_draft_is_clipped_before_it_is_sent() -> None:
     _ = ask("x" * (stt_speaker_ask.MAX_DRAFT_CHARS + 500))
 
     assert len(seen[0]) == len(seen[1])
-
-
-def test_a_patent_sensitive_draft_reaches_the_permitted_codex_route() -> None:
-    """규칙이 이름으로 허용한 경로일 때는 특허 초안도 묻는다 (2026-09-09 소유자 결정).
-
-    민감도 규칙이 patent-sensitive 에 허용하는 경로는 Codex OAuth 하나이고, 그 경로일 때
-    묻지 않으면 소유자의 비공개 전사본이 화자 수를 잃을 뿐 아무것도 지켜지지 않는다.
-    """
-    from automation.codex_llm import VerifiedRoute
-
-    seen: list[str] = []
-
-    def complete(prompt: str) -> str:
-        seen.append(prompt)
-        return "3"
-
-    ask = stt_speaker_ask.resolve(_ON, repo_root=REPO, complete=VerifiedRoute(complete))
-
-    assert ask is not None
-    assert ask("특허 출원 회의입니다. 청구항을 검토했습니다.") == "3"
-    assert len(seen) == 1

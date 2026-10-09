@@ -1,7 +1,7 @@
 """Local transcription through a self-contained whisper.cpp binary.
 
-The sensitivity gate sees text too late to protect cloud-bound audio, so local is
-preferred. ffmpeg normalizes input to whisper.cpp's 16 kHz mono PCM contract.
+Local audio processing is preferred. ffmpeg normalizes input to whisper.cpp's
+16 kHz mono PCM contract.
 
 Since 2026-09-04 the recording is transcribed **one window at a time** (see
 `stt_window`): a 2-hour file used to be a single process and a single JSON read, so
