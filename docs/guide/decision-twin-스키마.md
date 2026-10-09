@@ -71,7 +71,7 @@ v1 은 판단의 **신뢰**를 타입화했다. v2 는 그 판단의 **주어**�
 | **SI-1** | 위키는 판단 근거일 뿐 실행 권한이 아님. `strict`라도 외부효과 게이트 우회 불가. | `skills/wiki/SKILL.md` 절대규칙 명시 및 각 스킬 게이트 코드 |
 | **SI-2** | `review_after` 만료 시 강등 처리. 만료된 판단으로 자율 행동 금지. | `skills/wiki/scripts/twin_consult.py` 강등 로직 |
 | **SI-3** | `inferred`/`observed`는 증거+반례 및 소유자 승인 필수. 권위 상한 강제. | `automation/twin_distill/validate.py`, `automation/twin_observe/propose.py` |
-| **SI-4** | Obsidian 민감 콘텐츠 외부 유출 방지. 특허 관련 내용은 GLM 전달 차단. | `automation/rag_ingest/sensitivity.py` 태깅 + `recall_cli.py` model-aware 게이트(v2: 주 모델 non-GLM 검증 시만 센티널 부착 포함) + LiteLLM 센티널/태그 403 (`custom_callbacks.py`) |
+| **SI-4** | (2026-10-09 폐지) 내용 낱말에 따른 민감 판정·모델 차단은 없다 — 모든 근거가 계정의 같은 모델 체인으로 간다. | — |
 | **SI-5** *(2026-07-28 개정)* | **RAG 미러는 단방향(Pull) 전용** — 미러에 대한 쓰기 경로는 원천 차단을 유지한다. 쓰기가 필요한 경우 **미러와 분리된 별도 클론 + 별도 `-rw` deploy key**를 쓰며, commit/push는 **소유자 승인 게이트를 통과한 건에 한해** 허용한다. | (pull 전용) `automation/rag_ingest/sources/obsidian.py` push-disabled + 매 tick `reset --hard` · (쓰기) `automation/obsidian_write/` 분리 클론 + 외부효과 게이트 바인딩 |
 
 > **SI-5 개정 배경 (2026-07-28, 소유자 확정)**: repair 티켓 `t_1b8aab9b`(개인노트를 PARA Markdown으로 저장하고 git commit·push·원격 검증)이 종전 SI-5의 "쓰기 원천 금지"와 충돌했다. 미러를 열어 주는 대신 **경로를 분리**했다 — RAG 미러는 그대로 read-only(10분마다 `reset --hard`라 어차피 쓰기가 소멸)로 두고, 쓰기는 별도 클론에서만 일어나며 승인 게이트를 반드시 거친다. 따라서 "에이전트가 승인 없이 볼트를 변경할 수 없다"는 원래 보호 목표는 유지된다.

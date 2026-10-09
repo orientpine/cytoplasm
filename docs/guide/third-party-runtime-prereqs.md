@@ -155,7 +155,7 @@ model_list:
       model: <provider>/<model-id>
       api_key: os.environ/<YOUR_PROVIDER_KEY_ENV>
     model_info:
-      tags: ["default", "non-patent-sensitive"]
+      tags: ["default"]
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
