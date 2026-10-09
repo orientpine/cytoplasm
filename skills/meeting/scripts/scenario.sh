@@ -47,7 +47,8 @@ echo "$out" | tail -1 | grep -q '"sensitive"' && { echo "FAIL sensitivity verdic
 grep -q '청구항(claim) 초안 작성' "$work/plan/kanban-plan.jsonl" || { echo "FAIL card title masked"; exit 1; }
 grep -q '특허 출원서 제출' "$work/state/milestones.yaml" || { echo "FAIL milestone masked"; exit 1; }
 head -1 "$work/plan/team-post.txt" | grep -q '```json' || { echo "FAIL team post suppressed"; exit 1; }
-if grep -q 'patent-sensitive' "$work/notes/"*.md; then echo "FAIL sensitivity tag on note"; exit 1; fi
+untagged=$(grep -L '^tags: \[meeting, w2-3\]$' "$work/notes/"*.md || true)
+[ -z "$untagged" ] || { echo "FAIL extra tag on note"; exit 1; }
 
 echo "[5] 30MiB reject"
 dd if=/dev/zero of="$work/big.md" bs=1 count=1 seek=31457279 status=none
