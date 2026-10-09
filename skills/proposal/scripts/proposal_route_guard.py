@@ -3,28 +3,21 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Final, Literal, TypeAlias, assert_never, cast
-
-from . import proposal_sensitivity
+from typing import Final, Literal, TypeAlias, cast
 
 
 Destination: TypeAlias = Literal["image-api", "refine-host", "render", "drive"]
-Classification: TypeAlias = Literal["public", "owner-private", "patent-sensitive"]
+Classification: TypeAlias = Literal["public", "owner-private"]
 PayloadKind: TypeAlias = Literal["content", "index"]
 
 _DESTINATIONS: Final = frozenset({"image-api", "refine-host", "render", "drive"})
-_CLASSIFICATIONS: Final = frozenset({"public", "owner-private", "patent-sensitive"})
+_CLASSIFICATIONS: Final = frozenset({"public", "owner-private"})
 _OWNER_SOURCE_PREFIXES: Final = ("obsidian:", "wiki:", "note:")
 _OWNER_MARKER: Final = re.compile(r"(?im)^\s*(?:obsidian|wiki|note):")
 _SHA256: Final = re.compile(r"^[0-9a-f]{64}$")
 _INDEX_FIELDS: Final = frozenset({"source_key", "sha256", "collected_at", "sections"})
-OWNER_CONTROLLED_REFINE_HOSTS: Final = frozenset(
-    {"codex", "codex-oauth", "openai-codex", "hermes-codex"}
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,23 +30,8 @@ class RouteRefused(RuntimeError):
     """A payload may not cross the requested proposal boundary."""
 
 
-def _rules_path() -> Path:
-    skill_root = Path(__file__).resolve().parents[1]
-    return Path(
-        os.environ.get(
-            "PROPOSAL_RULES_PATH",
-            str(skill_root / "configs" / "sensitivity-rules.yaml"),
-        )
-    ).expanduser()
-
-
 def classify(payload: str, *, source_keys: tuple[str, ...] = ()) -> str:
-    """Classify with patent sensitivity taking precedence over private-note provenance."""
-    route = proposal_sensitivity.route_proposal(
-        payload, proposal_sensitivity.load_rules(_rules_path())
-    )
-    if route.sensitive:
-        return "patent-sensitive"
+    """Resolve the source-provenance boundary, independently of document words."""
     private_source = any(
         key.strip().lower().startswith(_OWNER_SOURCE_PREFIXES) for key in source_keys
     )
@@ -68,13 +46,6 @@ def _allow(reason: str) -> RouteDecision:
 
 def _refuse(reason: str) -> RouteDecision:
     raise RouteRefused(reason)
-
-
-def _owner_controlled_refine_hosts() -> frozenset[str]:
-    configured = os.environ.get("PROPOSAL_REFINE_ALLOWED_HOSTS")
-    if configured is None:
-        return OWNER_CONTROLLED_REFINE_HOSTS
-    return frozenset(host.strip().lower() for host in configured.split(",") if host.strip())
 
 
 def _field_within_limit(value: object) -> bool:
@@ -135,12 +106,11 @@ def assert_route_allowed(
     payload: str,
     destination: Destination,
     *,
-    host: str | None = None,
     payload_kind: PayloadKind = "content",
     classification: str | None = None,
     source_keys: tuple[str, ...] = (),
 ) -> RouteDecision:
-    """Enforce the complete proposal classification/destination truth table."""
+    """Keep source access and bounded index validation at proposal destinations."""
     if destination not in _DESTINATIONS:
         return _refuse("unknown destination")
     if payload_kind not in {"content", "index"}:
@@ -155,22 +125,6 @@ def assert_route_allowed(
 
     if selected == "public":
         return _allow("public payload is allowed")
-    if selected == "patent-sensitive":
-        match destination:
-            case "render":
-                return _allow("patent-sensitive payload is allowed for credential-free local rendering")
-            case "drive":
-                return _allow("patent-sensitive payload is allowed on owner-only Drive")
-            case "refine-host":
-                descriptor = (host or "").strip().lower()
-                if descriptor in _owner_controlled_refine_hosts():
-                    return _allow("patent-sensitive payload is allowed on an owner-controlled host")
-                return _refuse("patent-sensitive refinement requires an owner-controlled host")
-            case "image-api":
-                return _refuse("patent-sensitive payload is denied at this destination")
-            case _:
-                assert_never(destination)
-
     if destination == "drive" and payload_kind == "index":
         return _allow("owner-private source index is allowed on owner-only Drive")
     return _refuse("owner-private raw content is denied at this destination")

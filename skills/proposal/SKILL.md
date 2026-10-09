@@ -1,12 +1,12 @@
 ---
 name: proposal
 description: "개인 제안서 워크스페이스에서 섹션 Kanban·초안·인간 기여분·취합·Codex 최종 검토를 안전하게 관리한다. W5-4."
-version: 2.3.3
+version: 2.4.0
 author: autophagy-agents
 license: MIT
 metadata:
   hermes:
-    tags: [Proposal, Private-Workspace, Kanban, Sensitivity-Gate, Codex-Review]
+    tags: [Proposal, Private-Workspace, Kanban, Codex-Review]
 prerequisites:
   commands: [python3, hermes]
 ---
@@ -19,10 +19,16 @@ prerequisites:
 본문 없이 `slug`, 섹션 키/제목/상태, Kanban 카드 ID만 가진 상태 메타데이터 위치다. 운영에서 repo
 메타 worktree를 쓸 때만 이 환경변수로 지정한다. 기본 `~/.hermes/proposal-status/`도 0700이다.
 
+## v2.4.0 변경
+
+본문 낱말에 따른 분류·태그·렌더/그림/윤문 제한을 제거했다. 출처 접근·경로·권한·승인은 유지한다.
+기존 데이터는 그대로이며, 이전 파일·카드를 이관하거나 재처리하지 않는다.
+관련: [제안서 내용 동일 처리](../../docs/기능소개/제안서-내용-동일-처리.md).
+
 ## 절대 규칙
 
-1. `draft --brief-file`은 전체 제안서와 브리프를 결정적 민감도 게이트로 먼저 검사한다. 적중하면
-   공유 Hermes 경로(계정 설정의 주 모델·폴백)만 사용하며 GLM을 호출하지 않는다.
+1. `draft --brief-file`은 전체 제안서와 브리프를 공유 Hermes 경로(계정 설정의 주 모델·폴백)로
+   처리한다. 특허·기밀 등 본문 낱말은 초안·그림·윤문·렌더·발행 경로를 바꾸지 않는다.
 2. `review`는 `hermes -z -t todo`(모델은 계정 설정이 정한다) **1회만** 실행한다. 검토는
    취합본에 저장하고, `PROPOSAL_DM_TARGET` 또는 `~/.hermes/proposal/config.json`의 `dm_target`으로
    cha에게 DM한다. 재검토 대신 사람이 검토 결과를 직접 반영한다.
@@ -148,14 +154,13 @@ HWPX에 들어가지 못하고, 그 시점에는 고칠 표면이 바이너리�
 쪽 목표·그림 슬롯·본문 예산은 공개 계약 `layout_profile.py`의 `LAYOUT_PROFILES`에서 정의한다.
 비공개 엔진의 `contracts/layout_profile.py`는 이를 재수출하고, `proposal_ir.PROFILES`는 기존 절 단위 API로 변환한다.
 윤문과 렌더의 표를 따로 고치지 않으며, 엔진을 제외한 공개 반출본에서도 IR 명령을 실행할 수 있다.
-로컬 렌더는 LLM 클라이언트를 만들거나 네트워크에 본문을 보내지 않으므로 `기술이전` 등 특허 민감 문구도 허용한다.
-민감도 분류는 그대로이며, 이미지 API·허용 목록 밖 윤문 호스트는 계속 거부한다.
-소유자 전용 Drive와 승인된 Codex 호스트의 기존 명시적 예외는 유지한다.
+로컬 렌더는 LLM 클라이언트를 만들거나 네트워크에 본문을 보내지 않는다.
+모든 본문은 같은 처리 경로를 쓰며, 출처 기반 개인 노트 원문 경계·소유자 전용 Drive 권한 검사는 유지한다.
 렌더는 기록 직전 모든 `Contents/section*.xml` 에서 `hp:linesegarray`(한/글 라인 레이아웃 캐시)를 버리고,
 하나라도 살아남으면 `validate` 가 산출을 거부한다 — 문단을 지우거나 밴드를 끼우면 그 뒤 문단이 전부 다른 쪽으로 밀려
 캐시가 낡고, 한/글이 그 옛 좌표를 믿어 글줄이 뭉치고 자간이 무시되기 때문이다.
-소유자 비공개 노트는 외부 호스트에 닿지 않는다. 인용·렌더에 들어가는 근거는 PUBLIC뿐이고,
-비공개 근거는 구성 판단에만 쓴다.
+개인 노트 원문을 직접 외부 호스트에 보내지 않는다. 인용·렌더에는 출처 검증을 통과한 근거를 쓰며,
+원문 공개 대신 출처 키·요약을 전달하는 경계는 유지한다.
 
 ## Commands
 
@@ -225,8 +230,7 @@ rhwp(VS Code 한글 확장)에서만 드러난다.
 
 관련 근거가 없으면 초안 머리에 "근거 없음"을 명시하고 소유자의 과거·노트에 관한 사실 주장을
 근거 있는 것처럼 쓰지 않는다. 계층 조회가 불가능하면 "근거 수집 불가"를 표시하되 생성은 계속하며
-재시도하거나 자체 검색으로 우회하지 않는다. patent-sensitive 근거와 센티널 content는 GLM에 보내지
-않고 기존 Codex 전용 민감도 경로를 사용한다.
+재시도하거나 자체 검색으로 우회하지 않는다. 내용 낱말로 별도 태그나 모델 제한을 만들지 않는다.
 
 ## Sandbox
 

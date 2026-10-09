@@ -5,11 +5,10 @@ from argparse import Namespace
 from pathlib import Path
 from typing import cast
 
-from ..contracts import CitationStatus, DocRecord, EvidenceUnit
+from ..contracts import DocRecord, EvidenceUnit
 from .ingest import SUPPORTED_EXTENSIONS, RawDoc, ingest_path
 from .materialize import entity_key, materialize, numeric_values
 from .normalize import normalize
-from .pms import SENSITIVITY_TO_CITATION_STATUS
 
 
 def _collect_files(directory: Path) -> list[Path]:
@@ -21,10 +20,6 @@ def _collect_files(directory: Path) -> list[Path]:
         ),
         key=lambda file: file.name,
     )
-
-
-def _predict_citation_status(unit: EvidenceUnit) -> CitationStatus:
-    return SENSITIVITY_TO_CITATION_STATUS[unit.sensitivity_flag]
 
 
 def _candidate_unit_ids(candidate_files: list[Path], all_units: list[EvidenceUnit]) -> set[str]:
@@ -112,14 +107,6 @@ def lint(
         if unit.unit_id not in candidate_ids:
             continue
 
-        status = _predict_citation_status(unit)
-        if status != CitationStatus.PUBLIC:
-            print(
-                f"[{status.value}] unit={unit.unit_id[:8]} fact={unit.fact[:60]!r}",
-                file=sys.stderr,
-            )
-            has_violation = True
-
         if unit.conflict and _has_new_conflicting_value(unit, units, corpus_doc_ids):
             print(
                 f"[CONFLICT] unit={unit.unit_id[:8]} fact={unit.fact[:60]!r}",
@@ -135,7 +122,7 @@ def lint(
                 )
 
     if not has_violation:
-        print("OK: all candidate units are PUBLIC and conflict-free", file=sys.stderr)
+        print("OK: all candidate units are conflict-free", file=sys.stderr)
 
     if has_violation and not warn_only:
         return 1
@@ -147,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="python -m skills.proposal.engine.converter.corpus_lint",
-        description="Pre-ingest lint: predict PUBLIC/REDACT/INTERNAL/conflict for candidate corpus files",
+        description="Pre-ingest lint: detect numeric conflicts in candidate corpus files",
     )
     _ = parser.add_argument("--corpus", required=True, help="Existing corpus directory")
     _ = parser.add_argument(

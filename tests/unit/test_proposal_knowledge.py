@@ -15,17 +15,15 @@ from automation.knowledge.pack import DateBasis, EvidenceItem, EvidencePack, Kno
 from skills.proposal.scripts import proposal_assembly, proposal_cli, proposal_core, proposal_knowledge  # noqa: E402
 from skills.proposal.scripts.proposal_storage import ProposalPaths  # noqa: E402
 
-RULES = ROOT / "configs" / "sensitivity-rules.yaml"
-
 
 def _paths(tmp_path: Path) -> ProposalPaths:
-    return ProposalPaths(tmp_path / "proposals", tmp_path / "status", RULES)
+    return ProposalPaths(tmp_path / "proposals", tmp_path / "status")
 
 
-def _item(*, content: str = "건설 로보틱스 실증 성과", sensitivity: str | None = None) -> EvidenceItem:
+def _item(*, content: str = "건설 로보틱스 실증 성과") -> EvidenceItem:
     return EvidenceItem(
         "E1", "rag", "note", "robotics/result.md", "실증 결과", "2026-08-18", "path",
-        0.8, True, None, None, sensitivity, content, "a" * 64,
+        0.8, True, None, None, None, content, "a" * 64,
     )
 
 
@@ -63,7 +61,7 @@ def test_hit_pack_adds_prompt_evidence_validates_citations_and_writes_private_si
     paths, brief = _proposal(tmp_path, monkeypatch)
     prompts: list[str] = []
 
-    def draft(prompt: str, provider: str, model: str, sensitive: bool) -> str:
+    def draft(prompt: str) -> str:
         prompts.append(prompt)
         return "실증 성과를 활용한다 [E1]. 팩 밖 주장은 제외한다 [E9]."
 
@@ -94,7 +92,7 @@ def test_non_hit_pack_adds_deterministic_verdict_and_continues_generation(
     paths, brief = _proposal(tmp_path, monkeypatch)
     calls = 0
 
-    def draft(prompt: str, provider: str, model: str, sensitive: bool) -> str:
+    def draft(prompt: str) -> str:
         nonlocal calls
         calls += 1
         assert message in prompt
@@ -109,30 +107,13 @@ def test_non_hit_pack_adds_deterministic_verdict_and_continues_generation(
     assert body.startswith(message)
 
 
-def test_patent_sensitive_evidence_routes_draft_to_codex(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, brief = _proposal(tmp_path, monkeypatch)
-    routes: list[tuple[str, str, bool]] = []
-    sensitive = _item(content="[[PATENT-SENSITIVE-RECALL]] 비공개 실증", sensitivity="patent-sensitive")
-
-    def draft(prompt: str, provider: str, model: str, marked: bool) -> str:
-        routes.append((provider, model, marked))
-        return "민감 초안 [E1]"
-
-    monkeypatch.setattr(proposal_cli.proposal_llm, "run_section_draft", draft)
-
-    assert proposal_cli._draft(_args(brief), evidence_pack=_pack(item=sensitive)) == 0
-    assert routes == [("openai-codex", "hermes-config", True)]
-
-
 def test_assemble_appends_one_deduplicated_sources_block(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths, brief = _proposal(tmp_path, monkeypatch)
     monkeypatch.setattr(
         proposal_cli.proposal_llm, "run_section_draft",
-        lambda prompt, provider, model, sensitive: "근거 기반 초안 [E1]",
+        lambda prompt: "근거 기반 초안 [E1]",
     )
     proposal_cli._draft(_args(brief), evidence_pack=_pack())
     proposal_core.add_section(paths, "robotics", "impact", "기대효과")
@@ -146,13 +127,13 @@ def test_assemble_appends_one_deduplicated_sources_block(
 
 def _facade_item(
     ref: str, *, store: Store = "rag", source_type: str = "note",
-    sensitivity: str | None = None, content: str = "관련 근거",
+    content: str = "관련 근거",
     doc_date: str | None = None, date_basis: str = "none",
     sha256: str = "b" * 64,
 ) -> EvidenceItem:
     return EvidenceItem(
         "", cast(Store, store), source_type, ref, ref, doc_date,
-        cast(DateBasis, date_basis), 0.7, True, None, None, sensitivity, content,
+        cast(DateBasis, date_basis), 0.7, True, None, None, None, content,
         sha256,
     )
 
@@ -220,17 +201,6 @@ def test_gather_continues_when_rag_facade_raises() -> None:
     assert pack.by_bucket()["wiki-twin"]
 
 
-def test_patent_sensitive_item_remains_separately_taggable() -> None:
-    facade = _FakeFacade(rag_items=(
-        _facade_item("private/invention.md", sensitivity="patent-sensitive"),
-    ))
-
-    pack = proposal_knowledge.gather_owner_evidence("굴착 제어", knowledge=facade)
-
-    assert pack.items[0].sensitivity == "patent-sensitive"
-    assert pack.items[0] in pack.by_bucket()["rag"]
-
-
 def test_research_trends_keeps_only_newest_distinct_weeks() -> None:
     trends = tuple(
         _facade_item(f"research-trends/research-trends-2026{month:02d}{day:02d}.md")
@@ -289,7 +259,6 @@ def test_missing_source_key_defaults_to_rag_without_crashing() -> None:
         store = "rag"
         source_type = "rag"
         content = "출처 키 누락"
-        sensitivity = None
         score = None
 
     pack = proposal_knowledge.gather_owner_evidence(

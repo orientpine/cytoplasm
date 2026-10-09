@@ -9,17 +9,9 @@ from .frozen_model import FrozenModel
 _MAX_KEYWORDS = 5
 
 
-class SensitivityFlag(str, Enum):
-    PII = "PII"
-    IP = "IP"
-    NDA = "NDA"
-    NONE = "NONE"
-
-
 class CitationStatus(str, Enum):
     PUBLIC = "PUBLIC"
     INTERNAL = "INTERNAL"
-    REDACT = "REDACT"
 
 
 @dataclass(frozen=True)
@@ -32,7 +24,6 @@ class DocRecord(FrozenModel):
     raw_text: str
     lang: str
     confidence: float
-    sensitivity_flag: SensitivityFlag
     source_url: str | None = None
 
 
@@ -53,7 +44,6 @@ class EvidenceUnit(FrozenModel):
     fact: str
     provenances: list[Provenance]
     bucket: str
-    sensitivity_flag: SensitivityFlag
     conflict: bool = False
 
 
@@ -211,7 +201,6 @@ class EvidenceNode(FrozenModel):
     """A PUBLIC evidence unit node in the knowledge graph."""
 
     source_id: str
-    sensitivity: str = "PUBLIC"  # always PUBLIC in graph
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,7 @@
 """G_sanitize gate — second-barrier leak detection.
 
 Asserts that rendered artifact text contains ZERO verbatim strings
-from INTERNAL/REDACT evidence units.
+from unverified-source evidence units.
 """
 from __future__ import annotations
 
@@ -12,14 +12,6 @@ from ..contracts import CitationStatus
 
 # Minimum substring length to check for verbatim leaks
 _MIN_CHUNK = 20
-
-# NDA / confidentiality marker keywords that signal a leak when found
-# in artifact text AND sourced from a non-PUBLIC unit
-_NDA_MARKERS = ("기밀유지", "비밀유지", "비공개", "NDA")
-
-# Contract-value patterns that signal a financial leak
-_CONTRACT_VALUE_PATTERNS = ("억원", "B KRW")
-
 
 @dataclass
 class SanitizeViolation:
@@ -35,7 +27,7 @@ class SanitizeReport:
 
 
 def sanitize_gate(artifact_text: str, pms: Any) -> SanitizeReport:  # noqa: ANN401
-    """Check *artifact_text* for verbatim leaks from INTERNAL/REDACT units.
+    """Check *artifact_text* for verbatim leaks from unverified-source units.
 
     Parameters
     ----------
@@ -65,7 +57,7 @@ def sanitize_gate(artifact_text: str, pms: Any) -> SanitizeReport:  # noqa: ANN4
         if status == CitationStatus.PUBLIC:
             continue
 
-        # This unit is INTERNAL or REDACT — check for verbatim leaks
+        # This unit is not citation-verified — check for verbatim leaks
         for provenance in unit.provenances:
             verbatim = provenance.verbatim
             if not verbatim:
@@ -98,34 +90,6 @@ def sanitize_gate(artifact_text: str, pms: Any) -> SanitizeReport:  # noqa: ANN4
                     )
                     break  # one violation per unit is enough
 
-            # 3. NDA / confidentiality markers present in verbatim AND artifact
-            for marker in _NDA_MARKERS:
-                if marker in verbatim and marker in artifact_text:
-                    violations.append(
-                        SanitizeViolation(
-                            span=marker,
-                            source_id=unit.unit_id,
-                            reason=(
-                                f"NDA/confidentiality marker '{marker}' from "
-                                f"{status.value} unit found in artifact"
-                            ),
-                        )
-                    )
-
-            # 4. Contract-value patterns present in verbatim AND artifact
-            for pattern in _CONTRACT_VALUE_PATTERNS:
-                if pattern in verbatim and pattern in artifact_text:
-                    violations.append(
-                        SanitizeViolation(
-                            span=pattern,
-                            source_id=unit.unit_id,
-                            reason=(
-                                f"Contract-value pattern '{pattern}' from "
-                                f"{status.value} unit found in artifact"
-                            ),
-                        )
-                    )
-
     if violations:
         return SanitizeReport(ok=False, violations=violations)
     return SanitizeReport(ok=True)
@@ -141,7 +105,7 @@ def _collect_all_units(pms: Any) -> list[Any]:  # noqa: ANN401
     Strategy:
     - Start with public_evidence() to discover bucket names.
     - Then call evidence_for_bucket() for each discovered bucket to get ALL
-      units (including INTERNAL/REDACT).
+      units (including unverified-source).
     - Also try the private _by_bucket attribute as a fast path if available.
     """
     # Fast path: concrete ProposalMaterialStore exposes _by_bucket

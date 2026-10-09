@@ -132,12 +132,11 @@ def test_empty_evidence_pack_still_generates_brief(tmp_path: Path) -> None:
     assert "근거 없음" in path.read_text(encoding="utf-8")
 
 
-def test_research_brief_serializes_owner_evidence_sensitivity(tmp_path: Path) -> None:
+def test_research_brief_serializes_owner_evidence_summary(tmp_path: Path) -> None:
     item = proposal_knowledge.EvidenceItem(
         "wiki:invention/42",
         "wiki-twin",
         "patent summary",
-        "patent-sensitive",
         0.8,
         None,
     )
@@ -145,7 +144,7 @@ def test_research_brief_serializes_owner_evidence_sensitivity(tmp_path: Path) ->
 
     path = proposal_research.write_research_brief(tmp_path, "goal", pack)
 
-    assert "sensitivity=patent-sensitive" in path.read_text(encoding="utf-8")
+    assert "summary=patent summary" in path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(

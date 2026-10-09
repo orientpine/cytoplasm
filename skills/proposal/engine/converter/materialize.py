@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Mapping
 
-from ..contracts import DocRecord, EvidenceUnit, Provenance, SensitivityFlag
+from ..contracts import DocRecord, EvidenceUnit, Provenance
 from ..contracts.ids import stable_id
 
 
@@ -22,23 +21,14 @@ BUCKET_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("기대효과", ("기대", "효과", "파급", "활용")),
     ("리스크", ("리스크", "위험", "문제")),
 )
-SENSITIVITY_ORDER = (
-    SensitivityFlag.NONE,
-    SensitivityFlag.NDA,
-    SensitivityFlag.IP,
-    SensitivityFlag.PII,
-)
 
 
 def materialize(docs: list[DocRecord]) -> list[EvidenceUnit]:
     segmented: list[tuple[str, Provenance]] = []
-    sensitivity_by_source: dict[str, SensitivityFlag] = {}
     for doc in docs:
-        sensitivity_by_source[doc.doc_id] = doc.sensitivity_flag
         segmented.extend(_segment(doc))
 
     units = _dedup(segmented)
-    units = [_with_inherited_sensitivity(unit, sensitivity_by_source) for unit in units]
     return sorted(_detect_conflict(units), key=lambda unit: unit.unit_id)
 
 
@@ -88,7 +78,6 @@ def _dedup(units: list[tuple[str, Provenance]]) -> list[EvidenceUnit]:
                 fact=fact,
                 provenances=provenances,
                 bucket=_classify_bucket(fact),
-                sensitivity_flag=SensitivityFlag.NONE,
             )
         )
 
@@ -98,8 +87,6 @@ def _dedup(units: list[tuple[str, Provenance]]) -> list[EvidenceUnit]:
 def _detect_conflict(units: list[EvidenceUnit]) -> list[EvidenceUnit]:
     grouped: dict[str, list[EvidenceUnit]] = defaultdict(list)
     for unit in units:
-        if unit.sensitivity_flag != SensitivityFlag.NONE:
-            continue
         numbers = _numeric_values(unit.fact)
         if numbers:
             grouped[_entity_key(unit.fact)].append(unit)
@@ -118,19 +105,6 @@ def _detect_conflict(units: list[EvidenceUnit]) -> list[EvidenceUnit]:
             conflict_ids.update(unit.unit_id for unit in grouped_units)
 
     return [unit.model_copy(update={"conflict": unit.unit_id in conflict_ids}) for unit in units]
-
-
-def _with_inherited_sensitivity(
-    unit: EvidenceUnit, sensitivity_by_source: Mapping[str, SensitivityFlag]
-) -> EvidenceUnit:
-    flags = [sensitivity_by_source.get(provenance.source_id, SensitivityFlag.NONE) for provenance in unit.provenances]
-    return unit.model_copy(update={"sensitivity_flag": _max_sensitivity(flags)})
-
-
-def _max_sensitivity(flags: list[SensitivityFlag]) -> SensitivityFlag:
-    if not flags:
-        return SensitivityFlag.NONE
-    return max(flags, key=lambda flag: SENSITIVITY_ORDER.index(flag))
 
 
 def _unit_id(fact: str) -> str:

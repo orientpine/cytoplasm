@@ -19,7 +19,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(_SCRIPT_DIR.parents[1]))
     __package__ = "proposal.scripts"
 
-from . import proposal_assembly, proposal_core, proposal_dm, proposal_kanban, proposal_knowledge, proposal_llm, proposal_preflight, proposal_prompts, proposal_sensitivity  # noqa: E402
+from . import proposal_assembly, proposal_core, proposal_dm, proposal_kanban, proposal_knowledge, proposal_llm, proposal_preflight, proposal_prompts  # noqa: E402
 from . import proposal_env, proposal_images, proposal_governed  # noqa: E402
 from .proposal_corpus import command as corpus_command  # noqa: E402
 from .proposal_research import command as research_command  # noqa: E402
@@ -144,11 +144,8 @@ def _draft(
         section = proposal_core.read_section(paths, args.slug, args.section)
         if args.with_evidence and pack is None:
             pack = proposal_knowledge.collect(section.title, brief, proposal.title)
-        evidence_text = "\n".join(item.content for item in pack.items) if pack is not None else ""
-        combined = "\n".join((proposal_core.proposal_text(paths, args.slug), brief, evidence_text))
-        route = proposal_sensitivity.route_proposal(combined, proposal_sensitivity.load_rules(paths.rules_file))
         content = proposal_llm.run_section_draft(
-            _draft_prompt(paths, args.slug, args.section, brief, pack), route.provider, route.model, route.sensitive
+            _draft_prompt(paths, args.slug, args.section, brief, pack)
         )
         if pack is not None:
             content = _finalize_evidence(content, pack)

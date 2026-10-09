@@ -16,7 +16,6 @@ from skills.proposal.scripts.proposal_images import (
     ImageResult,
 )
 from skills.proposal.scripts.proposal_ir import FigureSpec, figures_to_json
-from skills.proposal.scripts.proposal_route_guard import RouteRefused
 from skills.proposal.scripts.proposal_version import Staging, VersionStore
 
 
@@ -226,16 +225,22 @@ def test_zero_budget_blocks_before_transport(
     assert "IMAGE-BUDGET-BLOCK" in capsys.readouterr().err
 
 
-def test_patent_sensitive_prompt_is_refused_before_transport(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("words", ["clean", "특허 patent 기밀", "NDA 비공개 기술이전"])
+def test_keyword_prompt_reaches_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, words: str
 ) -> None:
+    # Given: the same figure shape with different document words.
     root = tmp_path / "root"
-    _version(root, _figures(1, prompt_prefix="patent invention concept"))
+    _version(root, _figures(1, prompt_prefix=words))
     transport = RecordingTransport()
 
-    with pytest.raises(RouteRefused):
-        _run(monkeypatch, root, tmp_path / "state", transport)
-    assert transport.calls == []
+    # When: the real generation boundary processes it.
+    result = _run(monkeypatch, root, tmp_path / "state", transport)
+
+    # Then: every prompt is sent unchanged, with one completed image.
+    assert len(transport.calls) == 1
+    assert transport.calls[0][0] == words + " slot-1\nno text, no labels, no numerals"
+    assert len(result.images) == 1 and result.missing == ()
 
 
 def test_figures_json_records_prompt_model_sha_and_private_modes(

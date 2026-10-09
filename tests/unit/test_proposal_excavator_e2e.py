@@ -7,7 +7,7 @@ import stat
 from pathlib import Path
 
 from skills.proposal.scripts.proposal_excavator_e2e import _fill_body, augment
-from skills.proposal.scripts.proposal_route_guard import assert_route_allowed, classify
+from skills.proposal.scripts.proposal_route_guard import assert_route_allowed
 
 
 def test_augment_writes_private_version_files_under_permissive_umask(
@@ -90,9 +90,6 @@ def test_generated_figure_prompts_are_routable_to_the_image_api(tmp_path: Path) 
 
     figures = json.loads((tmp_path / "figures.json").read_text(encoding="utf-8"))
     for figure in figures:
-        assert classify(figure["prompt"]) != "patent-sensitive", (
-            f"prompt wording trips the patent gate: {figure['prompt']!r}"
-        )
         assert_route_allowed(figure["prompt"], "image-api")
 
 

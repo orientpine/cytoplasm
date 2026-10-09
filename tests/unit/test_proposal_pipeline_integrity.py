@@ -205,7 +205,7 @@ def test_missing_kpi_evidence_names_the_planning_brief(
 ) -> None:
     version = _version(tmp_path, monkeypatch)
     _ = (version / "corpus" / "claim.md").write_text(
-        "---\nsource_url: https://example.org/a\nsensitivity: public\n---\n"
+        "---\nsource_url: https://example.org/a\n---\n"
         + "굴착 작업의 실패 원인을 관측·토사·유압으로 나누어 진단한다.\n",
         encoding="utf-8",
     )
@@ -225,7 +225,7 @@ class _ConvertRunner:
         if "research-convert" in argv:
             out = Path(argv[argv.index("--out") + 1])
             _ = (out / "research-00000001.md").write_text(
-                "---\nsource_url: https://example.org/a\nsensitivity: public\n---\nclaim\n",
+                "---\nsource_url: https://example.org/a\n---\nclaim\n",
                 encoding="utf-8",
             )
         return proposal_corpus.InvocationResult(0, "", "")
@@ -258,7 +258,7 @@ def test_corpus_carries_the_planning_brief_as_public_evidence(tmp_path: Path) ->
     brief = corpus / proposal_corpus.PLAN_BRIEF_NAME
     assert brief in files
     text = brief.read_text(encoding="utf-8")
-    assert text.startswith("---\nsource: proposal-plan\nsensitivity: public\n---\n")
+    assert text.startswith("---\nsource: proposal-plan\n---\n")
     assert "baseline: 60%" in text
 
 

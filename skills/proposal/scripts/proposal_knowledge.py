@@ -56,7 +56,6 @@ class _UnavailablePack:
 
 
 Bucket = Literal["rag", "wiki-twin", "obsidian", "research-trends"]
-Sensitivity = Literal["public", "owner-private", "patent-sensitive"]
 _BUCKETS: tuple[Bucket, ...] = ("rag", "wiki-twin", "obsidian", "research-trends")
 _TREND_DATE = re.compile(r"(?:^|/)research-trends-(20\d{6})(?:\.md)?(?:$|#)")
 
@@ -66,7 +65,6 @@ class EvidenceItem:
     source_key: str
     bucket: Bucket
     summary: str
-    sensitivity: Sensitivity
     score: float | None
     week: str | None
     doc_date: str | None = None
@@ -101,7 +99,6 @@ class _FakeFacadeItem:
     source_type: str
     ref: str
     content: str
-    sensitivity: str | None = None
     score: float | None = 0.9
 
 
@@ -203,15 +200,6 @@ def _bucket(source_key: str, item: object) -> Bucket:
     return "rag"
 
 
-def _sensitivity(item: object) -> Sensitivity:
-    value = getattr(item, "sensitivity", None)
-    if value == "patent-sensitive":
-        return "patent-sensitive"
-    if value in {"owner-private", "private"}:
-        return "owner-private"
-    return "public" if value in {None, "", "public"} else "owner-private"
-
-
 def _week(source_key: str) -> str | None:
     match = _TREND_DATE.search(source_key)
     if match is None:
@@ -241,7 +229,6 @@ def _normalize(items: object) -> tuple[EvidenceItem, ...]:
             source_key=source_key,
             bucket=bucket,
             summary=str(summary if summary is not None else content or ""),
-            sensitivity=_sensitivity(item),
             score=float(score) if isinstance(score, (int, float)) else None,
             week=_week(source_key) if bucket == "research-trends" else None,
             doc_date=str(doc_date) if doc_date is not None else None,

@@ -54,11 +54,6 @@ def _route_consumer_failures(consumers: dict[str, str]) -> list[str]:
     ]
 
 
-@pytest.fixture(autouse=True)
-def _default_refine_host_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("PROPOSAL_REFINE_ALLOWED_HOSTS", raising=False)
-
-
 def _isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PROPOSAL_REFINE_ROOT", str(tmp_path / "refine"))
     monkeypatch.setenv("PROPOSAL_IMAGE_API_KEY_ENV", "TEST_PROPOSAL_IMAGE_KEY")
@@ -101,26 +96,21 @@ def test_absent_image_key_is_reported_but_only_blocks_images_stage(
 
 
 @pytest.mark.parametrize(
-    ("classification", "destination", "host", "payload_kind", "allowed"),
+    ("classification", "destination", "payload_kind", "allowed"),
     [
-        ("public", "image-api", None, "content", True),
-        ("public", "refine-host", None, "content", True),
-        ("public", "render", None, "content", True),
-        ("public", "drive", None, "content", True),
-        ("patent-sensitive", "image-api", None, "content", False),
-        ("patent-sensitive", "refine-host", "codex-oauth", "content", True),
-        ("patent-sensitive", "render", None, "content", True),
-        ("patent-sensitive", "drive", None, "content", True),
-        ("owner-private", "image-api", None, "content", False),
-        ("owner-private", "refine-host", "codex-oauth", "content", False),
-        ("owner-private", "render", None, "content", False),
-        ("owner-private", "drive", None, "content", False),
+        ("public", "image-api", "content", True),
+        ("public", "refine-host", "content", True),
+        ("public", "render", "content", True),
+        ("public", "drive", "content", True),
+        ("owner-private", "image-api", "content", False),
+        ("owner-private", "refine-host", "content", False),
+        ("owner-private", "render", "content", False),
+        ("owner-private", "drive", "content", False),
     ],
 )
 def test_route_guard_full_truth_table(
     classification: str,
     destination: str,
-    host: str | None,
     payload_kind: str,
     allowed: bool,
 ) -> None:
@@ -130,7 +120,6 @@ def test_route_guard_full_truth_table(
         decision = assert_route_allowed(
             "bounded payload",
             typed_destination,
-            host=host,
             payload_kind=typed_payload_kind,
             classification=classification,
         )
@@ -140,44 +129,9 @@ def test_route_guard_full_truth_table(
             assert_route_allowed(
                 "bounded payload",
                 typed_destination,
-                host=host,
                 payload_kind=typed_payload_kind,
                 classification=classification,
             )
-
-
-@pytest.mark.parametrize(
-    "host",
-    ["off-tier-host", "other-main", "attacker.example", "public-anthropic-api", None],
-)
-def test_patent_refine_rejects_hosts_outside_owner_allowlist(host: str | None) -> None:
-    with pytest.raises(RouteRefused):
-        assert_route_allowed(
-            "bounded payload", "refine-host", host=host, classification="patent-sensitive"
-        )
-
-
-def test_public_refine_allows_hosts_outside_owner_allowlist() -> None:
-    assert assert_route_allowed(
-        "bounded payload", "refine-host", host="attacker.example", classification="public"
-    ).allowed
-
-
-def test_patent_refine_owner_allowlist_can_be_overridden(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PROPOSAL_REFINE_ALLOWED_HOSTS", "node-a, NODE-B ")
-
-    assert assert_route_allowed(
-        "bounded payload", "refine-host", host="node-b", classification="patent-sensitive"
-    ).allowed
-    with pytest.raises(RouteRefused):
-        assert_route_allowed(
-            "bounded payload",
-            "refine-host",
-            host="codex-oauth",
-            classification="patent-sensitive",
-        )
 
 
 def test_route_guard_uses_source_key_provenance_when_classifying() -> None:

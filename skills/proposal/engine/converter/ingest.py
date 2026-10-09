@@ -45,8 +45,6 @@ def _parse_front_matter(text: str) -> tuple[str, dict[str, object]]:
             value = value.strip()
             if key == "source_url":
                 meta["source_url"] = value
-            elif key == "sensitivity":
-                meta["sensitivity"] = value
     body = "\n".join(lines[close_idx + 1 :]).strip()
     return body, meta
 

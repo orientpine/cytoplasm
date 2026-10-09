@@ -6,16 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from ..contracts import CitationStatus, EvidenceUnit, SensitivityFlag
+from ..contracts import CitationStatus, EvidenceUnit
 from ..contracts.ids import stable_id
-
-
-SENSITIVITY_TO_CITATION_STATUS: dict[SensitivityFlag, CitationStatus] = {
-    SensitivityFlag.PII: CitationStatus.REDACT,
-    SensitivityFlag.IP: CitationStatus.INTERNAL,
-    SensitivityFlag.NDA: CitationStatus.INTERNAL,
-    SensitivityFlag.NONE: CitationStatus.PUBLIC,
-}
 
 
 class ProposalMaterialStore:
@@ -58,12 +50,6 @@ class ProposalMaterialStore:
         if unit is None:
             return False
 
-        current = self._ledger.get(unit_id)
-        if current == CitationStatus.REDACT:
-            raise ValueError(
-                f"Cannot promote REDACT unit {unit_id!r} to PUBLIC (PII protection)."
-            )
-
         self._ledger[unit_id] = CitationStatus.PUBLIC
         self._rebuild_bucket_index()
         return True
@@ -104,9 +90,7 @@ class ProposalMaterialStore:
         return store
 
     def _citation_status(self, unit: EvidenceUnit) -> CitationStatus:
-        status = SENSITIVITY_TO_CITATION_STATUS[unit.sensitivity_flag]
-        if status != CitationStatus.PUBLIC:
-            return status
+        status = CitationStatus.PUBLIC
 
         if self._crossref_verify is None:
             return status
@@ -146,4 +130,4 @@ def _write_json(path: Path, data: object) -> None:
     )
 
 
-__all__ = ["ProposalMaterialStore", "SENSITIVITY_TO_CITATION_STATUS"]
+__all__ = ["ProposalMaterialStore"]

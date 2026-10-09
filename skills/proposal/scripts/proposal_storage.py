@@ -31,18 +31,13 @@ class ProposalPaths:
 
     workspace_root: Path
     status_root: Path
-    rules_file: Path
 
     @classmethod
     def from_environment(cls) -> ProposalPaths:
-        skill_root = Path(__file__).resolve().parents[1]
         return cls(
             workspace_root=Path(os.environ.get("PROPOSAL_WORKSPACE_ROOT", "~/proposals")).expanduser(),
             status_root=Path(
                 os.environ.get("PROPOSAL_STATUS_ROOT", "~/.hermes/proposal-status")
-            ).expanduser(),
-            rules_file=Path(
-                os.environ.get("PROPOSAL_RULES_PATH", str(skill_root / "configs/sensitivity-rules.yaml"))
             ).expanduser(),
         )
 

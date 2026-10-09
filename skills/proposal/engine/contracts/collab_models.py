@@ -13,7 +13,6 @@ class EvidenceCandidate(FrozenModel):
     verbatim: str
     bucket: str
     origin: Literal["external_live", "corpus"]
-    sensitivity: str = "INTERNAL"
     advise_score: float | None = None
 
     @classmethod
@@ -26,7 +25,6 @@ class EvidenceCandidate(FrozenModel):
             verbatim=verbatim,
             bucket=bucket,
             origin="external_live",
-            sensitivity="INTERNAL",
         )
 
 

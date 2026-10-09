@@ -22,7 +22,7 @@ def build_evidence_graph(
     public_units = sorted(pms.public_evidence(), key=lambda unit: unit.unit_id)
     public_ids = {unit.unit_id for unit in public_units}
     evidence_nodes = tuple(
-        EvidenceNode(source_id=unit.unit_id, sensitivity="PUBLIC") for unit in public_units
+        EvidenceNode(source_id=unit.unit_id) for unit in public_units
     )
 
     claim_nodes: list[ClaimNode] = []
@@ -77,7 +77,7 @@ def traceability_markdown(evidence_graph: EvidenceGraph) -> str:
         claim_text = claim.text[:30] + ("..." if len(claim.text) > 30 else "")
         lines.append(
             f"- {claim.section_id}절 · {claim_text} · "
-            f"{evidence.source_id} · {evidence.sensitivity}"
+            f"{evidence.source_id}"
         )
     return "\n".join(lines) + "\n"
 
