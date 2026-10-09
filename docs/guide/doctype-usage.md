@@ -33,4 +33,4 @@ JSON에만 두고 `doctype_cli.py draft --name … --inputs-json … --out <priv
 에이전트는 CLI 실행 뒤 `show --name …`으로 private 본문 없는 메타데이터만 확인하고
 **name/version/mode/fields**만 응답한다. 문서 본문을 채팅에 붙여 넣지 않는다. 예시·승인본·초안은
 `DOCTYPE_PRIVATE_ROOT`의 0700/0600 private store에만 보관한다. 모든 요지 추출과 한국어 서술 초안은
-계정 Hermes 설정의 주 모델(폴백 포함)을 사용하고, 민감도 게이트는 GLM 경로를 fail-closed로 막는다.
+계정 Hermes 설정의 주 모델(폴백 포함)을 사용한다. 문서 내용에 따라 경로를 바꾸거나 막지 않는다.
