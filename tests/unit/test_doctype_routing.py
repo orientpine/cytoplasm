@@ -9,17 +9,13 @@ from skills.doctype.scripts.doctype_routing import (
 )
 
 
-def test_sensitive_content_is_gated_before_explicit_destination() -> None:
-    # Given: a sensitive document with an otherwise explicit Drive destination.
-    # When: the save request is classified.
+@pytest.mark.parametrize("prefix", ["", "특허 patent 기밀 "])
+def test_content_keywords_do_not_override_explicit_destination(prefix: str) -> None:
     route = classify_save_request(
-        "Drive에 보고서를 저장해줘",
+        prefix + "드라이브에 보고서를 저장해줘",
         has_file_artifact=True,
-        sensitivity=frozenset({"patent-sensitive"}),
     )
-
-    # Then: the sensitivity gate owns the request without clarification.
-    assert route == SaveRoute(("gated",), "sensitive-gated", False)
+    assert route == SaveRoute(("drive",), "explicit-destination", False)
 
 
 @pytest.mark.parametrize(
@@ -185,7 +181,7 @@ def test_cli_save_route_without_save_request_does_not_default_to_drive() -> None
     from skills.doctype.scripts import doctype_cli
 
     args = argparse.Namespace(save_request="")
-    route = doctype_cli._save_route(args, frozenset())
+    route = doctype_cli._save_route(args)
     assert route.destinations == ("none",)
     assert route.clarify is False
 
@@ -196,5 +192,5 @@ def test_cli_save_route_with_explicit_request_still_routes() -> None:
     from skills.doctype.scripts import doctype_cli
 
     args = argparse.Namespace(save_request="이 안내문 파일로 저장해줘")
-    route = doctype_cli._save_route(args, frozenset())
+    route = doctype_cli._save_route(args)
     assert route.destinations == ("drive",)

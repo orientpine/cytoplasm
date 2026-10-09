@@ -97,7 +97,6 @@ _LONG_DIGITS = re.compile(r"\d{5,}")
 _TOPICS_PKG, _TOPICS_IMPORT_ROOT = _topics_import_location(SCRIPTS_DIR)
 sys.path.insert(0, str(_TOPICS_IMPORT_ROOT))
 topics_registry = import_module(f"{_TOPICS_PKG}.topics_registry")
-topics_sensitivity = import_module(f"{_TOPICS_PKG}.topics_sensitivity")
 topics_knowledge = import_module(f"{_TOPICS_PKG}.topics_knowledge")
 topics_evidence = import_module(f"{_TOPICS_PKG}.topics_evidence")
 
@@ -394,12 +393,7 @@ def _ingest_report() -> None:
 
 
 def _safe_topics() -> tuple[str, ...]:
-    rules = topics_registry.load_rules()
-    return tuple(
-        topic
-        for topic in topics_registry.list_topics()
-        if not topics_sensitivity.evaluate(topic, rules).sensitive
-    )
+    return topics_registry.list_topics()
 
 
 def run() -> int:
@@ -414,11 +408,9 @@ def run() -> int:
     day = now.date().isoformat()
     pack = topics_knowledge.collect(topics)
     evidence_block = topics_evidence.prompt_block(pack)
-    sensitive = topics_evidence.is_sensitive(pack)
-    summarize = (
-        (lambda _topic, _papers: "") if sensitive
-        else (lambda topic, papers: _synthesis(topic, papers, evidence_block))
-    )
+    def summarize(topic: str, papers: tuple[Paper, ...]) -> str:
+        return _synthesis(topic, papers, evidence_block)
+
     def write_korean(topic: str, papers: object, draft: str) -> str:
         return _korean(topic, papers, draft, evidence_block)
 

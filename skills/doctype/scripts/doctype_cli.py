@@ -103,22 +103,17 @@ def _registered_line(prefix: str, entry: doctype_store.StoredDocType) -> str:
             f"version={metadata.version}",
             f"name={metadata.doc_type_name}",
             f"mode={metadata.mode}",
-            f"sensitivity={metadata.sensitivity}",
             f"examples={len(metadata.examples)}",
         )
     )
 
 
-def _sensitivity_tags(primary: str, secondary: str = "none") -> frozenset[str]:
-    return frozenset(value for value in (primary, secondary) if value != "none")
-
-
-def _save_route(args: argparse.Namespace, sensitivity: frozenset[str]) -> doctype_routing.SaveRoute:
+def _save_route(args: argparse.Namespace) -> doctype_routing.SaveRoute:
     request = _argument(args, "save_request")
     # An absent --save-request is not a request to store the artifact externally:
     # registry operations must never be widened into a Drive upload (fail-closed).
     return doctype_routing.classify_save_request(
-        request, has_file_artifact=bool(request.strip()), sensitivity=sensitivity
+        request, has_file_artifact=bool(request.strip())
     )
 
 
@@ -146,14 +141,12 @@ def cmd_register(args: argparse.Namespace) -> int:
     store = _store()
     name = _name(_argument(args, "name"))
     example = Path(_argument(args, "example"))
-    source = doctype_extract.read_document(example)
-    sensitivity = doctype_store.document_sensitivity(source.text, store.paths.rules_file)
-    route = _save_route(args, _sensitivity_tags(sensitivity))
+    route = _save_route(args)
     if (exit_code := _clarify_save(route)) is not None:
         return exit_code
     _, entry_id = _existing_or_id(store, name)
     extracted = doctype_extract.extract(
-        example, store.paths.rules_file, mode_override=_optional_argument(args, "mode")
+        example, mode_override=_optional_argument(args, "mode")
     )
     result = store.add(extracted.draft(entry_id, name))
     _save_artifact(result.private_path, route)
@@ -195,8 +188,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
     store = _store()
     entry = store.get_by_name(_name(_argument(args, "name")))
     inputs = doctype_generate.load_inputs(Path(_argument(args, "inputs_json")))
-    input_sensitivity = doctype_store.document_sensitivity("\n".join(inputs.values()), store.paths.rules_file)
-    route = _save_route(args, _sensitivity_tags(entry.metadata.sensitivity, input_sensitivity))
+    route = _save_route(args)
     if (exit_code := _clarify_save(route)) is not None:
         return exit_code
     result = doctype_generate.generate(
@@ -224,14 +216,11 @@ def cmd_refine(args: argparse.Namespace) -> int:
     store = _store()
     entry = store.get_by_name(_name(_argument(args, "name")))
     approved = Path(_argument(args, "approved"))
-    source = doctype_extract.read_document(approved)
-    approved_sensitivity = doctype_store.document_sensitivity(source.text, store.paths.rules_file)
-    route = _save_route(args, _sensitivity_tags(entry.metadata.sensitivity, approved_sensitivity))
+    route = _save_route(args)
     if (exit_code := _clarify_save(route)) is not None:
         return exit_code
     extracted = doctype_extract.extract(
         approved,
-        store.paths.rules_file,
         mode_override=entry.metadata.mode,
         prior=entry.metadata,
         note=_optional_argument(args, "note") or "",

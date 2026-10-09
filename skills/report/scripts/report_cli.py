@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import date, datetime, timezone
 from importlib import import_module
@@ -17,12 +16,10 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(_SCRIPT_DIR))
     report_core = import_module("report_core")
     report_llm = import_module("report_llm")
-    report_sensitivity = import_module("report_sensitivity")
     report_knowledge = import_module("report_knowledge")
 else:
     report_core = import_module(".report_core", __package__)
     report_llm = import_module(".report_llm", __package__)
-    report_sensitivity = import_module(".report_sensitivity", __package__)
     report_knowledge = import_module(".report_knowledge", __package__)
 
 if __package__ in (None, ""):
@@ -71,7 +68,6 @@ class _Item(Protocol):
     grounded: bool | None
     authority: str | None
     expired: bool | None
-    sensitivity: str | None
     content: str
     sha256: str
 
@@ -153,7 +149,7 @@ def _pack_dict(pack: _Pack) -> dict[str, object]:
                 "ref": item.ref, "title": item.title, "doc_date": item.doc_date,
                 "date_basis": item.date_basis, "score": item.score,
                 "grounded": item.grounded, "authority": item.authority,
-                "expired": item.expired, "sensitivity": item.sensitivity,
+                "expired": item.expired,
                 "content": item.content, "sha256": item.sha256,
             }
             for item in pack.items
@@ -175,21 +171,11 @@ def _report(args: argparse.Namespace, evidence_pack: object | None = None) -> in
     if args.with_evidence and pack is None:
         material = "\n\n".join(note.text for note in notes)
         pack = cast(_Pack, report_knowledge.collect(title, args.query, material))
-    routed_notes = notes
-    if pack is not None:
-        evidence_text = "\n".join(item.content for item in pack.items)
-        routed_notes += (report_core.Note(Path("<knowledge-evidence>"), "Evidence", evidence_text, 0.0),)
-    rules_path = Path(os.environ.get(
-        "REPORT_RULES_PATH", _SCRIPT_DIR.parent / "configs" / "sensitivity-rules.yaml"
-    ))
-    route = report_sensitivity.route_notes(
-        routed_notes, report_sensitivity.load_rules(rules_path)
-    )
     prompt_evidence = _evidence_block(pack) if pack is not None else ""
     draft = (
         Path(args.response_file).read_text(encoding="utf-8")
         if args.response_file
-        else report_llm.generate(report_core.build_prompt(notes, title, prompt_evidence), route)
+        else report_llm.generate(report_core.build_prompt(notes, title, prompt_evidence))
     )
     sources = ""
     if pack is not None:
@@ -205,8 +191,7 @@ def _report(args: argparse.Namespace, evidence_pack: object | None = None) -> in
         )
     link = _publish_report(output, "주간연구동향", args.period_date)
     print(
-        f"REPORT-CREATED path={output} drive={link} provider={route.provider} "
-        f"sensitive={str(route.sensitive).lower()} notes={len(notes)}"
+        f"REPORT-CREATED path={output} drive={link} notes={len(notes)}"
     )
     return 0
 

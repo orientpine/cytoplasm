@@ -194,20 +194,15 @@ def test_research_trends_unavailable_evidence_does_not_block_report(
     assert "근거 수집 불가" in reports[0]
 
 
-def test_patent_sensitive_related_notes_skip_the_draft_stage_and_use_codex_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("content", ["ordinary evidence", "특허 patent 기밀"])
+def test_related_notes_use_both_draft_stages_regardless_of_keywords(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str,
 ) -> None:
-    # 2026-09-04 공급자 이관 전에는 초안 단계가 은퇴한 2차 티어로 나갔고 민감 근거는 그 티어를
-    # 건너뛰었다. 티어가 하나뿐인 지금도 민감 근거는 초안 단계를 아예 부르지 않고, 정리 단계의
-    # 공유 Codex 클라이언트 한 번만 쓴다 — 티어 수가 줄었다고 민감 경로가 넓어지지 않는다.
     _stub_research(tmp_path, monkeypatch)
     calls: list[str] = []
     drafts: list[str] = []
-    sensitive = _pack(items=(_item(
-        content="[[PATENT-SENSITIVE-RECALL]] patent filing",
-        sensitivity="patent-sensitive",
-    ),))
-    monkeypatch.setattr(research_trends.topics_knowledge, "collect", lambda topics: sensitive)
+    pack = _pack(items=(_item(content=content),))
+    monkeypatch.setattr(research_trends.topics_knowledge, "collect", lambda topics: pack)
     monkeypatch.setattr(
         research_trends, "_synthesis", lambda *args, **kwargs: calls.append("synthesis") or "draft"
     )
@@ -224,5 +219,13 @@ def test_patent_sensitive_related_notes_skip_the_draft_stage_and_use_codex_only(
 
     monkeypatch.setattr(research_trends.core, "run_topics", run_topics)
     assert research_trends.run() == 0
-    assert calls == ["codex"]
-    assert drafts == [""]  # 초안 단계는 모델을 부르지 않고 빈 문자열을 낸다.
+    assert calls == ["synthesis", "codex"]
+    assert drafts == ["draft"]
+
+
+@pytest.mark.parametrize("topic", ["cell monitoring", "특허 patent 기밀"])
+def test_research_topics_are_not_filtered_before_external_lookup(
+    monkeypatch: pytest.MonkeyPatch, topic: str,
+) -> None:
+    monkeypatch.setattr(research_trends.topics_registry, "list_topics", lambda: (topic,))
+    assert research_trends._safe_topics() == (topic,)

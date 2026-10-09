@@ -11,11 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
-from skills.doctype.scripts import doctype_schema, doctype_sensitivity
+from skills.doctype.scripts import doctype_schema
 
 
 _VERSION_FILE: Final = re.compile(r"^v([1-9][0-9]*)\.json$")
-_SENSITIVE: Final = "patent-sensitive"
 
 
 class DocTypeNotFoundError(LookupError):
@@ -33,12 +32,10 @@ class StorePaths:
     canonical_root: Path
     overlay_root: Path
     private_root: Path
-    rules_file: Path
 
     @classmethod
     def from_environment(cls) -> StorePaths:
         repo_root = Path(os.environ.get("DOCTYPE_REPO_ROOT", str(_default_repo_root()))).expanduser()
-        skill_root = Path(__file__).resolve().parents[1]
         return cls(
             canonical_root=repo_root / "doctype" / "library",
             overlay_root=Path(
@@ -46,9 +43,6 @@ class StorePaths:
             ).expanduser(),
             private_root=Path(
                 os.environ.get("DOCTYPE_PRIVATE_ROOT", "~/.hermes/doctype/private")
-            ).expanduser(),
-            rules_file=Path(
-                os.environ.get("DOCTYPE_RULES_FILE", str(skill_root / "configs/sensitivity-rules.yaml"))
             ).expanduser(),
         )
 
@@ -72,7 +66,6 @@ class DocTypeDraft:
     fields: tuple[doctype_schema.Field, ...]
     gist: str
     tone: str
-    sensitivity: str
     example: ExampleUpload
     template_from_example: bool
 
@@ -223,15 +216,12 @@ class DocTypeStore:
     def add(self, draft: DocTypeDraft) -> AddResult:
         """Append the next version and always persist the incoming document privately."""
         _ = doctype_schema.validate_identifier(draft.id)
-        if draft.sensitivity not in ("none", _SENSITIVE):
-            raise DocTypeStorageError("unsupported sensitivity")
         existing = [entry for entry in self._entries() if entry.metadata.id == draft.id]
         latest = max(existing, key=lambda entry: entry.metadata.version) if existing else None
         example, private_path = self._store_example(draft.example)
         try:
             version = max((entry.metadata.version for entry in existing), default=0) + 1
             created = latest.metadata.created if latest is not None else self._clock()
-            sensitivity = _SENSITIVE if draft.sensitivity == _SENSITIVE or (latest is not None and latest.metadata.sensitivity == _SENSITIVE) else "none"
             examples = (*(() if latest is None else latest.metadata.examples), example)
             template_ref = example if draft.template_from_example else (None if latest is None else latest.metadata.template_ref)
             metadata = doctype_schema.DocTypeMetadata(
@@ -243,7 +233,6 @@ class DocTypeStore:
                 fields=draft.fields,
                 gist=draft.gist.strip(),
                 tone=draft.tone.strip(),
-                sensitivity=sensitivity,
                 template_ref=template_ref,
                 examples=examples,
                 created=created,
@@ -264,9 +253,3 @@ class DocTypeStore:
     def repo_root(self) -> Path:
         """Return the metadata repository boundary where generated bodies are forbidden."""
         return self.paths.canonical_root.parents[1]
-
-
-def document_sensitivity(text: str, rules_file: Path) -> str:
-    """Translate the deterministic gate into the metadata routing tag."""
-    verdict = doctype_sensitivity.evaluate(text, doctype_sensitivity.load_rules(rules_file))
-    return _SENSITIVE if verdict.sensitive else "none"

@@ -38,18 +38,18 @@ def main() -> int:
         completed = _run(
             root / "skills/report/scripts/report_cli.py",
             ["report", "--notes-root", str(notes), "--outputs-root", str(outputs), "--response-file", str(response), "--query", "patent"],
-            {"AUTOPHAGY_DEMO_SECRET": "DUMMY-w5-report", "PATH": "/usr/bin:/bin", "REPORT_RULES_PATH": str(root / "configs/sensitivity-rules.yaml")},
+            {"AUTOPHAGY_DEMO_SECRET": "DUMMY-w5-report", "HOME": str(work), "PATH": "/usr/bin:/bin",
+             "AUTOPHAGY_SKILL_LIVE_ROOT": str(root / "skills")},
         )
         produced = list(outputs.glob("report-*.md"))
         obs: dict[str, bool | int | str | None] = {
             "report_exit": completed.returncode,
-            "sensitive_route_nonglm": "provider=openai-codex" in completed.stdout and "sensitive=true" in completed.stdout,
-            "glm_calls": 0,
+            "keyword_note_processed": "REPORT-CREATED" in completed.stdout and "notes=1" in completed.stdout,
             "output_private": outputs.exists() and stat.S_IMODE(outputs.stat().st_mode) == 0o700 and len(produced) == 1,
             "git_history_note_absent": not _git_has(root, marker),
             "error": None,
         }
-        print("OBS-JSON: " + json.dumps({"classified_note_nonglm": obs}, sort_keys=True))
+        print("OBS-JSON: " + json.dumps({"keyword_note_report": obs}, sort_keys=True))
     return 0
 
 

@@ -15,7 +15,6 @@ class Item(Protocol):
     store: str
     ref: str
     doc_date: str | None
-    sensitivity: str | None
     content: str
 
 
@@ -74,21 +73,15 @@ def validate(text: str, evidence_pack: object) -> str:
         return text
 
 
-def is_sensitive(evidence_pack: object) -> bool:
-    pack = cast(Pack, evidence_pack)
-    return any(
-        item.sensitivity == "patent-sensitive"
-        or "[[PATENT-SENSITIVE-RECALL]]" in item.content
-        for item in pack.items
-    )
-
-
 def write_sidecar(path: Path, evidence_pack: object) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.parent.chmod(0o700)
     target = path.with_suffix(".evidence.json")
+    payload = asdict(cast(Any, evidence_pack))
+    for item in payload["items"]:
+        item.pop("sensitivity", None)
     target.write_text(
-        json.dumps(asdict(cast(Any, evidence_pack)), ensure_ascii=False, indent=2, default=sorted) + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2, default=sorted) + "\n",
         encoding="utf-8",
     )
     target.chmod(0o600)

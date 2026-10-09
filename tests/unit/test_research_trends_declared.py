@@ -1,4 +1,4 @@
-"""RCB todo 16: the research_trends runtime, rules and prompt copies are declared.
+"""RCB todo 16: the research_trends runtime and prompt copies are declared.
 
 The flat runtime copy stays (the watcher must work whatever the release state is); what was
 missing is that the release can see the copy and put it back. Three lists must agree: the
@@ -64,11 +64,10 @@ def test_runtime_tree_declaration_lists_exactly_the_shipped_files() -> None:
     assert declared == swapped == _table_files() == _FILES
 
 
-def test_rules_and_prompt_copies_are_declared_where_the_deployer_pushes_them() -> None:
+def test_prompt_copy_is_declared_where_the_deployer_pushes_it() -> None:
     pushed = {m.group("dest"): m.group("src") for m in _PUSH.finditer(_DEPLOYER.read_text(encoding="utf-8"))}
     file_rows = {d.destination: d for d in _declarations() if d.kind == "file"}
     for source, dest in (
-        ("configs/sensitivity-rules.yaml", ".hermes/sensitivity-rules.yaml"),
         ("prompts/research-trends-v1.md", ".hermes/research-trends/research-trends-v1.md"),
     ):
         assert pushed.get(dest) == source
@@ -148,7 +147,7 @@ def test_research_trends_deploy_uses_the_swap_helper(tmp_path: Path) -> None:
     for name in _FILES:
         assert (runtime / name).read_bytes() == (_PKG / name).read_bytes()
     assert sorted(p.name for p in runtime.iterdir()) == sorted(_FILES)
-    assert (home / ".hermes/sensitivity-rules.yaml").read_bytes() == (_REPO / "configs/sensitivity-rules.yaml").read_bytes()
+    assert not (home / ".hermes/sensitivity-rules.yaml").exists()
     assert (home / ".hermes/research-trends/research-trends-v1.md").read_bytes() == (
         _REPO / "prompts/research-trends-v1.md"
     ).read_bytes()

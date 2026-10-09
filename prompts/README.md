@@ -14,7 +14,7 @@ prompts/
 
 ## 라이브러리 엔트리 형식 (library format)
 
-파일 = `library/<id>/v<N>.md`. frontmatter 키 **정확히 10개** (그 외 금지):
+파일 = `library/<id>/v<N>.md`. 새 frontmatter 키 **정확히 9개** (그 외 금지):
 
 ```
 ---
@@ -26,23 +26,16 @@ model: openai-codex           # 권장 모델: openai-codex | any
 tags: [report, weekly]
 created: 2026-07-16T00:00:00Z
 updated: 2026-07-16T00:00:00Z
-sensitivity: none             # none | patent-sensitive
 body_ref: inline              # inline | private:<불투명 32-hex ID>
 ---
 프롬프트 본문 (body_ref: inline 일 때만)
 ```
 
-## 민감도 분리 계약 (constraint 7/8)
+## 본문 저장
 
-- add/update 시 `configs/sensitivity-rules.yaml`의 결정적 키워드/정규식
-  게이트가 **본문+메타 전체**를 검사한다 (LLM 무참여).
-- **적중 시**: 본문은 `~agent/prompts-private/`(700, git 밖)에만 저장되고,
-  repo/오버레이 엔트리는 `sensitivity: patent-sensitive` +
-  `body_ref: private:<불투명 ID>` 메타 스텁만 갖는다 (본문 0바이트).
-- 민감 프롬프트 **사용 시** 호출은 `patent-sensitive` 태그가 강제되어
-  Codex OAuth 경로(`openai-codex`)로만 라우팅된다. 경로가 없거나 Codex OAuth로
-  검증되지 않으면 provider call 전에 fail-closed로 거부한다
-  (`configs/routing-policy.md`).
+새 엔트리는 내용과 무관하게 overlay에 inline 본문으로 저장한다(0700/0600).
+기존 데이터는 그대로. 이전 분리 본문은 `body_ref`의 불투명 참조로 읽으며
+이전 헤더의 추가 분류 필드는 읽을 때만 무시한다. 파일을 이동하거나 재처리하지 않는다.
 
 ## 버전 규칙
 
@@ -53,8 +46,8 @@ body_ref: inline              # inline | private:<불투명 32-hex ID>
 
 - repo 계층(읽기 전용): `/srv/autophagy-agents/prompts/`
 - 오버레이 계층(agent가 add한 엔트리): `~/.hermes/prompt-library/entries/`
-  — 비민감 엔트리는 검토 후 사람이 repo `library/`로 승격(커밋)할 수 있다.
-- 민감 본문: `~agent/prompts-private/` (700; repo에는 절대 없음)
+  — 엔트리는 검토 후 사람이 repo `library/`로 승격(커밋)할 수 있다.
+- 이전 분리 본문: `~/prompts-private/` (700; 기존 참조 읽기 전용)
 
 ## 레거시 형식 (meeting-extraction-v*.md)
 

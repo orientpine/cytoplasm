@@ -65,10 +65,6 @@ def _store() -> prompt_store.PromptStore:
     return prompt_store.PromptStore(prompt_store.StorePaths.from_environment())
 
 
-def _route(entry: prompt_store.StoredPrompt) -> str:
-    return ",".join(entry.routing_tags) if entry.routing_tags else "none"
-
-
 def _metadata_line(prefix: str, entry: prompt_store.StoredPrompt) -> str:
     metadata = entry.metadata
     return " ".join(
@@ -80,8 +76,6 @@ def _metadata_line(prefix: str, entry: prompt_store.StoredPrompt) -> str:
             f"category={metadata.category}",
             f"model={metadata.model}",
             f"tags={','.join(metadata.tags) or '-'}",
-            f"sensitivity={metadata.sensitivity}",
-            f"routing_tags={_route(entry)}",
         )
     )
 
@@ -183,9 +177,7 @@ def _cmd_add(request: AddRequest) -> int:
                 "ADDED",
                 f"id={metadata.id}",
                 f"version={metadata.version}",
-                f"sensitivity={metadata.sensitivity}",
                 f"body_ref={metadata.body_ref}",
-                f"private={str(result.private_path is not None).lower()}",
             )
         )
     )

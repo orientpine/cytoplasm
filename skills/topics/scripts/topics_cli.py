@@ -37,11 +37,6 @@ def _state_path() -> Path:
     return Path(os.environ.get("TOPICS_STATE_FILE", str(topics_registry.DEFAULT_STATE_PATH))).expanduser()
 
 
-def _rules_path() -> Path:
-    override = os.environ.get("TOPICS_RULES_PATH")
-    return Path(override).expanduser() if override else topics_registry.default_rules_path()
-
-
 def _topic(words: list[str]) -> str:
     return " ".join(words)
 
@@ -84,15 +79,11 @@ def main(argv: list[str] | None = None, evidence_pack: object | None = None) -> 
             removed = topics_registry.remove_topic(state, topic)
             print("TOPIC-REMOVED" if removed else "TOPIC-ABSENT")
             return 0
-        decision = topics_registry.validate_suggestion(topic, topics_registry.load_rules(_rules_path()))
-        if not decision.accepted:
-            prefix = "TOPIC-REFUSED" if args.command == "add" else "TOPIC-SUGGEST-REFUSED"
-            print(f"{prefix} {decision.guidance}")
-            return 0
+        decision = topics_registry.validate_suggestion(topic)
         if args.command == "suggest":
             print(f"TOPIC-SUGGEST {decision.topic}")
             return 0
-        added = topics_registry.add_topic(state, decision.topic, topics_registry.load_rules(_rules_path()))
+        added = topics_registry.add_topic(state, decision.topic)
         print(f"{'TOPIC-EXISTS' if added.duplicate else 'TOPIC-ADDED'} {added.topic}")
         return 0
     except topics_registry.RegistryError as error:

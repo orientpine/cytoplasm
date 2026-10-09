@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import os
 import re
-import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
-from skills.prompt.scripts import prompt_schema, prompt_sensitivity
+from skills.prompt.scripts import prompt_schema
 
 
 _VERSION_FILE: Final = re.compile(r"^v([1-9][0-9]*)\.md$")
 _LEGACY_FILE: Final = re.compile(r"^meeting-extraction-v([1-9][0-9]*)\.md$")
 _LEGACY_MARKER: Final = "<<<PROMPT>>>"
-_SENSITIVE_TAG: Final = "patent-sensitive"
 
 
 class PromptNotFoundError(LookupError):
@@ -31,7 +29,6 @@ class StorePaths:
     canonical_root: Path
     overlay_root: Path
     private_root: Path
-    rules_file: Path
 
     @classmethod
     def from_environment(cls) -> StorePaths:
@@ -42,9 +39,6 @@ class StorePaths:
                 os.environ.get("PROMPT_OVERLAY_ROOT", "~/.hermes/prompt-library/entries")
             ).expanduser(),
             private_root=Path(os.environ.get("PROMPT_PRIVATE_ROOT", "~/prompts-private")).expanduser(),
-            rules_file=Path(
-                os.environ.get("PROMPT_RULES_FILE", str(repo_root / "configs/sensitivity-rules.yaml"))
-            ).expanduser(),
         )
 
 
@@ -65,16 +59,10 @@ class StoredPrompt:
     path: Path
     source: str
 
-    @property
-    def routing_tags(self) -> tuple[str, ...]:
-        return (_SENSITIVE_TAG,) if self.metadata.sensitivity == _SENSITIVE_TAG else ()
-
-
 @dataclass(frozen=True, slots=True)
 class AddResult:
     entry: StoredPrompt
     path: Path
-    private_path: Path | None
 
 
 def _now() -> str:
@@ -167,7 +155,6 @@ class PromptStore:
                 tags=("legacy", "meeting"),
                 created=timestamp,
                 updated=timestamp,
-                sensitivity="none",
                 body_ref="inline",
             )
             entries.append(StoredPrompt(metadata, "\n".join(lines[marker + 1 :]).strip(), path, "legacy"))
@@ -232,36 +219,16 @@ class PromptStore:
             tags=draft.tags,
             created=self._clock(),
             updated=self._clock(),
-            sensitivity="none",
             body_ref="inline",
-        )
-        classified = prompt_sensitivity.evaluate(
-            prompt_schema.compose_entry(provisional, draft.body), prompt_sensitivity.load_rules(self.paths.rules_file)
         )
         versions = [entry.metadata.version for entry in self._entries() if entry.metadata.id == draft.id]
         version = max(versions, default=0) + 1
-        private_path: Path | None = None
-        if classified.sensitive:
-            opaque_id = secrets.token_hex(16)
-            metadata = replace(
-                provisional,
-                version=version,
-                sensitivity=_SENSITIVE_TAG,
-                body_ref=f"private:{opaque_id}",
-            )
-            _secure_directory(self.paths.private_root)
-            private_path = self.paths.private_root / f"{opaque_id}.md"
-            _write_exclusive(private_path, draft.body)
-            stored_body = ""
-        else:
-            metadata = replace(provisional, version=version)
-            stored_body = draft.body
+        metadata = replace(provisional, version=version)
+        stored_body = draft.body
         path = self.paths.overlay_root / metadata.id / f"v{metadata.version}.md"
         _secure_directory(path.parent)
         try:
             _write_exclusive(path, prompt_schema.compose_entry(metadata, stored_body))
         except FileExistsError as error:
-            if private_path is not None:
-                private_path.unlink()
             raise PromptStorageError("concurrent version creation detected; retry add") from error
-        return AddResult(StoredPrompt(metadata, stored_body, path, "overlay"), path, private_path)
+        return AddResult(StoredPrompt(metadata, stored_body, path, "overlay"), path)

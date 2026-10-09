@@ -15,11 +15,6 @@ import sys
 from pathlib import Path
 from typing import Final
 
-if __package__ in (None, ""):
-    from report_sensitivity import CODEX_PROVIDER, Route
-else:
-    from .report_sensitivity import CODEX_PROVIDER, Route
-
 LLM_TIMEOUT: Final = 600.0
 _REPO_ROOT_ENV: Final = "AUTOPHAGY_REPO_ROOT"
 _RELEASE_ROOT: Final = Path("/srv/autophagy-agent-current")
@@ -40,16 +35,15 @@ def _repo_root() -> Path:
     return _RELEASE_ROOT
 
 
-def _record_route(route: Route, served_provider: str, served_model: str) -> None:
+def _record_route(served_provider: str, served_model: str) -> None:
     directory = Path.home() / ".hermes" / "report" / "logs"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory.chmod(0o700)
     path = directory / "llm-calls.jsonl"
     record = {
         "run_id": os.environ.get("REPORT_RUN_ID", "unspecified"),
-        "provider": route.provider,
-        "model": route.model,
-        "sensitive": route.sensitive,
+        "provider": "openai-codex",
+        "model": "hermes-config",
         "served_model": served_model,
         "served_provider": served_provider,
     }
@@ -58,15 +52,8 @@ def _record_route(route: Route, served_provider: str, served_model: str) -> None
     path.chmod(0o600)
 
 
-def generate(prompt: str, route: Route) -> str:
-    """Call the pre-approved Codex OAuth route; refuse anything else (fail closed).
-
-    The guard that used to keep patent-sensitive notes off the second tier now
-    reads the other way round: only the Codex OAuth route may be called at all,
-    so an unexpected route is refused before the prompt leaves this process.
-    """
-    if route.provider != CODEX_PROVIDER:
-        raise LlmInvocationError(f"refused route {route.provider!r}; only {CODEX_PROVIDER} runs")
+def generate(prompt: str) -> str:
+    """Call the shared account-model client."""
     root = _repo_root()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
@@ -79,7 +66,7 @@ def generate(prompt: str, route: Route) -> str:
         client = CodexClient.from_environment(timeout=LLM_TIMEOUT)
         served = client.complete_served(prompt)
     except CodexError as error:
-        _record_route(route, UNKNOWN, UNKNOWN)
+        _record_route(UNKNOWN, UNKNOWN)
         raise LlmInvocationError(str(error)) from error
-    _record_route(route, served.provider, served.model)
+    _record_route(served.provider, served.model)
     return served.text

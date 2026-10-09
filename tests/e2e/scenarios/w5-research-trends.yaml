@@ -1,24 +1,22 @@
-# W5-6: sensitive topics are refused before either external arXiv transport or
-# GLM can be reached. The actor supplies only generated synthetic input.
+# W5-6: keyword topics use both paper sources and model stages with offline transports.
 version: 1
 id: w5-research-trends
-title: "W5 research-trends sensitive-topic refusal E2E bank"
+title: "W5 research-trends keyword parity E2E bank"
 driver: tests/e2e/drivers/w5_local.sh
 actor: tests/e2e/drivers/w5_research_trends_actor.py
 
 cases:
-  - id: sensitive_topic_refused
+  - id: keyword_topic_processed
     kind: security
     steps:
-      - "submit a classified synthetic topic through the real topics CLI"
-      - "require refusal and no registry persistence"
-      - "run the weekly path with stub transports and require zero arXiv and GLM calls"
+      - "submit a keyword-containing synthetic topic through the real topics CLI"
+      - "require registry persistence"
+      - "run the weekly path with stub transports and require both sources and model stages"
     expect:
-      refused: true
-      registry_contains_topic: false
-      arxiv_calls: 0
-      semscholar_calls: 0
-      glm_calls: 0
-      codex_calls: 0
-      report_written: false
+      add_exit: 0
+      registry_contains_topic: true
+      arxiv_calls: 1
+      semscholar_calls: 1
+      model_calls: 2
+      report_written: true
       error: null
