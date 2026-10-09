@@ -1,10 +1,8 @@
 """Side-effect builders for meeting ingest: Kanban, milestones.yaml, note, #team.
 
 Everything here is pure/deterministic except `write_note` and
-`update_milestones` (file writes under the agent home). Sensitive meetings:
-#team stays suppressed and cards default to a generic label + note pointer;
-an item whose public strings (title/deadline/basis) hit NO deterministic
-rule may carry an informative [민감회의] card (fail-closed without rules).
+`update_milestones` (file writes under the agent home). Every meeting is
+handled the same way — there is no sensitivity classification.
 """
 
 from __future__ import annotations
@@ -16,7 +14,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Sequence
 
-import meeting_gate
 import meeting_minutes
 import meeting_template
 from meeting_llm import ActionItem, Extraction
@@ -63,46 +60,19 @@ def _clip(text: str) -> str:
     return flat[: _TITLE_MAX - 1] + "…" if len(flat) > _TITLE_MAX else flat
 
 
-def _item_publishable(
-    item: ActionItem, rules: tuple[meeting_gate.TagRule, ...] | None
-) -> bool:
-    """Item-level recheck: True only when rules exist and NO tag hits the public strings."""
-    if rules is None:
-        return False  # fail-closed
-    public = "\n".join((item.title, item.deadline or "", item.basis))
-    return not meeting_gate.evaluate(public, rules).tags
-
-
 def sanitize_card(
     item: ActionItem,
     *,
-    sensitive: bool,
     seq: int,
     note_name: str,
     ref: str,
-    rules: tuple[meeting_gate.TagRule, ...] | None = None,
     project: str = "",
 ) -> PlannedCard:
-    """Card for MY item. Sensitive -> generic title, pointer-only body — unless
-    the item's public strings pass an item-level recheck against the same
-    deterministic rules (then an informative [민감회의] card)."""
-    if sensitive and _item_publishable(item, rules):
-        deadline = f" (마감 {item.deadline})" if item.deadline else ""
-        title = _clip(f"[민감회의] {item.title}{deadline}")
-        body = _clip(f"근거: {item.basis}") if item.basis else "회의록 추출 항목"
-        body += "\n(민감 회의 문서 — 항목 문자열 규칙 재검사 통과)"
-        body += f"\n출처: ~/notes/meetings/{note_name}"
-    elif sensitive:
-        title = f"[민감] 회의 액션아이템 {seq}"
-        body = (
-            f"상세는 로컬 노트 참조: ~/notes/meetings/{note_name} (mode 700). "
-            "민감 태그 회의라 카드에는 내용을 싣지 않습니다."
-        )
-    else:
-        deadline = f" (마감 {item.deadline})" if item.deadline else ""
-        title = _clip(f"{item.title}{deadline}")
-        body = _clip(f"근거: {item.basis}") if item.basis else "회의록 추출 항목"
-        body += meeting_minutes.source_block(note_name, project)
+    """Card for MY item: title with deadline, basis, and the minutes' source."""
+    deadline = f" (마감 {item.deadline})" if item.deadline else ""
+    title = _clip(f"{item.title}{deadline}")
+    body = _clip(f"근거: {item.basis}") if item.basis else "회의록 추출 항목"
+    body += meeting_minutes.source_block(note_name, project)
     return PlannedCard(
         title=title, body=body, idempotency_key=f"meeting:{ref}:todo:{seq}"
     )
@@ -111,18 +81,13 @@ def sanitize_card(
 def plan_cards(
     extraction: Extraction,
     *,
-    sensitive: bool,
     note_name: str,
     ref: str,
-    rules: tuple[meeting_gate.TagRule, ...] | None = None,
     project: str = "",
 ) -> tuple[PlannedCard, ...]:
     """Plan one owner-action card per MY todo, blocked from LLM dispatch."""
     return tuple(
-        sanitize_card(
-            item, sensitive=sensitive, seq=seq, note_name=note_name, ref=ref,
-            rules=rules, project=project,
-        )
+        sanitize_card(item, seq=seq, note_name=note_name, ref=ref, project=project)
         for seq, item in enumerate(extraction.todos, start=1)
     )
 
@@ -148,7 +113,6 @@ def write_note(
     kind: str,
     original_text: str,
     extraction: Extraction,
-    sensitive: bool,
     ref: str,
     now: datetime,
     evidence_footer: str = "",
@@ -166,7 +130,6 @@ def write_note(
             kind=kind,
             extraction=extraction,
             original_text=original_text,
-            sensitive=sensitive,
             ref=ref,
             now=now,
             evidence_footer=evidence_footer,
@@ -208,7 +171,6 @@ def format_team_post(
 def format_notify(
     *,
     label: str,
-    sensitive: bool,
     cards: int,
     milestones_added: int,
     others: int,
@@ -217,23 +179,19 @@ def format_notify(
     project: str = "",
     action_id_exhausted: bool = False,
 ) -> str:
-    """Sanitized completion notice for the originating DM/channel."""
-    lines = [f"회의록 처리 완료: {label}" if not sensitive else "회의록 처리 완료 (민감 문서)"]
+    """Completion notice for the originating DM/channel."""
+    lines = [f"회의록 처리 완료: {label}"]
     lines.append(f"- 내 액션아이템 카드: {cards}건 (Kanban)")
     lines.append(f"- 마일스톤 갱신: {milestones_added}건 (milestones.yaml)")
     if action_id_exhausted:
         lines.append("- 관리번호 소진 안내: 신규 Action Item은 관리번호 없이 회의록에 기록했습니다")
-    if sensitive:
-        lines.append("- 민감 태그 문서: 비-GLM 모델로 처리, 상세는 로컬 노트에만 보관")
-        lines.append(f"- 타인 항목 {others}건은 공유 채널에 게시하지 않음 (로컬 노트 참조)")
-    elif team_posted:
+    if team_posted:
         lines.append(f"- 타인 액션아이템 {others}건 → #team 규약 게시 완료")
-    if not sensitive:
-        lines.append(
-            f"- 과제: {project} — action item 원장 갱신"
-            if project
-            else "- 과제 미지정 — 관리번호 없이 표만 그렸습니다(원장 미갱신). "
-            "`--project <과제명>` 을 주거나 파일명에 과제명을 넣으세요."
-        )
+    lines.append(
+        f"- 과제: {project} — action item 원장 갱신"
+        if project
+        else "- 과제 미지정 — 관리번호 없이 표만 그렸습니다(원장 미갱신). "
+        "`--project <과제명>` 을 주거나 파일명에 과제명을 넣으세요."
+    )
     lines.append(f"- 노트: ~/notes/meetings/{note_name}")
     return "\n".join(lines)

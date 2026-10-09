@@ -55,7 +55,6 @@ def test_ingest_keeps_appendix_raw_when_extraction_excludes_fold(
     for name, value in {
         "MEETING_NOTES_DIR": tmp_path / "notes",
         "MEETING_STATE_FILE": tmp_path / "state/milestones.yaml",
-        "MEETING_RULES_FILE": REPO / "configs/sensitivity-rules.yaml",
         "MEETING_PROMPT_FILE": template,
         "MEETING_LOG_DIR": tmp_path / "logs",
         "MEETING_PLAN_DIR": tmp_path / "plan",
@@ -66,7 +65,7 @@ def test_ingest_keeps_appendix_raw_when_extraction_excludes_fold(
     prompts: list[str] = []
     recorded = (SKILL / "fixtures/recorded-clean.json").read_text(encoding="utf-8")
 
-    def call(prompt: str, *, sensitive: bool = False) -> str:
+    def call(prompt: str) -> str:
         prompts.append(prompt)
         return recorded
 

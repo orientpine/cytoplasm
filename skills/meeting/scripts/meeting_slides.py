@@ -1,13 +1,8 @@
 """발표자료(슬라이드) 텍스트 추출 — 대명사·모호 지시어 교정 재료.
 
-계약 둘이 이 모듈의 존재 이유다.
-
-- **fail-soft**: 발표자료는 보조 재료다. 없거나·스캔본이거나·형식이 낯설어도 회의록 생성을
-  멈추지 않는다. 실패는 예외가 아니라 `Deck.status` 로 돌아오고 노트에 그대로 적힌다.
-- **fail-closed 는 게이트 쪽**: 추출한 텍스트는 `gate_text()` 로 회의 본문과 함께 민감도
-  게이트에 **반드시** 합산된다. 합산하지 않으면 특허 슬라이드가 GLM 으로 새는 경로가 생긴다.
-  그래서 `prompt_block()` 과 `gate_text()` 는 **같은 조건**으로 자료를 고른다 — 프롬프트로
-  나가는 것은 예외 없이 게이트를 지난 것이다.
+**fail-soft** 가 이 모듈의 계약이다: 발표자료는 보조 재료다. 없거나·스캔본이거나·형식이
+낯설어도 회의록 생성을 멈추지 않는다. 실패는 예외가 아니라 `Deck.status` 로 돌아오고 노트에
+그대로 적힌다.
 
 본문을 읽는 일 자체는 여기서 하지 않는다. `automation/document_text.py` 가 단일 정의이고
 이 모듈은 그 단위들을 슬라이드 번호가 붙은 `Deck` 으로 옮길 뿐이다 — 추출기가 둘이면 한쪽만
@@ -101,10 +96,6 @@ def extract_deck(path: Path) -> Deck:
 
 def note_label(deck: Deck) -> str:
     return f"{deck.name} ({deck.slide_count}쪽)" if deck.status == "ok" else f"{deck.name} — {deck.status}"
-
-
-def gate_text(decks: tuple[Deck, ...]) -> str:
-    return "\n".join(deck.text for deck in decks if deck.status == "ok")
 
 
 def prompt_block(decks: tuple[Deck, ...], *, heading: str = "함께 제공된 발표자료") -> str:

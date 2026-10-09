@@ -1,13 +1,12 @@
 """LLM extraction routing + strict JSON parsing for meeting ingest.
 
-Routing contract (constraint 6):
-- Every extraction — patent-sensitive or not — runs on the Codex OAuth tier
-  through the shared `automation.codex_llm` client (provider ``openai-codex``).
-  There is no second tier, so there is nothing to downgrade to: an unavailable
-  tier fails the ingest visibly instead of answering from somewhere else.
-- The sensitivity gate is unchanged and still decides confinement and
-  sanitization. `call_codex` additionally REFUSES any route that is not the
-  Codex OAuth tier — the same fail-closed layer, pointed at the surviving tier.
+Routing contract:
+- Every extraction runs through the shared `automation.codex_llm` client, which
+  follows the account's main model and its configured fallback chain. When the
+  whole chain fails the ingest fails visibly instead of answering from elsewhere.
+- Meetings carry no sensitivity classification: every meeting takes this same
+  route and the same publication path (operators and members all hold the
+  security-manager grade, so per-document confinement is no longer needed).
 - The repository client is imported lazily (skills must not import automation
   eagerly); an ImportError refuses the call rather than calling a model itself.
 """
@@ -47,7 +46,6 @@ __all__ = [
     "OpenQuestion",
     "ResolvedAction",
     "SpeakerRef",
-    "PatentRoutingError",
     "Topic",
     "build_prompt",
     "call_codex",
@@ -66,10 +64,6 @@ CODEX_PROVIDER: Final = "openai-codex"
 _PROMPT_MARKER: Final = "<<<PROMPT>>>"
 _REPO_ROOT_ENV: Final = "AUTOPHAGY_REPO_ROOT"
 _RELEASE_ROOT: Final = Path("/srv/autophagy-agent-current")
-
-
-class PatentRoutingError(Exception):
-    """Raised when extraction is asked to run anywhere but the Codex OAuth tier."""
 
 
 class ExtractionUnavailableError(ExtractionParseError):
@@ -141,29 +135,13 @@ def _repo_root() -> Path:
     return _RELEASE_ROOT
 
 
-def call_codex(
-    prompt: str,
-    *,
-    sensitive: bool = False,
-    provider: str = CODEX_PROVIDER,
-    timeout: float | None = None,
-) -> str:
-    """Run one extraction on the Codex OAuth tier — the only route there is.
-
-    ``sensitive`` no longer picks a provider; it is kept so the refusal below
-    can say what was at stake. ``provider`` exists for the same reason: a caller
-    that asks for any other tier is refused BEFORE the prompt leaves this
-    process — the same guard that used to keep patent text off the second tier.
+def call_codex(prompt: str, *, timeout: float | None = None) -> str:
+    """Run one extraction through the shared model client.
 
     The shared client owns the transport (``-t todo`` inert toolset, Codex
     pinned as primary, the account's Hermes ``fallback_providers`` chain honored
     — configs/routing-policy.md). When the whole chain fails it raises.
     """
-    if provider != CODEX_PROVIDER:
-        detail = " (patent-sensitive)" if sensitive else ""
-        raise PatentRoutingError(
-            f"extraction must run on {CODEX_PROVIDER}; refused route {provider!r}{detail}"
-        )
     root = _repo_root()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
@@ -183,7 +161,6 @@ def call_codex(
 def extract(
     meeting_text: str,
     *,
-    sensitive: bool,
     prompt_path: Path,
     my_names: str,
     recorded_response: str | None = None,
@@ -191,16 +168,11 @@ def extract(
     slides: str = "",
     open_actions: str = "",
 ) -> tuple[Extraction, str]:
-    """Build the prompt, run it on the Codex OAuth tier, return (extraction, provider).
-
-    ``sensitive`` no longer selects a tier — it travels with the call so the
-    route guard can name it in a refusal, and the caller keeps using it for
-    confinement and sanitization exactly as before.
-    """
+    """Build the prompt, run it through the shared client, return (extraction, provider)."""
     prompt = build_prompt(
         load_prompt_template(prompt_path), meeting_text=meeting_text, my_names=my_names,
         evidence=evidence, slides=slides, open_actions=open_actions,
     )
     if recorded_response is not None:
         return parse_extraction(recorded_response), "recorded"
-    return parse_extraction(call_codex(prompt, sensitive=sensitive)), CODEX_PROVIDER
+    return parse_extraction(call_codex(prompt)), CODEX_PROVIDER

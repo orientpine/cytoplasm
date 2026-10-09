@@ -166,9 +166,9 @@ def detect_project(label: str, *, client: object | None = None) -> str:
     return found[0]
 
 
-def load_board(project: str, *, sensitive: bool = False, client: object | None = None) -> Board:
+def load_board(project: str, *, client: object | None = None) -> Board:
     """Load one project's optional Drive state without ever blocking a meeting."""
-    if not project or sensitive or (client is None and os.environ.get("DRIVE_PUBLISH_ENABLED") != "1"):
+    if not project or (client is None and os.environ.get("DRIVE_PUBLISH_ENABLED") != "1"):
         return empty_board(project)
     template: object | None = None
     records: tuple[object, ...] = ()

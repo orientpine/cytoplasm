@@ -54,7 +54,6 @@ def update_milestones(
     state_file: Path,
     milestones: tuple[ActionItem, ...],
     *,
-    sensitive: bool,
     note_name: str,
     ref: str,
     now: datetime,
@@ -68,11 +67,7 @@ def update_milestones(
     seen = {(entry.get("title"), entry.get("deadline")) for entry in existing}
     added = 0
     for seq, item in enumerate(milestones, start=1):
-        title = (
-            f"[민감] 회의 마일스톤 {seq} — 상세: ~/notes/meetings/{note_name}"
-            if sensitive
-            else item.title
-        )
+        title = item.title
         deadline = item.deadline or "미정"
         if (title, deadline) in seen:
             continue
@@ -80,7 +75,7 @@ def update_milestones(
             {
                 "title": title,
                 "deadline": deadline,
-                "basis": "로컬 노트 참조" if sensitive else (item.basis or ""),
+                "basis": item.basis or "",
                 "source": f"meeting:{note_name}",
                 "added": now.isoformat(timespec="seconds"),
             }

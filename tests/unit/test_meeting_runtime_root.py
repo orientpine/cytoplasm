@@ -135,7 +135,7 @@ print(json.dumps({{"result": result, "requests": requests, "automation": False}}
         "result": {"action": "skip", "reason": "meeting_ingest"},
         "requests": [
             ["/api/v10/channels/111/messages/222/threads", {"name": "회의록 처리"}],
-            [f"/api/v10/channels/{target}/messages", {"content": "회의록 접수 — 민감도 게이트 통과 후 처리 중입니다 (수 분 내 결과 통지)."}],
+            [f"/api/v10/channels/{target}/messages", {"content": "회의록 접수 — 처리 중입니다 (수 분 내 결과 통지)."}],
         ],
         "automation": False,
     }

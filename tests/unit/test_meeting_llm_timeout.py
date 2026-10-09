@@ -44,7 +44,7 @@ def test_a_long_transcript_gets_more_than_three_minutes(monkeypatch, tmp_path) -
     """180초는 91KB 전사본을 넘기기에 부족하다 — 실측으로 죽은 값이다."""
     seen = _capture(monkeypatch, tmp_path)
 
-    meeting_llm.call_codex("x", sensitive=False)
+    meeting_llm.call_codex("x")
 
     assert seen["timeout"] == meeting_llm.LLM_TIMEOUT
     assert meeting_llm.LLM_TIMEOUT >= 600, "공용 클라이언트 기본값(180초) 아래로 내려가지 않는다"
@@ -55,7 +55,7 @@ def test_the_budget_can_be_raised_without_a_release(monkeypatch, tmp_path) -> No
     seen = _capture(monkeypatch, tmp_path)
     monkeypatch.setenv(meeting_llm.TIMEOUT_ENV, "1234")
 
-    meeting_llm.call_codex("x", sensitive=False)
+    meeting_llm.call_codex("x")
 
     assert seen["timeout"] == 1234.0
 
@@ -64,7 +64,7 @@ def test_a_malformed_override_falls_back_instead_of_crashing(monkeypatch, tmp_pa
     seen = _capture(monkeypatch, tmp_path)
     monkeypatch.setenv(meeting_llm.TIMEOUT_ENV, "곧")
 
-    meeting_llm.call_codex("x", sensitive=False)
+    meeting_llm.call_codex("x")
 
     assert seen["timeout"] == meeting_llm.LLM_TIMEOUT
 
@@ -73,7 +73,7 @@ def test_every_extraction_call_pins_the_codex_oauth_route(monkeypatch, tmp_path)
     """사용자 설정의 fallback provider 로 내려갈 수 있는 argv 는 회귀다."""
     seen = _capture(monkeypatch, tmp_path)
 
-    meeting_llm.call_codex("x", sensitive=True)
+    meeting_llm.call_codex("x")
 
     assert "--ignore-user-config" not in seen["argv"]
     assert not {"--provider", "-m"} & set(seen["argv"])

@@ -65,15 +65,6 @@ def test_load_board_with_no_project_never_reaches_drive() -> None:
     assert drive.calls == []
 
 
-def test_sensitive_board_never_reaches_drive() -> None:
-    drive = RaisingDrive()
-
-    board = meeting_project.load_board("해양고신뢰성", sensitive=True, client=drive)
-
-    assert board == meeting_project.empty_board("해양고신뢰성")
-    assert drive.calls == []
-
-
 def test_load_board_parses_a_readable_form() -> None:
     drive = _drive_with(("form", "회의록양식.md", "회의록\n\n1. 일시\n2. 참석자\n"))
 

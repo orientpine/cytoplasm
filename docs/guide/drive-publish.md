@@ -157,8 +157,6 @@ oneshot의 날짜는 **고정(sticky)** 이다. 같은 제목을 다시 발행�
 - prompt 스킬의 버전 관리 자산 일괄 미러링.
 - 에이전트 작업용 코드와 계획 문서(`.omo/`, `docs/`).
 - 특허 산출물 — `patent`는 gate_only, 전용 반출 게이트 전용이다.
-- 민감 회의록 — meeting은 민감도 게이트에 걸리면 `DRIVE-PUBLISH-SKIP reason=sensitive`로
-  로컬 노트만 남긴다.
 
 유일한 예외는 위의 명시적 `--companion` 지정이다.
 

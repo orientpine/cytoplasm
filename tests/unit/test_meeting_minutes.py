@@ -67,7 +67,6 @@ def _render(extraction: meeting_llm.Extraction, **overrides) -> str:
         "kind": "md",
         "extraction": extraction,
         "original_text": "일시: 2026-07-15\n차: 데이터셋 사전 7/24까지 작성\n박: 펌웨어 리뷰",
-        "sensitive": False,
         "ref": "a1b2c3d4",
         "now": NOW,
         "evidence_footer": "[E1] RAG/회의: meetings/previous.md (2026-08-14, path)",
@@ -231,7 +230,6 @@ def test_write_note_persists_exactly_the_rendered_document(tmp_path):
         kind="md",
         original_text="차: 데이터셋 사전 7/24까지 작성",
         extraction=_full_extraction(),
-        sensitive=False,
         ref="a1b2c3d4",
         now=NOW,
         evidence_footer="[E1] RAG/회의: meetings/previous.md (2026-08-14, path)",
@@ -244,16 +242,17 @@ def test_write_note_persists_exactly_the_rendered_document(tmp_path):
     assert note.stat().st_mode & 0o777 == 0o600
 
 
-def test_sensitive_note_uses_the_same_skeleton_and_keeps_the_original(tmp_path):
+def test_patent_keyword_note_carries_no_sensitivity_tag_and_keeps_the_original(tmp_path):
     extraction = meeting_llm.Extraction(
         decisions=(meeting_llm.Decision("청구항 범위 확정", "청구항 논의"),)
     )
     note = meeting_actions.write_note(
-        tmp_path, label="민감 회의", kind="md", original_text="청구항 1항을 넓힌다",
-        extraction=extraction, sensitive=True, ref="deadbeef", now=NOW,
+        tmp_path, label="발명 회의", kind="md", original_text="청구항 1항을 넓힌다",
+        extraction=extraction, ref="deadbeef", now=NOW,
     )
     content = note.read_text(encoding="utf-8")
-    assert "patent-sensitive" in content
+    assert "patent-sensitive" not in content
+    assert "청구항 범위 확정" in content.split(meeting_minutes.APPENDIX_HEADING)[0]
     assert "청구항 1항을 넓힌다" in content.split(meeting_minutes.APPENDIX_HEADING)[1]
 
 
