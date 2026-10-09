@@ -1,8 +1,7 @@
 """큐레이션 실행 경로 — 증류는 주입, 저장은 게이트, 상한은 상태가 센다.
 
 증류에는 `automation/twin_distill/llm.py` 의 `LlmClient` Protocol 을 그대로 쓴다.
-새 LLM 경로·새 예산 경로를 만들지 않기 위해서다. patent-sensitive 원천은 후보 선정에서
-이미 걸러지므로 프롬프트에 도달하지 않는다(구성상 보장, 아래에서 확인한다).
+새 LLM 경로·새 예산 경로를 만들지 않기 위해서다. 모든 원천은 같은 경로로 전달한다.
 """
 
 from __future__ import annotations
@@ -29,28 +28,28 @@ class _FakeClient:
         return self.reply
 
 
-def _source(ref: str = "projects/kimm.md", *, sensitivity: str | None = None) -> SourceNote:
+def _source(ref: str = "projects/demo.md") -> SourceNote:
     return SourceNote(
-        ref=ref, title="KIMM 협업 조건", body="2026-05-02 회의에서 조건을 합의했다.",
-        tags=("연구",), sensitivity=sensitivity, event_date="2026-05-02", entities=("김박사",),
+        ref=ref, title="예제 협업 조건", body="2026-05-02 회의에서 조건을 합의했다.",
+        tags=("연구",), event_date="2026-05-02", entities=("김박사",),
     )
 
 
-def _candidate(ref: str = "projects/kimm.md"):
+def _candidate(ref: str = "projects/demo.md"):
     return select_candidates((_source(ref),), existing_digests=frozenset(), limit=1, clock=lambda: _CLOCK)[0]
 
 
 def test_prompt_carries_the_source_text_and_its_origin() -> None:
     prompt = render_prompt(_candidate())
     assert "2026-05-02 회의에서 조건을 합의했다." in prompt
-    assert "projects/kimm.md" in prompt
+    assert "projects/demo.md" in prompt
 
 
 def test_distilled_body_keeps_the_origin_line() -> None:
     client = _FakeClient("## 요약\n조건에 합의했다.")
     body = distilled_body(_candidate(), client=client)
     assert "조건에 합의했다." in body
-    assert "projects/kimm.md" in body
+    assert "projects/demo.md" in body
     assert len(client.prompts) == 1
 
 
@@ -74,7 +73,7 @@ def test_dry_run_plans_without_touching_the_gate_or_the_quota(tmp_path: Path) ->
         emit=False,
     )
     assert isinstance(plan, CurationPlan)
-    assert [candidate.source_ref for candidate in plan.candidates] == ["projects/kimm.md"]
+    assert [candidate.source_ref for candidate in plan.candidates] == ["projects/demo.md"]
     assert plan.emitted == 0
     assert calls == []
     assert not (tmp_path / "state.json").exists()

@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
-from typing import TypeAlias
 
 from automation.rag_ingest.chunking import parse_frontmatter
 from automation.wiki_curate.candidates import SourceNote, content_digest
 
-Classifier: TypeAlias = Callable[[str], frozenset[str]]
 
-_SENSITIVE = "patent-sensitive"
 
 
 def _markdown_files(root: Path) -> list[Path]:
@@ -37,20 +33,18 @@ def _event_date(frontmatter: dict[str, str]) -> str | None:
     return None
 
 
-def read_obsidian_notes(root: Path, *, classifier: Classifier) -> tuple[SourceNote, ...]:
+def read_obsidian_notes(root: Path) -> tuple[SourceNote, ...]:
     notes: list[SourceNote] = []
     for path in _markdown_files(root):
         text = path.read_text(encoding="utf-8", errors="replace")
         frontmatter, body = parse_frontmatter(text)
         relative = path.relative_to(root).as_posix()
-        tags = classifier(f"{frontmatter.get('title', '')} {body}")
         notes.append(
             SourceNote(
                 ref=relative,
                 title=frontmatter.get("title", "").strip() or path.stem,
                 body=body,
                 tags=_list_field(frontmatter, "tags"),
-                sensitivity=_SENSITIVE if _SENSITIVE in tags else None,
                 event_date=_event_date(frontmatter),
                 entities=_list_field(frontmatter, "entity"),
             )

@@ -14,7 +14,6 @@ SHADOW_SCHEMA: Final = "memory-curator-shadow-v1"
 _KINDS: Final[tuple[MemoryKind, ...]] = ("memory", "user")
 _ROUTES: Final[tuple[Route, ...]] = ("TWIN", "OPS_REFERENCE", "KEEP_NATIVE", "UNCERTAIN")
 _VETO_REASONS: Final[tuple[VetoReason, ...]] = (
-    "sensitivity",
     "credential",
     "keep_native_rule",
     "marker",

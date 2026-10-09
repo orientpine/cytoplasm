@@ -41,21 +41,18 @@ def main() -> int:
             "PATENT_STATUS_ROOT": str(work / "status"),
             "PATENT_LLM_LOG_ROOT": str(work / "logs"),
             "PATENT_RUN_ID": "w5-patent",
-            "PATENT_SENSITIVE_TAG": "",
         }
         _ = _run(root, env, "create", "--slug", "w5-disclosure")
         _ = _run(root, env, "checklist", "--slug", "w5-disclosure", "--state", "in-progress")
         drafted = _run(root, env, "draft", "--slug", "w5-disclosure", "--response-file", str(response))
         obs: dict[str, bool | int | str | None] = {
             "draft_exit": drafted.returncode,
-            "tag_auto_attached": "tag_auto_attached=true" in drafted.stdout,
-            "provider_nonglm": "provider=openai-codex" in drafted.stdout,
-            "glm_calls": 0,
+            "account_route": "provider=openai-codex" in drafted.stdout,
             "workspace_private": (drafts / "w5-disclosure").exists() and stat.S_IMODE((drafts / "w5-disclosure").stat().st_mode) == 0o700,
             "git_history_invention_absent": not _git_has(root, marker),
             "error": None,
         }
-        print("OBS-JSON: " + json.dumps({"forced_nonglm_private_draft": obs}, sort_keys=True))
+        print("OBS-JSON: " + json.dumps({"account_configured_private_draft": obs}, sort_keys=True))
     return 0
 
 

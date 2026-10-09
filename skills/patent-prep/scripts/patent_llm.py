@@ -1,4 +1,4 @@
-"""One-shot Codex-only dispatch for patent-prep drafts."""
+"""One-shot account-configured dispatch for patent-prep drafts."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class InvocationResult:
 
 @dataclass(frozen=True, slots=True)
 class DraftResponse:
-    """A private draft plus its enforced non-GLM dispatch plan."""
+    """A draft plus its dispatch plan."""
 
     text: str
     call: PatentCall
@@ -69,7 +69,6 @@ def _record_call(call: PatentCall, served_provider: str, served_model: str) -> N
         "served_model": served_model,
         "served_provider": served_provider,
         "tags": list(call.tags),
-        "tag_auto_attached": call.tag_auto_attached,
     }
     path = directory / "llm-calls.jsonl"
     with path.open("a", encoding="utf-8") as handle:
@@ -78,11 +77,10 @@ def _record_call(call: PatentCall, served_provider: str, served_model: str) -> N
 
 
 def _invoke(command: tuple[str, ...]) -> InvocationResult:
-    """Run Hermes in the home directory, bypassing the GLM default provider."""
+    """Run Hermes in the home directory using the account configuration."""
     environment = {
         **os.environ,
         "PATH": f"{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}",
-        "PATENT_SENSITIVE_TAG": "patent-sensitive",
     }
     try:
         completed = subprocess.run(
@@ -102,7 +100,7 @@ def _invoke(command: tuple[str, ...]) -> InvocationResult:
 def generate_draft(
     prompt: str, requested_tags: tuple[str, ...] = (), invoke: Invoke | None = None
 ) -> DraftResponse:
-    """Attach the patent tag before one hard-coded Codex-only Hermes call."""
+    """Generate a draft with the account-configured model and fallback chain."""
     call = plan_patent_call(requested_tags)
     handle, name = tempfile.mkstemp(prefix="patent-usage-", suffix=".json")
     os.close(handle)

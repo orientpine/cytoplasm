@@ -11,7 +11,7 @@ _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "knowledge"
 _NOW = datetime(2026, 8, 21, tzinfo=timezone.utc)
 
 
-def test_facade_derives_dates_reranks_and_excludes_sensitive_wiki() -> None:
+def test_facade_derives_dates_reranks_and_includes_all_wiki() -> None:
     fake = FakeSources.from_fixture_dir(_FIXTURES)
     pack = collect_evidence(KnowledgeQuery("배양 연구동향", purpose="cite"), clock=lambda: _NOW, env=fake)
     assert pack.verdict == "hit"
@@ -19,8 +19,8 @@ def test_facade_derives_dates_reranks_and_excludes_sensitive_wiki() -> None:
     assert stores[0] == "wiki"
     assert max(index for index, store in enumerate(stores) if store == "wiki") < stores.index("rag")
     assert any(item.doc_date == "2026-08-18" and item.date_basis == "path" for item in pack.items)
-    assert all("민감" not in item.title for item in pack.items)
-    assert any("민감 제외" in note for note in pack.notes)
+    assert any("특허" in item.title for item in pack.items)
+    assert pack.notes == ()
 
 
 def test_all_requested_layers_down_is_unavailable() -> None:

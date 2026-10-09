@@ -18,20 +18,16 @@ from automation.rag_ingest.config import IngestConfig, ObsidianSourceConfig
 from automation.rag_ingest.pipeline import run_pipeline
 from automation.rag_ingest.sources.obsidian import ObsidianSyncError, SyncResult
 
-_RULES_YAML = "version: 1\ntags:\n  patent-sensitive:\n    keywords:\n      - 특허청구항\n"
 
 
 def make_obsidian_config(tmp_path: Path) -> IngestConfig:
     for name in ("wiki", "notes", "notes/meetings"):
         (tmp_path / name).mkdir(parents=True, exist_ok=True)
-    rules_path = tmp_path / "sensitivity-rules.yaml"
-    _ = rules_path.write_text(_RULES_YAML, encoding="utf-8")
     obsidian = ObsidianSourceConfig(
         enabled=True,
         repo_url="ssh://git@git.example.invalid/vault.git",
         mirror_dir=tmp_path / "mirror",
         ssh_key_path=tmp_path / "id_ed25519",
-        sensitivity_rules_path=rules_path,
     )
     return IngestConfig(
         mcp_base_url="http://fake:8765",

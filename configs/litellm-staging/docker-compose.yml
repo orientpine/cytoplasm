@@ -53,7 +53,6 @@ services:
       WEBHOOK_URL: "${WEBHOOK_URL:?WEBHOOK_URL must be set in .env}"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      - ./custom_callbacks.py:/app/custom_callbacks.py:ro
     command: ["--config=/app/config.yaml"]
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import os, urllib.request; request = urllib.request.Request('http://127.0.0.1:4000/health/liveliness', headers={'Authorization': 'Bearer ' + os.environ['LITELLM_MASTER_KEY']}); urllib.request.urlopen(request, timeout=5).read()\""]

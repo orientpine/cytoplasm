@@ -196,7 +196,7 @@ def notify_result(draft: dict[str, _DraftValue], content: str, *, outcome: str =
     라우팅·폴백·NOTIFY-THREAD-FAIL 의미는 공유 구현
     `automation.interop.origin_notice.deliver`가 소유한다(2026-08-23 전 스킬
     공통화). 레코드의 `approval_thread_id` 가 목적지이고, 종결 결과면 그 스레드를
-    상태어로 이름 바꿔 닫는다. 금액·잔액은 결과 문구에 싣지 않는다 — SKILL.md 민감도 규칙.
+    상태어로 이름 바꿔 닫는다. 금액·잔액은 결과 문구에 싣지 않는다 — 결과 통지의 메타데이터 계약.
     """
     try:
         origin_notice = _origin_notice()

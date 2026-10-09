@@ -242,17 +242,17 @@ def test_flag_off_preserves_single_search_behavior(monkeypatch, capsys, tmp_path
     assert payload["search"]["entity_hint_count"] == 0
 
 
-def test_result_forwards_date_folder_and_sensitivity_metadata() -> None:
+def test_result_forwards_date_and_folder_metadata() -> None:
     row = _row(
         0.61, "김민준 협업 기록", "obsidian:people/collaboration.md#c0000",
         created="2026-05-02", updated="2026-08-20", day="2026-08-20",
-        folder="people", sensitivity="internal",
+        folder="people",
     )
     result = recall_core.classify("김민준 협업", [row])[0]
     assert result["metadata"] == {
         "source_type": "obsidian", "created": "2026-05-02",
         "updated": "2026-08-20", "day": "2026-08-20",
-        "folder": "people", "sensitivity": "internal",
+        "folder": "people",
     }
 
 

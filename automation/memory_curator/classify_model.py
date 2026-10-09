@@ -7,7 +7,6 @@ from .model import MemoryKind
 
 Route = Literal["TWIN", "OPS_REFERENCE", "KEEP_NATIVE", "UNCERTAIN"]
 VetoReason = Literal[
-    "sensitivity",
     "credential",
     "keep_native_rule",
     "marker",

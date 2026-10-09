@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,7 +14,7 @@ from automation.knowledge.facade import collect_evidence
 from automation.knowledge.pack import KnowledgeQuery
 from automation.knowledge.plan import QueryPlan, analyze_query
 from automation.rag_ingest.mcp_client import McpFatalError
-from automation.knowledge.rank import derive_doc_date
+from automation.knowledge.rank import derive_doc_date, item_from_rag
 
 _REPO = Path(__file__).resolve().parents[2]
 _FIXTURES = _REPO / "tests" / "fixtures" / "knowledge"
@@ -27,20 +27,31 @@ def test_doc_date_uses_only_explicit_metadata_or_supported_path() -> None:
     assert derive_doc_date({}, "meeting-about-2026.md") == (None, "none")
 
 
-def test_wiki_adapter_loads_scripts_and_excludes_sensitive_notes() -> None:
+def test_rag_pack_does_not_store_or_forward_content_labels() -> None:
+    item = item_from_rag({
+        "source": "obsidian:note.md", "content": "특허 patent 기밀 검토",
+        "score": 0.8, "metadata": {"source_type": "obsidian", "sensitivity": "restricted"},
+    }, True)
+
+    assert item.content == "특허 patent 기밀 검토"
+    assert "sensitivity" not in asdict(item)
+    assert not hasattr(item, "sensitivity")
+
+
+def test_wiki_adapter_loads_all_matching_notes_without_rules() -> None:
     result = fetch_wiki(
         KnowledgeQuery("배양", purpose="judgment", sources=frozenset({"wiki", "twin"})),
         _NOW,
         {
             "WIKI_SCRIPTS": str(_REPO / "skills" / "wiki" / "scripts"),
             "WIKI_ROOT": str(_FIXTURES / "wiki_vault"),
-            "KNOWLEDGE_SENSITIVITY_RULES": str(_FIXTURES / "sensitivity-rules.yaml"),
         },
     )
     assert result.wiki_status == "hit"
     assert result.twin_status == "conflict"
-    assert all("민감" not in item.title for item in (*result.wiki_items, *result.twin_items))
-    assert any("민감 제외" in note for note in result.notes)
+    assert any("특허" in item.title for item in result.wiki_items)
+    assert any("특허" in item.title for item in result.twin_items)
+    assert result.notes == ()
 
 
 def test_missing_wiki_scripts_is_fail_closed_unavailable() -> None:

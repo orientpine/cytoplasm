@@ -13,10 +13,10 @@ sys.path.insert(0, str(ROOT))
 from automation.knowledge.pack import EvidenceItem, EvidencePack, KnowledgeQuery, Verdict  # noqa: E402
 from skills.report.scripts import report_cli  # noqa: E402
 
-def _item(*, content: str = "건설 로보틱스 실증 성과", sensitivity: str | None = None) -> EvidenceItem:
+def _item(*, content: str = "건설 로보틱스 실증 성과") -> EvidenceItem:
     return EvidenceItem(
         "E1", "rag", "note", "robotics/result.md", "실증 결과", "2026-08-18", "path",
-        0.8, True, None, None, sensitivity, content, "a" * 64,
+        0.8, True, None, None, content, "a" * 64,
     )
 
 

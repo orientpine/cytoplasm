@@ -44,7 +44,6 @@ class EvidenceItem:
     grounded: bool | None
     authority: str | None
     expired: bool | None
-    sensitivity: str | None
     content: str
     sha256: str
 

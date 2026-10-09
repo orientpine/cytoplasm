@@ -7,7 +7,7 @@ reclaim first across both native stores, never an entry already handled.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,7 +19,6 @@ from automation.memory_curator.model import MemoryEntry, MemoryFile, MemoryKind
 from automation.memory_relocate.cron import memory_relocate_watch
 from automation.memory_relocate.discover import select_candidate
 from automation.memory_relocate.model import empty_state
-from automation.rag_ingest.sensitivity import SensitivityRule
 from automation.twin_distill.llm import LlmClient
 
 
@@ -91,17 +90,12 @@ def test_cron_discovery_when_user_is_ops_reference_reaches_proposed(
         entries_by_kind: Mapping[MemoryKind, tuple[MemoryEntry, ...]],
         *,
         client: LlmClient,
-        rules: Sequence[SensitivityRule],
     ) -> tuple[EntryVerdict, ...]:
-        del entries_by_kind, client, rules
+        del entries_by_kind, client
         return (verdict,)
-
-    def fake_rules(_path: Path) -> tuple[SensitivityRule, ...]:
-        return ()
 
     monkeypatch.setattr(memory_relocate_watch, "MEMORY_DIR", tmp_path)
     monkeypatch.setattr("automation.memory_curator.classify.classify_entries", fake_classify)
-    monkeypatch.setattr("automation.rag_ingest.sensitivity.load_rules", fake_rules)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(tmp_path / "hermes"))
 
@@ -133,18 +127,13 @@ def test_cron_discovery_fails_closed_when_codex_oauth_is_unavailable(
         entries_by_kind: Mapping[MemoryKind, tuple[MemoryEntry, ...]],
         *,
         client: LlmClient,
-        rules: Sequence[SensitivityRule],
     ) -> tuple[EntryVerdict, ...]:
-        del entries_by_kind, client, rules
+        del entries_by_kind, client
         classified.append("called")
-        return ()
-
-    def fake_rules(_path: Path) -> tuple[SensitivityRule, ...]:
         return ()
 
     monkeypatch.setattr(memory_relocate_watch, "MEMORY_DIR", tmp_path)
     monkeypatch.setattr("automation.memory_curator.classify.classify_entries", recording_classify)
-    monkeypatch.setattr("automation.rag_ingest.sensitivity.load_rules", fake_rules)
     monkeypatch.delenv("AUTOPHAGY_HERMES_BIN", raising=False)
     monkeypatch.delenv("HOME", raising=False)
 

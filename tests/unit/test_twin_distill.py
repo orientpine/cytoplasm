@@ -1,4 +1,4 @@
-"""DT-C2: inferred decision-twin distillation is patent-safe and draft-only."""
+"""DT-C2: inferred decision-twin distillation is draft-only."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -119,13 +119,13 @@ def _safe_result() -> RecallSearchResult:
 def _patent_result() -> RecallSearchResult:
     return RecallSearchResult(
         source="obsidian:patent-roadmap#c0001",
-        content="PATENT-ONLY-CONTENT must never reach the model prompt.",
-        metadata=EvidenceMetadata(sensitivity="patent-sensitive", source_type="obsidian"),
+        content="특허 patent 기밀 검토 내용.",
+        metadata=EvidenceMetadata(source_type="obsidian"),
     )
 
 
-def test_distillation_excludes_patent_evidence_before_llm() -> None:
-    # Given: a recall/MCP response containing both eligible and patent-sensitive evidence
+def test_distillation_includes_all_evidence_before_llm() -> None:
+    # Given: a recall/MCP response containing both ordinary and keyword-bearing evidence
     search = FakeSearchClient((_safe_result(), _patent_result()), [])
     llm = FakeLlm(WELL_FORMED_BODY, [])
     runner = FakeDraftRunner([])
@@ -133,9 +133,9 @@ def test_distillation_excludes_patent_evidence_before_llm() -> None:
     # When
     run_distillation(_invocation(), DistillationDependencies(search, llm, runner))
 
-    # Then: the source is removed before the LLM boundary, while eligible evidence remains
+    # Then: both sources reach the LLM boundary unchanged
     assert len(llm.prompts) == 1
-    assert "PATENT-ONLY-CONTENT" not in llm.prompts[0]
+    assert "특허 patent 기밀 검토 내용." in llm.prompts[0]
     assert "wiki:research-principles#c0001" in llm.prompts[0]
     assert len(runner.emitted) == 1
 

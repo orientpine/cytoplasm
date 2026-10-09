@@ -71,7 +71,7 @@ def test_memory_md_co_write_when_preference_is_short_stable_and_global() -> None
 
 def test_skill_without_memory_md_when_request_is_reusable_procedure() -> None:
     # Given: an explicit reusable procedure.
-    text = "보고서를 만들 때는 초안 검토, 민감도 확인, 승인 요청 순서로 진행하는 절차를 기억해줘"
+    text = "보고서를 만들 때는 초안 검토, 경로 확인, 승인 요청 순서로 진행하는 절차를 기억해줘"
 
     # When: the request is classified.
     route = classify_memory_request(text)
@@ -96,19 +96,6 @@ def test_tasks_and_never_persist_when_status_expires_within_seven_days() -> None
     assert route.never_persist is True
     assert route.reason == "temporary-status"
 
-
-def test_sensitive_flag_preserves_route_and_requires_approval() -> None:
-    # Given: a stable preference already flagged by the sensitivity boundary.
-    text = "나는 답변을 짧은 한국어로 받는 것을 항상 선호해. 기억해줘"
-
-    # When: the request is classified with a sensitivity tag.
-    route = classify_memory_request(text, sensitivity=frozenset({"patent-sensitive"}))
-
-    # Then: classification remains available but persistence requires approval.
-    assert route.canonical == "wiki"
-    assert route.co_write == ("memory_md",)
-    assert route.needs_sensitive_approval is True
-    assert route.reason == "sensitive-needs-approval"
 
 
 def test_none_and_never_persist_when_request_is_not_explicit_memory() -> None:

@@ -21,10 +21,10 @@ import triage_cli  # noqa: E402
 import triage_pipeline  # noqa: E402
 
 
-def _item(*, content: str = "상대와 지난번 합의한 일정", sensitivity: str | None = None) -> EvidenceItem:
+def _item(*, content: str = "상대와 지난번 합의한 일정") -> EvidenceItem:
     return EvidenceItem(
         "E1", "rag", "note", "contacts/peer.md", "상대 관련 노트", "2026-08-18",
-        "path", 0.8, True, None, None, sensitivity, content, "a" * 64,
+        "path", 0.8, True, None, None, content, "a" * 64,
     )
 
 

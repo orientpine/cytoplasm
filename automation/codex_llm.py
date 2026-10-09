@@ -21,7 +21,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -35,10 +35,8 @@ __all__ = [
     "CodexUnavailableError",
     "Served",
     "UNKNOWN",
-    "VerifiedRoute",
     "complete",
     "complete_served",
-    "route_is_verified",
     "served_route",
 ]
 
@@ -66,38 +64,12 @@ _SECRET: Final = re.compile(
 
 
 @dataclass(frozen=True, slots=True)
-class VerifiedRoute:
-    """A completer that IS the route the sensitivity rules already permit.
-
-    ``configs/sensitivity-rules.yaml`` says the tag ``patent-sensitive`` permits only
-    the shared Hermes route — the account config's main model plus its configured
-    ``fallback_providers`` chain. A gate therefore has two separate questions
-    to answer — "is this text sensitive?" and "is this route permitted?" — and only the
-    second one decides whether the call may happen. Wrapping the Codex completer states
-    that answer in the type system, so a gate can let permitted text through the one
-    route the rules allow while a completer of unknown provenance stays refused,
-    because an arbitrary callable is not this wrapper.
-    """
-
-    complete: Callable[[str], str]
-    provider: str = PROVIDER
-
-    def __call__(self, prompt: str) -> str:
-        return self.complete(prompt)
-
-
-def route_is_verified(completer: object) -> bool:
-    """True only for the Codex OAuth route the sensitivity rules permit."""
-    return isinstance(completer, VerifiedRoute) and completer.provider == PROVIDER
-
-
-@dataclass(frozen=True, slots=True)
 class Served:
     """One answer plus the route that actually produced it.
 
     The account config names the main model, but Hermes may answer from its
     ``fallback_providers`` chain. Routing logs that record only the requested
-    primary therefore cannot say where a patent-sensitive prompt really went;
+    primary therefore cannot say where a prompt really went;
     ``provider``/``model`` here come from Hermes' own ``--usage-file`` report.
     """
 

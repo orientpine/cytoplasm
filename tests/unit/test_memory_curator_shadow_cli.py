@@ -20,7 +20,7 @@ JsonValue: TypeAlias = (
 JsonLoader: TypeAlias = Callable[[str], JsonValue]
 _JSON_LOADS: JsonLoader = json.loads
 
-#: Long enough for the LLM path, free of every sensitivity/credential/native cue.
+#: Long enough for the LLM path, free of every credential/native cue.
 _LONG_ENTRY = (
     "The nightly export job writes its manifest to "
     "/var/log/autophagy/export-manifest.json before the archive step runs."

@@ -1,13 +1,11 @@
 """RCB todo 26: the sensitivity-rules copy is declared and release-converged."""
 from __future__ import annotations
 
-import ast
 import os
 import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 
 from automation.deploy_declarations import all_declarations
 from tests.unit.cron_fixture import declared_cron, listing_only_hermes
@@ -15,56 +13,6 @@ from tests.unit.cron_fixture import declared_cron, listing_only_hermes
 _REPO = Path(__file__).resolve().parents[2]
 _SOURCE = "configs/sensitivity-rules.yaml"
 _DESTINATION = ".hermes/rag-ingest/sensitivity-rules.yaml"
-
-
-def _calls(path: Path, attribute: str, first_argument: str) -> list[ast.Call]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == attribute
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value == first_argument
-    ]
-
-
-def _string(node: ast.expr | None) -> str | None:
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    return None
-
-
-def _knowledge_default() -> str:
-    path = _REPO / "automation/knowledge/adapters/wiki.py"
-    found = [
-        literal
-        for call in _calls(path, "get", "KNOWLEDGE_SENSITIVITY_RULES")
-        if len(call.args) >= 2 and (literal := _string(call.args[1])) is not None
-    ]
-    assert len(found) == 1, f"KNOWLEDGE_SENSITIVITY_RULES default missing in {path}: {found}"
-    return found[0]
-
-
-def _curate_default() -> str:
-    path = _REPO / "automation/wiki_curate/cli.py"
-    found: list[str] = []
-    for call in _calls(path, "add_argument", "--sensitivity-rules"):
-        for keyword in call.keywords:
-            value = keyword.value
-            if (
-                keyword.arg == "default"
-                and isinstance(value, ast.Call)
-                and isinstance(value.func, ast.Name)
-                and value.func.id == "Path"
-                and len(value.args) == 1
-                and (literal := _string(value.args[0])) is not None
-            ):
-                found.append(literal)
-    assert len(found) == 1, f"--sensitivity-rules default=Path(...) missing in {path}: {found}"
-    return found[0]
 
 
 def test_the_rules_copy_is_declared_and_pushed() -> None:
@@ -80,20 +28,6 @@ def test_the_rules_copy_is_declared_and_pushed() -> None:
     deployer = (_REPO / "automation/rag_ingest/deploy.sh").read_text(encoding="utf-8")
     assert f'push_file "$repo_root/{_SOURCE}" \'{_DESTINATION}\'' in deployer
 
-
-def test_the_declared_path_is_the_one_the_consumers_default_to(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    # Both consumers wrap the literal in Path(...).expanduser(); expand it the same way.
-    monkeypatch.setenv("HOME", str(tmp_path))
-    declared = tmp_path / _DESTINATION
-    defaults = {
-        "automation/knowledge/adapters/wiki.py": _knowledge_default(),
-        "automation/wiki_curate/cli.py": _curate_default(),
-    }
-    for consumer, literal in defaults.items():
-        assert Path(literal).expanduser() == declared, (consumer, literal)
 
 
 def _git(repo: Path, *args: str) -> str:

@@ -13,49 +13,36 @@ from automation.memory_routing.flow import (
 
 _SUCCESS: Final = AdapterResult("success", "stored")
 _RETRYABLE: Final = AdapterResult("retryable_failure", "store unavailable")
-_EMPTY_SENSITIVITY: Final[frozenset[str]] = frozenset[str]()
 
 _WIKI_AND_MEMORY: Final = MemoryRoute(
     canonical="wiki",
     co_write=("memory_md",),
     never_persist=False,
-    needs_sensitive_approval=False,
     reason="stable-global-preference",
 )
 _SKILL_ONLY: Final = MemoryRoute(
     canonical="skill",
     co_write=(),
     never_persist=False,
-    needs_sensitive_approval=False,
     reason="reusable-procedure",
 )
 _TASKS_ONLY: Final = MemoryRoute(
     canonical="tasks",
     co_write=(),
     never_persist=True,
-    needs_sensitive_approval=False,
     reason="temporary-status",
 )
 _SESSION_ONLY: Final = MemoryRoute(
     canonical="none",
     co_write=(),
     never_persist=True,
-    needs_sensitive_approval=False,
     reason="uncertain-conservative",
-)
-_SENSITIVE: Final = MemoryRoute(
-    canonical="wiki",
-    co_write=("memory_md",),
-    never_persist=False,
-    needs_sensitive_approval=True,
-    reason="sensitive-needs-approval",
 )
 
 
 @dataclass(frozen=True, slots=True)
 class ClassifierCall:
     text: str
-    sensitivity: frozenset[str]
 
 
 @final
@@ -73,10 +60,8 @@ class RecordingClassifier:
     def __call__(
         self,
         text: str,
-        *,
-        sensitivity: frozenset[str] = _EMPTY_SENSITIVITY,
     ) -> MemoryRoute:
-        self.calls.append(ClassifierCall(text, sensitivity))
+        self.calls.append(ClassifierCall(text))
         return self.route
 
 
@@ -167,7 +152,7 @@ def test_classifies_once_then_writes_wiki_before_allowed_memory_md() -> None:
     result = classify_then_store(request, stores.adapters(), classifier=classifier)
 
     # Then: one verdict drives the canonical store first and its allowed co-write.
-    assert classifier.calls == [ClassifierCall(request.body, frozenset())]
+    assert classifier.calls == [ClassifierCall(request.body)]
     assert stores.events == ["wiki", "memory_md"]
     assert stores.wiki.calls[0].route is _WIKI_AND_MEMORY
     assert stores.memory_md.calls[0].route is _WIKI_AND_MEMORY
@@ -228,28 +213,8 @@ def test_keeps_session_only_request_out_of_every_store() -> None:
     assert result.canonical is None
 
 
-def test_sensitive_request_is_explicitly_rejected_before_store_without_approval() -> None:
-    # Given: the boundary marked the request sensitive and approval is absent.
-    stores = StoreHarness()
-    classifier = RecordingClassifier(_SENSITIVE)
-    request = MemoryRequest(
-        title="민감 사실",
-        body="민감한 연구 사실을 기억해줘",
-        sensitivity=frozenset({"sensitive"}),
-    )
 
-    # When: the flow handles the request.
-    result = classify_then_store(request, stores.adapters(), classifier=classifier)
-
-    # Then: rejection is explicit and no adapter can create an external effect.
-    assert stores.events == []
-    assert result.outcome == "sensitive_rejected"
-    assert result.canonical is not None
-    assert result.canonical.outcome == "not_attempted"
-    assert [item.outcome for item in result.co_writes] == ["not_attempted"]
-
-
-def test_store_failure_stops_before_secondary_and_is_not_sensitive_rejection() -> None:
+def test_store_failure_stops_before_secondary() -> None:
     # Given: the canonical wiki adapter has a retryable infrastructure failure.
     stores = StoreHarness(StorePlan(wiki=(_RETRYABLE,)))
     classifier = RecordingClassifier(_WIKI_AND_MEMORY)

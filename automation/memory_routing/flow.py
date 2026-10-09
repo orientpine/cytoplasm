@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, Literal, Protocol, TypeAlias
+from typing import Literal, Protocol, TypeAlias
 
 from .adapters import AdapterOutcome, AdapterResult, MemoryWrite, dedupe_key
 from .classifier import MemoryRoute, MemoryTarget, classify_memory_request
@@ -10,22 +10,18 @@ FlowOutcome: TypeAlias = Literal[
     "stored",
     "duplicate",
     "not_persisted",
-    "sensitive_rejected",
     "store_rejected",
     "store_failure",
     "partial_rejection",
     "partial_failure",
 ]
 WritableTarget: TypeAlias = Literal["wiki", "memory_md", "skill", "tasks"]
-_EMPTY_SENSITIVITY: Final[frozenset[str]] = frozenset[str]()
 
 
 class MemoryClassifier(Protocol):
     def __call__(
         self,
         text: str,
-        *,
-        sensitivity: frozenset[str] = _EMPTY_SENSITIVITY,
     ) -> MemoryRoute: ...
 
 
@@ -38,8 +34,6 @@ class MemoryRequest:
     title: str
     body: str
     tags: tuple[str, ...] = ()
-    sensitivity: frozenset[str] = _EMPTY_SENSITIVITY
-    approved_sensitive: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,29 +77,18 @@ def classify_then_store(
     classifier: MemoryClassifier = classify_memory_request,
 ) -> MemoryFlowResult:
     """Classify exactly once and execute that verdict in canonical-first order."""
-    route = classifier(request.body, sensitivity=request.sensitivity)
+    route = classifier(request.body)
     key = dedupe_key(request.body)
     write = MemoryWrite(
         route=route,
         title=request.title,
         body=request.body,
         tags=request.tags,
-        approved_sensitive=request.approved_sensitive,
     )
 
     canonical_target = _writable_target(route.canonical)
     if canonical_target is None:
         return MemoryFlowResult(route, "not_persisted", key, None, ())
-
-    if route.needs_sensitive_approval and not request.approved_sensitive:
-        detail = "sensitive content needs owner approval"
-        return MemoryFlowResult(
-            route,
-            "sensitive_rejected",
-            key,
-            NotAttemptedStoreResult(canonical_target, "not_attempted", detail),
-            _not_attempted(route.co_write, detail),
-        )
 
     canonical = _store(canonical_target, write, adapters)
     match canonical.outcome:

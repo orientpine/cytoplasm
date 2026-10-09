@@ -55,7 +55,7 @@ def _draft(args: argparse.Namespace) -> int:
     print(
         "PATENT-DRAFTED "
         f"slug={progress.slug} path={output} provider={call.provider} model={call.model} "
-        f"tag_auto_attached={str(call.tag_auto_attached).lower()} percent={progress.percent_complete}"
+        f"percent={progress.percent_complete}"
     )
     return 0
 

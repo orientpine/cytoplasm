@@ -10,7 +10,6 @@ from typing import Any, Mapping, cast
 from automation.knowledge.core import grounded_rows
 from automation.knowledge.pack import DateBasis, EvidenceItem, EvidencePack, KnowledgeQuery, Purpose, Store, Verdict
 from automation.knowledge.rank import item_from_rag, item_from_wiki
-from automation.rag_ingest.sensitivity import classify, load_rules
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,22 +29,15 @@ class FakeSources:
     def from_fixture_dir(cls, root: Path) -> FakeSources:
         payload = json.loads((root / "rag_rows_hit.json").read_text(encoding="utf-8"))
         rag_items = tuple(item_from_rag(row, grounded) for row, grounded in grounded_rows("배양 연구동향", payload))
-        rules = load_rules(root / "sensitivity-rules.yaml")
         wiki_items: list[EvidenceItem] = []
         twin_items: list[EvidenceItem] = []
-        excluded = 0
         for path in sorted((root / "wiki_vault").glob("*.md")):
             meta, body = _parse_fixture_note(path.read_text(encoding="utf-8"))
-            text = f"{meta.get('title', '')} {body}"
-            if "patent-sensitive" in classify(text, rules):
-                excluded += 1
-                continue
             payload_note = {"slug": path.stem, "meta": meta, "body": body, "expired": False}
             wiki_items.append(item_from_wiki(payload_note))
             if meta.get("kind"):
                 twin_items.append(item_from_wiki(payload_note, twin=True))
-        notes = (f"wiki/twin {excluded}건 민감 제외",) if excluded else ()
-        return cls(rag_items, tuple(wiki_items), tuple(twin_items), "hit", "hit", "conflict", notes)
+        return cls(rag_items, tuple(wiki_items), tuple(twin_items), "hit", "hit", "conflict", ())
 
 
 def _parse_fixture_note(text: str) -> tuple[dict[str, Any], str]:
@@ -84,7 +76,7 @@ def _item(raw: object) -> EvidenceItem:
     score = raw.get("score")
     if score is not None and not isinstance(score, (int, float)):
         raise ValueError("fake pack item score malformed")
-    optional_strings = tuple(raw.get(key) for key in ("doc_date", "authority", "sensitivity"))
+    optional_strings = tuple(raw.get(key) for key in ("doc_date", "authority"))
     if not all(value is None or isinstance(value, str) for value in optional_strings):
         raise ValueError("fake pack item optional string malformed")
     for key in ("grounded", "expired"):
@@ -95,7 +87,7 @@ def _item(raw: object) -> EvidenceItem:
         str(raw["title"]), cast(str | None, raw.get("doc_date")), cast(DateBasis, basis),
         float(score) if score is not None else None, cast(bool | None, raw.get("grounded")),
         cast(str | None, raw.get("authority")), cast(bool | None, raw.get("expired")),
-        cast(str | None, raw.get("sensitivity")), str(raw["content"]), str(raw["sha256"]),
+        str(raw["content"]), str(raw["sha256"]),
     )
 
 

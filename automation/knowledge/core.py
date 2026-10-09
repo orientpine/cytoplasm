@@ -1,19 +1,16 @@
-"""Shared recall grounding and model-aware sensitivity gate."""
+"""Shared recall grounding and entity search."""
 
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-from automation.codex_llm import PROVIDER
 
 DEFAULT_THRESHOLD = 0.45
 DEFAULT_STRONG_THRESHOLD = 0.60
 GROUNDING_RATIO = 0.5
-SENSITIVE_MARKER = "[[PATENT-SENSITIVE-RECALL]]"
 
 _STOPWORDS = {
     "무엇", "뭐야", "뭐지", "뭐였지", "뭔가", "언제", "어디", "누구", "누가", "어떻게",
@@ -78,57 +75,6 @@ def grounded_rows(query: str, rows: list[dict[str, Any]], threshold: float = DEF
         if score >= strong_threshold or grounded:
             hits.append((row, grounded))
     return hits
-
-
-def visible_rows(rows: list[dict[str, Any]], sensitive_allowed: bool, marker: str = SENSITIVE_MARKER) -> tuple[list[dict[str, Any]], int, int]:
-    visible: list[dict[str, Any]] = []
-    excluded = released = 0
-    for original in rows:
-        metadata = original.get("metadata")
-        sensitive = isinstance(metadata, dict) and metadata.get("sensitivity") == "patent-sensitive"
-        if sensitive and not sensitive_allowed:
-            excluded += 1
-            continue
-        row = original
-        if sensitive:
-            row = {**original, "content": f"{marker} {original.get('content', '')}"}
-            released += 1
-        visible.append(row)
-    return visible, excluded, released
-
-
-def parse_primary_model(text: str) -> tuple[str, str]:
-    model = provider = ""
-    in_model = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if len(line) == len(line.lstrip()):
-            in_model = stripped == "model:"
-            continue
-        if in_model:
-            key, _, value = stripped.partition(":")
-            value = value.strip().strip("'\"")
-            if key == "default":
-                model = value
-            elif key == "provider":
-                provider = value
-    return model, provider
-
-
-def primary_route_is_codex_oauth(env: Mapping[str, str], default_path: str = "~/.hermes/config.yaml") -> bool:
-    """True only when the primary route IS the Codex OAuth tier — unreadable or any other provider stays closed."""
-    path = Path(env.get("RECALL_HERMES_CONFIG", env.get("KNOWLEDGE_HERMES_CONFIG", default_path))).expanduser()
-    try:
-        model, provider = parse_primary_model(path.read_text(encoding="utf-8"))
-    except OSError:
-        return False
-    return bool(model.strip()) and provider.strip().casefold() == PROVIDER
-
-
-#: Callers outside this module's ticket scope still import the old spelling.
-primary_route_is_glm_free = primary_route_is_codex_oauth
 
 
 def merge_entity_rows(primary: list[dict[str, Any]], auxiliary: list[dict[str, Any]], hints: tuple[str, ...]) -> list[dict[str, Any]]:

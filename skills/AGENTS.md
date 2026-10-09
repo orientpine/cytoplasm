@@ -32,7 +32,7 @@ skills/<name>/
 │   ├── <name>_cli.py     # 실행 진입점 (거의 모든 스킬)
 │   ├── *watch.py / confirm_reaction_watch.py  # no-agent cron 워처 (있으면)
 │   └── scenario.sh       # 필수(배포용). 샌드박스 검증 시나리오
-├── prompts/  configs/    # 선택 (LLM 프롬프트, 스킬별 sensitivity 등)
+├── prompts/  configs/    # 선택 (LLM 프롬프트, 스킬별 설정 등)
 └── deploy.sh             # 선택 (스킬 자체 배포 훅)
 ```
 

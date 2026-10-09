@@ -57,7 +57,6 @@ def _scan_obsidian_source(
             obsidian.exclude_names,
             config.perspective,
             config.max_chunk_chars,
-            sensitivity_rules_path=obsidian.sensitivity_rules_path,
         )
     except ObsidianSyncError as error:
         log_lines.append(f"WARN obsidian source skipped this run: {error}")

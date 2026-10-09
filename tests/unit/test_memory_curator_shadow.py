@@ -26,7 +26,7 @@ def _inputs() -> tuple[
     }
     verdicts = (
         EntryVerdict("memory", classifier_only, "TWIN", "classifier", "durable", None, True),
-        EntryVerdict("memory", both, "TWIN", "classifier", "durable", "sensitivity", True),
+        EntryVerdict("memory", both, "TWIN", "classifier", "durable", None, True),
         EntryVerdict("user", cue_only, "OPS_REFERENCE", "operator", "reference", "credential", False),
         EntryVerdict(
             "memory",
@@ -77,7 +77,6 @@ def test_build_shadow_report_summarizes_routes_candidates_and_projection() -> No
         "UNCERTAIN": {"count": 1, "reclaimable_chars": 0},
     }
     assert report["vetoes"] == {
-        "sensitivity": 1,
         "credential": 1,
         "keep_native_rule": 1,
         "marker": 0,

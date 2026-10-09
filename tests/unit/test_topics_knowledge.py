@@ -23,11 +23,11 @@ from skills.topics.scripts import topics_cli, topics_knowledge  # noqa: E402
 
 def _item(
     item_id: str = "E1", *, ref: str = "robotics/field-note.md",
-    content: str = "현장 로봇 실증 노트", sensitivity: str | None = None,
+    content: str = "현장 로봇 실증 노트",
 ) -> EvidenceItem:
     return EvidenceItem(
         item_id, "rag", "note", ref, "관련 노트", "2026-08-18", "path", 0.8,
-        True, None, None, sensitivity, content, "a" * 64,
+        True, None, None, content, "a" * 64,
     )
 
 

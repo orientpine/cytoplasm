@@ -16,19 +16,9 @@ The staged configuration uses these documented keys and endpoints:
 | `model_list[].model_name`, `litellm_params.model`, `litellm_params.api_key`, `general_settings.master_key`, `general_settings.database_url` | [Docker quick start](https://docs.litellm.ai/docs/proxy/docker_quick_start), including `os.environ/VARIABLE` resolution and Postgres-backed virtual keys. |
 | `default_key_generate_params`, `upperbound_key_generate_params` | [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys): default and upper-bound `/key/generate` fields, including `max_budget`, `models`, and `budget_duration`. |
 | `soft_budget`, `max_budget`, `budget_duration` on a virtual key | [Budgets, rate limits](https://docs.litellm.ai/docs/proxy/users): `/key/generate` applies a per-key hard `max_budget`; the current LiteLLM request schema also accepts `soft_budget` (warning threshold) for virtual keys. |
-| `router_settings.enable_tag_filtering`, deployment `litellm_params.tags`, request `metadata.tags` | [Tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing): tagged deployments are selected by request tags; if no deployment remains, LiteLLM returns `no_deployments_with_tag_routing`. |
 | `POST /key/generate` authentication | [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys): database + master key are prerequisites; call `/key/generate` with `Authorization: Bearer <master-key>`. |
 | `general_settings.fail_closed_budget_enforcement` | [Budgets, rate limits](https://docs.litellm.ai/docs/proxy/users#hard-budget-enforcement-fail-closed): verify budgeted calls against the authoritative database or reject them. |
 
-The `patent-sensitive` rule is request-tag based, not a policy attachment:
-policy-attachment `tags` match **key/team** metadata, while this requirement
-blocks a **request** carrying `metadata.tags`. `glm-main` is tagged only
-`default` and `non-patent-sensitive`, and LiteLLM tag filtering remains
-enabled. The deployed `PatentSensitiveGlmBlocker` is the verified fail-closed
-enforcement point for the current single-deployment image: it rejects that
-request before a provider call with the documented
-`no_deployments_with_tag_routing` marker. The client-side sensitivity gate must
-attach the tag before any GLM call; Hermes owns the non-GLM reroute.
 
 ## 0. Local context and hard gate
 
@@ -204,13 +194,6 @@ curl --fail --silent --show-error \
 docker compose exec -T postgres psql -U litellm -d litellm \
   -c 'SELECT COUNT(*) AS spend_log_rows FROM "LiteLLM_SpendLogs";'
 
-patent_code="$(curl --silent --show-error -o /tmp/litellm-w1-1-patent-block.json -w '%{http_code}' \
-  -H "Authorization: Bearer $AGENT_KEY" \
-  -H 'Content-Type: application/json' \
-  -X POST http://127.0.0.1:4000/v1/chat/completions \
-  --data '{"model":"glm-main","metadata":{"tags":["patent-sensitive"]},"messages":[{"role":"user","content":"blocked routing probe"}]}' || true)"
-test "$patent_code" -ge 400
-grep -q 'no_deployments_with_tag_routing' /tmp/litellm-w1-1-patent-block.json
 
 restore_agent_budget() {
   curl --fail --silent --show-error -o /dev/null \
@@ -309,8 +292,7 @@ cat > configs/routing-policy.md <<'EOF'
 - Alias: `glm-main`
 - Provider model: `zai/glm-5.1` (confirmed live in W0-9/W1-1 investigation)
 - Virtual keys: `agent`, `peer`; monthly soft budget `<monthly-soft-cap>`, hard budget `<monthly-hard-cap>`
-- Patent policy: callers must attach `metadata.tags=["patent-sensitive"]`; LiteLLM tag filtering rejects that request for `glm-main`. Hermes must route sensitive work to the non-GLM path instead.
-- Rebinding procedure: update only the `glm-main` provider model after a live provider check, run the positive and patent-block smoke cases, then record the change in `docs/patch/`.
+- Rebinding procedure: update only the `glm-main` provider model after a live provider check, run the positive and budget smoke cases, then record the change in `docs/patch/`.
 EOF
 
 cat > docs/patch/2026-07-15-litellm-gateway.md <<'EOF'
@@ -320,7 +302,7 @@ cat > docs/patch/2026-07-15-litellm-gateway.md <<'EOF'
 - Exposed LiteLLM on reserved port 4000 and enabled its `systemd --user` unit.
 - Bound the sole gateway alias `glm-main` to `zai/glm-5.1`.
 - Created runtime-only `agent` and `peer` virtual keys with installation-specific monthly soft/hard budgets.
-- Verified health, completion spend persistence, patent-sensitive tag rejection, and temporary `<test-hard-cap>` rejection before restoring `<monthly-hard-cap>`.
+- Verified health, completion spend persistence, temporary `<test-hard-cap>` rejection before restoring `<monthly-hard-cap>`.
 - Evidence is redacted under `docs/qa/W1-1/`; no secret or virtual key is tracked.
 EOF
 

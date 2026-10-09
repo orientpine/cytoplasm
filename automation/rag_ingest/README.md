@@ -16,7 +16,6 @@
 | `peer-report` | #agents-log의 active roster principal이 보낸 W1-6 v0 보고(정확 7키 JSON 블록) | `agents-log:<message_id>` |
 | `team-chat` | #team 신규 메시지 배치 트랜스크립트 | `team:<first_id>-<last_id>` |
 | `obsidian` | `~agent/.hermes/obsidian-mirror` (git-obsidian read-only 미러) | `obsidian:<relpath>` |
-| | (민감도 태깅: `patent-sensitive` 자동 분류 포함) | |
 
 모든 벡터에 **내 관점 메타데이터**(`agent_id/owner/role/project/interest_tags`
 + `source_type` + 출처 필드)가 붙는다. Markdown frontmatter의 `created`, `modified`,
@@ -76,7 +75,7 @@ python3 -m rag_ingest run [--config PATH] [--sources wiki,notes,...] [--force] [
 
 exit 0 = 정상(큐잉 포함), exit 1 = 설정/인증 오류. 성공 tick은 무음(stdout 없음),
 백로그가 남으면 한 줄 공지. 상세 로그는 `~/.hermes/rag-ingest/logs/`(600) —
-민감 콘텐츠가 제목에 포함될 수 있어 repo/공개 채널로 복사 금지(제약 8).
+설치별 정보가 제목에 포함될 수 있어 repo/공개 채널로 복사 금지(제약 8).
 
 ## 테스트
 

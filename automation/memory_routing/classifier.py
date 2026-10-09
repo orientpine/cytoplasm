@@ -88,17 +88,13 @@ class MemoryRoute:
     canonical: MemoryTarget
     co_write: tuple[MemoryTarget, ...]
     never_persist: bool
-    needs_sensitive_approval: bool
     reason: str
 
 
 def classify_memory_request(
     text: str,
-    *,
-    sensitivity: frozenset[str] = frozenset(),
 ) -> MemoryRoute:
     normalized = " ".join(text.casefold().split()).strip(" .,!?:;~。！？")
-    needs_sensitive_approval = bool(sensitivity)
     is_explicit = any(cue in normalized for cue in _EXPLICIT_CUES)
     has_temporary_window = any(cue in normalized for cue in _TEMPORARY_WINDOWS)
     has_status = any(cue in normalized for cue in _STATUS_CUES)
@@ -137,13 +133,9 @@ def classify_memory_request(
         never_persist = False
         reason = "uncertain-conservative" if is_ambiguous else "explicit-memory-wiki"
 
-    if needs_sensitive_approval:
-        reason = "sensitive-needs-approval"
-
     return MemoryRoute(
         canonical=canonical,
         co_write=co_write,
         never_persist=never_persist,
-        needs_sensitive_approval=needs_sensitive_approval,
         reason=reason,
     )

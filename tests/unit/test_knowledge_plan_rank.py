@@ -6,7 +6,7 @@ from automation.knowledge.rank import rank_and_deduplicate
 
 
 def _item(*, ref: str, store: str = "rag", source_type: str = "conversation", date: str | None = None, score: float | None = 0.8, content: str = "same") -> EvidenceItem:
-    return EvidenceItem("", store, source_type, ref, ref, date, "day" if date else "none", score, True, None, None, None, content, "")
+    return EvidenceItem("", store, source_type, ref, ref, date, "day" if date else "none", score, True, None, None, content, "")
 
 
 def test_intent_and_research_trends_hint_are_deterministic() -> None:

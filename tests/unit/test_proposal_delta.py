@@ -67,7 +67,7 @@ def _facade_item(
 ) -> EvidenceItem:
     return EvidenceItem(
         "E1", "rag", source_type, ref, ref, doc_date, cast(DateBasis, date_basis),
-        0.9, True, None, None, None, content, sha256,
+        0.9, True, None, None, content, sha256,
     )
 
 

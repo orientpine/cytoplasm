@@ -2,8 +2,6 @@
 
 The LLM leg reuses ``automation.twin_distill.llm`` — same Protocol, same Codex
 OAuth route, so this package adds no new model surface and no new budget path.
-patent-sensitive sources never reach a prompt: they are dropped during candidate
-selection, before this module is called.
 """
 
 from __future__ import annotations

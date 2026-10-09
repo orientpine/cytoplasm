@@ -61,7 +61,6 @@ def _config(tmp_path: Path) -> ObsidianSourceConfig:
         repo_url="git@example.test:cha/obsidian.git",
         mirror_dir=tmp_path / "mirror",
         ssh_key_path=tmp_path / "id_ed25519",
-        sensitivity_rules_path=tmp_path / "sensitivity.yaml",
         branch="decision-twin",
     )
 

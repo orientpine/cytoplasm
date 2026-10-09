@@ -16,16 +16,11 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
 from . import _bootstrap  # noqa: F401  (side effect: puts the repo root on sys.path)
-from automation.rag_ingest.sensitivity import (
-    SensitivityRule,
-    SensitivityRulesError,
-    load_rules,
-)
 from automation.twin_distill.llm import CodexLlmClient, LlmConfigurationError
 
 from .classify import classify_entries
@@ -38,7 +33,6 @@ from .watch_steps import read_native
 
 _DEFAULT_DIR: Final = "~/.hermes/memories"
 _KINDS: Final[tuple[MemoryKind, ...]] = ("memory", "user")
-_RULES_RELATIVE: Final = "configs/sensitivity-rules.yaml"
 _REFUSAL: Final = "MEMORY-SHADOW-REFUSED"
 _OFFLINE_REASON: Final = "offline: no LLM"
 
@@ -87,23 +81,6 @@ def _selected_kinds(kind: str) -> tuple[MemoryKind, ...]:
             raise ValueError(message)
 
 
-def _repo_root() -> Path:
-    if _bootstrap.REPO_ROOT is not None:
-        return _bootstrap.REPO_ROOT
-    override = os.environ.get("AUTOPHAGY_REPO_ROOT", "").strip()
-    if override:
-        return Path(override).expanduser()
-    return Path(__file__).resolve().parents[2]
-
-
-def _sensitivity_rules() -> tuple[SensitivityRule, ...]:
-    """Load the deterministic rules, degrading to none when the seed is absent."""
-    try:
-        return load_rules(_repo_root() / _RULES_RELATIVE)
-    except (OSError, SensitivityRulesError):
-        return ()
-
-
 def _limited(entries_by_kind: EntriesByKind, limit: int) -> EntriesByKind:
     if limit <= 0:
         return entries_by_kind
@@ -118,11 +95,10 @@ def _limited(entries_by_kind: EntriesByKind, limit: int) -> EntriesByKind:
 
 def _offline_verdicts(
     entries_by_kind: EntriesByKind,
-    rules: Sequence[SensitivityRule],
 ) -> tuple[EntryVerdict, ...]:
     """Classify with pre-LLM vetoes only; everything else stays UNCERTAIN."""
     return tuple(
-        pre_llm_veto(entry.text, source_kind=kind, rules=rules)
+        pre_llm_veto(entry.text, source_kind=kind)
         or EntryVerdict(
             source_kind=kind,
             entry_text=entry.text,
@@ -139,13 +115,12 @@ def _offline_verdicts(
 
 def _online_verdicts(
     entries_by_kind: EntriesByKind,
-    rules: Sequence[SensitivityRule],
 ) -> tuple[EntryVerdict, ...] | None:
     try:
         client = CodexLlmClient.from_environment(os.environ)
     except LlmConfigurationError:
         return None
-    return classify_entries(entries_by_kind, client=client, rules=rules)
+    return classify_entries(entries_by_kind, client=client)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -165,12 +140,11 @@ def main(argv: list[str] | None = None) -> int:
         {kind: files[kind].entries for kind in _selected_kinds(args.kind)},
         args.limit,
     )
-    rules = _sensitivity_rules()
 
     if args.offline:
-        verdicts = _offline_verdicts(entries_by_kind, rules)
+        verdicts = _offline_verdicts(entries_by_kind)
     else:
-        online = _online_verdicts(entries_by_kind, rules)
+        online = _online_verdicts(entries_by_kind)
         if online is None:
             return _refuse("Codex OAuth 인증 필요 (또는 --offline 사용)")
         verdicts = online

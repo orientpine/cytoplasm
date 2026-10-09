@@ -15,7 +15,6 @@ import json
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from hashlib import sha256
 from pathlib import Path
 from typing import Final, final
 
@@ -53,7 +52,7 @@ _PROJECT_KNOWLEDGE: Final = (
     "열 순서를 샘플, 배치, 보정값, 판정으로 고정하는 것을 선호해."
 )
 _STABLE_PREFERENCE: Final = "나는 답변을 짧은 한국어로 받는 것을 항상 선호해. 기억해줘"
-_PROCEDURE: Final = "보고서를 만들 때는 초안 검토, 민감도 확인, 승인 요청 순서로 진행하는 절차를 기억해줘"
+_PROCEDURE: Final = "보고서를 만들 때는 초안 검토, 경로 확인, 승인 요청 순서로 진행하는 절차를 기억해줘"
 _TEMPORARY_STATUS: Final = "이번 주 금요일까지 출장 중이라 답장이 늦어. 기억해줘"
 _AMBIGUOUS_PHRASINGS: Final = ("기억해", "기억해줘", "앞으로도 이렇게")
 
@@ -230,41 +229,14 @@ def test_temporary_status_routes_to_tasks_and_never_persists(tmp_path: Path) -> 
     assert not sandbox.skill_dir.exists()
 
 
-def test_sensitive_blocked_before_approval(tmp_path: Path) -> None:
-    # Given: sensitive content, no owner approval, and a MEMORY.md that already exists.
-    sandbox = MemorySandbox(tmp_path)
-    sandbox.memory_md.parent.mkdir(parents=True)
-    sandbox.memory_md.write_text("- 기존 사실\n", encoding="utf-8")
-    before = sha256(sandbox.memory_md.read_bytes()).hexdigest()
-    request = MemoryRequest(
-        title="민감 사실",
-        body=_STABLE_PREFERENCE,
-        sensitivity=frozenset({"patent-sensitive"}),
-    )
 
-    # When: the single flow handles the request.
-    result = sandbox.store(request)
-
-    # Then: the block happens before any external effect — no child, no draft.
-    assert result.outcome == "sensitive_rejected"
-    assert result.canonical is not None
-    assert result.canonical.outcome == "not_attempted"
-    assert [item.outcome for item in result.co_writes] == ["not_attempted"]
-    assert sandbox.spawns.argv == []
-    assert sandbox.drafts() == []
-    # Then: the plaintext file is byte-identical.
-    assert sha256(sandbox.memory_md.read_bytes()).hexdigest() == before
-
-
-def test_sensitive_rejection_reports_nothing_stored(tmp_path: Path) -> None:
-    # Given: the same sensitive content with approval supplied, but the owner-gated
+def test_owner_gate_rejection_reports_nothing_stored(tmp_path: Path) -> None:
+    # Given: a memory request, but the owner-gated
     # wiki CLI answers with the rejection verdict (rc=1, confirmation absent).
     sandbox = MemorySandbox(tmp_path, injected=_OWNER_REJECTED)
     request = MemoryRequest(
-        title="민감 사실",
+        title="연구 사실",
         body=_STABLE_PREFERENCE,
-        sensitivity=frozenset({"patent-sensitive"}),
-        approved_sensitive=True,
     )
 
     # When: the single flow handles the request.

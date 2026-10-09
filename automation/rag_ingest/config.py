@@ -46,7 +46,6 @@ class ObsidianSourceConfig:
     repo_url: str
     mirror_dir: Path
     ssh_key_path: Path
-    sensitivity_rules_path: Path
     branch: str = "main"
     exclude_names: tuple[str, ...] = DEFAULT_OBSIDIAN_EXCLUDE_NAMES
 
@@ -131,9 +130,6 @@ def _parse_obsidian(raw: dict[str, Any]) -> ObsidianSourceConfig | None:
         repo_url=_require_str(obsidian_raw, "repo_url"),
         mirror_dir=Path(_require_str(obsidian_raw, "mirror_dir")).expanduser(),
         ssh_key_path=Path(_require_str(obsidian_raw, "ssh_key_path")).expanduser(),
-        sensitivity_rules_path=Path(
-            _require_str(obsidian_raw, "sensitivity_rules_path")
-        ).expanduser(),
         branch=branch_raw,
         exclude_names=exclude_names,
     )

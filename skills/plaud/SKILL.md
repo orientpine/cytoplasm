@@ -1,7 +1,7 @@
 ---
 name: plaud
 description: "Plaud 라이프로그 동기화(plaud-sync 워처)의 상태를 읽기 전용으로 보고한다 — 로컬 전사 대기·승인 대기·저장 대기 건수와 로컬 전사본(.md) 경로. 트리거: 'plaud 상태', '라이프로그 동기화 상태', 'plaud 승인 대기 몇 건', 'plaud 마지막 폴', 'plaud 전사본 어디', 'plaud 녹음 회의록으로'. READ-only — Plaud·Discord·vault 어디에도 쓰지 않는다. 승인 카드(✅/⛔)는 이 스킬이 아니라 #agent-chat 요청별 스레드에 있다."
-version: 1.2.0
+version: 1.3.0
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -66,7 +66,7 @@ URL을 만든다. 길드가 없는 옛 레코드나 불완전한 좌표는 `thre
 - `PLAUD_SYNC_MIN_DURATION_MS`(기본 5000) 미만은 발견 시 건너뛰어 레코드·노트·카드를 만들지 않는다.
   이미 전사 대기 중이면 원본 길이를 확인하는 다음 처리에서 폐기한다.
 - Plaud 요약이 없으면 기존 필드 추출과 같은 LLM 호출에서 얻은 한국어 요약을 노트에 쓴다.
-  Plaud 요약이 있으면 그것이 우선하며, 민감도 게이트·소유자 ✅는 그대로다.
+  Plaud 요약이 있으면 그것이 우선하며, 내용 분류 없이 추출하며 소유자 ✅는 그대로다.
 
 ## 폴더 이동 별칭과 클라우드 재확인 오류
 

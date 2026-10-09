@@ -1,7 +1,7 @@
 """Discovery planning — freeze new recordings into approval-ready records.
 
 v2 (B안, 2026-09-04): each new recording goes through the injected extractor before
-its note is frozen. A permanent skip (sensitivity gate, no LLM configured) freezes a
+its note is frozen. A permanent skip (no LLM configured) freezes a
 note that says so; a transient failure (LifelogExtractError) defers the recording to
 the next poll instead of freezing a degraded note forever — same principle as the
 empty-summary skip.

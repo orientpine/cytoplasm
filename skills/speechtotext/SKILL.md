@@ -1,7 +1,7 @@
 ---
 name: speechtotext
 description: "Google Drive 폴더에 올려둔 음성 녹취를 전사본(.md)으로 만들고, 그 전사본을 meeting 스킬로 넘겨 회의록까지 잇는 스킬. 전사는 기본이 로컬(whisper.cpp)이고, 2시간이 넘는 단일 녹취도 누락 검증을 통과해야만 회의록으로 넘어간다."
-version: 1.6.0
+version: 1.7.0
 author: autophagy-agents
 ---
 
@@ -212,8 +212,7 @@ whisper.cpp 가 해석되면 그것을 쓴다.
   화자 라벨을 걷어낸 상태로 가고 시각은 남는다 — 라벨을 남기면 모델이 그것을 그대로 세어
   돌려준다(실측: 같은 초안에 라벨 있으면 2명, 없으면 3명=기준점). 정수 하나가 아닌 답
   ("3~4"·"세 명"·범위 밖)은 받지 않고, 소유자가 `--speaker-count` 를 선언했으면 묻지 않는다.
-  초안이 `patent-sensitive` 면 모델을 부르지 않으며(`RECOUNT-SKIP`), 민감도 규칙을 읽지
-  못해도 묻지 않는다(`RECOUNT-FAIL rules-unreadable`). stderr 에
+  모든 초안을 계정 모델 설정으로 질의한다. stderr에
   `DIARIZE-RECOUNT observed=<N> asked=<N> redo=<N|None>` 한 줄을 남긴다. 질의 실패도 재분리
   실패도 1차 결과를 그대로 쓴다.
 - API 백엔드에는 구간 타임스탬프가 없어 화자 분리를 하지 않는다.

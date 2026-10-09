@@ -158,7 +158,6 @@ def test_rag_ingest_obsidian_quotes_the_key_path(tmp_path: Path) -> None:
         repo_url="git@example.invalid:cha/vault.git",
         mirror_dir=tmp_path / "mirror",
         ssh_key_path=key,
-        sensitivity_rules_path=tmp_path / "sensitivity.yaml",
     )
     runner = RagIngestRunner()
 

@@ -6,44 +6,6 @@ import pytest
 
 from automation.memory_curator.classify_model import EntryVerdict
 from automation.memory_curator.classify_veto import post_llm_veto, pre_llm_veto
-from automation.rag_ingest.sensitivity import SensitivityRule, load_rules
-
-
-def _rules() -> tuple[SensitivityRule, ...]:
-    return load_rules(
-        Path(__file__).parents[2] / "configs" / "sensitivity-rules.yaml"
-    )
-
-
-def test_pre_llm_veto_closes_sensitive_text_without_an_llm() -> None:
-    # Given a real sensitivity rule hit
-    text = "새 발명 아이디어의 공개 전 검토 자료"
-
-    # When the pre-LLM safety layer classifies it
-    verdict = pre_llm_veto(text, source_kind="memory", rules=_rules())
-
-    # Then the route is closed before any LLM path is needed.
-    assert verdict == EntryVerdict(
-        source_kind="memory",
-        entry_text=text,
-        route="UNCERTAIN",
-        evidence="",
-        reason="sensitivity",
-        veto="sensitivity",
-        llm_called=False,
-    )
-
-
-def test_pre_llm_veto_prefers_sensitivity_over_later_vetoes() -> None:
-    # Given text that matches both V1 sensitivity and V2 credential
-    text = "특허 검토 api_key: placeholder"
-
-    # When the ordered pre-LLM veto table runs
-    verdict = pre_llm_veto(text, source_kind="memory", rules=_rules())
-
-    # Then the first hit wins.
-    assert verdict is not None
-    assert verdict.veto == "sensitivity"
 
 
 @pytest.mark.parametrize(
@@ -59,7 +21,7 @@ def test_pre_llm_veto_prefers_sensitivity_over_later_vetoes() -> None:
 )
 def test_pre_llm_veto_rejects_each_credential_shape(text: str) -> None:
     # Given a vendor-agnostic credential-shaped entry / When it is classified
-    verdict = pre_llm_veto(text, source_kind="memory", rules=_rules())
+    verdict = pre_llm_veto(text, source_kind="memory")
 
     # Then it is closed without sending the text to an LLM.
     assert verdict is not None
@@ -93,7 +55,7 @@ def test_classify_veto_source_contains_no_vendor_token_prefixes() -> None:
 )
 def test_pre_llm_veto_keeps_each_native_cue_group(text: str) -> None:
     # Given an identity, style, safety, or routing rule / When it is classified
-    verdict = pre_llm_veto(text, source_kind="memory", rules=_rules())
+    verdict = pre_llm_veto(text, source_kind="memory")
 
     # Then the deterministic native rule overrides the short-text fallback.
     assert verdict is not None
@@ -104,7 +66,7 @@ def test_pre_llm_veto_keeps_each_native_cue_group(text: str) -> None:
 def test_pre_llm_veto_keeps_marker_entries() -> None:
     # Given a curator marker / When it is classified
     text = "<!-- mc-marker-v1 promoted -->"
-    verdict = pre_llm_veto(text, source_kind="memory", rules=_rules())
+    verdict = pre_llm_veto(text, source_kind="memory")
 
     # Then V4 wins before the short-text fallback.
     assert verdict is not None
@@ -121,12 +83,10 @@ def test_pre_llm_veto_uses_collapsed_length_boundary() -> None:
     short_verdict = pre_llm_veto(
         short_text,
         source_kind="memory",
-        rules=_rules(),
     )
     eligible_verdict = pre_llm_veto(
         eligible_text,
         source_kind="memory",
-        rules=_rules(),
     )
 
     # Then only the 59-character entry is vetoed.
@@ -143,7 +103,7 @@ def test_pre_llm_veto_allows_plain_ops_fact() -> None:
     )
 
     # When the pre-LLM veto table runs / Then the entry remains LLM-eligible.
-    assert pre_llm_veto(text, source_kind="memory", rules=_rules()) is None
+    assert pre_llm_veto(text, source_kind="memory") is None
 
 
 def test_post_llm_veto_keeps_user_file_ops_reference() -> None:

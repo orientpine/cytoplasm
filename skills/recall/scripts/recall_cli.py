@@ -11,17 +11,9 @@ one entity-anchor fallback after ``no_memory``. RAG down means ``unavailable``.
   * every search appends one masked line to a mode-600 log under
     ``~/.hermes/recall/logs/`` (override: RECALL_LOG_DIR).
 
-Sensitivity (v3, model-aware — 2026-09-04):
-  patent-sensitive rows are excluded UNLESS the agent's PRIMARY model route is
-  positively the Codex OAuth tier (provider ``openai-codex``, read from
-  ~/.hermes/config.yaml; unreadable config or any other provider => excluded).
-  Released rows carry the ``[[PATENT-SENSITIVE-RECALL]]`` audit marker. One tier,
-  no fallback window, and deliberately NO caller-facing flag to force inclusion.
-
 Offline test hooks (sandbox scenario / unit tests only — no network):
   RECALL_FAKE_RESULTS=<path.json>  use these rows instead of MCP search
   RECALL_FAKE_ERROR=unreachable    simulate a down RAG node
-  RECALL_HERMES_CONFIG=<path.yaml> hermes config used by the model-route guard
 """
 
 from __future__ import annotations
@@ -42,22 +34,11 @@ import recall_runtime  # noqa: E402 - resolved from the script dir inserted abov
 sys.path.insert(0, str(recall_runtime.runtime_root()))
 
 import recall_core  # noqa: E402
-from automation.knowledge import core as knowledge_core  # noqa: E402
 
 _RUNTIME_DEFAULT = "~/.hermes/rag_ingest_runtime"
 _CONFIG_DEFAULT = "~/.hermes/rag-ingest/config.json"
 _LOG_DIR_DEFAULT = "~/.hermes/recall/logs"
-_HERMES_CONFIG_DEFAULT = "~/.hermes/config.yaml"
-
-# Shared with the facade: the audit marker every released sensitive row carries.
-SENSITIVE_MARKER = knowledge_core.SENSITIVE_MARKER
 analyze_entity_intent = recall_core.analyze_entity_intent
-_parse_primary_model = knowledge_core.parse_primary_model
-
-
-def _primary_route_is_codex() -> bool:
-    """True only when the primary route positively names the Codex OAuth tier."""
-    return knowledge_core.primary_route_is_codex_oauth(os.environ, _HERMES_CONFIG_DEFAULT)
 
 
 def _log_line(response: dict[str, Any], network_log: list[str]) -> None:
@@ -145,13 +126,6 @@ def run_search(args: argparse.Namespace) -> int:
     else:
         rows, error, network_log, base_url = _mcp_search(args.query, args.limit)
 
-    excluded_count = released_count = 0
-    sensitive_allowed = _primary_route_is_codex()
-    if rows is not None:
-        rows, excluded_count, released_count = recall_core.visible_rows(
-            rows, sensitive_allowed, SENSITIVE_MARKER
-        )
-
     searches = 1
     entity_hint_count = 0
     classification_query: str | None = None
@@ -188,11 +162,6 @@ def run_search(args: argparse.Namespace) -> int:
             if auxiliary is None:
                 rows = None
             else:
-                auxiliary, excluded, released = recall_core.visible_rows(
-                    auxiliary, sensitive_allowed, SENSITIVE_MARKER
-                )
-                excluded_count += excluded
-                released_count += released
                 rows = recall_core.merge_entity_rows(rows, auxiliary, intent.entity_hints)
                 classification_query = fallback_query
 
@@ -211,15 +180,6 @@ def run_search(args: argparse.Namespace) -> int:
         entity_hint_count=entity_hint_count,
     )
     _log_line(response, network_log)
-    if excluded_count:
-        summary = f"{excluded_count}건은 민감 분류로 제외"
-        print(summary, file=sys.stderr if args.json else sys.stdout)
-    if released_count:
-        notice = (
-            f"{released_count}건 patent-sensitive 포함 — 주 모델 Codex OAuth 확인, "
-            f"{SENSITIVE_MARKER} 마커 부착 (단일 티어·폴백 없음)"
-        )
-        print(notice, file=sys.stderr if args.json else sys.stdout)
     if args.json:
         print(json.dumps(response, ensure_ascii=False, indent=2))
     else:
