@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
-from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -35,35 +34,24 @@ WIKI_ROUTE = MemoryRoute(
     canonical="wiki",
     co_write=(),
     never_persist=False,
-    needs_sensitive_approval=False,
     reason="explicit-memory-wiki",
 )
 PREFERENCE_ROUTE = MemoryRoute(
     canonical="wiki",
     co_write=("memory_md",),
     never_persist=False,
-    needs_sensitive_approval=False,
     reason="stable-global-preference",
-)
-SENSITIVE_ROUTE = MemoryRoute(
-    canonical="wiki",
-    co_write=("memory_md",),
-    never_persist=False,
-    needs_sensitive_approval=True,
-    reason="sensitive-needs-approval",
 )
 PROCEDURE_ROUTE = MemoryRoute(
     canonical="skill",
     co_write=(),
     never_persist=False,
-    needs_sensitive_approval=False,
     reason="reusable-procedure",
 )
 TEMPORARY_ROUTE = MemoryRoute(
     canonical="tasks",
     co_write=(),
     never_persist=True,
-    needs_sensitive_approval=False,
     reason="temporary-status",
 )
 
@@ -242,21 +230,6 @@ def test_wiki_write_is_duplicate_when_an_identical_draft_already_awaits_approval
     assert runner.calls == []
 
 
-def test_wiki_write_is_rejected_before_spawning_when_sensitive_approval_is_missing() -> None:
-    # Given: sensitive content whose owner approval was not supplied.
-    runner = RecordingRunner()
-    write = MemoryWrite(route=SENSITIVE_ROUTE, title="t", body="특허 관련 사실")
-
-    # When: the wiki adapter runs.
-    result = write_wiki(write, _wiki_target(runner))
-
-    # Then: nothing is spawned at all — fail-closed before any external effect.
-    assert result.outcome == "rejected"
-    assert runner.calls == []
-
-
-# ----------------------------------------------------------------------- memory_md
-
 
 def test_memory_md_appends_one_short_stable_fact(tmp_path: Path) -> None:
     # Given: a stable global preference and an injected MEMORY.md path.
@@ -287,39 +260,6 @@ def test_memory_md_returns_duplicate_when_the_fact_differs_only_in_spacing_and_c
     assert path.read_text(encoding="utf-8") == "- Answer In Korean\n"
 
 
-def test_memory_md_rejects_unapproved_sensitive_content_leaving_the_file_byte_identical(
-    tmp_path: Path,
-) -> None:
-    # Given: an existing MEMORY.md and sensitive content without owner approval.
-    path = tmp_path / "MEMORY.md"
-    path.write_text("- 기존 사실\n", encoding="utf-8")
-    before = sha256(path.read_bytes()).hexdigest()
-    write = MemoryWrite(route=SENSITIVE_ROUTE, title="t", body="민감한 사실")
-
-    # When: the MEMORY.md adapter runs.
-    result = write_memory_md(write, MemoryMdTarget(path=path))
-
-    # Then: nothing sensitive reaches the plaintext file.
-    assert result.outcome == "rejected"
-    assert sha256(path.read_bytes()).hexdigest() == before
-
-
-def test_memory_md_accepts_sensitive_content_once_the_owner_approved_it(tmp_path: Path) -> None:
-    # Given: the same sensitive content, this time with owner approval supplied.
-    path = tmp_path / "MEMORY.md"
-    write = MemoryWrite(
-        route=SENSITIVE_ROUTE,
-        title="t",
-        body="민감한 사실",
-        approved_sensitive=True,
-    )
-
-    # When: the MEMORY.md adapter runs.
-    result = write_memory_md(write, MemoryMdTarget(path=path))
-
-    # Then: the approved fact is appended.
-    assert result.outcome == "success"
-    assert path.read_text(encoding="utf-8") == "- 민감한 사실\n"
 
 
 def test_memory_md_rejects_a_fact_too_long_to_be_a_stable_one_liner(tmp_path: Path) -> None:

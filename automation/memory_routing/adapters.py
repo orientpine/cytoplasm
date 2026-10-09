@@ -75,7 +75,6 @@ class MemoryWrite:
     title: str
     body: str
     tags: tuple[str, ...] = ()
-    approved_sensitive: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,8 +229,6 @@ def write_tasks(write: MemoryWrite, target: TasksTarget) -> AdapterResult:
 def _precheck(write: MemoryWrite, target: MemoryTarget) -> AdapterResult | None:
     """Deterministic guards shared by every adapter (fail-closed)."""
     route = write.route
-    if route.needs_sensitive_approval and not write.approved_sensitive:
-        return AdapterResult("rejected", f"sensitive content needs approval ({target})")
     if route.never_persist and target != "tasks":
         return AdapterResult("rejected", f"never-persist state must not reach {target}")
     if target != route.canonical and target not in route.co_write:
