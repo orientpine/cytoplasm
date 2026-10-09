@@ -6,7 +6,7 @@ from automation.knowledge.render import render_citations, render_verdict, valida
 
 def _pack(verdict: str = "hit") -> EvidencePack:
     query = KnowledgeQuery("연구동향", purpose="cite")
-    item = EvidenceItem("E1", "rag", "note", "research-trends/research-trends-20260818.md", "동향", "2026-08-18", "path", 0.7, True, None, None, None, "본문", "a" * 64)
+    item = EvidenceItem("E1", "rag", "note", "research-trends/research-trends-20260818.md", "동향", "2026-08-18", "path", 0.7, True, None, None, "본문", "a" * 64)
     return EvidencePack("knowledge-v1", query, verdict, (item,) if verdict == "hit" else (), {"rag": "hit" if verdict == "hit" else "no_memory", "wiki": "none", "twin": "none"}, ())
 
 

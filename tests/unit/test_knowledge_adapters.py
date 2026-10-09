@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,7 +14,7 @@ from automation.knowledge.facade import collect_evidence
 from automation.knowledge.pack import KnowledgeQuery
 from automation.knowledge.plan import QueryPlan, analyze_query
 from automation.rag_ingest.mcp_client import McpFatalError
-from automation.knowledge.rank import derive_doc_date
+from automation.knowledge.rank import derive_doc_date, item_from_rag
 
 _REPO = Path(__file__).resolve().parents[2]
 _FIXTURES = _REPO / "tests" / "fixtures" / "knowledge"
@@ -25,6 +25,17 @@ def test_doc_date_uses_only_explicit_metadata_or_supported_path() -> None:
     assert derive_doc_date({"created": "2026-05-02T01:02:03Z"}, "x") == ("2026-05-02", "created")
     assert derive_doc_date({}, "research-trends-20260818.md") == ("2026-08-18", "path")
     assert derive_doc_date({}, "meeting-about-2026.md") == (None, "none")
+
+
+def test_rag_pack_does_not_store_or_forward_content_labels() -> None:
+    item = item_from_rag({
+        "source": "obsidian:note.md", "content": "특허 patent 기밀 검토",
+        "score": 0.8, "metadata": {"source_type": "obsidian", "sensitivity": "restricted"},
+    }, True)
+
+    assert item.content == "특허 patent 기밀 검토"
+    assert "sensitivity" not in asdict(item)
+    assert not hasattr(item, "sensitivity")
 
 
 def test_wiki_adapter_loads_all_matching_notes_without_rules() -> None:

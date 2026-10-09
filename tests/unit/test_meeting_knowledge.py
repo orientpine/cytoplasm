@@ -17,10 +17,10 @@ import meeting_cli  # noqa: E402
 import meeting_knowledge  # noqa: E402
 
 
-def _item(*, content: str = "지난 회의에서 현장 실증을 결정함", sensitivity: str | None = None) -> EvidenceItem:
+def _item(*, content: str = "지난 회의에서 현장 실증을 결정함") -> EvidenceItem:
     return EvidenceItem(
         "E1", "rag", "meeting", "meetings/previous.md", "선행 회의", "2026-08-14",
-        "path", 0.9, True, None, None, sensitivity, content, "a" * 64,
+        "path", 0.9, True, None, None, content, "a" * 64,
     )
 
 

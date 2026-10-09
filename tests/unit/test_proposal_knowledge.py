@@ -23,7 +23,7 @@ def _paths(tmp_path: Path) -> ProposalPaths:
 def _item(*, content: str = "건설 로보틱스 실증 성과") -> EvidenceItem:
     return EvidenceItem(
         "E1", "rag", "note", "robotics/result.md", "실증 결과", "2026-08-18", "path",
-        0.8, True, None, None, None, content, "a" * 64,
+        0.8, True, None, None, content, "a" * 64,
     )
 
 
@@ -133,7 +133,7 @@ def _facade_item(
 ) -> EvidenceItem:
     return EvidenceItem(
         "", cast(Store, store), source_type, ref, ref, doc_date,
-        cast(DateBasis, date_basis), 0.7, True, None, None, None, content,
+        cast(DateBasis, date_basis), 0.7, True, None, None, content,
         sha256,
     )
 

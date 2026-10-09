@@ -36,7 +36,7 @@ def item_from_rag(row: dict[str, Any], grounded: bool) -> EvidenceItem:
     store: Store = "obsidian" if source_type == "obsidian" else "rag"
     doc_date, basis = derive_doc_date(metadata, ref)
     content = str(row.get("content", ""))
-    return EvidenceItem("", store, source_type, ref, str(metadata.get("title", "")), doc_date, basis, float(row.get("score", 0.0)), grounded, None, None, None, content, "")
+    return EvidenceItem("", store, source_type, ref, str(metadata.get("title", "")), doc_date, basis, float(row.get("score", 0.0)), grounded, None, None, content, "")
 
 
 def item_from_wiki(note: dict[str, Any], *, twin: bool = False) -> EvidenceItem:
@@ -49,7 +49,7 @@ def item_from_wiki(note: dict[str, Any], *, twin: bool = False) -> EvidenceItem:
     content = str(note.get("content", note.get("body", "")))
     authority = str(note.get("authority", meta.get("authority", ""))) or None
     expired_raw = note.get("expired")
-    return EvidenceItem("", "wiki", "twin" if twin else "wiki", ref, str(meta.get("title", ref)), doc_date, basis, None, None, authority, bool(expired_raw) if expired_raw is not None else None, None, content, "")
+    return EvidenceItem("", "wiki", "twin" if twin else "wiki", ref, str(meta.get("title", ref)), doc_date, basis, None, None, authority, bool(expired_raw) if expired_raw is not None else None, content, "")
 
 
 def _authority(item: EvidenceItem) -> int:

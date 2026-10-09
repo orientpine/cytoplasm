@@ -28,7 +28,7 @@ def _item(
         item_id, cast(Store, store), "twin" if store == "wiki" else "conversation",
         "budget-rule" if store == "wiki" else "conversation/42", "예산 판단",
         "2026-08-18", "updated" if store == "wiki" else "day", 0.9, True,
-        authority, expired, None, content, item_id.lower() * 32,
+        authority, expired, content, item_id.lower() * 32,
     )
 
 

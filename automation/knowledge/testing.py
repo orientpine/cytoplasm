@@ -87,7 +87,7 @@ def _item(raw: object) -> EvidenceItem:
         str(raw["title"]), cast(str | None, raw.get("doc_date")), cast(DateBasis, basis),
         float(score) if score is not None else None, cast(bool | None, raw.get("grounded")),
         cast(str | None, raw.get("authority")), cast(bool | None, raw.get("expired")),
-        None, str(raw["content"]), str(raw["sha256"]),
+        str(raw["content"]), str(raw["sha256"]),
     )
 
 
