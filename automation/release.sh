@@ -4,7 +4,8 @@
 # 머지는 축적이고 배포는 릴리스다(§10-1). 이 명령은 clean HEAD == origin/main 에서
 # 직전 릴리스 태그..HEAD 의 표면별 변경을 계획하고(release_plan — RC-3 과 같은 선언
 # 파서 재사용, 사본 0), 승인 요청을 게시한 뒤 소유자 결정을 계속 기다린다.
-#   ✅ → 기존 release_tag_lib 로 서명 태그 컷(리컨실러가 ~2분 내 수렴)
+#   ✅ → 기존 release_tag_lib 로 서명 태그 컷(리컨실러가 ~2분 내 수렴) → 같은 단계에서
+#        GitHub Release 노트 게시(ensure_release_note). 릴리스 = 태그 + 노트다.
 #   ⛔ → 태그 없음, prod 불변, exit 9
 #   기본 무응답 → 계속 대기. RELEASE_DEADLINE_SECONDS 를 명시한 운영만 exit 8.
 #   프로세스가 죽어도 재실행은 살아 있는 요청을 재사용하고 ✅ 뒤 곧장 태그로 간다.
@@ -14,7 +15,11 @@
 # 수렴을 기다려 `automation/deploy_all.sh --apply --wait-converge`(②~⑦ + 영수증)를
 # 호출한다. 필요하면 `--no-deploy`로 태그만 자르고 전량 반영을 따로 재개할 수 있다.
 #
-# Exit: 0 태그 컷 · 2 usage · 4 전제 미충족 · 8 결정 대기 초과 · 9 소유자 취소 · 10 태그 뒤 전량 반영 미완 · 1 그 외
+# 노트 초안(`--notes-file`, 첫 줄 `# <한 줄 요약>` + 한국어 본문)은 승인 요청 **전에** 받아
+# 체크아웃 밖 `~/.hermes/release-notes/<sha>.md` 에 둔다 — 초안이 없으면 승인을 쓰지 않고
+# 멈추고(exit 4), ✅ 뒤 완결 타이머도 같은 초안으로 노트를 게시한다.
+#
+# Exit: 0 태그+노트 · 2 usage · 4 전제 미충족 · 8 결정 대기 초과 · 9 소유자 취소 · 10 태그 뒤 전량 반영 미완 · 11 태그 뒤 릴리스 노트 게시 실패 · 1 그 외
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,12 +28,17 @@ REPO_ROOT="${RELEASE_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 log() { printf '[release] %s\n' "$*" >&2; }
 die() { log "RELEASE-BLOCK: $1"; exit "${2:-1}"; }
 
-usage="usage: release.sh [--no-deploy] [--bump {major,minor,patch}]"
+usage="usage: release.sh [--no-deploy] [--bump {major,minor,patch}] [--notes-file <note.md>]"
 no_deploy=0
 bump=patch
+notes_file=""
 while (( $# )); do
   case "$1" in
     --no-deploy) no_deploy=1; shift ;;
+    --notes-file)
+      (( $# >= 2 )) || { echo "$usage" >&2; exit 2; }
+      notes_file="$2"; shift 2
+      ;;
     --bump)
       (( $# >= 2 )) || { echo "$usage" >&2; exit 2; }
       case "$2" in major|minor|patch) bump="$2" ;; *) echo "$usage" >&2; exit 2 ;; esac
@@ -67,6 +77,32 @@ main="$(git -C "$REPO_ROOT" rev-parse origin/main)" || die "cannot resolve origi
 
 # 전제 ③: 로컬 CI 영수증 — 기존 push 게이트의 판정을 그대로 재사용한다.
 bash "$local_ci" verify "$head" || die "no valid local CI receipt for ${head:0:12}" 4
+
+# 전제 ⑤: 릴리스 노트. 직전 릴리스에 노트가 없으면 새 릴리스를 열지 않는다 — 노트 없는
+# 태그는 조용하다(노드는 태그만 본다). 2026-10-08 v1.16.0·v1.17.0 이 그렇게 남았다.
+# HEAD 자신이 이미 태그된 재실행이면 아래 태그 단계가 그 노트를 이어서 게시한다.
+released_here="$(released_tag_at "$REPO_ROOT" "$head")"
+previous_tag="$(git -C "$REPO_ROOT" ls-remote --tags --refs origin 'refs/tags/v*' 2>/dev/null \
+  | awk '{ sub("refs/tags/", "", $2); if ($2 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/) print $2 }' | sort -V | tail -n 1)"
+if [[ -n "$previous_tag" && "$previous_tag" != "$released_here" ]]; then
+  note_rc=0
+  release_note_present "$REPO_ROOT" "$previous_tag" || note_rc=$?
+  case "$note_rc" in
+    0) ;;
+    1) die "RELEASE-NOTE-MISSING: $previous_tag 에 GitHub Release 노트(또는 update-trust.pub)가 없다 — 먼저 보충한다: automation/release-note.sh $previous_tag --notes-file <note.md>" 4 ;;
+    *) die "cannot judge the release note of $previous_tag (gh unavailable?)" 4 ;;
+  esac
+fi
+note_draft="$(release_note_draft_path "$head")"
+if [[ -n "$notes_file" ]]; then
+  release_note_draft_check "$notes_file" || die "the release note draft is not usable" 4
+  mkdir -p -m 700 -- "$(dirname -- "$note_draft")" && cp -- "$notes_file" "$note_draft" \
+    || die "cannot store the release note draft at $note_draft" 4
+fi
+if [[ -z "$released_here" ]] || ! release_note_present "$REPO_ROOT" "$released_here"; then
+  release_note_draft_check "$note_draft" \
+    || die "no release note draft for ${head:0:12} — --notes-file <note.md> 로 준다(첫 줄 '# <한 줄 요약>' + 한국어 본문: 바뀐 것·사용자에게 보이는 변화·깨지는 변경/운영자 할 일)" 4
+fi
 
 helper_drift_probe() { # helper_drift_probe → 노드의 판정을 그대로 돌려준다(주입 이음새 있음)
   if [[ -n "${RELEASE_HELPER_PROBE_CMD:-}" ]]; then
@@ -235,7 +271,9 @@ else
 fi
 
 ensure_signed_tag "$REPO_ROOT" "$head" "$version" || die "signed release tag failed" 1
-log "released $version at ${head:0:12} — 리컨실러가 ~2분 내 수렴한다"
+ensure_release_note "$REPO_ROOT" "$version" "$head" \
+  || die "RELEASE-NOTE-FAIL: $version 의 태그는 잘렸지만 GitHub Release 노트가 없다 — 릴리스는 끝나지 않았다; 재실행(automation/release.sh)이 노트를 이어서 게시한다" 11
+log "released $version at ${head:0:12} with its release note — 리컨실러가 ~2분 내 수렴한다"
 if (( no_deploy )); then
   log "수렴 후 전량 반영·영수증: automation/deploy_all.sh --apply"
   exit 0

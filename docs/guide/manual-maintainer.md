@@ -76,12 +76,12 @@ Discord id·비공개 경로 세부를 쓰지 않는다. `automation/public_gate
 1. 변경이 PR 로 cytoplasm main 에 머지됐다(필수 체크 셋 green, `automation/merge-pr.sh`).
 2. 서명키를 가진 워크스테이션의 메인 체크아웃에서 `automation/local_ci.sh run` 으로 그 트리의
    영수증을 만든다(루트 `AGENTS.md` 「릴리스 태그 규칙」의 워크스테이션 전제).
-3. `automation/release.sh [--bump …]` — 승인 카드가 올라가고, 소유자 ✅ 뒤 그 main 커밋에
+3. `automation/release.sh [--bump …] --notes-file <노트>` — 승인 카드가 올라가고, 소유자 ✅ 뒤 그 main 커밋에
    update-trust 서명 태그가 잘린다. 노드는 2분 리컨실러로 그 태그에 수렴하고
    `deploy_all.sh --apply` 까지 이어진다.
-4. 릴리스 노트를 **손으로** 게시한다(§1.7) — `gh release create` + `update-trust.pub` 자산
-   (개인키에서 `ssh-keygen -y` 로 유도한 공개키) + 지문 대조. `release.sh` 는 아직 이 명령을
-   찍어 주지 않는다.
+4. 노트는 3의 같은 실행이 게시한다 — `release.sh --notes-file <노트>` 로 초안을 승인 요청 **전에**
+   준다(§1.7). 태그 직후 GitHub Release(초안 + PR 목록 + 신뢰키 지문)와 `update-trust.pub` 자산이
+   생기고, 실패하면 exit 11 이다. 초안 없이는 승인 요청도 올라가지 않는다.
 5. §1.8 로 확인한다.
 
 반출 스냅샷·fresh history·공개 원장 기록은 이 경로에 없다.
@@ -267,6 +267,35 @@ gitleaks 0건. 첫 실행은 export 트리 내부 `pytest` 3건이 이 머신의
 일어난다. 셋을 사람이 나눠 하는 순간 이 실수가 가능해진다.
 
 ### 1.7 릴리스 노트 게시 (사이클의 마지막 단계 — 선택이 아니다)
+
+**공개 우선 흐름(2026-10-09~)에서는 `release.sh` 가 이 절을 자동으로 한다.** 초안 형식:
+
+```markdown
+# <한 줄 요약 — Release 제목이 `vX.Y.Z — <요약>` 이 된다>
+
+<한두 문장 개요>
+
+## 바뀐 것
+- **<무엇>** — <왜·어떻게>
+
+## 사용자에게 보이는 변화
+- …
+
+## 깨지는 변경 · 운영자 할 일
+- 없음 / MAJOR 면 거부되는 것·오류 문자열·조치
+```
+
+`release.sh --notes-file <초안>` 이 초안을 `~/.hermes/release-notes/<sha>.md` 에 두고, ✅ 뒤 태그를 자른
+같은 단계에서 `ensure_release_note` 가 초안 아래에 `## 포함된 PR (<직전 태그> 이후)` 와
+`## 업데이트 신뢰키`(지문)를 붙여 Release 를 만들고 `update-trust.pub` 를 첨부한 뒤 다시 읽어 확인한다.
+가장 높은 버전만 Latest 로 표시한다. 실패 신호와 재개:
+
+- 초안이 없거나 제목 줄·본문이 비면 승인 전에 exit 4(`no release note draft`·`RELEASE-NOTE-FAIL`).
+- 게시 실패는 exit 11 `RELEASE-NOTE-FAIL` — 태그는 남고, 같은 명령을 다시 돌리면 노트만 이어서 게시한다.
+- 직전 릴리스 태그에 Release 나 `update-trust.pub` 가 없으면 새 릴리스를 열지 않는다(exit 4
+  `RELEASE-NOTE-MISSING`). 보충: `automation/release-note.sh <tag> --notes-file <초안>`(이미 있으면 무동작).
+
+아래 손 절차는 롤백 기간 경로(`public_export.sh`)와, 자동 게시 이전의 기록이다.
 
 `release.sh`(롤백 기간에는 `public_export.sh`)는 태그까지만 만들고 **노트는 사람이 올린다**. 그렇다고 이것이 부록은 아니다 —
 릴리스 객체와 거기 붙는 `update-trust.pub` 자산·지문 공지가 없으면 신규 설치는 시작조차
@@ -697,7 +726,8 @@ floor 이상인지 확인해야 하며, 잘못 전환한 뒤 태그 삭제나 �
       (필수 체크 verify·clean-host-install·leak-guard green, `automation/merge-pr.sh`)
 - [ ] 키 보유 워크스테이션에 그 트리의 `automation/local_ci.sh run` 영수증이 있다
 - [ ] `automation/release.sh` → 소유자 ✅ → 그 커밋에 서명 태그
-- [ ] GitHub Release 노트 게시 (**지문 재게시** + MAJOR면 조치 안내, 제목에 한 줄 요약)
+- [ ] GitHub Release 노트 게시 — `release.sh --notes-file` 이 태그와 같은 단계에서 한다
+      (**지문 재게시** + MAJOR면 조치 안내, 제목에 한 줄 요약)
 - [ ] 그 릴리스에 `update-trust.pub` 자산이 붙었다 → `gh release view <version> --json assets`
 - [ ] 공개 저장소에서 `git verify-tag <version>` 통과
 - [ ] 내 노드 `readlink /srv/autophagy-agent-current`가 2분 내 전진

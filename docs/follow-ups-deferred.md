@@ -2786,5 +2786,8 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 ## 공개 우선 전환 준비 중 남긴 것 (2026-10-07)
 
+- **릴리스 노트 게시가 다시 손 절차다** — 공개 우선 전환 뒤 릴리스는 `automation/release.sh` 가 cytoplasm 커밋에 서명 태그를 다는 것으로 끝나고, 옛 `public_export.sh` 가 성공 직후 찍던 `PUBLIC-EXPORT-NOTE-PENDING` 안내(노트·`update-trust.pub` 자산·지문 대조 명령)는 `release.sh` 에 없다. 그래서 manual-maintainer §1.7 을 기억하는 사람만 노트를 올린다(2026-09-09 v1.6.7 에서 실제로 잊혔다) → `release.sh` 완결 단계 끝에 같은 안내를 버전·저장소까지 채워 찍게 하고, 회귀 테스트로 고정한다. 자동 게시까지 할지는 서명키가 있는 워크스테이션 전제와 함께 판단한다. **영향: 노트를 빠뜨리면 신규 설치가 신뢰키 자산을 못 받음 · 기존 노드 무영향 · 심각도 중**.
+  > ↳ 2026-10-09 해소 — `release.sh` 가 태그와 같은 단계에서 `ensure_release_note` 로 Release 노트·`update-trust.pub` 를 게시하고, 실패는 exit 11, 직전 태그의 노트 누락은 `RELEASE-NOTE-MISSING` 으로 막는다(`tests/unit/test_release_note_gate.py`·`test_release_sh.py`). v1.16.0·v1.17.0 노트도 보충했다.
+
 - **수리 push 의 누출 게이트가 노드에서는 금칙어 없이 돈다** — `RepairWorkClone.push_branch` 는 `public_gate range` 를 돌리지만 노드에는 ops 저장소가 없어 금칙어 목록이 없고 경로·토폴로지 검사만 돈다(`PUBLIC-GATE-DENYLIST-UNSET`). 실명·과제명이 섞인 수리 패치는 막지 못한다 → 금칙어 목록 사본을 노드 비공개 루트(`/srv/autophagy-private/`)에 두고 수리 유닛 환경에 `PUBLIC_GATE_DENYLIST` 를 선언한다(목록 갱신 경로 포함). **영향: 노드 관찰 유래 패치의 실명 누출 가능성 · 심각도 중(노드 전환 F 전에 닫을 것)**.
   ↳ 처리(2026-10-07 · 해소): 노드 비공개 루트에 금칙어 목록 사본을 두고 수리 유닛 환경에 `PUBLIC_GATE_DENYLIST` 를 선언했다. 실제 id 를 담은 시험 커밋이 수리 push 경로에서 REFUSED 되는 것을 확인했다. 목록 갱신은 아직 손으로 한다(운영 저장소의 목록을 고치면 CI 비밀과 노드 사본을 함께 갱신).

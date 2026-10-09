@@ -41,6 +41,11 @@ esac
     library.write_text('''release_version_for() { printf 'v1.2.4\\n'; }
 latest_release_base() { printf '%s\\n' "$BASE"; }
 ensure_signed_tag() { printf '%s\\n' "$2" >> "$GATE_DIR/tags"; }
+released_tag_at() { :; }
+release_note_present() { return 0; }
+release_note_draft_path() { printf '%s/note.md\\n' "$GATE_DIR"; }
+release_note_draft_check() { :; }
+ensure_release_note() { printf '%s\\n' "$2" >> "$GATE_DIR/notes"; }
 ''', encoding="utf-8")
     ci = tmp_path / "ci.sh"
     ci.write_text("exit 0\n", encoding="utf-8")
