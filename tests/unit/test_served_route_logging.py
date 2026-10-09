@@ -102,7 +102,7 @@ def test_mail_log_keeps_the_primary_and_adds_the_served_route(
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
 
     summary = triage_llm.summarize(
-        subject="S", sender="X", body="B", sensitive=True, uid_opaque="sha256:u",
+        subject="S", sender="X", body="B", uid_opaque="sha256:u",
         prompt_path=ROOT / "skills" / "mail" / "prompts" / "digest-summary-v1.md",
     )
 

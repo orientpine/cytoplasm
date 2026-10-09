@@ -91,6 +91,6 @@ def _bind_mail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _FakeDirector
 def _mail_draft(kind: str) -> dict:
     return triage_gate.create_draft(
         uid="uid-1", sender="발신자 <s@example.invalid>", mail_subject="문의",
-        to="owner@example.invalid", subject="Re: 문의", body="본문", sensitive=False,
-        tags=(), category="important", flags=("reply_needed",), kind=kind,
+        to="owner@example.invalid", subject="Re: 문의", body="본문",
+        category="important", flags=("reply_needed",), kind=kind,
     )
