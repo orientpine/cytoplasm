@@ -26,7 +26,6 @@ import triage_core  # noqa: E402
 import triage_digest  # noqa: E402
 import triage_llm  # noqa: E402
 import triage_mode  # noqa: E402
-import triage_sensitivity  # noqa: E402
 import triage_store  # noqa: E402
 import triage_transport  # noqa: E402
 
@@ -46,9 +45,6 @@ _SENDER = '"\\"가상발신\\"" <sender@example.invalid>'
 
 
 def _stub_llm(monkeypatch: pytest.MonkeyPatch, summary: str = "합성 요약") -> None:
-    def gate(_text: str, _rules: tuple) -> triage_sensitivity.GateResult:
-        return triage_sensitivity.GateResult(sensitive=False, tags=(), matched=())
-
     def classify(**_kwargs: object) -> tuple[triage_core.Classification, str]:
         return triage_core.Classification(
             category="important", reply_needed=True, schedule_needed=False,
@@ -56,7 +52,6 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch, summary: str = "합성 요약") -
         ), "stub"
 
     monkeypatch.setenv("MAILON_ID", OWNER)
-    monkeypatch.setattr(triage_sensitivity, "evaluate", gate)
     monkeypatch.setattr(triage_llm, "classify", classify)
     monkeypatch.setattr(triage_llm, "summarize", lambda **_kwargs: summary)
 
@@ -88,7 +83,7 @@ def test_card_shows_names_only_without_internal_identifiers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_llm(monkeypatch)
-    dm_item, _store = triage_digest.build_item(_detail("u-1"), 3, rules=())
+    dm_item, _store = triage_digest.build_item(_detail("u-1"), 3)
 
     card = triage_digest.render_item(dm_item, kst_now=_KST_NOW)
 
@@ -105,7 +100,7 @@ def test_card_shows_names_only_without_internal_identifiers(
 
 def test_long_digest_splits_on_mail_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_llm(monkeypatch, summary="긴 요약 " * 400)
-    items = [triage_digest.build_item(_detail(f"u-{n}"), n, rules=())[0] for n in range(1, 13)]
+    items = [triage_digest.build_item(_detail(f"u-{n}"), n)[0] for n in range(1, 13)]
 
     parts = triage_digest.render_digest_parts(items, kst_now=_KST_NOW)
 
@@ -121,7 +116,6 @@ def test_run_digest_sends_one_message_per_mail_and_records_reply_keys(
     _stub_llm(monkeypatch)
     db = tmp_path / "triage.db"
     monkeypatch.setenv("TRIAGE_DB", str(db))
-    monkeypatch.setattr(triage_sensitivity, "load_rules", lambda _path: ())
     mails = [{"uid": "u-1", "date": "1"}, {"uid": "u-2", "date": "2"}]
     monkeypatch.setattr(triage_transport, "_list_mails", lambda _limit, _sync: mails)
     monkeypatch.setattr(triage_transport, "_get_mail", _detail)
@@ -155,7 +149,6 @@ def test_run_digest_posts_flat_when_no_thread_can_be_opened(
 ) -> None:
     _stub_llm(monkeypatch)
     monkeypatch.setenv("TRIAGE_DB", str(tmp_path / "triage.db"))
-    monkeypatch.setattr(triage_sensitivity, "load_rules", lambda _path: ())
     monkeypatch.setattr(triage_transport, "_list_mails", lambda _l, _s: [{"uid": "u-1", "date": "1"}])
     monkeypatch.setattr(triage_transport, "_get_mail", _detail)
     channel: list[str] = []

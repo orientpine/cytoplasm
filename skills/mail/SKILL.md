@@ -1,7 +1,7 @@
 ---
 name: mail
-description: "기관메일(mailon.kr) 스킬. 메일 작성·발송 지시에서 수신자가 이메일 주소가 아니라 사람 이름이면(예: '홍길동 박사님께 메일') 반드시 먼저 resolve로 이름→이메일 해석(기관 웹메일 자동완성 기반, READ-ONLY) — 메일함 검색만으로 포기하거나 주소를 추측·유추하는 것은 금지. 읽기: list/get/classify/status/resolve 래퍼(W4-1, READ-ONLY). 파이프라인(W4-2): 수신메일 민감도 게이트→분류(Codex OAuth 단일 티어)→다이제스트(08:00 KST)→소유자 지시 기반 회신 초안(Codex OAuth)→현재 승인 표면의 소유자 게이트→mailon 발송→approvals.jsonl. 새 메일 작성(compose)도 동일 watch·해시 바인딩 게이트를 경유한다. 발송은 반드시 승인 게이트 경유 — 직접 send 금지. 민감 회신은 승인 메시지 한 건에 전문과 sha256을 함께 표시한다. 승인 표면은 `approval_surface.py` 정책과 draft의 저장된 바인딩으로 결정되며, 폐지 표면의 미결정 초안은 승인 없이 만료된다. 회신·후속메일은 메일 클라이언트의 회신처럼 원문(헤더+본문)을 발송 본문 하단에 인용한다(draft 기본, --reply-all 로 전체회신, compose --in-reply-to <uid> 로 후속메일)."
-version: 1.8.0
+description: "기관메일(mailon.kr) 스킬. 메일 작성·발송 지시에서 수신자가 이메일 주소가 아니라 사람 이름이면(예: '홍길동 박사님께 메일') 반드시 먼저 resolve로 이름→이메일 해석(기관 웹메일 자동완성 기반, READ-ONLY) — 메일함 검색만으로 포기하거나 주소를 추측·유추하는 것은 금지. 읽기: list/get/classify/status/resolve 래퍼(W4-1, READ-ONLY). 파이프라인(W4-2): 수신메일 중요도·업무 분류(계정 모델 체인)→다이제스트(08:00 KST)→소유자 지시 기반 회신 초안(Codex OAuth)→현재 승인 표면의 소유자 게이트→mailon 발송→approvals.jsonl. 새 메일 작성(compose)도 동일 watch·해시 바인딩 게이트를 경유한다. 발송은 반드시 승인 게이트 경유 — 직접 send 금지. 회신은 승인 메시지 한 건에 전문과 sha256을 함께 표시한다. 승인 표면은 `approval_surface.py` 정책과 draft의 저장된 바인딩으로 결정되며, 폐지 표면의 미결정 초안은 승인 없이 만료된다. 회신·후속메일은 메일 클라이언트의 회신처럼 원문(헤더+본문)을 발송 본문 하단에 인용한다(draft 기본, --reply-all 로 전체회신, compose --in-reply-to <uid> 로 후속메일)."
+version: 1.9.0
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -35,7 +35,7 @@ prerequisites:
 ## 읽기 명령 (W4-1, READ-ONLY)
 
 ```bash
-# 최근 5건 (라이브 수집 후 state.db 읽기; 민감 표면용은 --masked)
+# 최근 5건 (라이브 수집 후 state.db 읽기; 필드를 명시적으로 가릴 때는 --masked)
 python3 /srv/autophagy-skills/live/mail/scripts/mail_wrapper.py list --limit 5 --sync --masked
 
 # 로컬 읽기만 (브라우저/네트워크 0)
@@ -50,7 +50,7 @@ python3 /srv/autophagy-skills/live/mail/scripts/mail_wrapper.py get <uid> --body
 # 메타데이터 분류 (제목/발신자 문자열만 사용, LLM 무경유)
 python3 /srv/autophagy-skills/live/mail/scripts/mail_wrapper.py classify --uid <uid>
 
-# 수신자 이름→이메일 해석 (기관 웹메일 자동완성 기반, READ-ONLY; 민감 표면용은 --masked)
+# 수신자 이름→이메일 해석 (기관 웹메일 자동완성 기반, READ-ONLY; 필드를 명시적으로 가릴 때는 --masked)
 python3 /srv/autophagy-skills/live/mail/scripts/mail_wrapper.py resolve --name "<이름>"
 
 # mailon 상태를 JSON으로
@@ -129,13 +129,12 @@ Hermes cron(`mail-triage-watch`, no_agent)이 `watch`를 돌린다. 이 루프�
 
 ### 2. 다이제스트 루프 (매일 08:00 KST)
 신규 cron `mail-daily-digest`(`0 8 * * *`, no_agent)가 `digest`를 실행한다.
-- 마지막 다이제스트 이후 수신된 메일을 채널에는 머리글 메시지(건수·회신 방법) **하나만** 올리고, 메일별 카드는 그 머리글에 단 스레드 안에 **메일 1건 = Discord 메시지 1건**으로 보낸다(2026-10-08 소유자 지시 — 글자 수 청크가 카드를 중간에서 자르던 문제). 스레드는 공용 `origin_notice.resolve_thread_id` 로 열며, 열 수 없으면(DM 폴백 등) `DIGEST-THREAD-FAIL` 마커 후 같은 채널에 이어 올린다. 머리글은 ✅ 를 요청하지 않는다 — 초안의 승인은 그 초안의 정식 승인 카드로만 받는다(「승인 경로 완결 규칙」). 카드는 `### N. 제목` → `-# ↩️ 이 메시지에 답장하면 회신 초안 · 회신 키 \`MMDD-HHMM-N\`` → 배지 → 인용문 요약 → `수신 시각 · 발신 <이름>` → `참조 A, B, C 외 N명` 순서다. 이름은 헤더의 따옴표·역슬래시 이스케이프와 RFC 2047 인코딩을 한 번만 풀어 보여 주고(`scripts/mail_contacts.py`), 이름이 없을 때만 주소를 쓴다. 참조에서 소유자 자신은 빠진다. UID·발신 해시는 화면에 없고 `digest_items`(회신 키·Discord 메시지 id 포함)에만 있다. 실제 발신자·Cc는 소유자 DM projection에만 포함되고 저장 row에는 남지 않는다. 배지는 중요도와 속성에 따라 한글·이모지(🔴 중요/🔵 일반/🗑️ 스팸, ↩️ 회신 필요, 📅 일정, 💳 예산, 🔒 민감, 👀 참조(CC))로 표시된다.
+- 마지막 다이제스트 이후 수신된 메일을 채널에는 머리글 메시지(건수·회신 방법) **하나만** 올리고, 메일별 카드는 그 머리글에 단 스레드 안에 **메일 1건 = Discord 메시지 1건**으로 보낸다(2026-10-08 소유자 지시 — 글자 수 청크가 카드를 중간에서 자르던 문제). 스레드는 공용 `origin_notice.resolve_thread_id` 로 열며, 열 수 없으면(DM 폴백 등) `DIGEST-THREAD-FAIL` 마커 후 같은 채널에 이어 올린다. 머리글은 ✅ 를 요청하지 않는다 — 초안의 승인은 그 초안의 정식 승인 카드로만 받는다(「승인 경로 완결 규칙」). 카드는 `### N. 제목` → `-# ↩️ 이 메시지에 답장하면 회신 초안 · 회신 키 \`MMDD-HHMM-N\`` → 배지 → 인용문 요약 → `수신 시각 · 발신 <이름>` → `참조 A, B, C 외 N명` 순서다. 이름은 헤더의 따옴표·역슬래시 이스케이프와 RFC 2047 인코딩을 한 번만 풀어 보여 주고(`scripts/mail_contacts.py`), 이름이 없을 때만 주소를 쓴다. 참조에서 소유자 자신은 빠진다. UID·발신 해시는 화면에 없고 `digest_items`(회신 키·Discord 메시지 id 포함)에만 있다. 실제 발신자·Cc는 소유자 DM projection에만 포함되고 저장 row에는 남지 않는다. 배지는 중요도와 속성에 따라 한글·이모지(🔴 중요/🔵 일반/🗑️ 스팸, ↩️ 회신 필요, 📅 일정, 💳 예산, 👀 참조(CC))로 표시된다.
 - **DM 전송**: 메시지마다 `dm_owner` 를 한 번씩 부른다(제목 200자·요약 1,200자에서 잘라 메시지가 2,000자를 넘지 않는다). 공유 interop 전송기(DiscordTransport)가 순서를 보장하고 429 Retry-After 에 대응한다. 다이제스트 등 `dm_owner`를 쓰는 모든 표면에 동일 적용. 발송/취소 **결과 통지**는 그 요청의 승인 스레드(`approval_thread_id`)로 게시되며, 없으면 origin 바인딩의 원 채널 스레드로 간다(§4).
 - **동기화 폴백**: mailon 동기화(`list --sync`) 실패 시 로컬 `state.db` 기준으로 폴백 발송하며, DM 최상단에 "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)" 경고를 부착한다. `--no-sync` 명시 실행의 실패는 폴백 없이 fail-closed.
 - **실패 처리**: 모든 digest 실패(빌드 단계 LLM 실패, DM 전송 실패)는 기록 없이 단일 행·레닥션된 구조화 마커 `DIGEST-FAIL stage=<build|deliver|runner> retry_safe=<true|false> code=<...>`로 종료하며(주소·본문·토큰 미포함), 다음 tick에 재시도한다(DM-first/record-after 불변식 유지 — cursor는 전달 성공 후에만 기록). 워처는 `retry_safe=true` 마커만 인틱 재시도한다(전달 실패는 일부 청크가 이미 나갔을 수 있어 `retry_safe=false`). cron은 `--deliver discord`로 등록되어, no-agent 스크립트의 **stdout**(성공=빈 stdout=무음, 실패=마커 1행+exit 1)이 소유자 DM으로 전달된다 — `--deliver local`(전달 대상 0개)이었던 2026-07-31에는 실패가 소유자에게 도달하지 못했다.
 - **항목 단위 fail-open (분류)**: 한 메일의 분류 LLM 호출이 실패(모델 timeout 또는 파싱 불가한 비-JSON 응답)해도 다이제스트 전체가 중단되지 않는다. 해당 항목은 보수적으로 `🔴 중요` + `⚠️ 분류 실패` 배지로 표면화되고(플래그는 모두 미부여 — 조작된 판정으로 캘린더 초안을 위임하지 않음), 나머지 메일은 정상 전달·기록된다. 요약 실패가 `(요약 실패)` fallback으로 항목을 유지하는 것과 동일한 취지이며, 요약도 분류와 같이 **1회 재시도**한 뒤에야 fallback으로 내려간다 — 재시도까지 실패한 건은 `llm-calls.jsonl`에 `purpose=digest_summary_failed` 한 줄로 예외 클래스와 레닥션·클립된 메시지, 불투명 uid만 남겨(제목·발신자·본문·주소 등 메일 내용은 절대 기록하지 않음) no-agent cron이 stderr를 버려도 원인을 추적할 수 있게 한다. 분류도 재시도 소진 시 `purpose=classify_failed`로 같은 방식으로 기록한다. (분류가 파싱은 되나 bool을 문자열로 준 경우 `"false"`가 참으로 새는 버그도 함께 차단 — `_json_bool` 엄격 파싱.)
 - **티어 불가 = fail closed (2026-09-04 공급자 이관)**: 모델 경로는 공유 Codex OAuth 클라이언트(`automation/codex_llm.py`, provider `openai-codex`) 하나뿐이다. 자격 증명 없음·쿼터·전송 실패는 `LlmUnavailableError`로 구분되며, **강등할 티어가 없으므로 강등하지 않는다** — 그 단계는 재시도하지 않고(사고 당시 재시도 폭주 방지) 틱 전체가 `DIGEST-FAIL stage=build retry_safe=false code=codex_unavailable` 마커 한 줄로 종료한다. DM도 저장도 하지 않으므로 메일은 다음 틱에 그대로 남고, 원인은 `llm-calls.jsonl`의 `purpose=classify_failed`(마스킹) 한 줄로 남는다. 개별 요청 실패(1회성 rc≠0·파싱 불가)는 기존 항목 단위 fail-open 그대로다. 2026-09-03 은퇴한 2차 티어로의 강등 폴백(`fallback_from` 표식과 `⚠️ 티어 사용 불가` 알림 줄)은 그 티어와 함께 제거되었다.
-- 민감 메일은 DM에는 전문이 포함되나, 로컬 DB에는 마스킹된 제목과 빈 요약만 저장된다(제약 7).
 - 일정 예약이 필요한 메일은 이 단계에서 캘린더 스킬에 `--digest-day`를 전달해 초안 생성과 승인 카드 게시까지 위임된다. **위임 실패는 원인별로 구분해 보고한다** — 카드의 `🗓️ 일정 초안` 노트가 `calendar-unavailable`(배포본 없음) · `calendar-refused`(rc=1 게이트 거부) · `calendar-unparsed`(rc=2 일정 문장 해석 불가) · `calendar-misconfigured`(rc=3 설정·피어 레지스트리 등) · `calendar-routing`(rc=4 단독 일정이 아님 — coordination/되묻기) · `calendar-ambiguous`(rc=5 되묻기) · `calendar-exec-failed`(rc=6) · `calendar-timeout` · `calendar-spawn-failed` · 계약 밖 종료코드는 `calendar-failed-rc<N>` 중 하나가 된다. 자식 CLI의 stderr는 카드가 아니라 운영 로그 한 줄(`CAL-FAIL uid=<마스킹> rc=… cause=… stderr=…`, 개행 제거·200자 클립)로만 나가고, 캘린더 CLI가 느리거나(timeout) 실행되지 않아도 그 항목만 잃고 다이제스트는 계속된다(항목 단위 fail-open).
 - 다이제스트 게시일(KST)마다 승인 스레드 하나에 일정별 카드를 묶는다. 미결 중복·정정은 최신 카드로 교체하고 이미 결정한 일정은 다시 묻지 않는다. 게시 실패는 소유자 통지를 시도하고 다음 감시 틱에 재시도하며, 실행·취소 결과는 원래 카드 아래 답글로 남긴다.
 - **참조(CC) 수신 메일**: cha가 To가 아닌 Cc로만 수신한 메일은 회신 대상이 아니다
@@ -167,7 +166,7 @@ python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py reply-request --ke
 ### 4. 새 메일 작성 (compose — 요청별 승인 스레드 확정)
 cha가 새 메일 발송을 지시하면, 이중 승인 없이 그 요청 전용 스레드 `메일 발신 · <제목>`에서 한 번만 확정한다:
 1. `compose --to <주소> [--cc <주소> ...] --subject "<제목>" --body "<본문>" [--attachment <경로> ...] [--in-reply-to <uid>] [--origin-channel-id <채널ID>] [--origin-message-id <메시지ID>]` — 초안 생성 + 현재 승인 스레드 게시(✅·⛔ 미리 부착). `--cc`는 여러 번 지정할 수 있고 To와 함께 승인 해시에 바인딩된다. 첨부는 최대 10개·개별/전체 25 MiB이며 반복 옵션 순서대로 파일명·크기·MIME·내용 해시가 승인에 바인딩된다. 승인 후 수신자·본문·첨부가 바뀌거나 일부 업로드만 성공하면 최종 발송을 거부한다.
-   - **후속 메일은 원문을 인용한다 (2026-09-01, 소유자 지시)**: 이전 메일(받은 메일이든 내가 보낸 메일이든 — `list --all-folders` 로 보낸메일함 uid 도 찾을 수 있다)에 이어지는 안내·확정·변경 메일은 **반드시 `--in-reply-to <uid>`** 를 붙여 그 메일의 원문(헤더+본문)을 발송 본문 하단에 인용하고, 제목은 원문 제목에 `Re:` 를 붙인다. 인용 원문도 민감도 게이트에 합산되므로 원문에 특허 등 민감어가 있으면 후속 메일 자체가 민감 초안으로 취급된다. 회신 대상 uid 를 모르면 `--in-reply-to` 를 지어내지 말고 먼저 `list`/`get` 으로 찾는다.
+   - **후속 메일은 원문을 인용한다 (2026-09-01, 소유자 지시)**: 이전 메일(받은 메일이든 내가 보낸 메일이든 — `list --all-folders` 로 보낸메일함 uid 도 찾을 수 있다)에 이어지는 안내·확정·변경 메일은 **반드시 `--in-reply-to <uid>`** 를 붙여 그 메일의 원문(헤더+본문)을 발송 본문 하단에 인용하고, 제목은 원문 제목에 `Re:` 를 붙인다. 회신 대상 uid 를 모르면 `--in-reply-to` 를 지어내지 말고 먼저 `list`/`get` 으로 찾는다.
    - **수신자 연속성 규칙 (2026-07-20, 소유자 지시)**: 후속·확정·변경 안내 메일은 **직전 관련 발송 메일의 전체 수신자 집합에서 시작**한다. 수신자를 제외할 때는 compose 요청에 제외 사유를 명시한다. 게이트는 최근 24시간 내 제목 토큰이 겹치는 발송 compose와 비교해 빠진 수신자를 승인 메시지에 ⚠️ 경고로 표시한다(발송 차단은 아님 — 최종 판단은 소유자 ✅). 이 결정론적 가드는 **compose 발송분만** 인식한다 — 게이트 밖 발송·회신(reply)은 비교 대상에 없으므로 LLM이 이 규칙을 1차 방어선으로 지켜야 한다.
    - **결과 통지 라우팅 (2026-09-01, 소유자 지시)**: 채널에서 발신 지시를 받았으면 **반드시 `--origin-channel-id`를 전달**하고, 지시 메시지 id를 알면 `--origin-message-id`도 함께 전달한다 — 지시가 승인 채널에서 왔으면 승인 스레드가 바로 그 메시지에 달린다. 발송 완료/취소 **결과**는 승인을 받은 그 요청별 스레드에 게시되고(문구에 제목·수신자·draft id·사유), 스레드 이름 앞에 `✅ 완료` / `⛔ 취소` / `⌛ 만료` 가 붙으며 스레드는 아카이브된다 — 승인 채널의 활성 스레드 목록이 곧 진행 중 요청 목록이다(이름 변경·아카이브 실패는 `THREAD-CLOSE-FAIL` 마커, 통지 자체는 유효). 승인 스레드가 없는 옛 초안은 origin 바인딩의 원 채널 스레드로, 그마저 없으면 기존 소유자 통지 경로로 간다. 결과는 `OwnerMessage`의 대상·사실·위치·인계·되돌리기 5필드로 전달한다. 대상은 제목과 draft id, 사실은 기존 수신자 표시·사유를 유지하며 본문·원문 인용·Cc를 새로 노출하지 않는다. 발송 성공 뒤에만 실행 완료와 **되돌릴 수 없음**(`irreversible`, 발송 회수 불가)을 표시하고, 취소·만료는 미발송 결과와 되돌리기 해당 없음으로 표시한다. 같은 스레드에서는 자기 링크를 생략한다. 스레드 게시 실패는 `NOTIFY-THREAD-FAIL` 마커 후 DM 폴백하며 **폴백 목적지로 다시 렌더**하여 승인 카드 URL을 싣는다. 길드 좌표가 없는 옛 레코드는 링크를 추측하지 않고 draft id 검색 키를 싣는다. 구현은 공유 `automation.interop.origin_notice`이며 봉투 모듈 부재·옛 함수 시그니처는 기존 문자열 그대로 배달한다. 헬퍼 자체를 import할 수 없으면 `NOTIFY-HELPER-MISSING` 마커 후 기존 DM 경로로 폴백한다.
 2. cha가 승인 스레드 메시지에 ✅ 리액션 → 같은 `watch` cron이 다음 tick에 감지하여 발송(⛔ = 폐기).
@@ -189,7 +188,7 @@ cha가 세미나/워크샵 **출장 신청 안내** 또는 그에 딸린 정산�
 ### 5. 수동 Triage (Legacy)
 `process` 명령은 수동으로 전체 파이프라인(수집→분류→초안 생성→게시)을 실행할 때 사용하며, cron에서는 더 이상 호출되지 않는다.
 ### 6. 승인 게이트 규칙
-- **현재 승인 표면 게이트**: 민감 회신은 완성된 회신 전문과 sha256을 현재 정책의 소유자 전용 승인 스레드 한 건에 함께 표시한다. 원본 수신메일의 제목·본문은 승인 메시지에 넣지 않는다.
+- **현재 승인 표면 게이트**: 회신은 완성된 회신 전문과 sha256을 현재 정책의 소유자 전용 승인 스레드 한 건에 함께 표시한다. 원본 수신메일의 제목·본문은 승인 메시지에 넣지 않는다.
 - **이모지 리액션**: 봇이 승인 메시지에 ✅(확정)와 ⛔(취소)를 미리 추가한다.
 - **소유자 전용**: cha 본인의 리액션만 인정하며, 봇이나 타인의 리액션은 무시한다.
 - **⛔ 우선**: ✅와 ⛔가 함께 있으면 취소로 처리한다.
@@ -245,8 +244,7 @@ python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py mode
 **수신자에게 전송될 제목·본문에는 `[En]` 인용이나 사적 출처를 절대 넣지 않는다.**
 생성 결과는 팩 기준 검증 뒤 모든 근거 id를 제거하고 승인 해시를 계산한다. 출처 확인은
 owner-only 표면에서만 파사드 `sources` 형식으로 한다. 근거가 없으면 `근거 없음`, 조회
-불가면 `근거 수집 불가`를 owner-only 표면에 표시하고 초안 생성은 계속한다. 근거 본문이
-patent-sensitive이면 기존 라우팅 입력에 합산해 codex-only로 처리한다. 메일 발송과 소유자
+불가면 `근거 수집 불가`를 owner-only 표면에 표시하고 초안 생성은 계속한다. 메일 발송과 소유자
 ✅ 게이트는 바뀌지 않는다. 정본은
 [`지식 계층 규약`](../../docs/guide/지식-계층-규약.md)이다.
 
@@ -265,18 +263,19 @@ MailOn 첨부파일은 Google Drive `autophagy/메일 첨부파일/<연도>/<월
 - 동기화 스크립트는 **`/srv/autophagy-skills/live/mail/scripts/mail_attachment_drive_sync.py`에서만** 실행한다. 마운트가 있는 호스트에서 다른 사본의 실행은 `mail_runtime.governed_copy_refusal`이 거부한다.
 - `mail_attachment_archive.py`는 계획·명명·archive.db 상태를, `mail_attachment_drive_sync.py`는 Drive 실행 CLI를 맡는다.
 
+## 내용 처리 변경 (2026-10-09)
+
+특허·patent·기밀이라는 낱말로 메일을 가리거나 별도 저장·모델 경로를 고르지 않는다.
+중요도·스팸·일정·예산·회신 필요 분류와 소유자 승인, 인증, 경로·첨부 검증은 그대로다.
+기존 데이터는 그대로이며, 과거 초안은 기존 위치에서 읽고 새 초안은 공통 저장소에 둔다.
+
 ## 절대 규칙
 
 1. **발송은 게이트 경유만**: mailon send를 직접 호출하지 않는다. 승인 없는
    발송 경로는 존재하지 않으며, 직접 터미널 호출은 배포된 외부효과 게이트
    (`mailon_send` 룰)가 fail-closed로 차단한다.
-2. **민감 라우팅 (제약 6)**: 민감도 게이트 적중 메일의 본문·초안은 승인된
-   Codex OAuth 티어(`openai-codex`) 밖으로 절대 나가지 않는다. 게이트가 LLM보다
-   먼저 실행되고, 공유 클라이언트가 다른 공급자를 가리키면 라우팅 가드가
-   호출 자체를 거부한다(`PatentRoutingError`).
-3. **마스킹 (제약 7)**: 실제 제목·발신자·본문을 QA/리포트/공개 채널/repo/git에
-   절대 쓰지 않는다. 민감 회신의 완성 본문은 소유자 전용 승인 메시지에만 표시하며, 원본 수신메일과
-   민감 초안은 `~agent/mail/`(700) 밖으로 내보내지 않는다.
+2. **공유 모델 체인**: 내용에 따른 별도 모델 제한 없이 계정 설정의 주 모델과 폴백을 따른다.
+3. **비밀·공개 누출 검사**: 자격증명과 실제 메일 원문은 로그·공개 저장소에 쓰지 않는다.
 4. **읽기 전용 래퍼 유지**: `mail_wrapper.py`의 mailon 호출 표면은 sync/status/resolve
    뿐이며 그 외 mailon 명령은 코드로 거부한다(send는 triage 게이트의 동결 argv 전용).
    래퍼 공개 서브커맨드는 list/get/classify/status/resolve다.

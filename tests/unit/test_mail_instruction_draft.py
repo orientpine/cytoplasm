@@ -24,7 +24,6 @@ import triage_gate  # noqa: E402
 import triage_mode  # noqa: E402
 import triage_store  # noqa: E402
 
-RULES_PATH = _REPO / "skills" / "mail" / "configs" / "sensitivity-rules.yaml"
 INSTRUCTION = "CANARY-지시: 회의는 다음 달로 미루자고 정중히 답해줘"
 MAIL_DETAIL = {
     "uid": "u-1",
@@ -54,7 +53,6 @@ def _setup_env(
     monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
     monkeypatch.setenv("TRIAGE_MAIL_MODE_FILE", str(mode_file))
     monkeypatch.setenv("TRIAGE_MAIL_MODE_REPO", str(tmp_path / "absent-repo-mode.json"))
-    monkeypatch.setenv("TRIAGE_RULES_FILE", str(RULES_PATH))
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(tmp_path / "llm-calls.jsonl"))
     monkeypatch.setenv("TRIAGE_MAILON_PYTHON", "python3")
     monkeypatch.delenv("TRIAGE_REPLY_PROMPT", raising=False)

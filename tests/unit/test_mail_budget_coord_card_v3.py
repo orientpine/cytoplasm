@@ -23,7 +23,7 @@ from skills.coordination.scripts.coordination_pending import (
     PendingConfirmStore,
 )
 
-CASES = ("original", "sensitive", "sensitive_dm", "compose", "gmail", "budget", "coordination")
+CASES = ("original", "compose", "gmail", "budget", "coordination")
 
 
 @pytest.mark.parametrize("name", CASES)
@@ -130,7 +130,7 @@ def test_gmail_v3_probe_rejects_changed_wire(
     gmail_wire_probe("3", binding, monkeypatch)
 
 
-def test_sensitive_v3_keeps_body_on_owner_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mail_v3_shows_keyword_body_on_both_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given distinct confidential subject/body/attachment data.
     draft: dict[str, JsonValue] = {
         **record(), "render_version": "3", "body": "PRIVATE-BODY",
@@ -139,12 +139,12 @@ def test_sensitive_v3_keeps_body_on_owner_surface(monkeypatch: pytest.MonkeyPatc
         }],
     }
     # When both supported destinations render the same sensitive reply.
-    console = render_case("sensitive", draft, monkeypatch)
-    owner = render_case("sensitive_dm", draft, monkeypatch)
+    console = render_case("original", draft, monkeypatch)
+    owner = render_case("original", draft, monkeypatch)
     # Then the destination's existing disclosure policy is retained.
-    assert "PRIVATE-BODY" not in console and "PRIVATE-SUBJECT" not in console
+    assert "PRIVATE-BODY" in console and "PRIVATE-SUBJECT" in console
     assert "PRIVATE-BODY" in owner and "PRIVATE-SUBJECT" in owner
-    assert "PRIVATE-FILE" not in console and "PRIVATE-FILE" not in owner
+    assert "PRIVATE-FILE" in console and "PRIVATE-FILE" in owner
 
 
 def test_coordination_v3_unknown_pending_version_is_refused(tmp_path: Path) -> None:

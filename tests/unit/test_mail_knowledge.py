@@ -18,9 +18,7 @@ from automation.knowledge.pack import EvidenceItem, EvidencePack, KnowledgeQuery
 import mail_evidence  # noqa: E402
 import mail_knowledge  # noqa: E402
 import triage_cli  # noqa: E402
-import triage_core  # noqa: E402
 import triage_pipeline  # noqa: E402
-import triage_sensitivity  # noqa: E402
 
 
 def _item(*, content: str = "상대와 지난번 합의한 일정", sensitivity: str | None = None) -> EvidenceItem:
@@ -63,9 +61,6 @@ def test_mail_draft_body_never_contains_private_evidence_citations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "gate"))
-    monkeypatch.setenv(
-        "TRIAGE_RULES_FILE", str(ROOT / "skills" / "mail" / "configs" / "sensitivity-rules.yaml")
-    )
     monkeypatch.setenv("TRIAGE_MAILON_PYTHON", "python3")
     draft = triage_pipeline.compose_and_post(
         "peer@example.invalid", "일정", "일정을 확인했습니다 [E1]. 허위 [E9].",
@@ -82,23 +77,6 @@ def test_non_hit_pack_owner_notice_is_deterministic_and_generation_continues(
     pack = _pack(verdict)
     assert message in mail_evidence.owner_notice(pack)
     assert mail_evidence.sanitize_draft_body("생성된 초안", pack) == "생성된 초안"
-
-
-def test_sensitive_evidence_is_added_to_pre_llm_mail_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[bool] = []
-    rules = triage_sensitivity.load_rules(ROOT / "skills" / "mail" / "configs" / "sensitivity-rules.yaml")
-    monkeypatch.setattr(
-        triage_cli.triage_pipeline.triage_llm, "classify",
-        lambda **kwargs: captured.append(bool(kwargs["sensitive"])) or (
-            triage_core.Classification("important", True, False, False, "", "test"), "codex"
-        ),
-    )
-    evidence = "[[PATENT-SENSITIVE-RECALL]] patent filing"
-    triage_cli.triage_pipeline._gate_and_classify(
-        "u-1", {"subject": "일정", "sender": "peer@example.invalid", "body": "확인"},
-        rules, evidence_text=evidence,
-    )
-    assert captured == [True]
 
 
 def test_evidence_preview_degrades_when_entity_preflight_module_is_absent(

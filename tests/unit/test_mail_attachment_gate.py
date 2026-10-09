@@ -27,8 +27,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def _draft(tmp_path: Path, *attachments: Path) -> dict:
     return triage_gate.create_draft(
         uid="compose:test", sender="", mail_subject="", to="recipient@example.test",
-        subject="offline subject", body="offline body", sensitive=False, tags=(),
-        category="compose", flags=(), kind="compose", channel_id="dm-1",
+        subject="offline subject", body="offline body", category="compose", flags=(), kind="compose", channel_id="dm-1",
         attachment_paths=tuple(attachments),
     )
 
@@ -67,7 +66,7 @@ def test_multi_attachment_manifest_is_hash_bound_and_rendered_safely(
     assert all(item["sha256"] not in message for item in draft["attachments"])
 
 
-def test_sensitive_reply_hides_attachment_filename_from_approvals(
+def test_reply_shows_attachment_filename_independently_of_topic(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _env(monkeypatch, tmp_path)
@@ -79,7 +78,7 @@ def test_sensitive_reply_hides_attachment_filename_from_approvals(
     message = triage_core.render_approvals_message(draft)
 
     assert "첨부: 1개" in message
-    assert attachment.name not in message and str(tmp_path) not in message
+    assert attachment.name in message and str(tmp_path) not in message
 
 
 def test_execute_attachment_requires_matching_provider_manifest(

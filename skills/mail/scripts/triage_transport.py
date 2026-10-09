@@ -34,10 +34,6 @@ def _env_path(name: str, default: str) -> Path:
     return Path(os.environ.get(name, default)).expanduser()
 
 
-def _rules_path() -> Path:
-    return _env_path("TRIAGE_RULES_FILE", str(SKILL_DIR / "configs/sensitivity-rules.yaml"))
-
-
 def _wrapper_json(argv: list[str], *, timeout: int = 1200) -> tuple[int, dict]:
     proc = subprocess.run(  # noqa: S603 — fixed wrapper path, read-only surface
         [sys.executable, str(SCRIPT_DIR / "mail_wrapper.py"), *argv],

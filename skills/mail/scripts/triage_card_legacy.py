@@ -1,12 +1,11 @@
-"""Frozen v1 mail approval bytes, including all destination masking branches."""
+"""Mail approval text for the original card layout."""
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import assert_never
 
 
 class ApprovalRenderDestination(StrEnum):
-    """The output surface that determines sensitive reply disclosure."""
+    """The output surface for an approval card."""
 
     CONSOLE = "console"
     OWNER_DM = "owner-dm"
@@ -18,7 +17,7 @@ def render_approvals_message(
     destination: ApprovalRenderDestination = ApprovalRenderDestination.CONSOLE,
     instruction: str = "",
 ) -> str:
-    """Frozen v1. Sensitive bodies are disclosed only to OWNER_DM."""
+    """Render reply content independently of topic."""
     if draft.get("provider") == "gmail":
         lines = [
             "[mail-triage] Gmail 발송 승인 요청 (DM 확정)",
@@ -50,29 +49,6 @@ def render_approvals_message(
             draft["body"],
             "```",
         ])
-    elif draft["sensitive"]:
-        lines = [
-            "[mail-triage] 민감 메일 회신 발송 승인 요청",
-            f"- 유형: {draft['category']} / 태그: {', '.join(draft['tags']) or '-'}"
-            f" / 플래그: {', '.join(draft['flags']) or '-'}",
-            f"- 발신(마스킹): `{draft['sender_masked']}`",
-            f"- 메일(불투명 id): `{draft['uid_opaque']}`",
-        ]
-        match destination:
-            case ApprovalRenderDestination.OWNER_DM:
-                if draft.get("cc"):
-                    lines.append(f"- Cc: `{draft['cc']}`")
-                lines.extend([
-                    f"- 회신 제목: {draft['subject']}",
-                    "- 회신 본문:",
-                    "```",
-                    draft["body"],
-                    "```",
-                ])
-            case ApprovalRenderDestination.CONSOLE:
-                pass
-            case unreachable:
-                assert_never(unreachable)
     else:
         preview = draft["body"][:600]
         lines = [
@@ -101,8 +77,6 @@ def render_approvals_message(
                 lines.append(
                     f"  - `{safe_name}` · {item['size_bytes']} bytes · `{item['sha256']}`"
                 )
-        elif draft.get("sensitive") and draft.get("kind") != "compose":
-            lines.append(f"- 첨부: {len(attachments)}개")
         else:
             lines.append(f"- 첨부: {len(attachments)}개")
             for item in attachments:

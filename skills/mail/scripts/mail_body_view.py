@@ -29,7 +29,7 @@ class Mail(TypedDict, total=False):
 def render(mail: Mail, *, full: bool = False) -> list[str]:
     """Format headers/body; retain quoted history only when explicitly requested.
 
-    No files, services, or sensitivity rules are consulted here. Masking belongs
+    No files or services are consulted here. Explicit field redaction belongs
     to the wrapper, before this projection. Quote counts include separator lines
     and blank lines in a trailing original, before whitespace normalization.
     """

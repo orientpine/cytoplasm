@@ -17,7 +17,7 @@ real mailon sync first; on the known structural sync failure (exit 3, e.g.
 the W0-7a folderUid selector) it degrades to the local state.db read and says
 so; on auth/browser failure (exit 2) it surfaces re-auth guidance and exit 2.
 
-Sensitivity: `--masked` replaces subjects/senders with opaque sha256-derived
+Explicit redaction: `--masked` replaces subjects/senders with opaque sha256-derived
 ids and omits bodies — the only mode whose output may leave the agent home
 (QA/repo/git). Classification is metadata-only (subject/sender strings);
 no mail content ever goes through an LLM here (patent gate: W4-2, non-GLM).

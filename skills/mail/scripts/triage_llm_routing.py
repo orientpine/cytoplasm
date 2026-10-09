@@ -1,10 +1,10 @@
 """Per-call retry policy for the digest — one tier, no degrade, fail closed.
 
 2026-09-03, digest run 49: the provider behind the retired second tier answered
-HTTP 429 ("Insufficient balance") to every call. Each of the 15 non-sensitive
+HTTP 429 ("Insufficient balance") to every call. Each of the 15 mail
 mails retried its own way into the same outage (~40 s apiece) and then landed in
 the owner's digest as ``(요약 실패)`` + ``⚠️ 분류 실패``, with no cause anywhere. The
-repair of that day degraded non-sensitive mail onto the other tier of the time
+repair of that day degraded mail onto the other tier of the time
 and latched the outage verdict for the rest of the run.
 
 2026-09-04 removed the second tier: every mail now runs on the Codex OAuth tier

@@ -118,11 +118,7 @@ class TestOwnerAddress:
 import triage_core  # noqa: E402
 import triage_llm  # noqa: E402
 import triage_pipeline  # noqa: E402
-import triage_sensitivity  # noqa: E402
 
-
-def _gate_stub(text, rules):  # noqa: ARG001 — signature parity
-    return triage_sensitivity.GateResult(sensitive=False, tags=(), matched=())
 
 
 def _classify_stub(**kwargs):  # noqa: ARG001
@@ -146,17 +142,16 @@ def test_process_one_cc_only_mail_skips_reply_draft(
     # Given: an important reply_needed verdict but the owner is only a Cc recipient
     monkeypatch.setenv("MAILON_ID", OWNER)
     monkeypatch.setattr(triage_pipeline, "_get_mail", lambda _uid: _mail_detail(FRONTMATTER_CC))
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub)
     monkeypatch.setattr(triage_llm, "classify", _classify_stub)
     monkeypatch.setattr(
         triage_pipeline, "_draft_and_post",
         lambda *args, **kwargs: pytest.fail("cc-only mail must not auto-draft a reply"),
     )
     # When: the process path handles the mail
-    action, sensitive, category = triage_pipeline._process_one("u-role", (), post=False)
+    action, category = triage_pipeline._process_one("u-role", post=False)
     # Then: the reply draft is suppressed and the suppression is visible in the action
     assert "cc-no-reply" in action
-    assert category == "important" and sensitive is False
+    assert category == "important"
 
 
 def test_process_one_to_recipient_still_drafts(
@@ -165,7 +160,6 @@ def test_process_one_to_recipient_still_drafts(
     # Given: the same verdict with the owner as a To recipient
     monkeypatch.setenv("MAILON_ID", OWNER)
     monkeypatch.setattr(triage_pipeline, "_get_mail", lambda _uid: _mail_detail(FRONTMATTER_TO))
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub)
     monkeypatch.setattr(triage_llm, "classify", _classify_stub)
     drafted: list[str] = []
     monkeypatch.setattr(
@@ -173,7 +167,7 @@ def test_process_one_to_recipient_still_drafts(
         lambda *args, **kwargs: drafted.append("called") or ["draft:stub"],
     )
     # When: the process path handles the mail
-    action, _sensitive, _category = triage_pipeline._process_one("u-role", (), post=False)
+    action, _category = triage_pipeline._process_one("u-role", post=False)
     # Then: the reply draft path runs unchanged
     assert drafted == ["called"]
     assert "draft:stub" in action

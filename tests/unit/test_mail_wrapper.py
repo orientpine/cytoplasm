@@ -343,29 +343,29 @@ def test_get_masked_body_is_hash_only(stub_repo: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("subject", "sender", "category", "route"),
+    ("subject", "sender", "category"),
     [
-        ("[광고] 여름 세일", "ads@example.invalid", "spam", "glm-ok"),
-        ("특허 출원 검토 요청", "tlo@example.invalid", "important", "non-glm"),
-        ("과제비 정산 안내", "admin@example.invalid", "important", "glm-ok"),
-        ("다음주 세미나 초청", "prof@example.invalid", "important", "glm-ok"),
-        ("서류 제출 기한 안내", "office@example.invalid", "important", "glm-ok"),
-        ("소식지 7월호", "noreply@example.invalid", "notice", "glm-ok"),
-        ("안부 인사", "friend@example.invalid", "general", "glm-ok"),
+        ("[광고] 여름 세일", "ads@example.invalid", "spam"),
+        ("특허 출원 검토 요청", "tlo@example.invalid", "important"),
+        ("과제비 정산 안내", "admin@example.invalid", "important"),
+        ("다음주 세미나 초청", "prof@example.invalid", "important"),
+        ("서류 제출 기한 안내", "office@example.invalid", "important"),
+        ("소식지 7월호", "noreply@example.invalid", "notice"),
+        ("안부 인사", "friend@example.invalid", "general"),
     ],
 )
-def test_classify_metadata_rules(subject, sender, category, route) -> None:
+def test_classify_metadata_rules(subject, sender, category) -> None:
     result = mail_wrapper.classify_metadata(subject, sender)
     assert result["category"] == category
-    assert result["route"] == route
+    assert "route" not in result
     assert result["basis"] == "metadata-only"
 
 
 def test_classify_by_uid_masked(stub_repo: Path) -> None:
     rc, out = run_cli("classify", "--uid", "u-101", "--masked")
     assert rc == 0
-    assert out["classification"]["flags"]["patent_sensitive"] is True
-    assert out["classification"]["route"] == "non-glm"
+    assert "patent_sensitive" not in out["classification"]["flags"]
+    assert "route" not in out["classification"]
     assert re.fullmatch(r"sha256:[0-9a-f]{16}", out["subject"])
     assert "특허" not in json.dumps(out, ensure_ascii=False)
 

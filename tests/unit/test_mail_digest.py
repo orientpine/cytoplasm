@@ -21,10 +21,9 @@ import triage_digest  # noqa: E402
 import triage_gate  # noqa: E402
 import triage_llm  # noqa: E402
 import triage_mode  # noqa: E402
-import triage_sensitivity  # noqa: E402
 import triage_transport  # noqa: E402
 
-CANARY = "PSEUDOSECRET-cafe0123"  # synthetic; must never persist in sensitive store rows
+CANARY = "PSEUDOSECRET-cafe0123"  # synthetic; synthetic body marker
 
 
 def test_record_digest_run_and_items_round_trip(tmp_path: Path) -> None:
@@ -35,7 +34,7 @@ def test_record_digest_run_and_items_round_trip(tmp_path: Path) -> None:
             "uid": "uid-2",
             "subject": "Synthetic second",
             "sender_masked": "sha256:sender-2",
-            "sensitive": 0,
+
             "category": "normal",
             "flags": "",
             "summary": "Second summary",
@@ -47,7 +46,7 @@ def test_record_digest_run_and_items_round_trip(tmp_path: Path) -> None:
             "uid": "uid-1",
             "subject": "Synthetic first",
             "sender_masked": "sha256:sender-1",
-            "sensitive": 1,
+
             "category": "important",
             "flags": "reply_needed",
             "summary": "First summary",
@@ -68,7 +67,7 @@ def test_digested_uids_returns_union_across_runs(tmp_path: Path) -> None:
         "uid": "uid-shared",
         "subject": "Synthetic first",
         "sender_masked": "sha256:sender-1",
-        "sensitive": 0,
+
         "category": "normal",
         "flags": "",
         "summary": "First summary",
@@ -90,7 +89,7 @@ def test_latest_digest_items_returns_last_run_only(tmp_path: Path) -> None:
         "uid": "uid-old",
         "subject": "Synthetic old",
         "sender_masked": "sha256:sender-old",
-        "sensitive": 0,
+
         "category": "normal",
         "flags": "",
         "summary": "Old summary",
@@ -125,16 +124,6 @@ def test_record_digest_run_zero_items_ok(tmp_path: Path) -> None:
 
 # --- W4-6 digest engine (triage_digest) -------------------------------------------
 
-
-def _gate_stub(*, sensitive: bool):
-    def evaluate(text, rules):  # noqa: ARG001 — signature parity with triage_sensitivity
-        return triage_sensitivity.GateResult(
-            sensitive=sensitive,
-            tags=("patent-sensitive",) if sensitive else (),
-            matched=(),
-        )
-
-    return evaluate
 
 
 def _classify_stub(category: str, *, schedule: bool = False, schedule_text: str = ""):
@@ -179,24 +168,23 @@ def test_select_new_mails_orders_by_recv_date_ascending() -> None:
     assert [mail["uid"] for mail in selected] == ["uid-a", "uid-b", "uid-c"]
 
 
-def test_build_item_sensitive_masks_store_row_but_not_dm_row(
+def test_build_item_preserves_keyword_text_in_store_and_owner_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=True))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("important"))
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: f"요약 {CANARY}")
     monkeypatch.setattr(
         triage_transport, "_delegate_schedule",
         lambda *args: pytest.fail("delegation must not run without schedule_needed"),
     )
-    detail = _detail("uid-9", subject=f"제목 {CANARY}")
+    detail = _detail("uid-9", subject=f"특허 patent 기밀 {CANARY}")
 
-    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+    dm_item, store_item = triage_digest.build_item(detail, 1)
 
     assert CANARY in dm_item["subject"] and CANARY in dm_item["summary"]
-    assert store_item["summary"] == ""
-    assert store_item["subject"] == triage_core.mask_value(detail["subject"])
-    assert CANARY not in json.dumps(store_item, ensure_ascii=False)
+    assert store_item["summary"] == dm_item["summary"]
+    assert store_item["subject"] == detail["subject"]
+    assert CANARY in json.dumps(store_item, ensure_ascii=False)
     assert dm_item["sender_masked"] == triage_core.mask_value(detail["sender"])
     assert store_item["sender_masked"] == dm_item["sender_masked"]
 
@@ -205,7 +193,6 @@ def test_owner_digest_shows_real_sender_and_cc_without_persisting_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a private owner digest item with a real sender and Cc recipient.
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
     detail = {
@@ -218,7 +205,7 @@ def test_owner_digest_shows_real_sender_and_cc_without_persisting_them(
     }
 
     # When: the private card is built and rendered.
-    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+    dm_item, store_item = triage_digest.build_item(detail, 1)
     rendered = triage_digest.render_digest_dm([dm_item], kst_now=_KST_NOW)
 
     # Then: the owner sees sender+Cc, while persistence retains only the sender hash.
@@ -232,7 +219,6 @@ def test_owner_digest_shows_real_sender_and_cc_without_persisting_them(
 
 
 def test_build_item_summary_failure_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
 
     def summarize(**kwargs):
@@ -240,7 +226,7 @@ def test_build_item_summary_failure_falls_back(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(triage_llm, "summarize", summarize)
 
-    dm_item, store_item = triage_digest.build_item(_detail("uid-7"), 1, rules=())
+    dm_item, store_item = triage_digest.build_item(_detail("uid-7"), 1)
 
     assert dm_item["summary"] == "(요약 실패)"
     assert store_item["summary"] == "(요약 실패)"
@@ -251,7 +237,6 @@ def test_build_item_retries_summary_once_before_falling_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: one mail whose first summary call fails at the transport level.
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
     calls: list[str] = []
 
@@ -264,7 +249,7 @@ def test_build_item_retries_summary_once_before_falling_back(
     monkeypatch.setattr(triage_llm, "summarize", summarize)
 
     # When: that mail is built into one digest item.
-    dm_item, store_item = triage_digest.build_item(_detail("uid-8"), 1, rules=())
+    dm_item, store_item = triage_digest.build_item(_detail("uid-8"), 1)
 
     # Then: the retry result is used — one transient failure must not cost the summary.
     assert dm_item["summary"] == "Synthetic summary"
@@ -278,7 +263,6 @@ def test_build_item_logs_masked_reason_when_summary_keeps_failing(
     # Given: a mail whose summary never parses, with the routing log redirected to tmp.
     log = tmp_path / "llm-calls.jsonl"
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
     calls: list[str] = []
 
@@ -290,7 +274,7 @@ def test_build_item_logs_masked_reason_when_summary_keeps_failing(
     detail = {**_detail("uid-8"), "sender": "Synthetic Sender <sender@example.invalid>"}
 
     # When: the item is built after both attempts fail.
-    dm_item, _store_item = triage_digest.build_item(detail, 1, rules=())
+    dm_item, _store_item = triage_digest.build_item(detail, 1)
 
     # Then: the item survives with the fallback and the reason is recorded, masked —
     # the cron drops stderr, so the log line is the only forensic trace.
@@ -310,7 +294,6 @@ def test_build_item_retries_only_the_current_classification_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: one mail whose first classification response is invalid JSON, then succeeds.
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     attempts: list[str] = []
 
     def classify(**kwargs):
@@ -323,7 +306,7 @@ def test_build_item_retries_only_the_current_classification_once(
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
 
     # When: that mail is built into one digest item.
-    dm_item, store_item = triage_digest.build_item(_detail("uid-retry"), 1, rules=())
+    dm_item, store_item = triage_digest.build_item(_detail("uid-retry"), 1)
 
     # Then: only classification repeats, and the recovered verdict has no failure marker.
     assert attempts == ["Synthetic subject", "Synthetic subject"]
@@ -346,7 +329,6 @@ def test_build_item_classify_failure_fails_open(
     # NOT a tier outage, which fails the whole tick closed — must NOT abort
     # the whole digest: keep the item, mark it important + classification-failed,
     # and NEVER delegate a calendar draft off a fabricated verdict.
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
 
     def classify(**kwargs):  # noqa: ARG001
         raise error
@@ -358,7 +340,7 @@ def test_build_item_classify_failure_fails_open(
         lambda *args: pytest.fail("a failed classification must never delegate calendar"),
     )
 
-    dm_item, store_item = triage_digest.build_item(_detail("uid-cf"), 1, rules=())
+    dm_item, store_item = triage_digest.build_item(_detail("uid-cf"), 1)
 
     assert dm_item["category"] == "important"  # conservative — surfaces the mail
     assert "classification_failed" in dm_item["flags"]
@@ -372,7 +354,6 @@ def test_build_item_logs_classify_failure_after_retry_exhaustion(
 ) -> None:
     log = tmp_path / "llm-calls.jsonl"
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
 
     def classify(**kwargs):  # noqa: ARG001
         raise triage_llm.LlmCallError("classify timed out")
@@ -380,7 +361,7 @@ def test_build_item_logs_classify_failure_after_retry_exhaustion(
     monkeypatch.setattr(triage_llm, "classify", classify)
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
 
-    dm_item, store_item = triage_digest.build_item(_detail("uid-classify-log"), 1, rules=())
+    dm_item, store_item = triage_digest.build_item(_detail("uid-classify-log"), 1)
 
     records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 1
@@ -418,12 +399,11 @@ def test_build_item_cc_only_mail_suppresses_reply_and_flags_cc(
 ) -> None:
     # Given: the owner is only a Cc recipient and the LLM says reply_needed
     monkeypatch.setenv("MAILON_ID", "owner@inst.example")
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("important"))
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
     detail = {**_detail("uid-cc"), "body": _CC_BODY}
     # When: the digest item is built
-    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+    dm_item, store_item = triage_digest.build_item(detail, 1)
     # Then: reply_needed is suppressed and the cc marker is carried on both rows
     assert dm_item["flags"] == ("cc",)
     assert store_item["flags"] == "cc"
@@ -434,7 +414,6 @@ def test_build_item_owner_dm_keeps_real_sender_and_cc_private(
 ) -> None:
     # Given: a private owner-DM digest item with named sender and Cc recipients.
     monkeypatch.setenv("MAILON_ID", "owner@inst.example")
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
     body = (
@@ -448,7 +427,7 @@ def test_build_item_owner_dm_keeps_real_sender_and_cc_private(
     }
 
     # When: the item is projected for owner delivery and persistent storage.
-    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+    dm_item, store_item = triage_digest.build_item(detail, 1)
     rendered = triage_digest.render_digest_dm([dm_item], kst_now=_KST_NOW)
 
     # Then: only the owner projection contains real sender/Cc; storage stays redacted.
@@ -465,7 +444,6 @@ def test_build_item_mass_notice_suppresses_reply_without_overriding_cc_logic(
 ) -> None:
     # Given: a To-recipient bulk notice that the LLM incorrectly marks reply-needed.
     monkeypatch.setenv("MAILON_ID", "owner@inst.example")
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("normal"))
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
     detail = {
@@ -475,7 +453,7 @@ def test_build_item_mass_notice_suppresses_reply_without_overriding_cc_logic(
     }
 
     # When: the digest item applies deterministic recipient/search signals.
-    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+    dm_item, store_item = triage_digest.build_item(detail, 1)
 
     # Then: bulk notice suppresses reply while the independent Cc badge remains absent.
     assert dm_item["flags"] == ()
@@ -487,12 +465,11 @@ def test_build_item_to_recipient_keeps_reply_flag(
 ) -> None:
     # Given: the owner is a To recipient of a reply-needed mail
     monkeypatch.setenv("MAILON_ID", "owner@inst.example")
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "classify", _classify_stub("important"))
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
     detail = {**_detail("uid-to"), "body": _TO_BODY}
     # When: the digest item is built
-    dm_item, store_item = triage_digest.build_item(detail, 1, rules=())
+    dm_item, store_item = triage_digest.build_item(detail, 1)
     # Then: behavior is unchanged — reply_needed stays, no cc marker
     assert dm_item["flags"] == ("reply_needed",)
     assert store_item["flags"] == "reply_needed"
@@ -508,14 +485,13 @@ def test_build_item_delegates_calendar_for_important_schedule_needed(
         return "calendar:abc123"
 
     monkeypatch.setattr(triage_transport, "_delegate_schedule", delegate)
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
     monkeypatch.setattr(
         triage_llm, "classify",
         _classify_stub("important", schedule=True, schedule_text="7/20 10:00 장비 회의"),
     )
 
-    dm_item, store_item = triage_digest.build_item(_detail("uid-5"), 1, rules=(), digest_day="2026-07-20")
+    dm_item, store_item = triage_digest.build_item(_detail("uid-5"), 1, digest_day="2026-07-20")
 
     # The digest day travels with the delegation so the calendar side groups the card by day.
     assert calls == [("7/20 10:00 장비 회의", triage_core.mask_value("uid-5"), "2026-07-20")]
@@ -527,7 +503,7 @@ def test_build_item_delegates_calendar_for_important_schedule_needed(
         _classify_stub("normal", schedule=True, schedule_text="7/20 10:00 장비 회의"),
     )
 
-    dm_item, store_item = triage_digest.build_item(_detail("uid-5"), 2, rules=())
+    dm_item, store_item = triage_digest.build_item(_detail("uid-5"), 2)
 
     assert len(calls) == 1  # category "normal" never delegates
     assert dm_item["note"] == "" and store_item["note"] == ""
@@ -560,7 +536,7 @@ def test_render_digest_dm_card_format() -> None:
     assert "### 2. Synthetic second" in lines
     assert text.index("### 1.") < text.index("### 2.")
     assert "🔴 중요 · ↩️ 회신 필요" in lines
-    assert "🔵 일반 · 🔒 민감 · 📅 일정" in lines
+    assert "🔵 일반 · 📅 일정" in lines
     assert "> 요약 · First summary" in lines
     assert "수신 07-18 18:01" in lines
     assert "UID" not in text and "sha256" not in text
@@ -633,13 +609,13 @@ def test_render_digest_dm_recv_time_kst_variants() -> None:
 
 def test_render_digest_dm_badge_maps() -> None:
     # Given: spam category with budget+cc flags, and an unknown category/flag pair
-    spam = _card_item(category="spam", flags=("budget", "cc"), sensitive=1)
+    spam = _card_item(category="spam", flags=("budget", "cc"), )
     unknown = _card_item(category="weird", flags=("mystery",))
     # When: both are rendered
     text_spam = triage_digest.render_digest_dm([spam], kst_now=_KST_NOW)
     text_unknown = triage_digest.render_digest_dm([unknown], kst_now=_KST_NOW)
     # Then: known keys map to Korean emoji badges, unknown keys fall back to raw text
-    assert "🗑️ 스팸 · 🔒 민감 · 💳 예산 · 👀 참조(CC)" in text_spam.splitlines()
+    assert "🗑️ 스팸 · 💳 예산 · 👀 참조(CC)" in text_spam.splitlines()
     assert "weird · mystery" in text_unknown.splitlines()
 
 
@@ -647,7 +623,6 @@ def _patch_cli_digest_engine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     db = tmp_path / "triage.db"
     monkeypatch.setenv("TRIAGE_DB", str(db))
     monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
-    monkeypatch.setattr(triage_digest.triage_sensitivity, "load_rules", lambda _path: ())
     monkeypatch.setattr(
         triage_digest.triage_transport,
         "_list_mails",
@@ -660,13 +635,13 @@ def _patch_cli_digest_engine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     )
 
     def build_item(  # noqa: ARG001
-        detail: dict, item_no: int, *, rules: tuple, digest_day: str = ""
+        detail: dict, item_no: int, *, digest_day: str = ""
     ) -> tuple[dict, dict]:
         shared = {
             "item_no": item_no,
             "uid": detail["uid"],
             "sender_masked": "sha256:sender-cli",
-            "sensitive": 0,
+
             "category": "important",
             "note": "",
             "recv_date": detail["date"],
@@ -719,7 +694,6 @@ def test_run_digest_one_bad_classify_still_completes_and_delivers(
     db = tmp_path / "triage.db"
     monkeypatch.setenv("TRIAGE_DB", str(db))
     monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
-    monkeypatch.setattr(triage_digest.triage_sensitivity, "load_rules", lambda _path: ())
     mails = [
         {"uid": "uid-bad", "date": "2026-07-18T09:01:00Z"},
         {"uid": "uid-good", "date": "2026-07-18T09:02:00Z"},
@@ -732,7 +706,6 @@ def test_run_digest_one_bad_classify_still_completes_and_delivers(
         "_get_mail",
         lambda uid: _detail(uid, subject=f"Subject {uid}"),
     )
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=False))
     monkeypatch.setattr(triage_llm, "summarize", lambda **kwargs: "Synthetic summary")
 
     def classify(**kwargs):
@@ -888,7 +861,7 @@ def test_cmd_digest_items_prints_latest_mapping(
             "uid": "uid-items",
             "subject": "sha256:masked-subject",
             "sender_masked": "sha256:sender-items",
-            "sensitive": 1,
+
             "category": "important",
             "flags": "reply_needed",
             "summary": "",
@@ -902,7 +875,7 @@ def test_cmd_digest_items_prints_latest_mapping(
     # Then: the stable mapping line exposes only the stored subject
     assert rc == 0
     assert capsys.readouterr().out.strip() == (
-        "ITEM no=1 uid=uid-items sensitive=1 category=important "
+        "ITEM no=1 uid=uid-items category=important "
         "flags=reply_needed subject=sha256:masked-subject"
     )
 

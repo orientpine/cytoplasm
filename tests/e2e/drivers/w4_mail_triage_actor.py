@@ -1,7 +1,7 @@
 """W4-5 scenario actor: mail triage -> draft -> approval gate -> send (W4-2).
 
 Fully offline replica of the deployed W4-2 pipeline against stub transports
-(stub mailon repo/state.db, stub GLM + non-GLM LLMs, stub mailon-send binary,
+(stub mailon repo/state.db, stub shared-model client, stub mailon-send binary,
 stub calendar CLI) in a throwaway temp dir. mail-mode is pinned full-go (the
 W0-7c verdict), so this exercises the GO branch: the auto-send path MUST pass
 through the external-effect approval gate (W1-6 signed injection standing in
@@ -31,28 +31,6 @@ CHANNEL = "999000000000000025"
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
-GLM_STUB = """#!/usr/bin/env python3
-import pathlib, sys
-prompt = sys.stdin.read()
-base = pathlib.Path(__file__).resolve().parent
-with (base / "glm-calls.log").open("a") as h:
-    h.write("call\\n")
-with (base / "glm-inputs.log").open("a", encoding="utf-8") as h:
-    h.write(prompt + "\\n===\\n")
-if "beta-202" in prompt:
-    print('{"category": "spam", "reply_needed": false, "schedule_needed": false,'
-          ' "budget": false, "schedule_text": "", "reason": "stub"}')
-elif "장비 사용" in prompt:
-    print('{"category": "important", "reply_needed": true, "schedule_needed": false,'
-          ' "budget": false, "schedule_text": "", "reason": "stub"}')
-elif "delta-404" in prompt:
-    print('{"category": "important", "reply_needed": false, "schedule_needed": true,'
-          ' "budget": false, "schedule_text": "7월 20일 오후 3시 세미나", "reason": "stub"}')
-else:
-    print('{"category": "normal", "reply_needed": false, "schedule_needed": false,'
-          ' "budget": false, "schedule_text": "", "reason": "stub"}')
-"""
-
 HERMES_STUB = """#!/usr/bin/env python3
 import pathlib, re, sys
 prompt = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -60,8 +38,16 @@ base = pathlib.Path(__file__).resolve().parent
 with (base / "codex-calls.log").open("a") as h:
     h.write("call\\n")
 if '"category"' in prompt:
-    print('{"category": "important", "reply_needed": true, "schedule_needed": false,'
-          ' "budget": false, "schedule_text": "", "reason": "stub-codex"}')
+    if "beta-202" in prompt:
+        category, reply, schedule = "spam", "false", "false"
+    elif "delta-404" in prompt:
+        category, reply, schedule = "important", "false", "true"
+    elif "장비 사용" in prompt or "alpha-101" in prompt:
+        category, reply, schedule = "important", "true", "false"
+    else:
+        category, reply, schedule = "normal", "false", "false"
+    print('{"category": "%s", "reply_needed": %s, "schedule_needed": %s,'
+          ' "budget": false, "schedule_text": "7월 20일 오후 3시 세미나", "reason": "stub"}' % (category, reply, schedule))
 else:
     print('{"subject": "", "body": "요청하신 내용 확인했습니다. 감사합니다."}')
 """
@@ -135,7 +121,6 @@ def _setup(work: Path, root: Path) -> tuple[dict[str, str], str]:
         f'{{"owner_id": "{OWNER}", "personal_approvals_channel_id": "{CHANNEL}"}}',
         encoding="utf-8",
     )
-    _stub(work / "glm-stub", GLM_STUB)
     _stub(work / "hermes-stub", HERMES_STUB)
     _stub(work / "mailon-send-stub", SEND_STUB)
     (work / "calendar-stub.py").write_text(CALENDAR_STUB, encoding="utf-8")
@@ -153,10 +138,8 @@ def _setup(work: Path, root: Path) -> tuple[dict[str, str], str]:
         "TRIAGE_MAIL_MODE_FILE": str(work / "runtime" / "mail-mode.json"),
         "TRIAGE_MAIL_MODE_REPO": str(work / "mail-mode-repo.json"),
         "TRIAGE_MAILON_PYTHON": str(work / "mailon-send-stub"),
-        "TRIAGE_GLM_BIN": str(work / "glm-stub"),
-        "TRIAGE_HERMES_BIN": str(work / "hermes-stub"),
+        "AUTOPHAGY_HERMES_BIN": str(work / "hermes-stub"),
         "TRIAGE_CALENDAR_CLI": str(work / "calendar-stub.py"),
-        "TRIAGE_DM_FULLTEXT": "0",
         "INTEROP_RUNTIME": str(root),
         "INTEROP_CONFIG": str(work / "interop-config.json"),
         # This checkout copy is the governed one for the run (mail_runtime.governed_copy_refusal).
@@ -219,10 +202,9 @@ def main() -> int:
         rules = load_denylist(root / "configs" / "external-effect-tools.yaml")
         obs: dict[str, dict[str, Any]] = {}
 
-        # --- case 1: triage tick -> drafts only, sensitive routing, 0 send ----
+        # --- case 1: triage tick -> drafts only, common routing, 0 send ----
         t1 = _cli(root, env, "process", "--no-sync", "--no-post")
         t2 = _cli(root, env, "process", "--no-sync", "--no-post")
-        glm_inputs = (work / "glm-inputs.log").read_text(encoding="utf-8") if (work / "glm-inputs.log").exists() else ""
         obs["triage_draft"] = {
             "process_exit": t1.returncode,
             "processed_n": 5 if "PROCESSED n=5" in t1.stdout else -1,
@@ -230,10 +212,8 @@ def main() -> int:
             "spam_skipped": "action=spam-skip" in t1.stdout,
             "normal_no_action": "action=no-action" in t1.stdout,
             "calendar_delegated": "action=calendar:calstub1" in t1.stdout,
-            "sensitive_draft_created": "sensitive=True category=important action=draft:" in t1.stdout,
-            "glm_calls": _count(work / "glm-calls.log"),
-            "nonglm_calls": _count(work / "codex-calls.log"),
-            "sensitive_body_reached_glm": canary in glm_inputs or "특허" in glm_inputs,
+            "keyword_draft_created": "category=important action=draft:" in t1.stdout,
+            "model_calls": _count(work / "codex-calls.log"),
             "canary_on_approvals_surface": canary in t1.stdout,
             "sends_before_approval": _count(send_log),
             "approval_records_before_approval": _count(approval_log),
@@ -241,15 +221,28 @@ def main() -> int:
             "error": None,
         }
 
-        listed = _cli(root, env, "list-drafts").stdout
-        pub = re.search(r"DRAFT id=([0-9a-f]+) status=pending sensitive=False", listed)
-        sens = re.search(r"DRAFT id=([0-9a-f]+) status=pending sensitive=True", listed)
-        pub_id = pub.group(1) if pub else ""
-        sens_id = sens.group(1) if sens else ""
+        drafts = [json.loads(p.read_text(encoding="utf-8"))
+                  for p in (work / "triage-gate" / "drafts").glob("*.json")]
+        pub_id = next((d["id"] for d in drafts if d["uid"] == "u-104"), "")
+        sens_id = next((d["id"] for d in drafts if d["uid"] == "u-101"), "")
+        # Offline signed approvals require the same persisted binding as production.
+        bind = subprocess.run(
+            [
+                sys.executable, "-c",
+                "import sys; sys.path.insert(0, sys.argv[1]); import triage_gate; "
+                "[(triage_gate.set_approval_binding(triage_gate.load_draft(d), "
+                "kind='reply', surface='skill-approvals', channel_id=sys.argv[2], "
+                "policy_version=1)) for d in sys.argv[3:]]",
+                str(root / "skills/mail/scripts"), CHANNEL, pub_id, sens_id,
+            ],
+            env=env, capture_output=True, text=True, check=False,
+        )
+        assert bind.returncode == 0, bind.stderr
 
         # --- case 2: GO branch — signed owner approval -> gate -> 1 send -------
         _cli(root, env, "sign", "--draft", pub_id, "--out", str(work / "ok.json"), "--user-id", OWNER, e2e=e2e)
         confirm = _cli(root, env, "confirm", "--draft", pub_id, "--injection-file", str(work / "ok.json"), e2e=e2e)
+        assert confirm.returncode == 0, confirm.stderr
         records = _records(approval_log)
         gate_recs = [r for r in records if r.get("action") == "external_effect.approval"]
         audit_recs = [r for r in records if r.get("action") == "mail.reply_send"]

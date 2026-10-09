@@ -1,8 +1,7 @@
 # mail digest summary prompt v1 (W4-6)
 
 - Consumer: `skills/mail/scripts/triage_llm.py::summarize` — one-line digest
-  summaries. Routed by the step-1 sensitivity verdict (sensitive mail goes to
-  the non-GLM tier, NEVER GLM).
+  summaries through the account-configured shared model chain.
 - Contract: the response MUST contain exactly one JSON object
   `{"summary": "..."}` with a non-empty string value. Parsed by
   `triage_core.parse_digest_summary`.

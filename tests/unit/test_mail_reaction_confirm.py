@@ -203,7 +203,6 @@ def test_new_reply_draft_posts_to_the_agent_chat_thread(
             "subject": "민감 문의",
             "body": "원본 민감 메일 본문",
         },
-        SimpleNamespace(sensitive=True, tags=("patent-sensitive",)),
         SimpleNamespace(category="important", flags=lambda: ("reply_needed",)),
         post=True,
     )
@@ -774,8 +773,7 @@ def test_confirm_intent_persists_the_request_thread_outside_the_action_hash(
     monkeypatch.setattr(triage_binding, "approval_directory", lambda: _RequestThreadDirectory())
     draft = triage_gate.create_draft(
         uid="u-1", sender="발신자 <s@example.invalid>", mail_subject="일정 문의",
-        to="owner@example.invalid", subject="Re: 일정 문의", body="본문", sensitive=False,
-        tags=(), category="important", flags=("reply_needed",), kind="reply",
+        to="owner@example.invalid", subject="Re: 일정 문의", body="본문", category="important", flags=("reply_needed",), kind="reply",
         origin_channel_id=ORIGIN_CHANNEL, origin_message_id=ORIGIN_MESSAGE,
     )
 

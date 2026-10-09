@@ -38,8 +38,6 @@ def test_mail_reminder_wiring_passes_guild_resolver(
         to="recipient@example.test",
         subject="subject",
         body="body",
-        sensitive=False,
-        tags=(),
         category="compose",
         flags=(),
         kind="compose",

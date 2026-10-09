@@ -4,9 +4,6 @@ and gate-parity external-effect action hashing.
 
 No I/O, no subprocess, no network — everything here is pytest-able.
 
-Pipeline order contract (constraint 6): the deterministic sensitivity gate
-(triage_sensitivity) runs FIRST on subject+sender+full body; only then may an
-LLM see mail content, and a sensitivity hit forces the non-GLM tier.
 """
 
 from __future__ import annotations
@@ -248,8 +245,11 @@ def draft_sha256(record: dict) -> str:
     """Content hash binding a draft to the exact reply it will send."""
     bound = {
         key: record[key]
-        for key in ("argv", "body", "sensitive", "subject", "to", "uid")
+        for key in ("argv", "body", "subject", "to", "uid")
     }
+    # Old approved hashes keep their original fields; new drafts do not write them.
+    if "sensitive" in record:
+        bound["sensitive"] = record["sensitive"]
     if "cc" in record:
         bound["cc"] = record["cc"]
     if "quote" in record:  # the answered mail sent below the body (mail_quote)

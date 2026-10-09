@@ -31,8 +31,6 @@ def _draft(*attachments: Path) -> dict:
         to="recipient@example.test",
         subject="offline subject",
         body="offline body",
-        sensitive=False,
-        tags=(),
         category="compose",
         flags=(),
         kind="compose",

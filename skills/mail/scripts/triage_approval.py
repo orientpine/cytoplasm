@@ -170,7 +170,7 @@ def posting_journal() -> PostingJournal:
 def _pending_drafts() -> tuple[tuple[Path, dict, str], ...]:
     """(path, record, key) for every pending draft — ANY unreadable record fails closed."""
     records: list[tuple[Path, dict, str]] = []
-    directories = (triage_gate._public_drafts_dir(), triage_gate._sensitive_drafts_dir())
+    directories = (triage_gate._public_drafts_dir(), triage_gate._legacy_drafts_dir())
     for path in sorted(item for directory in directories for item in directory.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))

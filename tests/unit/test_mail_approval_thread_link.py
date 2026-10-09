@@ -20,7 +20,6 @@ import triage_cli  # noqa: E402
 import triage_gate  # noqa: E402
 import triage_mode  # noqa: E402
 import triage_pipeline  # noqa: E402
-import triage_sensitivity  # noqa: E402
 import triage_store  # noqa: E402
 
 GUILD = "300000000000000001"
@@ -87,11 +86,9 @@ def test_instruction_draft_prints_the_approval_thread_link(
     monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
     monkeypatch.setattr(triage_gate, "has_draft_for", lambda _uid: False)
     monkeypatch.setattr(triage_cli, "_get_mail", lambda _uid: {"sender": "a@b.c"})
-    monkeypatch.setattr(triage_cli, "_rules_path", lambda: Path("/dev/null"))
-    monkeypatch.setattr(triage_sensitivity, "load_rules", lambda _path: None)
     monkeypatch.setattr(
-        triage_pipeline, "_gate_and_classify",
-        lambda *_a, **_k: (argparse.Namespace(sensitive=False), argparse.Namespace(category="x")),
+        triage_pipeline, "_classify",
+        lambda *_a, **_k: argparse.Namespace(category="x"),
     )
     monkeypatch.setattr(
         triage_pipeline, "_draft_and_post",

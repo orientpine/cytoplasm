@@ -1,8 +1,7 @@
 # mail reply draft prompt v2 (W4-6)
 
 - Consumer: `skills/mail/scripts/triage_llm.py::draft_reply` — the pipeline's
-  step ③. ALWAYS the non-GLM quality tier (openai-codex one-shot); the
-  Korean final text never goes through GLM regardless of sensitivity.
+  reply drafting through the account-configured shared model chain.
 - Contract: the response MUST contain exactly one JSON object with keys
   `subject` (string; may be empty → caller falls back to "Re: <원제목>")
   and `body` (non-empty string; the final Korean reply text). Parsed by
