@@ -25,8 +25,8 @@ class ReportStatus(StrEnum):
     BLOCKED = "blocked"
 
 
-# Interop 규약 §1.3: `summary`는 공유 `#agents-log`에 게시되므로 내부 상세·민감
-# 본문이 새지 않도록 작성 시 결정론적으로 마스킹한다. 순서 의존적(긴 패턴 먼저).
+# Interop 규약 §1.3: 공유 보고의 경로·PII·시크릿·계정 식별자를 보호한다.
+# 순서 의존적(긴 패턴 먼저).
 _SUMMARY_MASKS: Final = (
     # secret/token 모양 — repair_redaction 계열과 동일
     (re.compile(r"sk-[A-Za-z0-9_-]{6,}"), "[MASKED_KEY]"),
