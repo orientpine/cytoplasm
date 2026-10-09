@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 
@@ -12,7 +11,6 @@ from automation.memory_curator.classify import classify_entries
 from automation.memory_curator.classify_model import EntryVerdict, Route
 from automation.memory_curator.classify_prompt import render
 from automation.memory_curator.model import MemoryEntry, MemoryKind
-from automation.rag_ingest.sensitivity import SensitivityRule, load_rules
 from automation.twin_distill.llm import LlmInvocationError
 
 _OPS_ENTRY = (
@@ -44,35 +42,11 @@ class RaisingLlm:
         raise LlmInvocationError("boom")
 
 
-def _rules() -> tuple[SensitivityRule, ...]:
-    return load_rules(Path("configs/sensitivity-rules.yaml"))
-
-
 def _response(route: Route, evidence: str) -> str:
     return json.dumps(
         {"route": route, "evidence": evidence, "reason": "grounded classification"}
     )
 
-
-def test_pre_llm_veto_keeps_sensitive_text_out_of_the_client() -> None:
-    # Given one sensitive entry followed by one LLM-eligible entry
-    sensitive = "특허 출원 전 검토할 발명 설명"
-    client = FakeLlm(
-        responses=[_response("OPS_REFERENCE", _OPS_EVIDENCE)], prompts=[]
-    )
-    entries: Mapping[MemoryKind, tuple[MemoryEntry, ...]] = {
-        "memory": (MemoryEntry(sensitive), MemoryEntry(_OPS_ENTRY)),
-        "user": (),
-    }
-
-    # When the batch is classified
-    verdicts = classify_entries(entries, client=client, rules=_rules())
-
-    # Then the vetoed text never reaches the LLM and only the eligible entry does.
-    assert verdicts[0].veto == "sensitivity"
-    assert verdicts[0].llm_called is False
-    assert client.prompts == [render(_OPS_ENTRY, source_kind="memory")]
-    assert len(client.prompts) == 1
 
 
 def test_llm_error_closes_each_entry_and_continues_in_order() -> None:
@@ -88,7 +62,7 @@ def test_llm_error_closes_each_entry_and_continues_in_order() -> None:
     }
 
     # When the batch is classified
-    verdicts = classify_entries(entries, client=client, rules=_rules())
+    verdicts = classify_entries(entries, client=client)
 
     # Then both failures are isolated and both entries remain in input order.
     assert verdicts == (
@@ -111,7 +85,7 @@ def test_user_ops_reference_is_overridden_after_llm() -> None:
     }
 
     # When classification completes
-    (verdict,) = classify_entries(entries, client=client, rules=_rules())
+    (verdict,) = classify_entries(entries, client=client)
 
     # Then the V7 post-LLM rule keeps USER.md content native.
     assert verdict.route == "KEEP_NATIVE"
@@ -133,9 +107,8 @@ def test_safety_cue_is_overridden_after_llm(
         _text: str,
         *,
         source_kind: MemoryKind,
-        rules: Sequence[SensitivityRule],
     ) -> None:
-        del source_kind, rules
+        del source_kind
 
     monkeypatch.setattr(classify_module, "pre_llm_veto", allow_llm)
     client = FakeLlm(responses=[_response("OPS_REFERENCE", evidence)], prompts=[])
@@ -145,7 +118,7 @@ def test_safety_cue_is_overridden_after_llm(
     }
 
     # When the LLM verdict passes through the independent post-veto defense
-    (verdict,) = classify_entries(entries, client=client, rules=_rules())
+    (verdict,) = classify_entries(entries, client=client)
 
     # Then V6 keeps the safety rule native.
     assert verdict.route == "KEEP_NATIVE"
@@ -170,7 +143,7 @@ def test_output_order_is_memory_then_user_and_stable_within_each_kind() -> None:
     client = FakeLlm(responses=["not-json"] * 4, prompts=[])
 
     # When the mapping is classified
-    verdicts = classify_entries(entries, client=client, rules=_rules())
+    verdicts = classify_entries(entries, client=client)
 
     # Then kind priority and each input tuple's order are deterministic.
     assert tuple((item.source_kind, item.entry_text) for item in verdicts) == (
@@ -192,7 +165,7 @@ def test_memory_ops_fact_stays_ops_reference_through_the_full_pipeline() -> None
     }
 
     # When the entry flows through render, complete, parse, and post-veto
-    (verdict,) = classify_entries(entries, client=client, rules=_rules())
+    (verdict,) = classify_entries(entries, client=client)
 
     # Then the grounded LLM verdict remains unchanged.
     assert verdict == EntryVerdict(

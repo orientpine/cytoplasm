@@ -26,9 +26,8 @@ def test_veto_reasons_match_the_frozen_contract() -> None:
     # Given the public VetoReason alias / When its Literal values are inspected
     veto_reasons = frozenset(get_args(VetoReason))
 
-    # Then all and only the eight contract values are present.
+    # Then all and only the seven contract values are present.
     assert veto_reasons == {
-        "sensitivity",
         "credential",
         "keep_native_rule",
         "marker",

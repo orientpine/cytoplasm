@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
 from dataclasses import replace
 from typing import Final
 
-from automation.rag_ingest.sensitivity import SensitivityRule, classify
 
 from .classify_model import EntryVerdict, VetoReason
 from .model import MemoryKind
@@ -98,18 +96,7 @@ def pre_llm_veto(
     text: str,
     *,
     source_kind: MemoryKind,
-    rules: Sequence[SensitivityRule],
 ) -> EntryVerdict | None:
-    if classify(text, tuple(rules)):
-        return EntryVerdict(
-            source_kind=source_kind,
-            entry_text=text,
-            route="UNCERTAIN",
-            evidence="",
-            reason="sensitivity",
-            veto="sensitivity",
-            llm_called=False,
-        )
     if any(pattern.search(text) is not None for pattern in _CREDENTIAL_PATTERNS):
         return EntryVerdict(
             source_kind=source_kind,

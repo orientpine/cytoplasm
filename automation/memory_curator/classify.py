@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Final
 
-from automation.rag_ingest.sensitivity import SensitivityRule
 from automation.twin_distill.llm import (
     LlmClient,
     LlmConfigurationError,
@@ -23,12 +22,11 @@ def classify_entries(
     entries_by_kind: Mapping[MemoryKind, tuple[MemoryEntry, ...]],
     *,
     client: LlmClient,
-    rules: Sequence[SensitivityRule],
 ) -> tuple[EntryVerdict, ...]:
     verdicts: list[EntryVerdict] = []
     for kind in _KIND_ORDER:
         for entry in entries_by_kind.get(kind, ()):
-            verdict = pre_llm_veto(entry.text, source_kind=kind, rules=rules)
+            verdict = pre_llm_veto(entry.text, source_kind=kind)
             if verdict is not None:
                 verdicts.append(verdict)
                 continue

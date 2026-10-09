@@ -112,15 +112,12 @@ def _discover_and_propose(state: RelocationState, now: datetime) -> RelocationSt
         from automation.memory_curator.watch_steps import read_native
         from automation.memory_relocate.discover import select_candidate
         from automation.memory_relocate.propose import build_proposed_record
-        from automation.rag_ingest.sensitivity import load_rules
         from automation.twin_distill.llm import CodexLlmClient
 
         files = {kind: read_native(MEMORY_DIR, kind)[1] for kind in ("memory", "user")}
-        rules = load_rules(_REPO_ROOT / "configs" / "sensitivity-rules.yaml")
         verdicts = classify_entries(
             {kind: files[kind].entries for kind in ("memory", "user")},
             client=CodexLlmClient.from_environment(os.environ),
-            rules=rules,
         )
         known = frozenset(record.entry_sha256 for record in state.relocations.values())
         candidate = select_candidate(verdicts, files, known)
