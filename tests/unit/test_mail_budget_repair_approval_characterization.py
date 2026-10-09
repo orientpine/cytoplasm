@@ -55,7 +55,7 @@ MAIL_DRAFT_KEYS = [
     "argv", "body", "category", "cc", "channel_id", "created", "flags", "id", "kind",
     "mail_subject", "message_id", "origin_channel_id", "origin_message_id",
     "policy_version", "sender", "sender_masked",
-    "sensitive", "sha256", "status", "subject", "surface", "tags", "to", "uid",
+    "sha256", "status", "subject", "surface", "to", "uid",
     "uid_opaque",
 ]
 BUDGET_DRAFT_KEYS = [
@@ -89,7 +89,7 @@ def _new_mail_draft(uid: str = "u-1") -> dict:
     return triage_gate.create_draft(
         uid=uid, sender="발신자 <s@example.invalid>", mail_subject="문의",
         to="owner@example.invalid", subject="Re: 문의", body="본문",
-        sensitive=False, tags=(), category="important", flags=("reply_needed",),
+        category="important", flags=("reply_needed",),
     )
 
 

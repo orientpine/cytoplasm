@@ -1,4 +1,4 @@
-"""W4-2 mail triage — sensitivity-gate ordering/routing, LLM contract parsing,
+"""W4-2 mail triage — shared-model calls, LLM contract parsing,
 draft binding, claim idempotency, consecutive-failure mail-mode downgrade,
 #approvals sanitization, and hash parity with the deployed external-effect
 gate's mailon_send rule."""
@@ -9,7 +9,6 @@ import json
 import shlex
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -18,44 +17,10 @@ sys.path.insert(0, str(_REPO / "skills" / "mail" / "scripts"))
 
 import triage_core  # noqa: E402
 import triage_llm  # noqa: E402
-import triage_sensitivity  # noqa: E402
 import triage_store  # noqa: E402
 from automation.interop import external_effect_gate  # noqa: E402
 
-RULES_PATH = _REPO / "skills" / "mail" / "configs" / "sensitivity-rules.yaml"
 CANARY = "PSEUDOSECRET-cafe0123"  # synthetic; must never surface in approvals text
-
-
-def _rules():
-    return triage_sensitivity.load_rules(RULES_PATH)
-
-
-# --- ① sensitivity gate: deterministic, pre-LLM ---------------------------------
-
-def test_patent_keyword_mail_hits_gate() -> None:
-    result = triage_sensitivity.evaluate(f"특허 출원 검토 요청\nx@y.kr\n본문 {CANARY}", _rules())
-    assert result.sensitive is True
-    assert "patent-sensitive" in result.tags
-
-
-def test_plain_mail_does_not_hit_gate() -> None:
-    result = triage_sensitivity.evaluate("주간 회의 일정 안내\nx@y.kr\n다음 주 회의", _rules())
-    assert result.sensitive is False
-
-
-def test_rules_copy_is_in_sync_with_repo_config() -> None:
-    repo_rules = (_REPO / "configs" / "sensitivity-rules.yaml").read_bytes()
-    assert RULES_PATH.read_bytes() == repo_rules
-
-
-def test_gate_hit_refuses_unapproved_tier_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 제약 6: 게이트 적중 본문은 승인된 Codex OAuth 티어 밖으로 나가지 않는다. 공유
-    # 클라이언트가 다른 공급자를 가리키면 프롬프트가 전송되기 전에 거부된다.
-    monkeypatch.setattr(
-        triage_llm, "_codex_module", lambda: SimpleNamespace(PROVIDER="unapproved-tier")
-    )
-    with pytest.raises(triage_llm.PatentRoutingError):
-        triage_llm.call_codex("아무 프롬프트", sensitive=True)
 
 
 def test_call_codex_pins_provider_and_honors_user_config(
@@ -72,8 +37,8 @@ def test_call_codex_pins_provider_and_honors_user_config(
     )
     monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
 
-    # When: 비민감 분류 요청 한 건이 나간다.
-    result = triage_llm.call_codex("return JSON", sensitive=False, timeout=30.0)
+    # When: 일반 분류 요청 한 건이 나간다.
+    result = triage_llm.call_codex("return JSON", timeout=30.0)
 
     # Then: 주 경로는 Codex 로 고정되고, 사용자 설정(fallback_providers 체인)은 살아 있다.
     argv = json.loads(argv_log.read_text(encoding="utf-8"))
@@ -174,36 +139,13 @@ def _draft(*, sensitive: bool) -> dict:
         "sensitive": sensitive,
         "status": "pending",
         "subject": f"Re: 특허 {CANARY}",
-        "tags": ["patent-sensitive"] if sensitive else [],
+        "tags": ["private"] if sensitive else [],
         "to": "me@inst.re.kr",
         "uid": "u-1",
         "uid_opaque": triage_core.mask_value("u-1"),
     }
     record["sha256"] = triage_core.draft_sha256(record)
     return record
-
-
-def test_sensitive_approval_rendering_confines_full_text_to_owner_dm() -> None:
-    draft = _draft(sensitive=True)
-    console = triage_core.render_approvals_message(
-        draft,
-        destination=triage_core.ApprovalRenderDestination.CONSOLE,
-    )
-    owner_dm = triage_core.render_approvals_message(
-        draft,
-        destination=triage_core.ApprovalRenderDestination.OWNER_DM,
-    )
-    default = triage_core.render_approvals_message(draft)
-
-    assert draft["subject"] not in console
-    assert draft["body"] not in console
-    assert draft["subject"] not in default
-    assert draft["body"] not in default
-    assert draft["subject"] in owner_dm
-    assert draft["body"] in owner_dm
-    assert "p@inst.re.kr" not in owner_dm and "me@inst.re.kr" not in owner_dm
-    for expected in ("sha256:", "abc123", "patent-sensitive"):
-        assert expected in console and expected in owner_dm
 
 
 def test_non_sensitive_approvals_message_shows_reply_text() -> None:
@@ -287,7 +229,7 @@ def test_processed_marker_round_trip(tmp_path: Path) -> None:
     db = tmp_path / "triage.db"
     assert triage_store.is_processed(db, "u-1") is False
     triage_store.record_processed(
-        db, "u-1", category="important", sensitive=True, action="draft:abc", processed_at="t"
+        db, "u-1", category="important", action="draft:abc", processed_at="t"
     )
     assert triage_store.is_processed(db, "u-1") is True
 
@@ -502,13 +444,13 @@ def test_summarize_non_sensitive_uses_codex(
     monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(codex))
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
     summary = triage_llm.summarize(
-        subject="S", sender="X", body="B", sensitive=False,
+        subject="S", sender="X", body="B",
         uid_opaque="sha256:u", prompt_path=_PROMPTS / "digest-summary-v1.md",
     )
     assert summary == "ok"
     record = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
     assert record["purpose"] == "digest_summary"
-    assert record["provider"] == triage_llm.CODEX_PROVIDER and record["sensitive"] is False
+    assert record["provider"] == triage_llm.CODEX_PROVIDER
     assert record["model"] == triage_llm.codex_model()
 
 
@@ -524,14 +466,12 @@ def test_summarize_sensitive_routes_to_codex(
     monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(log))
     summary = triage_llm.summarize(
-        subject=f"특허 {CANARY}", sender="X", body=f"본문 {CANARY}", sensitive=True,
-        uid_opaque="sha256:u", prompt_path=_PROMPTS / "digest-summary-v1.md",
+        subject=f"특허 {CANARY}", sender="X", body=f"본문 {CANARY}",         uid_opaque="sha256:u", prompt_path=_PROMPTS / "digest-summary-v1.md",
     )
     assert summary == "ok"
     record = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
     assert record["purpose"] == "digest_summary"
-    # 민감 메일도 같은 승인 티어를 쓴다 — 게이트 판정은 라우팅 가드를 무장시킬 뿐이다.
-    assert record["provider"] == triage_llm.CODEX_PROVIDER and record["sensitive"] is True
+    assert record["provider"] == triage_llm.CODEX_PROVIDER
 
 
 def test_draft_reply_passes_instruction(
@@ -549,7 +489,7 @@ def test_draft_reply_passes_instruction(
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(tmp_path / "llm-calls.jsonl"))
     instruction = "CANARY-지시: 회의 일정은 다음 달로 미룬다고 답하라"
     subject, body, provider = triage_llm.draft_reply(
-        subject="S", sender="X", body="B", sensitive=False,
+        subject="S", sender="X", body="B",
         uid_opaque="sha256:u", prompt_path=_PROMPTS / "reply-draft-v2.md",
         instruction=instruction,
     )

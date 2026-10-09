@@ -183,7 +183,7 @@ def test_when_an_old_approval_message_is_gone_then_the_lifecycle_unbinds_and_rep
     record = triage_gate.create_draft(
         uid="u-1", sender="발신자 <sender@example.com>", mail_subject="문의",
         to="owner@example.com", subject="Re: 문의", body="회신 본문",
-        sensitive=False, tags=(), category="important", flags=("reply_needed",),
+        category="important", flags=("reply_needed",),
     )
     assert triage_approval.post_for_approval(record) == "m-1"
     fake.contents.pop("m-1")

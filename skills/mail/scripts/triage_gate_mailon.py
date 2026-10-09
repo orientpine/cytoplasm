@@ -163,7 +163,6 @@ def execute_mailon_draft(draft: dict, approval: triage_gate.Approval) -> None:
         "draft_id": draft["id"],
         "method": approval.method,
         "ref": approval.ref,
-        "sensitive": draft["sensitive"],
         "sha256": draft["sha256"],
         "status": "sent",
         "timestamp": triage_core.utc_now(),

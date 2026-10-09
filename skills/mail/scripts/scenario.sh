@@ -7,8 +7,8 @@
 # the env allowlist (DISCORD_BOT_TOKEN never reaches mailon). No network, no
 # real secrets, no real mail data.
 #
-# W4-2 triage legs (stub LLMs / stub mailon-send / stub calendar): sensitivity
-# gate FIRST + every call pinned to the approved Codex OAuth tier, sanitized
+# W4-2 triage legs (stub LLMs / stub mailon-send / stub calendar): mail processing
+# all text uses the account-configured shared model chain, sanitized
 # #approvals rendering, claim idempotency, fail-closed confirm, signed-inject
 # send with approval records, discard, 2-consecutive-fail NO-GO downgrade +
 # W4-1N switch record, and the watch E2E/mode refusals.
@@ -128,10 +128,10 @@ assert set(lst["mails"][0]) == {"uid", "folder", "date", "subject", "sender", "m
 got = json.load(open(sys.argv[2]))
 assert got["mail"]["uid"] == "u-101" and "특허" in got["mail"]["subject"]
 pat = json.load(open(sys.argv[3]))["classification"]
-assert pat["category"] == "important" and pat["flags"]["patent_sensitive"] is True
-assert pat["route"] == "non-glm" and pat["basis"] == "metadata-only"
+assert pat["category"] == "important" and "patent_sensitive" not in pat["flags"]
+assert "route" not in pat and pat["basis"] == "metadata-only"
 spam = json.load(open(sys.argv[4]))["classification"]
-assert spam["category"] == "spam" and spam["route"] == "glm-ok"
+assert spam["category"] == "spam" and "route" not in spam
 PY
 
 # --- 2) masking: no fixture plaintext leaves the wrapper ----------------------
@@ -248,9 +248,9 @@ if '"category"' in prompt:
     elif "delta-404" in prompt:
         print('{"category": "important", "reply_needed": false, "schedule_needed": true,'
               ' "budget": false, "schedule_text": "7월 20일 오후 3시 세미나", "reason": "stub"}')
-    elif "alpha-101" in prompt:  # 민감도 게이트 적중건도 같은 승인 티어로 온다
+    elif "alpha-101" in prompt:  # 특허 본문도 같은 처리 경로를 쓴다
         print('{"category": "important", "reply_needed": true, "schedule_needed": false,'
-              ' "budget": false, "schedule_text": "", "reason": "stub-sensitive"}')
+              ' "budget": false, "schedule_text": "", "reason": "stub"}')
     else:
         print('{"category": "normal", "reply_needed": false, "schedule_needed": false,'
               ' "budget": false, "schedule_text": "", "reason": "stub"}')
@@ -297,16 +297,16 @@ else
     | grep -q '근거 수집 불가' || fail "offline evidence degradation"
 fi
 
-# --- 5) triage happy tick: gate order, routing split, drafts, no send ----------
+# --- 5) triage happy tick: common route, drafts, no send ----------
 tri process --no-sync --no-post > "$work/t1.out" || fail "triage process failed"
 grep -q '^PROCESSED n=5' "$work/t1.out" || fail "expected 5 processed mails"
 grep -q 'action=spam-skip' "$work/t1.out" || fail "spam mail not skipped"
 grep -q 'action=no-action' "$work/t1.out" || fail "normal mail not no-action"
 grep -q 'action=calendar:calstub1' "$work/t1.out" || fail "schedule mail not delegated to calendar"
 grep -Ec 'action=draft:[0-9a-f]+' "$work/t1.out" | grep -qx 2 || fail "expected exactly 2 drafts"
-grep -q 'sensitive=True category=important action=draft:' "$work/t1.out" \
-  || fail "sensitive mail did not produce a draft"
-grep -q "$canary" "$work/t1.out" && fail "canary leaked into triage stdout (#approvals surface)"
+grep -q 'category=important action=draft:' "$work/t1.out" \
+  || fail "keyword mail did not produce a draft"
+grep -q "$canary" "$work/t1.out" || fail "keyword body missing from approval preview"
 [[ "$(wc -l < "$work/codex-calls.log")" == 7 ]] \
   || fail "expected exactly 7 codex calls (5 classify + 2 drafts)"
 grep -q '"provider":"openai-codex"' "$work/llm-calls.jsonl" || fail "routing log missing codex entries"
@@ -325,10 +325,9 @@ assert records, "routing log empty"
 for rec in records:
     assert rec["provider"] == "openai-codex", rec
     assert "fallback_from" not in rec, rec
-assert any(rec["sensitive"] for rec in records), "sensitive call not recorded"
+assert all("sensitive" not in rec for rec in records), "unexpected topic verdict"
 PY
-grep -rq "$canary" "$work/mailhome/triage-drafts" || fail "sensitive draft body not confined to mail home"
-grep -rq "$canary" "$work/triage-gate/drafts" 2>/dev/null && fail "canary leaked into public drafts dir"
+grep -rq "$canary" "$work/triage-gate/drafts" || fail "keyword draft not in common storage"
 grep -q '되묻기\|calendar-calls' /dev/null 2>/dev/null || true
 grep -q -- '--text' "$work/calendar-calls.log" || fail "calendar delegation argv missing --text"
 [[ "$(send_calls)" == 0 ]] || fail "triage tick sent mail before any approval"
@@ -338,12 +337,12 @@ grep -q -- '--text' "$work/calendar-calls.log" || fail "calendar delegation argv
 tri process --no-sync --no-post > "$work/t2.out" || fail "second process failed"
 grep -q '^PROCESSED n=0' "$work/t2.out" || fail "reprocess was not idempotent"
 
-sens_draft="$(tri list-drafts | sed -n 's/^DRAFT id=\([0-9a-f]*\) status=pending sensitive=True.*/\1/p' | head -1)"
-pub_draft="$(tri list-drafts | sed -n 's/^DRAFT id=\([0-9a-f]*\) status=pending sensitive=False.*/\1/p' | head -1)"
-[[ -n "$sens_draft" && -n "$pub_draft" ]] || fail "draft ids not found"
+keyword_draft="$(PYTHONPATH="$script_dir" python3 -c 'import triage_gate; print(next(d["id"] for d in triage_gate.list_drafts() if d["uid"] == "u-101"))')"
+other_draft="$(PYTHONPATH="$script_dir" python3 -c 'import triage_gate; print(next(d["id"] for d in triage_gate.list_drafts() if d["uid"] == "u-104"))')"
+[[ -n "$keyword_draft" && -n "$other_draft" ]] || fail "draft ids not found"
 
 # --- 7) no approval -> 0 send ----------------------------------------------------
-if tri confirm --draft "$pub_draft" >/dev/null 2>&1; then
+if tri confirm --draft "$other_draft" >/dev/null 2>&1; then
   fail "confirm succeeded without owner approval"
 fi
 [[ "$(send_calls)" == 0 ]] || fail "fail-closed confirm still sent mail"
@@ -365,7 +364,7 @@ channel = os.environ["SCENARIO_APPROVAL_CHANNEL_ID"]
 draft = triage_gate.create_draft(
     uid="u-reaction-cancel", sender="owner <owner@example.invalid>",
     mail_subject="취소 반응", to="owner@example.invalid", subject="Re: 취소 반응",
-    body="반응 취소 검증", sensitive=False, tags=(), category="important",
+    body="반응 취소 검증", category="important",
     flags=("reply_needed",),
 )
 draft = triage_gate.set_approval_binding(
@@ -440,20 +439,20 @@ triage_gate.set_approval_binding(
 PY
   }
 
-  persist_e2e_binding "$pub_draft"
+  persist_e2e_binding "$other_draft"
 
-  tri sign --draft "$pub_draft" --out "$work/forged.json" \
+  tri sign --draft "$other_draft" --out "$work/forged.json" \
     --user-id "$test_owner" --forge-signature >/dev/null
-  tri confirm --draft "$pub_draft" --injection-file "$work/forged.json" >/dev/null 2>&1 \
+  tri confirm --draft "$other_draft" --injection-file "$work/forged.json" >/dev/null 2>&1 \
     && fail "forged signature was accepted"
-  tri sign --draft "$pub_draft" --out "$work/wrong-owner.json" --user-id "111100000000000111" >/dev/null
-  tri confirm --draft "$pub_draft" --injection-file "$work/wrong-owner.json" >/dev/null 2>&1 \
+  tri sign --draft "$other_draft" --out "$work/wrong-owner.json" --user-id "111100000000000111" >/dev/null
+  tri confirm --draft "$other_draft" --injection-file "$work/wrong-owner.json" >/dev/null 2>&1 \
     && fail "non-owner approval was accepted"
   [[ "$(send_calls)" == 0 ]] || fail "rejected confirm still sent mail"
 
-  tri sign --draft "$pub_draft" --out "$work/ok.json" --user-id "$test_owner" >/dev/null
-  tri confirm --draft "$pub_draft" --injection-file "$work/ok.json" \
-    | grep -q "^SENT draft=$pub_draft method=signed_injection_e2e" || fail "signed confirm did not send"
+  tri sign --draft "$other_draft" --out "$work/ok.json" --user-id "$test_owner" >/dev/null
+  tri confirm --draft "$other_draft" --injection-file "$work/ok.json" \
+    | grep -q "^SENT draft=$other_draft method=signed_injection_e2e" || fail "signed confirm did not send"
   [[ "$(send_calls)" == 1 ]] || fail "expected exactly 1 mailon send call after confirm"
   grep -q 'mailon.main send' "$work/mailon-send-calls.log" || fail "executed call is not mailon send"
   grep -q '"action":"external_effect.approval"' "$TRIAGE_APPROVAL_LOG" \
@@ -463,13 +462,13 @@ PY
   grep -q '"action":"mail.reply_send"' "$TRIAGE_APPROVAL_LOG" || fail "mail.reply_send audit missing"
   grep -q '"status":"sent"' "$work/triage-gate/send-log.jsonl" || fail "send log missing"
   grep -q 'example.invalid' "$work/triage-gate/send-log.jsonl" && fail "send log leaked recipient"
-  tri confirm --draft "$pub_draft" --injection-file "$work/ok.json" >/dev/null 2>&1 \
+  tri confirm --draft "$other_draft" --injection-file "$work/ok.json" >/dev/null 2>&1 \
     && fail "executed draft was confirmable twice"
   [[ "$(send_calls)" == 1 ]] || fail "double confirm sent a second mail"
 
   # --- 10) approval REJECT -> discard + 0 further send --------------------------
-  tri discard --draft "$sens_draft" | grep -q "^DISCARDED" || fail "discard failed"
-  tri confirm --draft "$sens_draft" --injection-file "$work/ok.json" >/dev/null 2>&1 \
+  tri discard --draft "$keyword_draft" | grep -q "^DISCARDED" || fail "discard failed"
+  tri confirm --draft "$keyword_draft" --injection-file "$work/ok.json" >/dev/null 2>&1 \
     && fail "discarded draft was confirmable"
   [[ "$(send_calls)" == 1 ]] || fail "discarded draft still sent"
 
@@ -483,7 +482,7 @@ import triage_gate
 record = triage_gate.create_draft(
     uid=f"u-fail-{sys.argv[2]}", sender="셀프 <self@example.invalid>",
     mail_subject="실패 주입", to="self@example.invalid", subject="Re: 실패 주입",
-    body="실패 경로 검증", sensitive=False, tags=(), category="important",
+    body="실패 경로 검증", category="important",
     flags=("reply_needed",))
 print(record["id"])
 PY
@@ -508,7 +507,7 @@ import triage_gate
 record = triage_gate.create_draft(
     uid="u-postmode", sender="셀프 <self@example.invalid>", mail_subject="모드 검증",
     to="self@example.invalid", subject="Re: 모드 검증", body="모드 fail-closed",
-    sensitive=False, tags=(), category="important", flags=("reply_needed",))
+    category="important", flags=("reply_needed",))
 print(record["id"])
 PY
 )"
@@ -532,4 +531,4 @@ tri watch > "$work/watch-mode.out" || fail "mode-skip watch tick failed"
 grep -q '^MODE-SKIP mode=no-go' "$work/watch-mode.out" || fail "watch did not skip on no-go"
 [[ "$(send_calls)" == "$calls_before_watch" ]] || fail "mode-skip watch sent mail"
 
-echo "SCENARIO-PASS mail wrapper+triage offline contract leg=$confirm_leg (gate-first/codex-only-tier/no-send-before-approval/idempotent/no-go-downgrade+resolve)"
+echo "SCENARIO-PASS mail wrapper+triage offline contract leg=$confirm_leg (common-model-route/no-send-before-approval/idempotent/no-go-downgrade+resolve)"

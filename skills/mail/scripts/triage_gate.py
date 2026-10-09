@@ -12,10 +12,6 @@ The backends live in siblings (G8 LOC split) but reach their side effects back
 through THIS module's attributes (``_run_send``, ``write_json``, ``os``,
 ``_draft_path``), so the gate keeps exactly one seam per effect.
 
-Sensitive-draft confinement: drafts whose sensitivity gate hit live under
-``~agent/mail/triage-drafts`` (inside the 700 mail home) — never in the
-generic gate dir or repository plaintext.
-
 Two CONSECUTIVE approved-send failures downgrade the runtime mail-mode to
 no-go (triage_mode, source W4-2-runtime) and every execution re-checks the
 effective mode fail-closed first — see ``triage_gate_mailon``.
@@ -75,10 +71,9 @@ def _public_drafts_dir() -> Path:
     return path
 
 
-def _sensitive_drafts_dir() -> Path:
-    path = mail_home() / "triage-drafts"
-    path.mkdir(mode=0o700, exist_ok=True)
-    return path
+def _legacy_drafts_dir() -> Path:
+    """Read existing drafts without moving or reprocessing them."""
+    return Path(os.environ.get("TRIAGE_MAIL_HOME", "~/mail")).expanduser() / "triage-drafts"
 
 
 def _approval_log() -> Path:
@@ -96,7 +91,7 @@ def _send_log() -> Path:
 def _draft_path(draft_id: str) -> Path | None:
     if not draft_id.isalnum():
         raise GateError(f"잘못된 드래프트 id: {draft_id!r}", 3)
-    for directory in (_public_drafts_dir(), _sensitive_drafts_dir()):
+    for directory in (_public_drafts_dir(), _legacy_drafts_dir()):
         candidate = directory / f"{draft_id}.json"
         if candidate.exists():
             return candidate
@@ -105,7 +100,7 @@ def _draft_path(draft_id: str) -> Path | None:
 
 def create_draft(
     *, uid: str, sender: str, mail_subject: str, to: str, subject: str, body: str,
-    sensitive: bool, tags: tuple[str, ...], category: str, flags: tuple[str, ...],
+    category: str, flags: tuple[str, ...],
     kind: str = "reply", channel_id: str = "",
     attachment_paths: tuple[str | Path, ...] = (),
     cc: str = "",
@@ -113,7 +108,7 @@ def create_draft(
     quote: str = "",
 ) -> dict:
     """Persist a pending draft; ``quote`` (the answered mail) is sent below ``body``."""
-    directory = _sensitive_drafts_dir() if sensitive else _public_drafts_dir()
+    directory = _public_drafts_dir()
     draft_id = secrets.token_hex(3)
     while (directory / f"{draft_id}.json").exists():
         draft_id = secrets.token_hex(3)
@@ -138,11 +133,9 @@ def create_draft(
         "origin_message_id": origin_message_id,
         "sender": sender,
         "sender_masked": triage_core.mask_value(sender),
-        "sensitive": sensitive,
         "status": "pending",
         "subject": subject,
         "surface": None,
-        "tags": list(tags),
         "to": to,
         "uid": uid,
         "uid_opaque": triage_core.mask_value(uid),
@@ -262,7 +255,7 @@ def expire_draft(draft_id: str, message_id: str, reason: str) -> None:
 
 def list_drafts() -> list[dict]:
     records = []
-    for directory in (_public_drafts_dir(), _sensitive_drafts_dir()):
+    for directory in (_public_drafts_dir(), _legacy_drafts_dir()):
         records += [
             json.loads(path.read_text(encoding="utf-8"))
             for path in sorted(directory.glob("*.json"))

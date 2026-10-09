@@ -5,7 +5,7 @@ ONLY the newly written text. A reply must carry the owner-reviewed reply text
 FOLLOWED by the quoted original (Outlook-style Korean header block + the
 original body); ``draft --reply-all`` copies the original To/Cc minus the owner
 and the sender into Cc; ``compose --in-reply-to`` quotes a prior mail and the
-sensitivity gate sees the quoted text. The approval message never dumps the
+quoted text stays in the send payload. The approval message never dumps the
 quote (Discord 2,000-char limit) — it notes it in one line.
 """
 from __future__ import annotations
@@ -26,7 +26,6 @@ import triage_core  # noqa: E402
 import triage_gate  # noqa: E402
 from mailon.writer import Mail, build_markdown  # noqa: E402
 
-RULES_PATH = _REPO / "skills" / "mail" / "configs" / "sensitivity-rules.yaml"
 OWNER = "owner@example.invalid"
 SENDER = "가상 발신자 <peer@example.invalid>"
 ORIGINAL_TO = f"{OWNER}, 동료 <colleague@example.invalid>"
@@ -78,7 +77,6 @@ def _setup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, detail: dict) ->
     monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
     monkeypatch.setenv("TRIAGE_MAIL_MODE_FILE", str(mode_file))
     monkeypatch.setenv("TRIAGE_MAIL_MODE_REPO", str(tmp_path / "absent-repo-mode.json"))
-    monkeypatch.setenv("TRIAGE_RULES_FILE", str(RULES_PATH))
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(tmp_path / "llm-calls.jsonl"))
     monkeypatch.setenv("TRIAGE_MAILON_PYTHON", "python3")
     monkeypatch.delenv("TRIAGE_REPLY_PROMPT", raising=False)
@@ -111,7 +109,7 @@ def _run_cli(monkeypatch: pytest.MonkeyPatch, *argv: str) -> int:
 def _only_draft() -> tuple[Path, dict]:
     paths = [
         path
-        for directory in (triage_gate._public_drafts_dir(), triage_gate._sensitive_drafts_dir())
+        for directory in (triage_gate._public_drafts_dir(), triage_gate._legacy_drafts_dir())
         if directory.is_dir()
         for path in directory.glob("*.json")
     ]
@@ -194,7 +192,7 @@ def test_reply_all_without_other_recipients_degrades_to_plain_reply(
 
 # --- C3: follow-up compose quotes a prior mail and the gate sees it ------------------
 
-def test_compose_in_reply_to_quotes_original_and_gates_its_sensitivity(
+def test_compose_in_reply_to_quotes_keyword_text_in_normal_draft(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sensitive_body = "특허 출원 일정을 공유드립니다."
@@ -204,9 +202,9 @@ def test_compose_in_reply_to_quotes_original_and_gates_its_sensitivity(
         "--in-reply-to", "u-1", "--no-post",
     ) == 0
     path, record = _only_draft()
-    # Then: the quoted original made the draft sensitive → confined to the mail home
-    assert record["sensitive"] is True
-    assert path.is_relative_to(triage_gate._sensitive_drafts_dir())
+    # Then: the quoted original uses the same draft storage and send payload.
+    assert "sensitive" not in record
+    assert path.is_relative_to(triage_gate._public_drafts_dir())
     sent = _sent_body(record)
     assert record["body"] == "후속 안내드립니다."
     assert sent == f"후속 안내드립니다.\n\n{EXPECTED_HEADER}\n{sensitive_body}"

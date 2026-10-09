@@ -1,8 +1,8 @@
 """Codex OAuth 티어가 유일한 모델 경로일 때의 fail-closed 계약.
 
 2026-09-03 다이제스트 49회차 사고: 은퇴한 2차 티어 뒤의 공급자가 모든 호출에
-HTTP 429("Insufficient balance")를 돌려주어 비민감 15/19건이 ``(요약 실패)``
-+ ``⚠️ 분류 실패``로 끝났다. 당시 수리는 비민감 메일을 그 시절의 다른 티어로 **강등**
+HTTP 429("Insufficient balance")를 돌려주어 일반 15/19건이 ``(요약 실패)``
++ ``⚠️ 분류 실패``로 끝났다. 당시 수리는 일반 메일을 그 시절의 다른 티어로 **강등**
 하는 것이었다. 2026-09-04 공급자 이관으로 은퇴한 2차 티어 자체가 사라졌고,
 강등할 곳이 없으므로 계약이 뒤집힌다 — 내려갈 티어가 없으면 내려가지 않는다.
 
@@ -36,7 +36,6 @@ import triage_digest  # noqa: E402
 import triage_gate  # noqa: E402
 import triage_llm  # noqa: E402
 import triage_mode  # noqa: E402
-import triage_sensitivity  # noqa: E402
 
 # codex 한 방 응답: 분류 JSON과 요약 JSON을 동시에 만족하는 합성 페이로드.
 def _served(text: str) -> SimpleNamespace:
@@ -80,16 +79,6 @@ def _failing_hermes(tmp_path: Path, stderr: str, *, name: str = "hermes-stub") -
     )
 
 
-def _gate_stub(*, sensitive: bool):
-    def evaluate(text, rules):  # noqa: ARG001 — signature parity with triage_sensitivity
-        return triage_sensitivity.GateResult(
-            sensitive=sensitive,
-            tags=("patent-sensitive",) if sensitive else (),
-            matched=(),
-        )
-
-    return evaluate
-
 
 def _detail(uid: str) -> dict:
     return {
@@ -114,15 +103,12 @@ def _prepare_digest(
     tmp_path: Path,
     *,
     uids: tuple[str, ...],
-    sensitive: bool = False,
 ) -> list[str]:
     """합성 메일 한 틱을 준비하고, 전달된 소유자 메시지를 모으는 리스트를 준다."""
     monkeypatch.setenv("MAILON_ID", "owner@inst.example")
     monkeypatch.setenv("TRIAGE_DB", str(tmp_path / "triage.db"))
     monkeypatch.setenv("TRIAGE_LLM_LOG", str(tmp_path / "llm-calls.jsonl"))
     monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
-    monkeypatch.setattr(triage_digest.triage_sensitivity, "load_rules", lambda _path: ())
-    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub(sensitive=sensitive))
     mails = [
         {"uid": uid, "date": f"2026-07-18T09:0{index}:00Z"}
         for index, uid in enumerate(uids, start=1)
@@ -139,10 +125,9 @@ def _run_digest(
     tmp_path: Path,
     *,
     uids: tuple[str, ...],
-    sensitive: bool = False,
 ) -> str:
     """성공하는 한 틱을 돌리고 소유자 메시지 본문을 돌려준다."""
-    sent = _prepare_digest(monkeypatch, tmp_path, uids=uids, sensitive=sensitive)
+    sent = _prepare_digest(monkeypatch, tmp_path, uids=uids)
     assert triage_digest.run_digest(limit=10, sync=False, dry_run=False) == 0
     assert sent and sent[0].startswith("## 📬")  # 머리글 뒤에 메일당 메시지 하나씩
     return "\n\n".join(sent)
@@ -159,7 +144,7 @@ def test_codex_unavailable_credentials_map_to_unavailable(
 
     # When/Then: 호출자는 "티어가 죽었다"를 "이 호출이 나빴다"와 구분할 수 있다.
     with pytest.raises(triage_llm.LlmUnavailableError):
-        triage_llm.call_codex("프롬프트", sensitive=False, timeout=10.0)
+        triage_llm.call_codex("프롬프트", timeout=10.0)
 
 
 def test_codex_empty_answer_stays_a_plain_call_error(
@@ -173,7 +158,7 @@ def test_codex_empty_answer_stays_a_plain_call_error(
     )
 
     with pytest.raises(triage_llm.LlmCallError) as failure:
-        triage_llm.call_codex("프롬프트", sensitive=False, timeout=10.0)
+        triage_llm.call_codex("프롬프트", timeout=10.0)
     assert not isinstance(failure.value, triage_llm.LlmUnavailableError)
 
 
@@ -186,7 +171,7 @@ def test_codex_failure_message_stays_masked_and_clipped(
 
     # When: 실패가 표면화된다.
     with pytest.raises(triage_llm.LlmUnavailableError) as failure:
-        triage_llm.call_codex("프롬프트", sensitive=False, timeout=10.0)
+        triage_llm.call_codex("프롬프트", timeout=10.0)
 
     # Then: 마스킹과 200자 클립은 공급자가 바뀌어도 그대로다.
     text = str(failure.value)
@@ -203,7 +188,7 @@ def test_missing_shared_client_refuses_instead_of_calling_out(
 
     # When/Then: 로컬 HTTP 폴백이 아니라 거부다(skills/AGENTS.md fail-closed 규칙).
     with pytest.raises(triage_llm.LlmUnavailableError):
-        triage_llm.call_codex("프롬프트", sensitive=False, timeout=10.0)
+        triage_llm.call_codex("프롬프트", timeout=10.0)
 
 
 def test_no_second_tier_survives_the_migration() -> None:
@@ -216,9 +201,8 @@ def test_no_second_tier_survives_the_migration() -> None:
 # --- ⓑ 티어 불가 = 다이제스트 fail closed -----------------------------------------
 
 
-@pytest.mark.parametrize("sensitive", [False, True])
 def test_digest_fails_closed_when_codex_tier_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sensitive: bool
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Given: 유일한 티어가 사고 당시 은퇴한 2차 티어처럼 전량 실패한다.
     calls: list[str] = []
@@ -228,7 +212,7 @@ def test_digest_fails_closed_when_codex_tier_is_unavailable(
         raise triage_llm.LlmUnavailableError("codex 호출 실패: no credentials")
 
     monkeypatch.setattr(triage_llm, "call_codex", call_codex)
-    sent = _prepare_digest(monkeypatch, tmp_path, uids=("uid-down",), sensitive=sensitive)
+    sent = _prepare_digest(monkeypatch, tmp_path, uids=("uid-down",))
 
     # When/Then: 강등된 다이제스트를 내보내는 대신 구조화 마커 한 줄로 죽는다.
     with pytest.raises(triage_gate.GateError) as error_info:
@@ -252,7 +236,6 @@ def test_digest_fails_closed_when_codex_tier_is_unavailable(
     records = _records(tmp_path / "llm-calls.jsonl")
     assert [record["purpose"] for record in records] == ["classify_failed"]
     assert records[0]["error"].startswith("LlmUnavailableError")
-    assert records[0]["sensitive"] is sensitive
 
 
 def test_failclosed_marker_hides_addresses_and_long_digits(

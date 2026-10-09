@@ -102,7 +102,7 @@ def long_draft():
         uid="long-mail", sender="sender@example.invalid", mail_subject="review",
         to="recipient@example.invalid", subject="long review", body="가" * 2500,
         quote="original quoted message", cc="copy@example.invalid", kind="compose",
-        sensitive=False, tags=(), category="important", flags=(),
+        category="important", flags=(),
     )
 
 

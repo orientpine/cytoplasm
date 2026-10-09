@@ -15,7 +15,7 @@
 #
 # Isolation: fully offline (stub mailon/LLMs/calendar/send transports in a
 # temp dir); E2E_TEST_MODE only on the actor's subprocesses; zero real sends;
-# zero production paths; the fixture canary must never reach GLM or stdout.
+# zero production paths; all mail uses the same model chain and draft storage.
 version: 1
 id: w4-mail-triage
 title: "W4 mail triage GO-branch E2E bank (approval-gate hardened)"
@@ -27,7 +27,7 @@ cases:
     kind: happy
     steps:
       - "triage tick over 5 fixture mails: spam skip, normal no-action, seminar -> calendar delegation, 2 reply drafts"
-      - "sensitivity gate BEFORE LLM: patent mail never reaches GLM (4 GLM calls, 3 non-GLM), canary confined"
+      - "keyword mail uses the same model chain (7 calls) and common draft storage"
       - "zero sends and zero approval records before any confirm; reprocess tick is idempotent"
     expect:
       process_exit: 0
@@ -36,10 +36,8 @@ cases:
       spam_skipped: true
       normal_no_action: true
       calendar_delegated: true
-      sensitive_draft_created: true
-      glm_calls: 4
-      nonglm_calls: 3
-      sensitive_body_reached_glm: false
+      keyword_draft_created: true
+      model_calls: 7
       canary_on_approvals_surface: false
       sends_before_approval: 0
       approval_records_before_approval: 0

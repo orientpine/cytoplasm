@@ -143,7 +143,7 @@ def _draft(uid: str = "u-1", body: str = "본문") -> dict:
     return triage_gate.create_draft(
         uid=uid, sender="발신자 <s@example.invalid>", mail_subject="문의",
         to="owner@example.invalid", subject="Re: 문의", body=body,
-        sensitive=False, tags=(), category="important", flags=("reply_needed",),
+        category="important", flags=("reply_needed",),
     )
 
 

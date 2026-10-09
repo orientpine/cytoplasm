@@ -93,7 +93,6 @@ def flow(calendar_env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(calendar_confirm, "_api", api)
     monkeypatch.setattr(triage_transport.subprocess, "run", run)
     monkeypatch.setattr(triage_digest.triage_gate, "db_path", lambda: tmp_path / "mail.db")
-    monkeypatch.setattr(triage_digest.triage_sensitivity, "load_rules", lambda _path: ())
     monkeypatch.setattr(triage_transport, "_list_mails", lambda *_args: mails)
     monkeypatch.setattr(triage_transport, "_get_mail", lambda uid: next(row for row in mails if row["uid"] == uid))
     monkeypatch.setattr(triage_digest.triage_llm, "classify", lambda **kw: (

@@ -1,10 +1,7 @@
 # mail triage classification prompt v1 (W4-2)
 
 - Consumer: `skills/mail/scripts/triage_llm.py::classify` — the pipeline's
-  step ② (the deterministic sensitivity gate already ran in step ①).
-- Routing: every mail — sensitive or not — runs on the shared Codex OAuth
-  client (`automation/codex_llm.py`, provider `openai-codex`). There is no
-  second tier: an unavailable tier fails the call closed, never a downgrade.
+  action classification through the account-configured shared model chain.
 - Contract: the response MUST contain exactly one JSON object with keys
   `category` ("important"|"normal"|"spam"), `reply_needed` (bool),
   `schedule_needed` (bool), `budget` (bool), `schedule_text` (string),

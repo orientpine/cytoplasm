@@ -13,6 +13,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+# Historical DB columns stay in place; new writes use zero, with no verdict.
 SEND_FAILURE_COUNTER = "consecutive_send_failures"
 
 _SCHEMA = """
@@ -99,13 +100,13 @@ def release_mail(db_path: Path, uid: str) -> None:
 
 
 def record_processed(
-    db_path: Path, uid: str, *, category: str, sensitive: bool, action: str, processed_at: str
+    db_path: Path, uid: str, *, category: str, action: str, processed_at: str
 ) -> None:
     with _connect(db_path) as connection:
         connection.execute(
             "INSERT OR REPLACE INTO processed (uid, category, sensitive, action, processed_at)"
             " VALUES (?, ?, ?, ?, ?)",
-            (uid, category, int(sensitive), action, processed_at),
+            (uid, category, 0, action, processed_at),
         )
 
 
@@ -152,7 +153,7 @@ def record_digest_run(db_path: Path, sent_at: str, items: list[dict[str, int | s
                         item["uid"],
                         item["subject"],
                         item["sender_masked"],
-                        int(item["sensitive"]),
+                        0,
                         item["category"],
                         item["flags"],
                         item["summary"],
@@ -205,7 +206,6 @@ def latest_digest_items(
             "uid": str(row[1]),
             "subject": str(row[2]),
             "sender_masked": str(row[3]),
-            "sensitive": int(row[4]),
             "category": str(row[5]),
             "flags": str(row[6]),
             "summary": str(row[7]),

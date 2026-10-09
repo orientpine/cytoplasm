@@ -3,11 +3,8 @@
 confirmation→send pipeline. Drafting is owner-initiated (`draft` — 지시문
 필수); the cron `watch` tick is the approval/send loop ONLY (repost→✅/⛔
 resolution→send — no auto-drafting). Draft pipeline order (fixed):
-① deterministic sensitivity gate (constraint 6, BEFORE any LLM)
-② classification annotation (shared Codex OAuth client; the gate verdict arms
-the routing guard — never gates an owner-instructed draft) ③ Korean final-text
-reply draft (same Codex OAuth tier, instruction-aware v2 prompt) ④ owner gate ⑤ mailon
-send ⑥ approvals.jsonl (W0-6 schema). Schedule-needed mail is delegated to
+① classification annotation ② Korean reply draft through the account model chain
+③ owner gate ④ mailon send ⑤ approvals.jsonl (W0-6 schema). Schedule-needed mail is delegated to
 the W3-1 calendar skill via the legacy manual `process` path (draft only —
 its own gate confirms; SQLite claim-before-draft keeps its ticks idempotent).
 
@@ -15,15 +12,15 @@ Exit codes: 0 ok | 1 approval absent/invalid (nothing sent) | 2 input rejected
             3 config/env/mode error | 4 mail read failed | 6 send failed
 
 Env: TRIAGE_GATE_DIR, TRIAGE_DB, TRIAGE_APPROVAL_LOG, TRIAGE_MAIL_HOME,
-     TRIAGE_MAIL_MODE_FILE, TRIAGE_MAIL_MODE_REPO, TRIAGE_RULES_FILE,
+     TRIAGE_MAIL_MODE_FILE, TRIAGE_MAIL_MODE_REPO,
      TRIAGE_CLASSIFY_PROMPT, TRIAGE_REPLY_PROMPT, TRIAGE_CALENDAR_CLI,
      TRIAGE_MAILON_PYTHON,
      INTEROP_RUNTIME, INTEROP_CONFIG, E2E_TEST_MODE, INTEROP_E2E_SECRET
      (+ shared-client test hooks AUTOPHAGY_HERMES_BIN —
      never in production).
 
-There is exactly one model tier (Codex OAuth). When it is unavailable the call
-fails closed: LLM-FAIL/ROUTING-REFUSED with a non-zero exit, never a downgrade.
+The account config selects the primary and fallback models. If the whole chain
+is unavailable the call fails closed: LLM-FAIL with a non-zero exit, never a downgrade.
 """
 from __future__ import annotations
 
@@ -46,9 +43,8 @@ import mail_quote
 import mail_runtime
 import triage_pipeline
 import mail_preflight
-import triage_sensitivity
 import triage_store
-from triage_transport import _get_mail, _rules_path
+from triage_transport import _get_mail
 
 mail_evidence = importlib.import_module("mail_evidence")
 mail_knowledge = importlib.import_module("mail_knowledge")
@@ -91,13 +87,9 @@ def cmd_draft(args: argparse.Namespace) -> int:
                 },
                 counterparty, subject, args.instruction,
             )
-    rules = triage_sensitivity.load_rules(_rules_path())
-    evidence_text = mail_evidence.evidence_text(pack) if pack is not None else ""
-    gate, cls = triage_pipeline._gate_and_classify(
-        args.uid, detail, rules, evidence_text=evidence_text
-    )
+    cls = triage_pipeline._classify(args.uid, detail)
     actions = triage_pipeline._draft_and_post(
-        {**detail, "uid": args.uid}, gate, cls,
+        {**detail, "uid": args.uid}, cls,
         post=not args.no_post, instruction=args.instruction,
         attachments=tuple(getattr(args, "attachment", ()) or ()),
         evidence_pack=pack,
@@ -109,7 +101,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
     if pack is not None:
         mail_evidence.write_sidecar(triage_gate.gate_dir(), draft_id, pack)
     triage_store.record_processed(
-        triage_gate.db_path(), args.uid, category=cls.category, sensitive=gate.sensitive,
+        triage_gate.db_path(), args.uid, category=cls.category,
         action=f"instr-draft:{draft_id}", processed_at=triage_core.utc_now(),
     )
     posted = int(any(action.startswith("posted:") for action in actions))
@@ -219,7 +211,7 @@ def cmd_digest_items(args: argparse.Namespace) -> int:
     for item in items:
         print(
             f"ITEM no={item['item_no']} uid={item['uid']} "
-            f"sensitive={int(item['sensitive'])} category={item['category']} "
+            f"category={item['category']} "
             f"flags={item['flags']} subject={item['subject']}"
         )
     return 0
@@ -385,7 +377,7 @@ def cmd_discard(args: argparse.Namespace) -> int:
 def cmd_list_drafts(_args: argparse.Namespace) -> int:
     for record in triage_gate.list_drafts():
         print(f"DRAFT id={record['id']} status={record['status']} "
-              f"sensitive={record['sensitive']} uid={record['uid_opaque']} "
+              f"uid={record['uid_opaque']} "
               f"message={record.get('message_id') or 'unposted'} created={record['created']}")
     return 0
 
@@ -575,9 +567,6 @@ def main() -> int:
     except triage_gate.GateError as error:
         print(f"GATE-REFUSED {error}", file=sys.stderr)
         return error.exit_code
-    except triage_llm.PatentRoutingError as error:
-        print(f"ROUTING-REFUSED {error}", file=sys.stderr)
-        return 3
     except triage_llm.LlmCallError as error:
         print(f"LLM-FAIL {triage_core.redact(str(error))[:300]}", file=sys.stderr)
         return 3

@@ -32,7 +32,7 @@ INSTRUCTION = "이 메시지에 ✅ 실행 / ⛔ 취소"
 def record() -> dict[str, JsonValue]:
     return dict(
         id="abc123", sha256="digest-1", created="2026-09-01T00:00:00Z",
-        kind="reply", provider="mailon", sensitive=False, category="important",
+        kind="reply", provider="mailon", category="important",
         tags=["private"], flags=["reply_needed"], sender_masked="sha256:masked",
         uid_opaque="sha256:opaque", mail_subject="문의", subject="Re: 문의", body="회신 본문",
         to="to@example.invalid", cc="cc@example.invalid", sender_account="sender@example.invalid",
@@ -80,13 +80,13 @@ def render_case(name: str, draft: dict[str, JsonValue], monkeypatch: pytest.Monk
             )
             return posts.pop()
         case _:
-            extra = {"sensitive": True} if name.startswith("sensitive") else {}
+            extra = {}
             if name == "compose":
                 extra = {"kind": "compose"}
             if name == "gmail":
                 extra = {"provider": "gmail"}
             destination = (triage_core.ApprovalRenderDestination.CONSOLE
-                           if name in ("original", "sensitive")
+                           if name == "original"
                            else triage_core.ApprovalRenderDestination.OWNER_DM)
             return triage_core.render_approvals_message(
                 {**draft, **extra}, destination=destination, instruction=INSTRUCTION,
@@ -95,8 +95,6 @@ def render_case(name: str, draft: dict[str, JsonValue], monkeypatch: pytest.Monk
 
 LEGACY = {
     "original": '[mail-triage] 수신메일 회신 발송 승인 요청\n- 분류: important / 플래그: reply_needed\n- 발신(마스킹): `sha256:masked`\n- 원문 제목: 문의\n- Cc: `cc@example.invalid`\n- 회신 제목: Re: 문의\n- 회신 본문:\n```\n회신 본문\n```\n- draft: `abc123` sha256: `digest-1`\n- 반응(기본): 이 메시지에 ✅ 실행 / ⛔ 취소',
-    "sensitive": '[mail-triage] 민감 메일 회신 발송 승인 요청\n- 유형: important / 태그: private / 플래그: reply_needed\n- 발신(마스킹): `sha256:masked`\n- 메일(불투명 id): `sha256:opaque`\n- draft: `abc123` sha256: `digest-1`\n- 반응(기본): 이 메시지에 ✅ 실행 / ⛔ 취소',
-    "sensitive_dm": '[mail-triage] 민감 메일 회신 발송 승인 요청\n- 유형: important / 태그: private / 플래그: reply_needed\n- 발신(마스킹): `sha256:masked`\n- 메일(불투명 id): `sha256:opaque`\n- Cc: `cc@example.invalid`\n- 회신 제목: Re: 문의\n- 회신 본문:\n```\n회신 본문\n```\n- draft: `abc123` sha256: `digest-1`\n- 반응(기본): 이 메시지에 ✅ 실행 / ⛔ 취소',
     "compose": '[mail-triage] 새 메일 발송 승인 요청 (DM 확정)\n- To: `to@example.invalid`\n- Cc: `cc@example.invalid`\n- 제목: `Re: 문의`\n- 본문:\n```\n회신 본문\n```\n- draft: `abc123` sha256: `digest-1`\n- 반응(기본): 이 메시지에 ✅ 실행 / ⛔ 취소',
     "gmail": '[mail-triage] Gmail 발송 승인 요청 (DM 확정)\n- 발신 계정: `sender@example.invalid`\n- 작업: `reply`\n- 수신자: `to@example.invalid`\n- Cc: `cc@example.invalid`\n- 회신 대상: `reply-1`\n- 제목: `Re: 문의`\n- 본문:\n```\n회신 본문\n```\n- draft: `abc123` sha256: `digest-1`\n- action hash: `sha256:action-1`\n- 반응(기본): 이 메시지에 ✅ 실행 / ⛔ 취소',
     "budget": '[budget-mail] 과제비 변경 감지 — 요청 메일 발송 승인 요청\n- 과제: 예제 (2026년)\n- 변경 1건 (금액은 마스킹 — 원문은 `!budget` 조회):\n  - 재료비 / 잔액: [MASKED-ad5736] → [MASKED-1a6562]\n- 스냅샷: `previous` → `next`\n- draft: `abc123` sha256: `digest-1`\n- 반응(기본): 이 메시지에 ✅ 실행 / ⛔ 취소\n- 텍스트 대체: `실행/취소 abc123` — 반응 사용이 기본이며, 확정 시 다음 30분 tick에 발송',
@@ -105,13 +103,13 @@ LEGACY = {
 }
 
 
-@pytest.mark.parametrize("name", ["original", "sensitive", "sensitive_dm", "compose", "gmail", "budget", "calendar", "coordination"])
+@pytest.mark.parametrize("name", ["original", "compose", "gmail", "budget", "calendar", "coordination"])
 def test_legacy_bytes_when_record_has_no_version(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a fixed pre-version record; when its real render root runs; then posted bytes replay.
     assert render_case(name, {**record(), "render_version": "1"}, monkeypatch) == LEGACY[name]
 
 
-@pytest.mark.parametrize("name", ["original", "sensitive", "sensitive_dm", "compose", "gmail", "budget", "calendar", "coordination"])
+@pytest.mark.parametrize("name", ["original", "compose", "gmail", "budget", "calendar", "coordination"])
 def test_envelope_when_record_uses_version_two(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a new rendering version; when rendered; then all five fields precede the binding.
     content = render_case(name, {**record(), "render_version": "2"}, monkeypatch)

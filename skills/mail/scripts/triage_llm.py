@@ -1,27 +1,4 @@
-"""LLM routing for mail triage (W4-2, constraint 6) — one Codex OAuth tier.
-
-Routing contract (2026-09-04 provider migration):
-- EVERY call — classification, digest summary, Korean reply draft, sensitive or
-  not — runs on the shared Codex OAuth client (``automation.codex_llm``,
-  provider ``openai-codex``).
-- the sensitivity gate is unchanged and still runs first. Its routing guard
-  survives as an identity check: gate-hit text only leaves after the shared
-  client is confirmed to be the approved Codex OAuth tier
-  (``PatentRoutingError`` otherwise). There is no longer a GLM tier to keep it
-  away from, so the guard now protects against the tier being repointed.
-- when Codex OAuth cannot answer (quota, credentials, transport), Hermes itself
-  falls back along the account's ``fallback_providers`` chain (xAI Grok since
-  2026-09-22, ``configs/routing-policy.md``). Only when that whole chain fails
-  does the call raise ``LlmUnavailableError`` and the caller fail closed. The
-  routing log records ``hermes-config`` (the account config decides) and the
-  ``served_*`` pair that actually answered.
-
-Every call appends one masked line to the routing log (provider/model/purpose/
-opaque uid) — the auditable call-count surface for QA.
-
-Test hooks (never set in production units; read by the shared client):
-  AUTOPHAGY_HERMES_BIN   overrides the hermes binary.
-"""
+"""Mail model calls through the account-configured shared client and fallback chain."""
 
 from __future__ import annotations
 
@@ -35,14 +12,10 @@ from typing import Any
 
 import triage_core
 
-CODEX_PROVIDER = "openai-codex"  # the only approved tier
+CODEX_PROVIDER = "openai-codex"  # legacy requested-route label; served_* records actual model
 CALL_TIMEOUT_S = 600.0  # unchanged per-call budget of the mail pipeline
 REPO_ROOT_ENV = "AUTOPHAGY_REPO_ROOT"
 MOUNTED_REPO_ROOT = Path("/srv/autophagy-agent-current")
-
-
-class PatentRoutingError(RuntimeError):
-    """Raised when triage text is about to reach a non-approved model tier."""
 
 
 class LlmCallError(RuntimeError):
@@ -84,26 +57,9 @@ def _codex_module() -> ModuleType:
         import automation.codex_llm as codex_llm
     except ImportError:
         raise LlmUnavailableError(
-            "automation.codex_llm 임포트 실패 — 승인된 Codex OAuth 경로 없음 (호출 거부)"
+            "automation.codex_llm 임포트 실패 — 공유 모델 경로 없음 (호출 거부)"
         ) from None
     return codex_llm
-
-
-def _approved_codex(sensitive: bool) -> ModuleType:
-    """Return the shared client only if it is bound to the approved tier.
-
-    Constraint 6's guard, carried through the migration: gate-hit text may only
-    ever leave for the approved tier. With a single tier left the check is on the
-    tier's identity instead of a GLM/non-GLM split — a client repointed at any
-    other provider refuses the prompt before it is built into a request.
-    """
-    codex = _codex_module()
-    if codex.PROVIDER != CODEX_PROVIDER:
-        subject = "민감도 게이트 적중 메일" if sensitive else "메일"
-        raise PatentRoutingError(
-            f"{subject} 프롬프트가 승인되지 않은 티어({codex.PROVIDER})로 향함 — 호출 거부"
-        )
-    return codex
 
 
 def codex_model() -> str:
@@ -129,7 +85,7 @@ def _append_record(record: dict) -> None:
     path.chmod(0o600)
 
 
-def _log_call(*, model: str, purpose: str, uid_opaque: str, sensitive: bool, served: Any) -> None:
+def _log_call(*, model: str, purpose: str, uid_opaque: str, served: Any) -> None:
     """Append one masked routing line: the requested primary and the route that answered.
 
     ``provider``/``model`` stay the pinned primary so the QA call-count surface still
@@ -144,14 +100,13 @@ def _log_call(*, model: str, purpose: str, uid_opaque: str, sensitive: bool, ser
             "purpose": purpose,
             "served_model": served.model,
             "served_provider": served.provider,
-            "sensitive": sensitive,
             "timestamp": triage_core.utc_now(),
             "uid": uid_opaque,
         }
     )
 
 
-def log_failure(*, purpose: str, uid_opaque: str, sensitive: bool, error: BaseException) -> None:
+def log_failure(*, purpose: str, uid_opaque: str, error: BaseException) -> None:
     """Record one masked ``<purpose>_failed`` line next to the successful calls.
 
     The digest runs under a no-agent cron that drops stderr, so this line is the
@@ -162,22 +117,21 @@ def log_failure(*, purpose: str, uid_opaque: str, sensitive: bool, error: BaseEx
         {
             "error": f"{type(error).__name__}: {triage_core.redact(str(error))[:160]}",
             "purpose": f"{purpose}_failed",
-            "sensitive": sensitive,
             "timestamp": triage_core.utc_now(),
             "uid": uid_opaque,
         }
     )
 
 
-def call_codex(prompt: str, *, sensitive: bool = False, timeout: float = CALL_TIMEOUT_S) -> Any:
+def call_codex(prompt: str, *, timeout: float = CALL_TIMEOUT_S) -> Any:
     """One completion on the shared route (Codex OAuth first) — no client retry.
 
-    The shared client owns the argv (Codex pinned as primary, user config
+    The shared client owns the argv (account config
     honored so Hermes' ``fallback_providers`` chain applies), the child
     environment and the success rule (rc 0 AND non-empty stdout). Returns the shared
     client's ``Served`` (``.text`` plus the provider/model that answered).
     """
-    codex = _approved_codex(sensitive)
+    codex = _codex_module()
     try:
         client = codex.CodexClient.from_environment(timeout=timeout)
         return client.complete_served(prompt)
@@ -192,53 +146,48 @@ def _failure_text(error: BaseException) -> str:
 
 
 def classify(
-    *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path,
+    *, subject: str, sender: str, body: str, uid_opaque: str, prompt_path: Path,
 ) -> tuple[triage_core.Classification, str]:
-    """Step-2 classification on the approved Codex OAuth tier.
-
-    The step-① sensitivity verdict no longer selects a tier (there is one), but it
-    still travels with the call: it arms the routing guard and stays in the masked
-    audit line.
-    """
+    """Classify mail actions on the account-configured shared route."""
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    served = call_codex(prompt, sensitive=sensitive)
+    served = call_codex(prompt)
     _log_call(model=codex_model(), purpose="classify",
-              uid_opaque=uid_opaque, sensitive=sensitive, served=served)
+              uid_opaque=uid_opaque, served=served)
     raw = served.text
     return triage_core.parse_classification(raw), CODEX_PROVIDER
 
 
 def draft_reply(
-    *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str,
+    *, subject: str, sender: str, body: str, uid_opaque: str,
     prompt_path: Path, instruction: str = "", evidence: str = "",
 ) -> tuple[str, str, str]:
-    """Step-3 Korean final-text reply — the approved Codex OAuth tier, as before."""
+    """Korean final-text reply through the shared account route."""
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body, instruction=instruction,
         evidence=evidence,
     )
-    served = call_codex(prompt, sensitive=sensitive)
+    served = call_codex(prompt)
     _log_call(model=codex_model(), purpose="draft_reply",
-              uid_opaque=uid_opaque, sensitive=sensitive, served=served)
+              uid_opaque=uid_opaque, served=served)
     raw = served.text
     llm_subject, reply_body = triage_core.parse_reply(raw)
     return triage_core.reply_subject(llm_subject, subject), reply_body, CODEX_PROVIDER
 
 
 def summarize(
-    *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path,
+    *, subject: str, sender: str, body: str, uid_opaque: str, prompt_path: Path,
 ) -> str:
-    """One-line Korean digest summary on the approved Codex OAuth tier."""
+    """One-line Korean digest summary through the shared account route."""
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    served = call_codex(prompt, sensitive=sensitive)
+    served = call_codex(prompt)
     _log_call(model=codex_model(), purpose="digest_summary",
-              uid_opaque=uid_opaque, sensitive=sensitive, served=served)
+              uid_opaque=uid_opaque, served=served)
     raw = served.text
     return triage_core.parse_digest_summary(raw)

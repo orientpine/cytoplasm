@@ -14,7 +14,6 @@ import triage_gate
 import triage_llm
 import triage_mode
 import triage_recipient
-import triage_sensitivity
 import triage_store
 from triage_transport import (
     SKILL_DIR,
@@ -22,7 +21,6 @@ from triage_transport import (
     _env_path,
     _get_mail,
     _list_mails,
-    _rules_path,
 )
 
 mail_evidence = importlib.import_module("mail_evidence")
@@ -44,21 +42,14 @@ def compose_and_post(
     origin_message_id: str = "",
     quote: str = "",
 ) -> dict:
-    rules = triage_sensitivity.load_rules(_rules_path())
-    evidence_text = mail_evidence.evidence_text(evidence_pack) if evidence_pack is not None else ""
-    # The quoted mail is sent too, so the gate must see it (a patent line in the
-    # answered mail makes the follow-up sensitive).
-    gate = triage_sensitivity.evaluate(
-        "\n".join((subject, to, cc, body, evidence_text, quote)), rules
-    )
     recipient_body = (
         mail_evidence.sanitize_draft_body(body, evidence_pack)
         if evidence_pack is not None else body
     )
     draft = triage_gate.create_draft(
         uid=f"compose:{secrets.token_hex(8)}", sender="", mail_subject="",
-        to=to, cc=cc, subject=subject, body=recipient_body, sensitive=gate.sensitive,
-        tags=gate.tags, category="compose", flags=(),
+        to=to, cc=cc, subject=subject, body=recipient_body,
+        category="compose", flags=(),
         kind="compose",
         attachment_paths=attachments,
         origin_channel_id=origin_channel_id, origin_message_id=origin_message_id,
@@ -89,7 +80,7 @@ def compose_and_post(
 
 
 def _draft_and_post(
-    detail: dict, gate, cls, *, post: bool, instruction: str = "",
+    detail: dict, cls, *, post: bool, instruction: str = "",
     attachments: tuple[str, ...] = (), evidence_pack: object | None = None,
     reply_all: bool = False,
 ) -> list[str]:
@@ -104,7 +95,7 @@ def _draft_and_post(
     )
     subject, body, _provider = triage_llm.draft_reply(
         subject=detail.get("subject") or "", sender=detail.get("sender") or "",
-        body=detail.get("body") or "", sensitive=gate.sensitive,
+        body=detail.get("body") or "",
         uid_opaque=triage_core.mask_value(detail["uid"]),
         prompt_path=_env_path("TRIAGE_REPLY_PROMPT", str(DEFAULT_REPLY_PROMPT)),
         instruction=instruction,
@@ -115,7 +106,7 @@ def _draft_and_post(
     draft = triage_gate.create_draft(
         uid=detail["uid"], sender=detail.get("sender") or "",
         mail_subject=detail.get("subject") or "", to=to, subject=subject, body=body,
-        sensitive=gate.sensitive, tags=gate.tags, category=cls.category, flags=cls.flags(),
+         category=cls.category, flags=cls.flags(),
         attachment_paths=attachments, cc=cc, quote=mail_quote.render_quote(original),
     )
     actions.append(f"draft:{draft['id']}")
@@ -133,33 +124,29 @@ def _draft_and_post(
     return actions
 
 
-def _gate_and_classify(
-    uid: str, detail: dict, rules: tuple[triage_sensitivity.TagRule, ...],
-    evidence_text: str = "",
-) -> tuple[triage_sensitivity.GateResult, triage_core.Classification]:
+def _classify(
+    uid: str, detail: dict,
+) -> triage_core.Classification:
     subject = detail.get("subject") or ""
     sender = detail.get("sender") or ""
     body = detail.get("body") or ""
-    gate = triage_sensitivity.evaluate(
-        "\n".join((subject, sender, body, evidence_text)), rules
-    )  # ① FIRST
-    cls, _provider = triage_llm.classify(  # ② routed by the step-① verdict
-        subject=subject, sender=sender, body=body, sensitive=gate.sensitive,
+    cls, _provider = triage_llm.classify(
+        subject=subject, sender=sender, body=body,
         uid_opaque=triage_core.mask_value(uid),
         prompt_path=_env_path(
             "TRIAGE_CLASSIFY_PROMPT", str(SKILL_DIR / "prompts/triage-classify-v1.md")
         ),
     )
-    return gate, cls
+    return cls
 
 
-def _process_one(uid: str, rules, *, post: bool) -> tuple[str, bool, str]:
+def _process_one(uid: str, *, post: bool) -> tuple[str, str]:
     detail = _get_mail(uid)
-    gate, cls = _gate_and_classify(uid, detail, rules)
+    cls = _classify(uid, detail)
     if cls.category == "spam":
-        return "spam-skip", gate.sensitive, cls.category
+        return "spam-skip", cls.category
     if cls.category != "important":
-        return "no-action", gate.sensitive, cls.category
+        return "no-action", cls.category
     actions: list[str] = []
     role = triage_recipient.recipient_role(
         str(detail.get("body") or ""), triage_recipient.owner_address()
@@ -173,14 +160,13 @@ def _process_one(uid: str, rules, *, post: bool) -> tuple[str, bool, str]:
         else:
             actions.append("calendar-no-text")
     if cls.reply_needed:
-        actions += _draft_and_post({**detail, "uid": uid}, gate, cls, post=post)  # ③④
-    return ",".join(actions) or "logged", gate.sensitive, cls.category
+        actions += _draft_and_post({**detail, "uid": uid}, cls, post=post)  # ③④
+    return ",".join(actions) or "logged", cls.category
 
 
 def run_process(args: argparse.Namespace) -> int:
     if triage_mode.effective_mode() == "no-go":
         raise triage_gate.GateError("mail-mode=no-go — W4-2 파이프라인 비활성(W4-1N 분기)", 3)
-    rules = triage_sensitivity.load_rules(_rules_path())
     db = triage_gate.db_path()
     handled = 0
     for mail in _list_mails(args.limit, not args.no_sync):
@@ -191,17 +177,17 @@ def run_process(args: argparse.Namespace) -> int:
             continue
         opaque = triage_core.mask_value(uid)
         try:
-            action, sensitive, category = _process_one(uid, rules, post=not args.no_post)
+            action, category = _process_one(uid, post=not args.no_post)
         except Exception as error:  # noqa: BLE001 — release claim, keep the tick going
             triage_store.release_mail(db, uid)
             print(f"MAIL-FAIL uid={opaque} err={triage_core.redact(str(error))[:200]}",
                   file=sys.stderr)
             continue
         triage_store.record_processed(
-            db, uid, category=category, sensitive=sensitive, action=action,
+            db, uid, category=category, action=action,
             processed_at=triage_core.utc_now(),
         )
-        print(f"MAIL uid={opaque} sensitive={sensitive} category={category} action={action}")
+        print(f"MAIL uid={opaque} category={category} action={action}")
         handled += 1
     print(f"PROCESSED n={handled}")
     return 0
