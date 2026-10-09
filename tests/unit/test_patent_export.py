@@ -364,4 +364,4 @@ def test_export_does_not_alter_model_routing():
     call = plan_patent_call(("review",))
     assert call.provider == "openai-codex"
     assert call.model == "hermes-config"
-    assert call.tag_auto_attached is True
+    assert call.tags == ("review",)

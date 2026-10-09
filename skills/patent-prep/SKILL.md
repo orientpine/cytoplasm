@@ -1,12 +1,12 @@
 ---
 name: patent-prep
-description: "발명 신고서와 선행기술 체크리스트를 보호된 개인 워크스페이스에서 준비하고, Codex OAuth 전용 초안을 생성한다. W5-5."
-version: 1.1.5
+description: "발명 신고서와 선행기술 체크리스트를 보호된 개인 워크스페이스에서 준비하고, 계정 모델 설정으로 초안을 생성한다. W5-5."
+version: 1.2.0
 author: autophagy-agents
 license: MIT
 metadata:
   hermes:
-    tags: [Patent-Sensitive, Private-Workspace, Codex-OAuth-Only, Tech-Transfer]
+    tags: [Private-Workspace, Tech-Transfer]
 prerequisites:
   commands: [python3, hermes]
 ---
@@ -22,13 +22,9 @@ prerequisites:
 
 ## 절대 규칙
 
-1. `draft`의 모든 LLM 호출은 호출 지점에서 `patent-sensitive` 태그를 누락 시 자동 첨부하고,
-   모델은 고르지 않고 계정 `~/.hermes/config.yaml` 의 주 모델·폴백을 따른다(`--provider`·`-m` 없음). 다른 제공자 선택 인자는 없다.
-2. Hermes v0.18.2 one-shot CLI에는 호출별 metadata-tag 플래그가 없으므로, 이 스킬은 태그가
-   첨부된 호출 계획을 private audit log에 먼저 기록하고 Codex OAuth를 주 경로로 호출한다.
-   Codex가 답하지 못하면 Hermes가 계정 설정의 `fallback_providers`(xAI Grok)로 넘기며 — 소유자가
-   2026-09-22 특허 민감 초안에도 이 폴백을 허용했다 —, 그 체인까지 모두 실패하면 호출은 fail-closed로 거부된다.
-3. `--brief-file`은 해당 slug의 private workspace 아래 파일만 허용한다. 경로·상태·SHA256만
+1. `draft`의 모델은 계정 `~/.hermes/config.yaml`의 주 모델·폴백을 따른다.
+   호출이 실패하면 초안을 만들지 않는다. 실제 응답 제공자·모델은 호출 로그에 기록한다.
+2. `--brief-file`은 해당 slug의 private workspace 아래 파일만 허용한다. 경로·상태·SHA256만
    공유하며, 초안이나 입력 본문을 Discord·repo·`docs/qa`·외부 RAG API로 보내지 않는다.
    **좁은 예외 — 개인 백업 반출(`export-prepare`/`export-execute`)에 한한다: 소유자(cha)의
    ✅ 승인이 대상 `draft.md`의 평문 SHA-256·목적지 폴더·mode·만료에 함께 바인딩되고,
@@ -39,7 +35,7 @@ prerequisites:
    반출하지 않는다(무승인·만료·⛔·해시 불일치·nonce 재사용·비-owner 폴더 권한 = 업로드 안 함,
    fail-closed). 제3자·임의 목적지·임의 폴더 반출은 지원하지 않으며, 승인 요청·owner DM·감사
    로그·stdout에는 본문·제목·발명자를 남기지 않는다(slug·경로·SHA-256·폴더ID·webViewLink만).**
-4. W2-4 RAG 적재는 on-prem MCP/embedding 경로만 허용된다. 이 스킬은 RAG 설정이나 외부 API를
+3. W2-4 RAG 적재는 on-prem MCP/embedding 경로만 허용된다. 이 스킬은 RAG 설정이나 외부 API를
    변경하거나 호출하지 않는다.
 
 ## Commands
@@ -68,7 +64,7 @@ python3 /srv/autophagy-skills/live/patent-prep/scripts/patent_cli.py export-exec
 
 `scripts/scenario.sh` uses only a temporary workspace and a dummy secret. It never invokes an
 LLM or contains invention material; it verifies 0700/0600 isolation, metadata-only progress,
-and automatic `patent-sensitive` attachment.
+and the account-configured dispatch plan.
 
 ## 승인형 반출 게이트 (개인 백업) + 위협 모델
 

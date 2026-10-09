@@ -54,7 +54,7 @@ def test_prior_art_checklist_updates_progress_without_body(tmp_path: Path) -> No
     assert progress.percent_complete == 50
 
 
-def test_missing_patent_tag_is_auto_attached_before_codex_dispatch() -> None:
+def test_draft_dispatch_does_not_add_content_tags() -> None:
     # Given
     commands: list[tuple[str, ...]] = []
 
@@ -66,14 +66,13 @@ def test_missing_patent_tag_is_auto_attached_before_codex_dispatch() -> None:
     response = patent_llm.generate_draft("private material", (), invoke)
 
     # Then
-    assert response.call.tags == (patent_routing.PATENT_SENSITIVE_TAG,)
-    assert response.call.tag_auto_attached is True
+    assert response.call.tags == ()
     assert len(commands) == 1
     assert commands[0][:5] == ("hermes", "-z", "private material", "-t", "todo")
     assert commands[0][5] == "--usage-file" and len(commands[0]) == 7
 
 
-def test_patent_call_never_selects_glm_even_with_unrelated_tag() -> None:
+def test_patent_call_preserves_only_requested_tags() -> None:
     # Given
     requested_tags = ("review",)
 
@@ -83,7 +82,7 @@ def test_patent_call_never_selects_glm_even_with_unrelated_tag() -> None:
     # Then
     assert call.provider == patent_routing.CODEX_PROVIDER
     assert call.model == patent_routing.CODEX_MODEL
-    assert call.tags == ("review", patent_routing.PATENT_SENSITIVE_TAG)
+    assert call.tags == ("review",)
 
 
 def test_progress_metadata_never_contains_private_draft_body(tmp_path: Path) -> None:

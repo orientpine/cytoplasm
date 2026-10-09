@@ -21,7 +21,6 @@ printf 'Synthetic local response.\n' > "$tmp/response.md"
 draft_out="$("${cli[@]}" draft --slug demo-disclosure --response-file "$tmp/response.md")"
 grep -Fq 'provider=openai-codex' <<<"$draft_out"
 grep -Fq 'model=hermes-config' <<<"$draft_out"
-grep -Fq 'tag_auto_attached=true' <<<"$draft_out"
 test "$(stat -c '%a' "$PATENT_DRAFT_ROOT/demo-disclosure")" = 700
 test "$(stat -c '%a' "$PATENT_DRAFT_ROOT/demo-disclosure/draft.md")" = 600
 ! grep -Fq 'Synthetic local response.' "$PATENT_STATUS_ROOT/demo-disclosure.json"
@@ -47,4 +46,4 @@ grep -Fq PATENT-PREP-REFUSED "$tmp/exec_err"
 test ! -f "$tmp/gws-calls.log"
 test ! -f "$tmp/age-calls.log"
 
-echo "SCENARIO-PASS private=true metadata_only=true codex=true tag_auto_attached=true export_fail_closed=true"
+echo "SCENARIO-PASS private=true metadata_only=true account_route=true export_fail_closed=true"
