@@ -20,11 +20,8 @@
    receives exit code 0 and non-empty output. When the primary and every fallback fail, the error
    reaches the caller. No caller retries on its own or opens a route outside the shared client;
    the only place to add or remove a route is `fallback_providers`.
-4. **Sensitive work stays gated.** Deterministic sensitivity classification remains before every
-   model call. Patent-sensitive or confidential content may be sent only through the shared Hermes
-   route (Codex primary plus the configured fallback chain) after the applicable gate approves it.
-   Since 2026-09-22 the owner permits the xAI fallback for patent-sensitive text as well. A
-   completer outside the shared client is refused before a provider call.
+4. **Content does not choose a route.** All text uses the same account configuration.
+   External writes still require their existing owner approval, credentials and permissions.
 5. **Accounting.** Codex and SuperGrok are subscriptions outside the LiteLLM budget. A call that
    falls back is served, and counted, by the xAI account.
 6. **Logs name who answered.** Every masked routing log keeps `provider` and

@@ -2,7 +2,7 @@
 
 `automation/plaud_sync/lifelog_extract_live.py` 가 **요약이 비었을 때만** 부르는 두 번째
 프롬프트다. Plaud 요약도 없고 첫 추출(`lifelog-extraction-v2`)의 summary 도 빈 경우에만
-실행되므로 평상시 모델 호출 수는 그대로 1회다. 민감도 게이트를 통과한 녹취만 전달된다.
+실행되므로 평상시 모델 호출 수는 그대로 1회다. 모든 녹취를 같은 경로로 전달한다.
 `build_prompt` 가 `{{TRANSCRIPT}}` 를 치환한다.
 
 <<<PROMPT>>>

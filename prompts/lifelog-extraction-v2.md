@@ -4,7 +4,7 @@ PLAUD 라이프로그 노트의 구조화 필드와 요약을 한 번에 추출�
 `automation/plaud_sync/lifelog_extract_live.py`가 마커 아래를 읽고
 `build_prompt`가 `{{SUMMARY}}`와 `{{TRANSCRIPT}}`를 치환한다.
 v1은 동결한다. v2는 기존 필드에 summary만 추가하며 추가 모델 호출은 없다.
-민감도 게이트를 통과한 녹취만 전달한다. Plaud 요약이 있으면 노트는 그것을 우선한다.
+Plaud 요약이 있으면 노트는 그것을 우선한다.
 
 <<<PROMPT>>>
 아래는 한 음성 녹취의 요약과 전사본이다.
