@@ -1,8 +1,7 @@
 """The wiki confirm message may carry an OPTIONAL owner-DM-only summary.
 
 The legacy confirm text is deliberately content-free (``저장 <id> sha256:<hash>``)
-because a wiki note may be patent-sensitive and ``skills/AGENTS.md`` forbids
-leaking a body/title outside cha's own DM. This suite pins the ONLY relaxation:
+because the approval surface limits disclosure to the authenticated owner. This suite pins the ONLY relaxation:
 an explicitly supplied summary renders when — and only when — the effective
 approval surface is the owner DM. Every other surface, and every unresolvable
 surface, falls back to the byte-exact legacy line (fail-closed).

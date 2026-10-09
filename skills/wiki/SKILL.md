@@ -1,7 +1,7 @@
 ---
 name: wiki
 description: "개인 위키(~/wiki, 700, git 밖) + 의사결정 트윈(decision-twin) 관리 스킬. 노트 생성/수정은 반드시 초안 → 확인 메시지 게시(봇이 ✅·⛔ 미리 부착) → cha의 ✅ 리액션 → 저장의 게이트를 거친다(⛔=취소, ⛔ 우선; 텍스트 `저장 <draft-id>`는 하위호환 fallback). 조회/백링크/정리 제안/twin 컨설트는 읽기 전용. W2-2 + DT-B."
-version: 2.0.2
+version: 2.1.0
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -231,7 +231,7 @@ python3 /srv/autophagy-skills/live/wiki/scripts/wiki_cli.py consult \
 `--json`은 원문 없이 `evidence_count`와 `layers`만 표시한다. 근거가 없으면
 "근거 없음", 계층 조회 불가면 "근거 수집 불가"를 표시하며, 재시도·임계값 하향·
 직접 `twin_consult`/recall 우회를 하지 않는다. `none/conflict`, 만료·advisory만 존재,
-민감 요청 또는 외부효과가 포함되면 cha에게 묻는다. 실제 결정은 통상의 decision-record
+외부효과가 포함되면 cha에게 묻는다. 실제 결정은 통상의 decision-record
 초안 → ✅ 게이트로만 축적한다.
 
 **SI-1 (판단 ≠ 권한)**: `authority: strict`라도 메일·캘린더·예산·배포·위키 저장의

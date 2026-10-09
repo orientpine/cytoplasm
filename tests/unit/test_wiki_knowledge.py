@@ -23,13 +23,12 @@ wiki_store = import_module("wiki_store")
 def _item(
     item_id: str = "E1", *, store: str = "wiki", authority: str | None = "default",
     expired: bool | None = False, content: str = "승인된 예산 판단",
-    sensitivity: str | None = None,
 ) -> EvidenceItem:
     return EvidenceItem(
         item_id, cast(Store, store), "twin" if store == "wiki" else "conversation",
         "budget-rule" if store == "wiki" else "conversation/42", "예산 판단",
         "2026-08-18", "updated" if store == "wiki" else "day", 0.9, True,
-        authority, expired, sensitivity, content, item_id.lower() * 32,
+        authority, expired, None, content, item_id.lower() * 32,
     )
 
 
@@ -138,7 +137,7 @@ def test_sensitive_expired_advisory_evidence_is_read_only_and_marked_uncertain(
     root, _ = roots
     sensitive = _item(
         authority="advisory", expired=True,
-        content="[[PATENT-SENSITIVE-RECALL]] 비공개 판단", sensitivity="patent-sensitive",
+        content="특허 patent 기밀 판단",
     )
     before = tuple(root.iterdir())
 

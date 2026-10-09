@@ -26,7 +26,6 @@ class Item(Protocol):
     grounded: bool | None
     authority: str | None
     expired: bool | None
-    sensitivity: str | None
     content: str
     sha256: str
 
@@ -134,7 +133,7 @@ def pack_dict(pack: Pack) -> dict[str, object]:
                 "ref": item.ref, "title": item.title, "doc_date": item.doc_date,
                 "date_basis": item.date_basis, "score": item.score,
                 "grounded": item.grounded, "authority": item.authority,
-                "expired": item.expired, "sensitivity": item.sensitivity,
+                "expired": item.expired,
                 "content": item.content, "sha256": item.sha256,
             }
             for item in pack.items
