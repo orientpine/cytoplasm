@@ -4,12 +4,8 @@ model_list: []
   # 실사용은 9/28 peer 3건이 마지막이었고, OpenAI 조직 크레딧 경고로 키 사용처를 정리했다.
   # 다시 별칭을 열려면 git 이력의 이전 항목과 그 키를 함께 되살린다.
 
-router_settings:
-  enable_tag_filtering: true
-
 litellm_settings:
   drop_params: true
-  callbacks: custom_callbacks.proxy_handler_instance
   default_key_generate_params:
     models: ["glm-main"]
     max_budget: os.environ/LITELLM_MONTHLY_HARD_CAP
