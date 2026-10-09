@@ -43,7 +43,6 @@ def main() -> int:
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "PROPOSAL_WORKSPACE_ROOT": str(workspace),
             "PROPOSAL_STATUS_ROOT": str(status_root),
-            "PROPOSAL_RULES_PATH": str(root / "configs/sensitivity-rules.yaml"),
             "PROPOSAL_LLM_LOG_ROOT": str(work / "logs"),
             "PROPOSAL_RUN_ID": "w5-proposal",
             "PROPOSAL_KANBAN_DISABLED": "1",

@@ -22,7 +22,7 @@ Order is fixed in `NODE_NAMES`; each step appends a `NodeLog` (input/output `sta
 
 ## DATA FLOW (all frozen pydantic models, `contracts/models.py`)
 `RawDoc → DocRecord → EvidenceUnit → (PMS) → PlanSpec → SectionDraft[] → HWPX`
-Citation/sensitivity rides along: `SensitivityFlag` (on units) maps to `CitationStatus` in PMS; only `PUBLIC` survives to the artifact.
+Citation verification rides along: `CitationStatus` in PMS depends only on optional source cross-reference verification; document words do not change eligibility.
 At render, a deterministic `EvidenceGraph` (claim→evidence→source, PUBLIC-only) is built via `converter/traceability_graph.build_evidence_graph` → traceability appendix + `coverage_score`.
 
 ## GOTCHAS

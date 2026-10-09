@@ -227,7 +227,7 @@ def _evidence_text(pack: proposal_knowledge.EvidencePack) -> str:
         return "- 근거 없음"
     return "\n".join(
         f"- source_key={item.source_key}; bucket={item.bucket}; "
-        f"sensitivity={item.sensitivity}; summary={item.summary}"
+        f"summary={item.summary}"
         for item in pack.items
     )
 

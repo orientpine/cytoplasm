@@ -21,7 +21,6 @@ from skills.proposal.scripts.proposal_refine import (
     refine_version,
     verify_invariants,
 )
-from skills.proposal.scripts.proposal_route_guard import RouteRefused
 from skills.proposal.scripts.proposal_version import Staging, VersionStore
 
 
@@ -382,40 +381,16 @@ def test_proposal_cli_identity_transport_reports_explicit_no_op(
     assert report["rules_applied"] == []
 
 
-def test_patent_section_refuses_a_non_codex_host_before_transport() -> None:
+@pytest.mark.parametrize("words", ["clean", "특허 patent 기밀", "NDA 비공개 기술이전"])
+def test_keyword_section_uses_the_same_refinement_transport(words: str) -> None:
+    # Given: the same section shape, including the formerly restricted host.
     transport = RecordingTransport()
-    body = "# 발명 개요\n\n특허 출원 전략을 수립한다.\n"
-
-    with pytest.raises(RouteRefused, match="owner-controlled host"):
-        _ = refine_section(body, transport, host="off-tier-host")
-
-    assert transport.calls == []
-
-
-def test_non_codex_host_skips_without_failing_and_records_manifest(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    body = "# 발명 개요\n\n특허 출원 전략을 수립한다.\n"
-    version = _version(tmp_path, [_section(body)])
-    drafts = version / "out" / "drafts.json"
-    original = drafts.read_bytes()
-    transport = RecordingTransport()
-    _configure(monkeypatch, tmp_path)
-
-    result = refine_version("demo", transport=transport, host="off-tier-host")
-
-    assert result.refined is False
-    assert result.reason == "route-refused"
-    assert transport.calls == []
-    assert drafts.read_bytes() == original
-    assert not result.output_path.exists()
-    report = _report(version)
-    assert report["no_op_detected"] is True
-    assert report["failure_reason"] == "route-refused"
-    assert report["source_equals_output"] is True
-    manifest = _json_object(version / "manifest.json")
-    assert manifest["refined"] is False
-    assert manifest["reason"] == "route-refused"
+    body = "# 개요\n\n" + words + " 계획을 수립한다.\n"
+    # When: it goes through the actual section refinement boundary.
+    result = refine_section(body, transport, host="off-tier-host")
+    # Then: identity transport still runs and the body remains unchanged.
+    assert len(transport.calls) == 1
+    assert result.text == body
 
 
 def test_heading_invariant_rejects_tampered_host_output() -> None:

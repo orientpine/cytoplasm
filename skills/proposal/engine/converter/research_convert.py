@@ -32,7 +32,7 @@ _CLAIM_ROW_RE = re.compile(
 
 
 def convert(
-    synthesis_path: Path, out_dir: Path, *, sensitivity: str = "internal"
+    synthesis_path: Path, out_dir: Path
 ) -> int:
     text = synthesis_path.read_text(encoding="utf-8").strip()
 
@@ -76,7 +76,7 @@ def convert(
         sha8 = stable_id(url)[:8]
         filename = f"research-{sha8}.md"
         body = "\n".join(claims_by_url[url])
-        content = f"---\nsource_url: {url}\nsensitivity: {sensitivity}\n---\n{body}\n"
+        content = f"---\nsource_url: {url}\n---\n{body}\n"
         _ = (out_dir / filename).write_text(content, encoding="utf-8")
 
     return 0
@@ -116,10 +116,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     _ = parser.add_argument("synthesis", help="Path to SYNTHESIS.md")
     _ = parser.add_argument("--out", required=True, help="Output corpus directory")
-    _ = parser.add_argument(
-        "--sensitivity", choices=("internal", "public"), default="internal",
-        help="Sensitivity tag for emitted corpus files (default: internal)",
-    )
     args = parser.parse_args(argv)
 
     synthesis_path = Path(cast(str, args.synthesis))
@@ -129,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {synthesis_path} not found", file=sys.stderr)
         return 1
 
-    return convert(synthesis_path, out_dir, sensitivity=cast(str, args.sensitivity))
+    return convert(synthesis_path, out_dir)
 
 
 if __name__ == "__main__":

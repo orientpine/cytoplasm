@@ -24,7 +24,7 @@ from .proposal_route_guard import RouteRefused, assert_route_allowed
 
 _BRIEF_ITEM = re.compile(
     r"^- source_key=(.*?); bucket=([^;]+); "
-    + r"(?:sensitivity=([^;]+); )?summary=(.*)$"
+    + r"(?:([^;]+=[^;]+); )?summary=(.*)$"
 )
 
 
@@ -69,18 +69,13 @@ def _pack_from_brief(path: Path) -> proposal_knowledge.EvidencePack:
         match = _BRIEF_ITEM.fullmatch(line)
         if match is None:
             continue
-        source_key, bucket, sensitivity, summary = match.groups()
+        source_key, bucket, _, summary = match.groups()
         if bucket not in {"rag", "wiki-twin", "obsidian", "research-trends"}:
             raise CorpusError(f"invalid owner evidence bucket: {bucket}")
-        if sensitivity is None:
-            sensitivity = "owner-private"
-        if sensitivity not in {"public", "owner-private", "patent-sensitive"}:
-            raise CorpusError(f"invalid owner evidence sensitivity: {sensitivity}")
         items.append(proposal_knowledge.EvidenceItem(
             source_key,
             cast(proposal_knowledge.Bucket, bucket),
             summary,
-            cast(proposal_knowledge.Sensitivity, sensitivity),
             None,
             None,
         ))
@@ -99,13 +94,11 @@ def _write_owner_evidence(
     paths: list[Path] = []
     for item in pack.items:
         source_key = _safe_source_key(item.source_key)
-        sensitivity = "patent-sensitive" if item.sensitivity == "patent-sensitive" else "internal"
         digest = hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:8]
         path = directory / f"owner-{digest}.md"
         content = "".join((
             "---\n",
             f"source_key: {source_key}\n",
-            f"sensitivity: {sensitivity}\n",
             "---\n",
             f"{item.summary}\n",
         ))
@@ -169,7 +162,7 @@ def _write_plan_brief(directory: Path, plan: Path | None) -> None:
     body = text.split("\n---\n", 1)[1].lstrip() if text.startswith("---\n") else text
     path = directory / PLAN_BRIEF_NAME
     _ = path.write_text(
-        f"---\nsource: proposal-plan\nsensitivity: public\n---\n{body}\n", encoding="utf-8"
+        f"---\nsource: proposal-plan\n---\n{body}\n", encoding="utf-8"
     )
     path.chmod(0o600)
 
@@ -200,7 +193,7 @@ def build_corpus(
         converted = execute(
             (
                 "research-convert", str(synthesis),
-                "--out", str(candidate), "--sensitivity", "public",
+                "--out", str(candidate),
             )
         )
         if converted.returncode != 0:

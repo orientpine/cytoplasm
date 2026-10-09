@@ -105,7 +105,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "research-convert":
         return _research_convert(
             synthesis=cast(str, args.synthesis), out=cast(str, args.out),
-            sensitivity=cast(str, args.sensitivity),
         )
     if command == "research":
         return _research(
@@ -227,10 +226,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _ = rc_parser.add_argument("synthesis", help="path to SYNTHESIS.md")
     _ = rc_parser.add_argument("--out", required=True, help="output corpus directory")
-    _ = rc_parser.add_argument(
-        "--sensitivity", choices=("internal", "public"), default="internal",
-        help="sensitivity tag for emitted files (default: internal)",
-    )
 
     research_parser = subparsers.add_parser(
         "research",
@@ -272,7 +267,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cl_parser = subparsers.add_parser(
         "corpus-lint",
-        help="pre-ingest lint: predict PUBLIC/REDACT/INTERNAL/conflict for candidate files",
+        help="pre-ingest lint: detect numeric conflicts in candidate files",
     )
     _ = cl_parser.add_argument("--corpus", required=True, help="existing corpus directory")
     _ = cl_parser.add_argument(
@@ -515,10 +510,10 @@ def _judge(*, hwpx_path: str, mode: str, cache_path: str, out_path: str) -> int:
     return 0
 
 
-def _research_convert(*, synthesis: str, out: str, sensitivity: str) -> int:
+def _research_convert(*, synthesis: str, out: str) -> int:
     from ..converter.research_convert import main as rc_main
 
-    return rc_main([synthesis, "--out", out, "--sensitivity", sensitivity])
+    return rc_main([synthesis, "--out", out])
 
 
 def _research(

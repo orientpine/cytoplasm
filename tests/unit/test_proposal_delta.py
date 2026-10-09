@@ -234,7 +234,7 @@ def test_generic_rag_source_is_note_and_excerpt_fallback_is_marked(
     monkeypatch.setenv("PROPOSAL_ROOT", str(root))
     excerpt = SimpleNamespace(
         store="rag", source_type="note", ref="FAKE/personal.md",
-        summary="SEARCH EXCERPT ONLY", sensitivity=None, score=0.7,
+        summary="SEARCH EXCERPT ONLY", score=0.7,
         doc_date=None, date_basis=None, sha256=None, content=None,
     )
     destination = root / "demo" / "staging" / ("9" * 64)

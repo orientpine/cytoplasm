@@ -10,18 +10,15 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from automation import drive_outputs  # noqa: E402
-from skills.proposal.scripts import proposal_assembly, proposal_cli, proposal_core, proposal_llm, proposal_sensitivity  # noqa: E402
+from skills.proposal.scripts import proposal_assembly, proposal_cli, proposal_core, proposal_llm  # noqa: E402
 from skills.proposal.scripts.proposal_storage import ProposalPaths, SectionState  # noqa: E402
 
-
-RULES = ROOT / "configs" / "sensitivity-rules.yaml"
 
 
 def _paths(tmp_path: Path) -> ProposalPaths:
     return ProposalPaths(
         workspace_root=tmp_path / "agent" / "proposals",
         status_root=tmp_path / "repo-status",
-        rules_file=RULES,
     )
 
 
@@ -276,41 +273,6 @@ def test_final_review_invokes_codex_once_through_the_shared_oauth_client(
     assert argv[4] == "--usage-file" and len(argv) == 6
 
 
-def test_sensitive_proposal_routes_drafting_to_the_codex_oauth_tier(tmp_path: Path) -> None:
-    # Given
-    paths = _paths(tmp_path)
-    _ = proposal_core.create_proposal(paths, "renewal-plan", "Renewal plan", (("need", "Need"),))
-    _ = proposal_core.write_draft(paths, "renewal-plan", "need", "Patent filing material.")
-
-    # When
-    route = proposal_sensitivity.route_proposal(
-        proposal_core.proposal_text(paths, "renewal-plan"), proposal_sensitivity.load_rules(paths.rules_file)
-    )
-
-    # Then
-    assert route.sensitive is True
-    assert route.provider == "openai-codex"
-    assert route.model == "hermes-config"
-
-
-def test_non_sensitive_proposal_uses_the_same_codex_oauth_tier(tmp_path: Path) -> None:
-    """There is no second tier left to fall to: drafting is Codex OAuth either way."""
-    # Given
-    paths = _paths(tmp_path)
-    _ = proposal_core.create_proposal(paths, "renewal-plan", "Renewal plan", (("need", "Need"),))
-    _ = proposal_core.write_draft(paths, "renewal-plan", "need", "Ordinary renewal rationale.")
-
-    # When
-    route = proposal_sensitivity.route_proposal(
-        proposal_core.proposal_text(paths, "renewal-plan"),
-        proposal_sensitivity.load_rules(paths.rules_file),
-    )
-
-    # Then
-    assert route.sensitive is False
-    assert (route.provider, route.model) == ("openai-codex", "hermes-config")
-
-
 def test_status_metadata_never_contains_draft_or_contribution_body(tmp_path: Path) -> None:
     # Given
     paths = _paths(tmp_path)
@@ -340,7 +302,7 @@ def test_section_draft_resolves_the_codex_binary_from_home_without_a_gateway_key
     monkeypatch.setenv("PROPOSAL_LLM_LOG_ROOT", str(tmp_path / "logs"))
 
     # When
-    result = proposal_llm.run_section_draft("prompt", "openai-codex", "hermes-config", False)
+    result = proposal_llm.run_section_draft("prompt", "openai-codex", "hermes-config")
 
     # Then
     assert result == "draft"
@@ -360,7 +322,7 @@ def test_missing_codex_credentials_fail_closed_without_a_second_provider(
 
     # When / Then
     with pytest.raises(proposal_llm.LlmInvocationError):
-        _ = proposal_llm.run_section_draft("prompt", "openai-codex", "hermes-config", False)
+        _ = proposal_llm.run_section_draft("prompt", "openai-codex", "hermes-config")
 
     recorded = record.read_text(encoding="utf-8").splitlines()
     assert recorded.count("-z") == 1
@@ -378,6 +340,6 @@ def test_non_codex_route_is_refused_before_transport(
 
     # When / Then
     with pytest.raises(proposal_llm.LlmInvocationError):
-        _ = proposal_llm.run_section_draft("prompt", "custom:other", "other-main", False)
+        _ = proposal_llm.run_section_draft("prompt", "custom:other", "other-main")
 
     assert not record.exists()

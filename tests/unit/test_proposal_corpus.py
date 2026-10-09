@@ -50,7 +50,6 @@ class FakeRunner:
                 (out / f"research-{digest}.md").write_text(
                     "---\n"
                     f"source_url: {claim.url}\n"
-                    "sensitivity: public\n"
                     "---\n"
                     f"{claim.text}\n",
                     encoding="utf-8",
@@ -65,15 +64,15 @@ def _pack() -> proposal_knowledge.EvidencePack:
         (
             proposal_knowledge.EvidenceItem(
                 "obsidian:Projects/excavator.md", "obsidian", "summary only",
-                "owner-private", 0.9, None,
+                0.9, None,
             ),
             proposal_knowledge.EvidenceItem(
                 "wiki:invention/42", "wiki-twin", "patent summary",
-                "patent-sensitive", 0.8, None,
+                0.8, None,
             ),
             proposal_knowledge.EvidenceItem(
                 "note:research-trends/weekly.md", "research-trends",
-                "weekly summary", "public", 0.7, "2026-W34",
+                "weekly summary", 0.7, "2026-W34",
             ),
         ),
         (),
@@ -93,7 +92,6 @@ def test_three_confirmed_claims_become_public_corpus_files(tmp_path: Path) -> No
     web = sorted(corpus.glob("research-*.md"))
     assert len(web) == 3
     assert all("source_url: https://" in path.read_text(encoding="utf-8") for path in web)
-    assert all("sensitivity: public" in path.read_text(encoding="utf-8") for path in web)
 
 
 def test_lint_failure_exits_three_and_removes_corpus(
@@ -124,41 +122,7 @@ def test_lint_failure_exits_three_and_removes_corpus(
     assert not corpus.exists()
 
 
-def test_patent_sensitivity_survives_brief_handoff(tmp_path: Path) -> None:
-    inputs = tmp_path / "inputs"
-    item = proposal_knowledge.EvidenceItem(
-        "wiki:invention/42",
-        "wiki-twin",
-        "patent summary",
-        "patent-sensitive",
-        0.8,
-        None,
-    )
-    original = proposal_knowledge.EvidencePack("goal", (item,), (), ())
-    brief = proposal_corpus.proposal_research.write_research_brief(inputs, "goal", original)
-
-    restored = proposal_corpus._pack_from_brief(brief)
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    paths = proposal_corpus._write_owner_evidence(corpus, restored)
-
-    assert len(paths) == 1
-    assert "sensitivity: patent-sensitive" in paths[0].read_text(encoding="utf-8")
-
-
-def test_brief_without_sensitivity_defaults_to_owner_private(tmp_path: Path) -> None:
-    brief = tmp_path / "RESEARCH_BRIEF.md"
-    brief.write_text(
-        "- source_key=legacy:key; bucket=obsidian; summary=legacy summary\n",
-        encoding="utf-8",
-    )
-
-    restored = proposal_corpus._pack_from_brief(brief)
-
-    assert restored.items[0].sensitivity == "owner-private"
-
-
-def test_owner_files_keep_source_keys_tags_and_only_summaries(tmp_path: Path) -> None:
+def test_owner_files_keep_source_keys_and_only_summaries(tmp_path: Path) -> None:
     synthesis = tmp_path / "SYNTHESIS.md"
     synthesis.write_text(_synthesis(), encoding="utf-8")
     corpus = tmp_path / "corpus"
@@ -171,7 +135,6 @@ def test_owner_files_keep_source_keys_tags_and_only_summaries(tmp_path: Path) ->
     owner_text = "\n".join(path.read_text(encoding="utf-8") for path in corpus.glob("owner-*.md"))
     assert all(item.source_key in owner_text for item in pack.items)
     assert all(item.summary in owner_text for item in pack.items)
-    assert "sensitivity: patent-sensitive" in owner_text
     assert "RAW-NOTE-SENTINEL" not in owner_text
 
 

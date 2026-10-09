@@ -797,7 +797,7 @@ def _assert_routes(prepared: Sequence[_PreparedChunk], host: str) -> None:
         if not item.sent:
             continue
         chunk_text = item.chunk.text
-        _ = assert_route_allowed(chunk_text, "refine-host", host=host)
+        _ = assert_route_allowed(chunk_text, "refine-host")
 
 
 def _transport_failure(item: _PreparedChunk, reason: str) -> ChunkResult:
@@ -875,7 +875,7 @@ def _refine_section(
             results.append(_passthrough_result(item))
             continue
         chunk_text = item.chunk.text
-        _ = assert_route_allowed(chunk_text, "refine-host", host=host)
+        _ = assert_route_allowed(chunk_text, "refine-host")
         try:
             raw_host_output = cast(object, transport(item.masked.text, host, timeout))
             if not isinstance(raw_host_output, str):

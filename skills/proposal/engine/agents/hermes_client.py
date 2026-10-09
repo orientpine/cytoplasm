@@ -6,7 +6,6 @@ not provide a ``hermes`` binary. Tests therefore inject a fake runner.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from collections.abc import Callable, Sequence
 from typing import Final
@@ -22,10 +21,6 @@ class HermesClientError(RuntimeError):
     """Hermes did not return a usable completion."""
 
 
-class SensitiveRouteRefused(HermesClientError):
-    """A patent-sensitive prompt was assigned to a forbidden GLM route."""
-
-
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -37,7 +32,6 @@ class HermesLLMClient:
         provider: str,
         model: str,
         *,
-        sensitive: bool = False,
         hermes_bin: str = "hermes",
         runner: Runner = subprocess.run,
         timeout_s: float = 600,
@@ -45,23 +39,12 @@ class HermesLLMClient:
     ) -> None:
         self.provider: str = provider
         self.model: str = model
-        self.sensitive: bool = sensitive
         self._hermes_bin: str = hermes_bin
         self._runner: Runner = runner
         self._timeout_s: float = timeout_s
         self._extra_args: tuple[str, ...] = tuple(extra_args)
 
     def complete(self, role: str, prompt: str) -> str:
-        if self.sensitive and _is_glm_route(self.provider, self.model):
-            raise SensitiveRouteRefused(
-                "".join(
-                    [
-                        "Patent-sensitive text cannot use a GLM/LiteLLM route: ",
-                        f"provider={self.provider!r}, model={self.model!r}.",
-                    ]
-                )
-            )
-
         payload = f"You are acting as {role} in a research proposal pipeline.\n\n{prompt}"
         argv = [
             self._hermes_bin,
@@ -107,21 +90,11 @@ class HermesLLMClient:
         return stdout.strip()
 
 
-def _is_glm_route(provider: str, model: str) -> bool:
-    route = f"{provider} {model}".lower()
-    return "glm" in route or "litellm" in route
-
-
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def hermes_client_from_env() -> HermesLLMClient:
     """Build the Hermes backend from its dedicated routing environment."""
     return HermesLLMClient(
         DEFAULT_PROVIDER,
         DEFAULT_MODEL,
-        sensitive=_env_flag("KIMM_DOCBOT_SENSITIVE"),
     )
 
 
@@ -130,6 +103,5 @@ __all__ = [
     "DEFAULT_PROVIDER",
     "HermesClientError",
     "HermesLLMClient",
-    "SensitiveRouteRefused",
     "hermes_client_from_env",
 ]

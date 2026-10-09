@@ -1,4 +1,4 @@
-"""Local render exception must not expand the existing network policy."""
+"""Content words do not change destination access; source boundaries still apply."""
 
 from __future__ import annotations
 
@@ -8,48 +8,21 @@ from skills.proposal.scripts.proposal_route_guard import (
     Destination,
     RouteRefused,
     assert_route_allowed,
-    classify,
 )
 
 
-@pytest.mark.parametrize(
-    "route",
-    [
-        ("render", None, True),
-        ("drive", None, True),
-        ("refine-host", "codex-oauth", True),
-        ("refine-host", "codex", True),
-        ("refine-host", "openai-codex", True),
-        ("refine-host", "hermes-codex", True),
-        ("image-api", None, False),
-        ("refine-host", None, False),
-        ("refine-host", "public-anthropic-api", False),
-        ("refine-host", "attacker.example", False),
-    ],
-)
-def test_technical_transfer_follows_destination_policy(
-    monkeypatch: pytest.MonkeyPatch,
-    route: tuple[Destination, str | None, bool],
-) -> None:
-    destination, host, allowed = route
-    # Given: the real keyword classifier and default owner-controlled hosts.
-    monkeypatch.delenv("PROPOSAL_REFINE_ALLOWED_HOSTS", raising=False)
-    monkeypatch.delenv("PROPOSAL_RULES_PATH", raising=False)
-    payload = "기술이전 계획은 검증된 공개 성과의 활용 절차를 설명한다."
-    assert classify(payload) == "patent-sensitive"
-
-    # When: the same sensitive body is offered to a destination.
-    # Then: only local rendering and the pre-existing explicit exceptions pass.
-    if allowed:
-        assert assert_route_allowed(payload, destination, host=host).allowed
-    else:
-        with pytest.raises(RouteRefused):
-            _ = assert_route_allowed(payload, destination, host=host)
+@pytest.mark.parametrize("destination", ["render", "drive", "refine-host", "image-api"])
+@pytest.mark.parametrize("words", ["clean", "특허 patent 기밀", "NDA 기술이전 비공개"])
+def test_keywords_do_not_change_destination_access(words: str, destination: Destination) -> None:
+    # Given / When: the same source is offered with ordinary or technical words.
+    decision = assert_route_allowed(words, destination)
+    # Then: content never changes the destination decision.
+    assert decision == assert_route_allowed("clean", destination)
 
 
 def test_private_note_render_remains_refused() -> None:
-    # Given: private-note provenance without a patent keyword.
+    # Given: private-note provenance.
     payload = "Local note content"
-    # When / Then: allowing patent-sensitive render does not open private notes.
+    # When / Then: content-independent source access stays closed.
     with pytest.raises(RouteRefused):
         _ = assert_route_allowed(payload, "render", source_keys=("obsidian:private",))

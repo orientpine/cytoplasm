@@ -169,7 +169,7 @@ def local_render_bundle(tmp_path: Path) -> Path:
     return directory
 
 
-def test_sensitive_body_renders_when_credentials_and_network_are_absent(
+def test_technical_transfer_body_renders_when_credentials_and_network_are_absent(
     local_render_bundle: Path, tmp_path: Path,
 ) -> None:
     # Given: real on-disk inputs and a fresh interpreter with no credentials.
@@ -193,7 +193,7 @@ with patch('socket.socket.connect', side_effect=AssertionError('network forbidde
              "PROPOSAL_ROOT": str(tmp_path / "proposals")},
         capture_output=True, text=True, timeout=30, check=False,
     )
-    # Then: sensitive source text reaches the real artifact without a model/client.
+    # Then: technical-transfer source text reaches the real artifact without a model/client.
     assert result.returncode == 0, result.stderr
     with zipfile.ZipFile(local_render_bundle / "out" / "proposal.hwpx") as archive:
         assert "기술이전" in archive.read("Preview/PrvText.txt").decode("utf-8")

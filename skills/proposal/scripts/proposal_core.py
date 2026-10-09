@@ -115,7 +115,7 @@ def _pack_dict(pack: EvidencePack | _UnavailablePack) -> dict[str, object]:
                 "id": item.id, "store": item.store, "source_type": item.source_type,
                 "ref": item.ref, "title": item.title, "doc_date": item.doc_date,
                 "date_basis": item.date_basis, "score": item.score, "grounded": item.grounded,
-                "authority": item.authority, "expired": item.expired, "sensitivity": item.sensitivity,
+                "authority": item.authority, "expired": item.expired,
                 "content": item.content, "sha256": item.sha256,
             }
             for item in pack.items
@@ -152,6 +152,6 @@ def fold_contribution(paths: ProposalPaths, slug: str, key: str, content: str, s
 
 
 def proposal_text(paths: ProposalPaths, slug: str) -> str:
-    """Return private material for deterministic sensitivity routing only."""
+    """Return the complete proposal material for the drafting prompt."""
     proposal = load_proposal(paths, slug)
     return "\n\n".join(f"{section.title}\n{section.body}" for section in proposal.sections)

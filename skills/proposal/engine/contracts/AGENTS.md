@@ -5,7 +5,7 @@ Shared data contracts: frozen pydantic models, cross-module protocols, validator
 ## FILES
 | File | Role |
 |------|------|
-| `models.py` | All domain models. `FrozenModel` base = `ConfigDict(frozen=True)` → immutable. Enums `SensitivityFlag`, `CitationStatus`. `IR`→`PlanSpec` inheritance. DocRecord/Provenance carry additive `source_url: str | None = None` (research origin URL; backward-compatible default None). Evidence-graph models `ClaimNode`/`EvidenceNode`/`EdgeClaimToEvidence`/`EvidenceGraph` (consumed by `converter/traceability_graph`). |
+| `models.py` | All domain models. `FrozenModel` base = `ConfigDict(frozen=True)` → immutable. `CitationStatus` records source cross-reference eligibility. `IR`→`PlanSpec` inheritance. DocRecord/Provenance carry additive `source_url: str | None = None` (research origin URL; backward-compatible default None). Evidence-graph models `ClaimNode`/`EvidenceNode`/`EdgeClaimToEvidence`/`EvidenceGraph` (consumed by `converter/traceability_graph`). |
 | `protocols.py` | Structural interfaces: `LLMClient.complete`, `PMSQuery` (`evidence_for_bucket`/`public_evidence`/`resolve`). |
 | `validators.py` | `validate_kpi_sum`, `validate_citation_cover`, `validate_sections`, `normalize_kpi_weights`, `budget_constants`. |
 | `ids.py` | `stable_id(*parts)` = sha256 of `|`-joined parts (deterministic ids). |
