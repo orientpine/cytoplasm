@@ -24,7 +24,6 @@ from automation.git_remote_url import GitRemoteUrlError, validate_remote_url
 
 from ..config import ObsidianSourceConfig
 from ..documents import Chunk, LogicalDocument
-from ..sensitivity import SensitivityRules, SensitivityRulesError, classify, load_rules
 from .files import scan_directory
 from .obsidian_dates import explicit_date_metadata
 
@@ -217,23 +216,11 @@ def _with_folder(document: LogicalDocument, folder: str) -> LogicalDocument:
     return _with_chunk_metadata(document, {"folder": folder})
 
 
-def _with_sensitivity(document: LogicalDocument, sensitivity: str) -> LogicalDocument:
-    return _with_chunk_metadata(document, {"sensitivity": sensitivity})
-
-
-def _load_sensitivity_rules(path: Path) -> SensitivityRules:
-    try:
-        return load_rules(path)
-    except (OSError, SensitivityRulesError) as error:
-        raise ObsidianSyncError(f"sensitivity rules unavailable: {path}: {error}") from error
-
-
 def scan_obsidian(
     mirror_dir: Path,
     exclude_names: tuple[str, ...],
     perspective: dict[str, str],
     max_chunk_chars: int,
-    sensitivity_rules_path: Path | None = None,
 ) -> tuple[list[LogicalDocument], set[str]]:
     """Return (documents, present source keys) for the Obsidian mirror.
 
@@ -243,11 +230,6 @@ def scan_obsidian(
     vault-root notes). Point ids stay (source, content)-derived, so the
     folder enrichment never perturbs idempotent upserts.
     """
-    sensitivity_rules = (
-        _load_sensitivity_rules(sensitivity_rules_path)
-        if sensitivity_rules_path is not None
-        else None
-    )
     documents, present_keys = scan_directory(
         root=mirror_dir,
         prefix="obsidian",
@@ -265,14 +247,5 @@ def scan_obsidian(
             folder_document,
             explicit_date_metadata(folder_document, relative),
         )
-        if sensitivity_rules is None:
-            enriched.append(dated_document)
-            continue
-        full_text = "\n\n".join(chunk.content for chunk in dated_document.chunks)
-        tags = classify(full_text, sensitivity_rules)
-        enriched.append(
-            _with_sensitivity(dated_document, "patent-sensitive")
-            if "patent-sensitive" in tags
-            else dated_document
-        )
+        enriched.append(dated_document)
     return enriched, present_keys

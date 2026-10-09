@@ -39,7 +39,6 @@
       ".claude",
       ".cursor",
       ".playwright-mcp"
-    ],
-    "sensitivity_rules_path": "REPLACE-SENSITIVITY-RULES-PATH"
+    ]
   }
 }

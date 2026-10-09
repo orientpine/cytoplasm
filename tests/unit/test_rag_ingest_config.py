@@ -33,7 +33,6 @@ def test_load_config_populates_valid_obsidian_source(tmp_path: Path) -> None:
     # Given
     mirror_dir = tmp_path / "obsidian-mirror"
     ssh_key_path = tmp_path / "id_ed25519"
-    sensitivity_rules_path = tmp_path / "sensitivity-rules.yaml"
     config_path = write_config(
         tmp_path,
         {
@@ -43,7 +42,6 @@ def test_load_config_populates_valid_obsidian_source(tmp_path: Path) -> None:
             "ssh_key_path": str(ssh_key_path),
             "branch": "develop",
             "exclude_names": [".custom", "archive*"],
-            "sensitivity_rules_path": str(sensitivity_rules_path),
         },
     )
 
@@ -58,10 +56,9 @@ def test_load_config_populates_valid_obsidian_source(tmp_path: Path) -> None:
     assert config.obsidian.ssh_key_path == ssh_key_path
     assert config.obsidian.branch == "develop"
     assert config.obsidian.exclude_names == (".custom", "archive*")
-    assert config.obsidian.sensitivity_rules_path == sensitivity_rules_path
 
 
-@pytest.mark.parametrize("missing_key", ["repo_url", "ssh_key_path", "sensitivity_rules_path"])
+@pytest.mark.parametrize("missing_key", ["repo_url", "ssh_key_path"])
 def test_enabled_obsidian_requires_security_and_repository_keys(
     tmp_path: Path, missing_key: str
 ) -> None:
@@ -71,7 +68,6 @@ def test_enabled_obsidian_requires_security_and_repository_keys(
         "repo_url": "https://example.invalid/placeholder/obsidian.git",
         "mirror_dir": str(tmp_path / "obsidian-mirror"),
         "ssh_key_path": str(tmp_path / "id_ed25519"),
-        "sensitivity_rules_path": str(tmp_path / "sensitivity-rules.yaml"),
     }
     del obsidian[missing_key]
     config_path = write_config(tmp_path, obsidian)
@@ -121,7 +117,6 @@ def test_wrong_obsidian_field_type_raises_config_error(tmp_path: Path) -> None:
             "repo_url": 42,
             "mirror_dir": str(tmp_path / "obsidian-mirror"),
             "ssh_key_path": str(tmp_path / "id_ed25519"),
-            "sensitivity_rules_path": str(tmp_path / "sensitivity-rules.yaml"),
         },
     )
 

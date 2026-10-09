@@ -4,7 +4,7 @@ Every changed document becomes one queued job carrying its full upsert
 payloads, stale-point deletes, and post-delivery state/cursor updates. Jobs
 are drained oldest-first; on MCP unreachability the remaining jobs stay
 queued and the next cron tick retries them (0 loss). Job payloads can contain
-sensitive local content, so the queue file lives inside the agent home
+local document content, so the queue file lives inside the agent home
 (mode 600) and is never copied into repo/QA artifacts.
 """
 

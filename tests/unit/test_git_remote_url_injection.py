@@ -218,7 +218,6 @@ def _obsidian_source(tmp_path: Path, url: str) -> ObsidianSourceConfig:
         repo_url=url,
         mirror_dir=tmp_path / "mirror",
         ssh_key_path=tmp_path / "key",
-        sensitivity_rules_path=tmp_path / "sensitivity.yaml",
     )
 
 
