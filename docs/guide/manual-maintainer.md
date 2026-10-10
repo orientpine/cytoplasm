@@ -19,8 +19,7 @@
 | 그룹 관리자 / 팀원 역할 | [manual-group-admin.md](manual-group-admin.md) · [manual-member.md](manual-member.md) |
 
 > 위 표의 `operations.md`·`incident-response.md`·`reboot-recovery.md`는 **개발 저장소
-> 전용**이라 공개 배포본에는 포함되지 않는다(`configs/public-export-manifest.txt`).
-> 공개본에서 이 문서를 읽고 있다면 그 세 링크는 열리지 않는다.
+> 전용**이라 공개 저장소에는 없다. 공개 저장소에서 이 문서를 읽고 있다면 그 세 문서는 열리지 않는다.
 
 ---
 
@@ -38,11 +37,11 @@ main 커밋에 서명 태그를 다는 것이다.**
 
 | | public `orientpine/cytoplasm` | private `orientpine/autophagy-ops` | private `orientpine/autophagy-agents` |
 |---|---|---|---|
-| 성격 | **개발 정본 + 배포본** | 비공개 운영 자료(계획·QA 증적·누출 금칙어) | 옛 개발 저장소 — 롤백 기간의 되돌리기 경로 |
-| 누가 쓰나 | 사람·에이전트·수리 자동화가 브랜치·PR | 운영자 | 아무도(롤백을 결정했을 때만) |
-| main 갱신 | PR + 필수 체크 verify·clean-host-install·leak-guard + `merge-pr.sh` (브랜치 보호, 관리자 포함) | 직접 커밋 | 쓰지 않는다 |
-| 배포 provenance 기준 | `origin/main` (「배포 provenance 규칙」) | 해당 없음 | 롤백 시에만 |
-| 노드의 `origin` | **맞음** | 아님 | 아님(롤백 때 되돌리는 대상) |
+| 성격 | **개발 정본 + 배포본** | 비공개 운영 자료(계획·QA 증적·누출 금칙어) | 옛 개발 저장소 — 2026-10-10 archive(읽기 전용, 이력 보관) |
+| 누가 쓰나 | 사람·에이전트·수리 자동화가 브랜치·PR | 운영자 | 아무도 |
+| main 갱신 | PR + 필수 체크 verify·clean-host-install·leak-guard + `merge-pr.sh` (브랜치 보호, 관리자 포함) | 직접 커밋 | 쓸 수 없다(archive) |
+| 배포 provenance 기준 | `origin/main` (「배포 provenance 규칙」) | 해당 없음 | 해당 없음 |
+| 노드의 `origin` | **맞음** | 아님 | 아님 |
 
 개발 체크아웃은 운영 저장소를 `.omo`·`docs/qa` 로 링크해 쓴다. `automation/ops_link.sh` 가
 링크와 누출 게이트 훅 셋(pre-commit·commit-msg·pre-push)을 설치하고, 경로는
@@ -104,167 +103,8 @@ Discord id·비공개 경로 세부를 쓰지 않는다. `automation/public_gate
 
 [기능 소개](../기능소개/릴리스-승인-자가-회수.md)
 
-> **§1.1~§1.6 은 롤백 기간 전용이다.** `automation/public_export.sh` 는 공개 우선 흐름을
-> 되돌려야 할 때 private 저장소에서 다시 반출하는 길로만 남는다(롤백 기간 = 공개 우선 릴리스
-> 3회 무사고. 그 뒤 스크립트·원장·관련 테스트와 함께 이 절들을 지운다). 실행하면 그 사이
-> cytoplasm 에 들어온 변경을 private 스냅샷으로 덮으므로, 되돌리기를 결정했을 때가 아니면
-> 쓰지 않는다.
-
-### 1.1 최초 1회: 대상 저장소를 먼저 만든다 (스크립트가 하지 않는다)
-
-`public_export.sh`는 **존재하는 원격**을 전제로 한다. 시작하자마자 `git ls-remote`로
-대상을 읽고, 실패하면 `destination remote is unavailable`로 멈춘다. 그래서 새 대상
-저장소로 처음 내보내기 전에는 유지보수자가 직접 만든다.
-
-```bash
-gh repo create orientpine/cytoplasm --public
-```
-
-자동 초기화(`--add-readme` 등)를 **하지 않는다.** 스크립트는 원격에
-`refs/heads/main`이 없으면 `--no-checkout`으로 클론하고
-`git symbolic-ref HEAD refs/heads/main`으로 브랜치를 열어 **첫 루트 커밋**을 만든다
-(`public_export.sh:254-262`). 원격에 이미 커밋이 있으면 그 공개 이력을 이어간다.
-
-이 단계는 대상 저장소당 딱 한 번이다. 이후 릴리스에서는 아무것도 만들지 않는다.
-
-### 1.2 사전 조건 — 스크립트가 검사하고 거부하는 것
-
-전부 `PUBLIC-EXPORT-BLOCK: <사유>` 한 줄로 멈춘다. 미리 알고 가면 시간을 아낀다.
-
-| 조건 | 위반 시 메시지 |
-|---|---|
-| **private에 이미 랜딩돼 있어야 한다** (기본 `--source-ref origin/main`) | `source ref is not a commit: <ref>` |
-| 워킹트리가 untracked 포함 clean | `source worktree is dirty; commit or remove every change first` |
-| 얕은 클론이 아니어야 한다 | `source is shallow; full-history secret scanning is impossible` |
-| 대상 디렉터리가 아직 없어야 한다 | `target already exists: <dir>` |
-| 대상 디렉터리의 부모는 있어야 한다 | `target parent does not exist` |
-| 대상은 private 워킹트리 **밖** | `target must be outside the private source working tree` |
-| 유도되거나 명시된 버전이 `vX.Y.Z`(선택적 접미사) | `source commit has no semantic release tag` / `source commit has multiple semantic release tags` / `--version must be a v-prefixed semantic version` |
-| `--visibility`가 정확히 `public` | `--visibility must be exactly public` |
-| `--repository-name`이 `OWNER/REPO` | `--repository-name must be OWNER/REPO` |
-| 서명키가 심링크 아닌 정규 파일이고 읽을 수 있어야 한다 | `update-trust signing key must be a regular non-symlink file` / `... is unreadable or unusable` |
-| 그 버전 태그가 원격에 아직 없어야 한다 | `destination tag already exists: <version>` |
-| 매니페스트가 `.omo/`와 `docs/qa/`를 명시적으로 제외 | `manifest must explicitly exclude both .omo/ and docs/qa/` |
-| 도구 전부 존재: `git gitleaks grep python3 pytest ssh-keygen tar cp mktemp realpath` | `required tool is unavailable: <tool>` |
-
-`--remote`와 `--signing-key`는 값이 git 인자·git config 줄에 도달하므로 제어문자·선행
-대시·`ext::` 전송이 사용 **전에** 거부된다(감사 C2/C3).
-
-### 1.3 새 파일을 추가했다면 — 공개 결정 원장
-
-`configs/`, `docs/` 아래의 모든 추적 파일은
-**`configs/public-export-manifest.txt`(제외) 또는 `configs/public-export-review.txt`(공개)
-둘 중 정확히 하나**에 기록되어야 한다. 단, 거버넌스 확대 전에 이미 공개됐음이
-`.omo/evidence/fs3/public-baseline.txt` 또는 동결된
-`configs/public-export-grandfathered.txt`로 증명된 경로는 기존 공개 결정으로 간주한다.
-매니페스트가 제외 목록이라 그 밖의 경로에 기록이 없으면
-**기본값이 "공개"** 였고, 그 구멍을 닫은 것이 이 짝 원장이다(감사 C1).
-
-```bash
-python3 -m pytest tests/unit/test_public_export_manifest_coverage.py -q
-```
-
-여기서 실패하면 export도 실패한다 — 스크립트가 **내보낸 트리 안에서**
-`python3 -m pytest tests/unit`을 다시 돌리기 때문이다(`public_export.sh:272`). 즉
-원장을 잊으면 공개되는 것이 아니라 릴리스가 멈춘다. 원장은 **디렉터리 단위 공개
-승인을 금지**한다 — 그것은 방금 닫은 구멍을 다시 여는 일이다. 공개 결정 원장
-`configs/public-export-review.txt`와 정당화 원장 `configs/public-export-baseline-additions.txt`는 경로 바이트순으로 유지하고 새 행을 끝에 덧붙이지 않으며, `tests/unit/test_public_export_ledger_order.py`가 이를 강제한다.
-
-### 1.4 실행 형태 예시 — 기본은 source commit의 태그를 재사용한다
-
-```bash
-bash automation/public_export.sh \
-  --source-repo <private 체크아웃 경로> --source-ref origin/main \
-  --target-dir <체크아웃 밖 임시 디렉터리> \
-  --remote https://github.com/orientpine/cytoplasm.git \
-  --signing-key ~/.ssh/autophagy_update_trust \
-  --repository-name orientpine/cytoplasm --visibility public
-```
-
-`--signing-key` 대신 `UPDATE_TRUST_SIGNING_KEY` 환경변수를 써도 된다(같은 검사를 받는다).
-독립적인 공개 버전이 꼭 필요할 때만 `--version vX.Y.Z`를 추가한다. 이 명시값은 커밋
-태그 유도보다 우선하지만, 이미 노드가 검증한 floor보다 낮은 번호를 고르면 아래 §5.1의
-영구 거부를 피할 수 없다.
-
-### 1.5 한 번의 실행 안에서 벌어지는 일
-
-이 순서가 곧 안전 논증이므로 통째로 읽는다.
-
-1. 인자·전제 검사(§1.2).
-2. **private 트리 비밀 스캔** — 워킹트리와 `--all --full-history` 양쪽. 그 직전에
-   카나리아 2개(평범한 파일 하나, `.gitignore`가 제외하는 파일 하나)를 심어
-   **둘 다 탐지되는지** 확인한다. 0건 스캔이 "스캔했다"의 증거가 되게 만드는 장치다
-   (감사 C5). 놓치면 다음 둘 중 하나로 멈춘다 —
-   `gitleaks missed a planted canary in <root>; a zero-finding scan proves nothing`
-   또는 `gitleaks skipped an ignore-listed canary in <root>; scan coverage is narrower than assumed`.
-   두 문구를 나눠 둔 이유는 "스캐너가 트리를 못 읽었다"와 "ignore 규칙을 존중해 일부를
-   건너뛰었다"가 서로 다른 전제 붕괴이기 때문이다.
-3. 원격 ref 조회 + 태그 중복 확인.
-4. `git archive <source_commit>`로 스냅샷 전개 → 매니페스트 항목 삭제 →
-   `automation/public_export_redaction.py`로 vendored 트리 비식별화(사후조건 불통과 시
-   `vendored public-snapshot de-identification failed`).
-5. 대상 클론 → 이전 스냅샷 제거 → 새 스냅샷 복사 → `git add -A`.
-6. **내보낸 트리 스캔 + `python3 -m pytest tests/unit`** (여기서도 카나리아 선행).
-   실패하면 `exported-tree unit tests failed`.
-7. 커밋. 작성자/커미터 시각은 **source 커밋의 시각**을 그대로 쓰고, 메시지 본문에
-   `source-sha:<private commit>`을 남긴다 — 공개 커밋에서 private 기준점을 되짚는
-   유일한 연결고리다.
-8. **그 커밋에 서명 태그**를 만든다(`git -c gpg.format=ssh ... tag -s`). 태그 메시지에
-   `repository:` · `visibility:` · `source-sha:`가 들어간다.
-9. **자체 검증** — 개인키에서 공개키를 뽑아 임시 allowed-signers를 만들고
-   `git verify-tag`를 돌린다. 실패하면 push 전에
-   `release tag does not verify as update-trust@autophagy in namespace git`으로 멈춘다.
-10. 공개 이력 전체 비밀 스캔.
-11. **`git push --atomic`으로 커밋과 태그를 한 번에** 보낸다. 어느 한쪽만 공개되는
-    상태를 허용하지 않는다.
-12. push한 원격을 **다시 읽어** `main`과 태그가 로컬과 정확히 같은지 확인한다.
-
-13. 성공을 알린 **직후에 남은 단계를 찍는다** — 사이클은 §1.7의 릴리스 노트에서 끝나기
-    때문이다. `PUBLIC-EXPORT-NOTE-PENDING`은 advisory이며 종료 코드는 그대로 0이다
-    (push와 read-back이 이미 끝난 자리에서 non-zero를 내면 성공한 반출을 실패로
-    보고하게 된다). 차단 경로에서는 나오지 않는다.
-
-성공하면 끝은 이렇다. 첫 줄이 "반출이 됐다", 그 아래가 "아직 안 끝났다"이다.
-
-```
-[public-export] PUBLIC-EXPORT-OK repository=orientpine/cytoplasm visibility=public source_sha=<private sha> commit=<public sha> tag=v1.0.1 target=<dir>
-[public-export] PUBLIC-EXPORT-NOTE-PENDING v1.0.1 — the export is pushed but the cycle ends at the release note (docs/guide/manual-maintainer.md §1.7):
-[public-export]   1. ssh-keygen -y -f "<signing key>" > /tmp/update-trust.pub   # public half only; never upload the private key
-[public-export]   2. ssh-keygen -lf /tmp/update-trust.pub                        # the fingerprint line the note must carry
-[public-export]   3. gh release create v1.0.1 --repo orientpine/cytoplasm --title 'v1.0.1 — <one-line summary>' --notes-file <notes.md>
-[public-export]   4. gh release upload v1.0.1 --repo orientpine/cytoplasm /tmp/update-trust.pub && rm -f /tmp/update-trust.pub
-[public-export]   5. gh release view v1.0.1 --repo orientpine/cytoplasm --json assets   # update-trust.pub attached?
-```
-
-버전과 대상 저장소는 **그 실행의 인자로 이미 채워져** 나오므로 그대로 붙여 쓴다.
-
-v1.0.0 실측값: `source_sha=f54cf28fdf541631c14c6dd03a3a13c6eac8a86d`,
-`commit=4789b2ad73f4d66c3f5f91e13311910e0a2e022c`, 내보낸 트리에서 `3902 passed`,
-gitleaks 0건(private 워킹트리·private 전체이력·공개 트리·공개 이력 전부).
-
-v1.0.1(W-M3 검증) 실측값: `source_sha=a53157c32bce36c603c317880defa045f05aad08`,
-`commit=45311d84ce807afc76d9e5f57465e2b8d4454d12`, 내보낸 트리에서 `3951 passed`,
-gitleaks 0건. 첫 실행은 export 트리 내부 `pytest` 3건이 이 머신의 실제 `~/.hermes/node.toml`
-(다른 동시 세션이 생성)을 격리하지 않은 헬스체크 테스트 2개로 fail-closed 차단되었다 —
-문서가 설계대로 동작한 증거다(**7절이 이 감지를 막는 것이 아니라**, PUBLIC-EXPORT-BLOCK이 설계대로 작동해 결함 있는 커밋이 공개되는 것을 막았다). 테스트 헬퍼에 격리 `HOME`을 추가한 후 재시도해 성공했다.
-
-실패하면 `trap`이 임시 디렉터리와 (이 실행이 만든) 대상 디렉터리를 지운다. 부분
-결과를 남기지 않는다.
-
-### 1.6 ⚠️ 왜 순서를 뒤집을 수 없나 (D8)
-
-**private에서 태그를 먼저 서명하고 그 다음에 export하는 순서가 아니다.**
-
-공개 저장소는 fresh history다. private의 커밋 SHA는 공개 저장소에 **존재하지 않고
-앞으로도 존재하지 않는다.** private에서 서명한 태그는 공개 저장소에 없는 객체를
-가리키므로, 그 태그를 공개 저장소에 밀어 넣어도 사용자 노드에서는 후보가 되지 않는다 —
-`parse_remote_release_refs`는 **peeled commit이 현재 `refs/heads/main`과 같은** 태그만
-후보로 올리기 때문이다.
-
-그 결과는 한 노드의 실패가 아니라 **연합 전체의 정지**다. 후보가 0이면
-`UNSIGNED-HEAD`, 리컨실러는 매 2분 같은 줄을 찍으며 아무 노드도 전진하지 않는다.
-그래서 커밋 생성 · 그 커밋에 대한 서명 · push가 **한 번의 스크립트 실행 안에서**
-일어난다. 셋을 사람이 나눠 하는 순간 이 실수가 가능해진다.
+> 옛 반출 절차 §1.1~§1.6(`automation/public_export.sh`)은 롤백 기간(공개 우선 릴리스 3회
+> 무사고)이 끝나 2026-10-10 에 지웠다. 옛 개발 저장소는 archive 되어 읽기 전용으로 남는다.
 
 ### 1.7 릴리스 노트 게시 (사이클의 마지막 단계 — 선택이 아니다)
 
@@ -295,17 +135,13 @@ gitleaks 0건. 첫 실행은 export 트리 내부 `pytest` 3건이 이 머신의
 - 직전 릴리스 태그에 Release 나 `update-trust.pub` 가 없으면 새 릴리스를 열지 않는다(exit 4
   `RELEASE-NOTE-MISSING`). 보충: `automation/release-note.sh <tag> --notes-file <초안>`(이미 있으면 무동작).
 
-아래 손 절차는 롤백 기간 경로(`public_export.sh`)와, 자동 게시 이전의 기록이다.
-
-`release.sh`(롤백 기간에는 `public_export.sh`)는 태그까지만 만들고 **노트는 사람이 올린다**. 그렇다고 이것이 부록은 아니다 —
+아래 손 절차는 자동 게시가 실패했을 때 손으로 보충하는 길이다(평소에는 `release-note.sh` 가 같은 일을 한다).
+그렇다고 이것이 부록은 아니다 —
 릴리스 객체와 거기 붙는 `update-trust.pub` 자산·지문 공지가 없으면 신규 설치는 시작조차
 하지 못한다(루트 `AGENTS.md` 「공개 릴리스 규칙」의 종결 조건 셋 중 둘이 여기서 생긴다).
 
-스크립트가 성공 직후 **이 절의 명령을 버전·저장소까지 채워서 찍는다**
-(`PUBLIC-EXPORT-NOTE-PENDING`, §1.5) — 롤백 기간 경로 이야기다. 공개 우선 흐름의
-`release.sh` 는 아직 찍지 않으므로 이 절이 유일한 안내다. 산문으로만 두었을 때 실제로 잊혔기 때문이다 —
-2026-09-09 v1.6.7은 태그만 올라가 목록의 Latest가 v1.6.1에 멈춰 있었다. 아래는 그
-출력의 정본이며, 터미널을 이미 닫았을 때 되짚는 자리다.
+산문으로만 두었을 때 실제로 잊혔다 — 2026-09-09 v1.6.7은 태그만 올라가 목록의 Latest가
+v1.6.1에 멈춰 있었다. 그래서 지금은 `release.sh` 가 태그와 같은 단계에서 게시한다.
 
 **제목은 `vX.Y.Z` 하나로 두지 않는다.** 무엇이 바뀌었는지 한 줄이 제목에 있어야 목록에서
 읽힌다(루트 「릴리스 패치노트 작성 규칙」과 같은 기준). 실측 반례: v1.6.9는 제목이 맨
@@ -319,9 +155,8 @@ gh release create v1.0.1 --repo orientpine/cytoplasm \
 # 신뢰키 공개키를 asset 으로 붙인다. 붙이지 않으면 install.md §1·manual-member.md §1 의
 # "릴리스에 동봉" 이 거짓이 되고, `--update-trust-key` 가 필수 인자라 신규 설치가 시작조차
 # 하지 못한다(2026-09-07 제3자 설치 실측). 공개키이므로 공개 저장소에 올려도 무해하다.
-# 올리는 것은 반드시 `.pub` 이다. `UPDATE_TRUST_SIGNING_KEY` 는 위 §1.4 의 export 에서
-# 개인키 경로다(`public_export.sh` 가 `ssh-keygen -y` 로 공개키를 유도한다) — 그 변수를 여기에
-# 그대로 넣으면 개인키가 공개 asset 이 된다. 업로드 전에 첫 낱말이 `ssh-ed25519` 인지 본다.
+# 올리는 것은 반드시 `.pub` 이다. 개인키 경로를 그대로 넣으면 개인키가 공개 asset 이 된다.
+# 업로드 전에 첫 낱말이 `ssh-ed25519` 인지 본다.
 head -c 11 ~/.ssh/autophagy_update_trust.pub; echo   # → ssh-ed25519
 
 # asset 이름은 올리는 **파일 이름 그대로**가 된다. `gh release upload <파일>#<이름>` 의 `#` 뒤는
@@ -531,7 +366,7 @@ update-trust@autophagy namespaces="git" ssh-ed25519 AAAA...<신키> update-trust
    제3자 설치는 **대역외 공지 + 각 소유자의 수동 실행**이다(§3.2).
 4. **전 노드에서 3이 끝났음을 확인한다.** 여기가 유일한 게이트다. 확인되지 않은 노드가
    하나라도 있으면 그 노드는 5 이후 조용히 멈춘다.
-5. **새 키로 다음 릴리스를 컷한다.** §1.4의 명령에서 `--signing-key`만 바꾼다.
+5. **새 키로 다음 릴리스를 컷한다.** `release.sh` 의 서명키(`UPDATE_TRUST_SIGNING_KEY`)만 바꾼다.
    스크립트가 push **전에** 자기 공개키로 태그를 자체 검증하므로, 키를 잘못 지정했으면
    `release tag does not verify as update-trust@autophagy in namespace git`에서 멈춘다.
 6. **노드들이 그 릴리스로 전진한 것을 확인한 뒤**(`readlink /srv/autophagy-agent-current`),
@@ -733,14 +568,6 @@ floor 이상인지 확인해야 하며, 잘못 전환한 뒤 태그 삭제나 �
 - [ ] 내 노드 `readlink /srv/autophagy-agent-current`가 2분 내 전진
 - [ ] main 에 손으로 push한 것이 없다 (브랜치 보호가 거부한다)
 
-롤백 기간에 `public_export.sh` 로 반출할 때만 더한다(§1.1~§1.6):
-
-- [ ] `configs/` · `docs/`에 새 파일이 있으면 매니페스트 또는 공개 원장에 기록했다
-      → `pytest tests/unit/test_public_export_manifest_coverage.py`
-- [ ] 워킹트리 clean, 대상 디렉터리는 체크아웃 **밖**의 새 경로
-- [ ] source commit에 유일한 semantic release tag가 있다(독립 버전이면 `--version` 명시)
-- [ ] `automation/public_export.sh` 1회 실행 → `PUBLIC-EXPORT-OK`
-
 ---
 
 ## 관련
@@ -753,7 +580,7 @@ floor 이상인지 확인해야 하며, 잘못 전환한 뒤 태그 삭제나 �
 - `operations.md` · `incident-response.md` · `reboot-recovery.md` — 내 노드 운영
   *(개발 저장소 전용 — 공개본에 포함되지 않는다)*
 - 핵심 코드: `automation/release.sh` · `automation/public_gate.py` · `automation/ops_link.sh` ·
-  `automation/update_trust.py` · `automation/public_export.sh`(롤백 기간 전용) ·
+  `automation/update_trust.py` ·
   `automation/update_trust_state.py` · `automation/deploy_reconcile_cli.py` ·
   `automation/release_rollback.py` · `automation/install/trust_key_bootstrap.py` ·
   `automation/install/allowed_signers.py`
