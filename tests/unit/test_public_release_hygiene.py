@@ -67,7 +67,6 @@ _ALLOWLISTED_SUFFIXES: Final = (
 _ALLOWLISTED_MATCHES: Final[dict[tuple[str, int], str]] = {
     # Add only an unavoidable, non-identifying literal with a path+line and a safety reason.
 }
-_PUBLIC_EXPORT_MANIFEST: Final = _REPO / "configs" / "public-export-manifest.txt"
 
 
 def _tracked_paths() -> tuple[Path, ...]:
@@ -86,22 +85,6 @@ def _is_allowlisted_path(path: Path) -> bool:
         relative.startswith(_ALLOWLISTED_PREFIXES)
         or any(part in relative for part in _ALLOWLISTED_PATH_PARTS)
         or relative.endswith(_ALLOWLISTED_SUFFIXES)
-    )
-
-
-def _public_export_exclusions() -> tuple[str, ...]:
-    return tuple(
-        line
-        for raw in _PUBLIC_EXPORT_MANIFEST.read_text(encoding="utf-8").splitlines()
-        if (line := raw.strip()) and not line.startswith("#")
-    )
-
-
-def _is_private_export_path(path: Path, exclusions: tuple[str, ...]) -> bool:
-    relative = path.as_posix()
-    return any(
-        (entry.endswith("/") and relative.startswith(entry)) or relative == entry
-        for entry in exclusions
     )
 
 
@@ -188,12 +171,11 @@ def test_tracked_non_test_sources_contain_no_discord_snowflake_literals() -> Non
 
 def test_public_non_test_sources_contain_no_personal_or_private_infra_literals() -> None:
     # Given: every editable non-test file that survives the public-export manifest.
-    exclusions = _public_export_exclusions()
     findings: list[str] = []
 
     # When: generalized identity patterns and private-host digests scan each line.
     for relative in _tracked_paths():
-        if _is_allowlisted_path(relative) or _is_private_export_path(relative, exclusions):
+        if _is_allowlisted_path(relative):
             continue
         source = _REPO / relative
         if not source.is_file():
@@ -217,12 +199,11 @@ def test_public_files_including_tests_name_no_private_account_or_owner() -> None
     # Given: every file the public export ships. Tests count — a comment or fixture in a public
     #        test is published exactly like a doc line. Vendored trees are skipped because
     #        automation/public_export_redaction.py de-identifies them at export time.
-    exclusions = _public_export_exclusions()
     findings: list[str] = []
 
     # When: each line is checked for a private account's home directory and the owner's name.
     for relative in _tracked_paths():
-        if _is_private_export_path(relative, exclusions) or "/vendor/" in relative.as_posix():
+        if "/vendor/" in relative.as_posix():
             continue
         source = _REPO / relative
         if not source.is_file():

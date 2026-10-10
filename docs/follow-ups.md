@@ -306,6 +306,7 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 ## cytoplasm 이전 전수 조사에서 남긴 것 (2026-10-10)
 
 - **공개 코드의 Discord User-Agent 가 옛 비공개 저장소 URL 을 가리킨다** — `DiscordBot (https://github.com/orientpine/autophagy-agents, 0)` 이 automation 과 스킬 스크립트 27곳(예: `automation/owner_notice.py:35`, `skills/mail/scripts/triage_confirm.py:18`)에 있다. 기능에는 영향이 없다. 스킬 파일을 고치면 그 스킬 10여 개가 다시 마운트되므로 통지 복구 릴리스에 섞지 않았다 → 한 상수(예: `automation/interop/user_agent.py`)로 모으고 cytoplasm URL 로 바꾼다. 스킬은 격리 샌드박스에서 automation 을 import 하지 못하는 것도 있어 사본이 필요할 수 있다. **영향: 공개 코드가 404 URL 을 광고 · 심각도 낮음**.
+- **반출 뒤처리 두 가지가 남았다** — 롤백 기간 종료 정리(2026-10-10)는 반출 스크립트·원장·전용 시험만 지웠다. ① `automation/public_export_redaction.redact_vendor_tree` 와 그 시험 `tests/unit/test_public_export_redaction.py` 는 이제 반출 때만 쓰던 함수라 호출자가 없다. 같은 모듈의 토폴로지 규칙은 `public_gate` 가 쓰므로 모듈은 남겨야 한다. ② `skills/mail/vendor/NOTICE:87` 이 "스냅샷이 redaction 을 돈다"고 아직 말한다. 스킬 파일이라 고치면 mail 이 다시 마운트되므로 이번 정리에 넣지 않았다 → 토폴로지 규칙을 `automation/public_topology.py` 로 옮기고 redaction 함수·시험을 지운다. NOTICE 는 다음 mail 변경 때 함께 고친다. **영향: 죽은 코드와 낡은 문구 · 심각도 낮음**.
 
 ## 공개 우선 전환 준비 중 남긴 것 (2026-10-07)
 

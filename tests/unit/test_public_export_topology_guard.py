@@ -29,11 +29,9 @@ import pytest
 from automation.public_export_redaction import (
     PublicExportRedactionError,
     assert_no_private_topology,
-    redact_vendor_tree,
 )
 
 _REPO: Final = Path(__file__).resolve().parents[2]
-_MANIFEST: Final = _REPO / "configs" / "public-export-manifest.txt"
 
 #: This module is published too, and the guard scans every published file — so a matching
 #: literal here would make the guard refuse its own test.  That is not a reason for an
@@ -45,31 +43,17 @@ _SYNTHETIC_ADDRESS: Final = ".".join(("100", "64", "0", "1"))
 _SYNTHETIC_HOST: Final = "ori" + "beef"
 
 
-def _exclusions() -> tuple[str, ...]:
-    lines = _MANIFEST.read_text(encoding="utf-8").splitlines()
-    return tuple(line.strip() for line in lines if line.strip() and not line.startswith("#"))
-
-
-def _is_excluded(relative: str, exclusions: tuple[str, ...]) -> bool:
-    return any(
-        relative.startswith(entry) if entry.endswith("/") else relative == entry
-        for entry in exclusions
-    )
-
-
 def _materialize_public_snapshot(destination: Path) -> None:
-    """Reproduce public_export.sh: whole tree, minus manifest entries, then redaction."""
+    """The published tree is the tracked tree itself since public-first development (2026-10-07)."""
     tracked = subprocess.run(
         ("git", "ls-files"), cwd=_REPO, capture_output=True, text=True, check=True
     ).stdout.splitlines()
     if not tracked:
-        # public_export.sh runs `pytest tests/unit` inside the EXPORTED tree, whose index
-        # it has just emptied.  Passing there would be vacuous, and asserting there would
-        # block the release, so say plainly that this environment cannot answer.
+        # Without an index (an unpacked tarball) there is nothing to judge; passing there
+        # would be vacuous, so say plainly that this environment cannot answer.
         pytest.skip("not a source checkout: nothing to snapshot")
-    exclusions = _exclusions()
     for relative in tracked:
-        if not relative or _is_excluded(relative, exclusions):
+        if not relative:
             continue
         source = _REPO / relative
         if not source.is_file():
@@ -77,7 +61,6 @@ def _materialize_public_snapshot(destination: Path) -> None:
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-    redact_vendor_tree(destination)
 
 
 def test_the_public_snapshot_carries_no_installation_topology(tmp_path: Path) -> None:

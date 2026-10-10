@@ -367,7 +367,7 @@ python3 -m automation.managed_skills.submission_cli \
 공급망 승인 표면에 올라간다. **이것은 검토 요청일 뿐이다.** 내 노드나 관리자 repo에는
 아무것도 자동 import되지 않으며, 관리자가 검토 후 자기 워크스테이션에서 기존
 `publish_cli`를 직접 실행해야만 발행 절차가 시작된다. 정확한 제출·검토 명령은
-[관리형 스킬 채널 가이드 §4](managed-skill-channel.md#4-운영-런북)가 단독 소유한다.
+관리형 스킬 채널 가이드 §4가 단독 소유한다.
 
 ---
 
@@ -524,6 +524,6 @@ sudo journalctl -u autophagy-managed-sync.service -n 50 --no-pager
 - 설치 절차(정본): [install.md](install.md)
 - 그룹 관리자 쪽 시점: [manual-group-admin.md](manual-group-admin.md)
 - 스킬 형식·시나리오 계약: [스킬-제작.md](스킬-제작.md)
-- 관리형 스킬 채널: [managed-skill-channel.md](managed-skill-channel.md)
-- Discord 토폴로지: [discord-server-architecture.md](discord-server-architecture.md)
+- 관리형 스킬 채널: managed-skill-channel.md
+- Discord 토폴로지: discord-server-architecture.md
 - 환경변수 정본: [`configs/env.example`](../../configs/env.example)

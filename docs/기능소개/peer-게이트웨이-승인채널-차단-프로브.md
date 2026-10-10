@@ -77,7 +77,7 @@ SH
 ## 관련
 
 - PR #409 · `automation/peer_gateway_probe.sh` · `automation/healthcheck.sh`
-- [승인 채널 차단 변경 기록](../patch/2026-09-05-peer-gateway-ignores-approvals.md) ·
-  [운영 규약](../guide/operations.md) · [소유자·관측 원장](../follow-ups-deferred.md#후속-과제-스윕-5-착지-후-남긴-것-2026-09-05--소유자관측)
+- 승인 채널 차단 변경 기록 ·
+  운영 규약 · [소유자·관측 원장](../follow-ups-deferred.md#후속-과제-스윕-5-착지-후-남긴-것-2026-09-05--소유자관측)
 - [자가 스킬 승인 역할 주장 advisory](에이전트-자가-스킬.md#승인-역할-주장-advisory-2026-09-05)(PR #408)는
   본문 저작을 알리는 별도 보완책이다. 둘 다 승인 주체나 소유자 ✅ 게이트를 대체하지 않는다.

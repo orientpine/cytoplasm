@@ -14,8 +14,8 @@ agent can write (``node.toml`` ``origin_url``; ``~/.hermes/**`` ``remote_url`` /
 stop a URL-shaped value from being consumed as an option in some other position,
 so callers do both: validate here, then pass ``--`` immediately before the URL.
 
-This mirrors the bash-side guard landed for ``automation/public_export.sh``
-(control characters, leading dash, ``ext::``); the allowlist is the additional
+This mirrors the bash-side guard of the former export script (removed
+2026-10-10): control characters, leading dash, ``ext::``; the allowlist is the additional
 positive check the Python call sites can afford because their URLs are
 configuration, not operator arguments.
 

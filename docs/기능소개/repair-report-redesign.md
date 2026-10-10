@@ -51,10 +51,10 @@ Discord 메시지 정확히 1건을 남겼다.
 
 ## 관련
 
-- 운영 절차·활성 cron·잔여 위험: [operations.md](../guide/operations.md) §5
-- detect 런타임 갱신: [repair detect 런타임 배포](../guide/repair-detect-runtime-배포.md)
-- 경로·권한 원장: [gate-ledger-inventory.md](../guide/gate-ledger-inventory.md),
-  [w0-4-account-setup.md](../guide/w0-4-account-setup.md)
+- 운영 절차·활성 cron·잔여 위험: operations.md §5
+- detect 런타임 갱신: repair detect 런타임 배포
+- 경로·권한 원장: gate-ledger-inventory.md,
+  w0-4-account-setup.md
 - 증적: `docs/qa/RRO-0/`, `docs/qa/RRO-1/`, `docs/qa/RRO-2/`
 - 승인 게이트: 이 경로 자체에는 소유자 승인이 없다. 승인은 **패치 적용** 단계에 있고
   ([수리 승인 내용 바인딩](수리-승인-내용-바인딩.md)), 보고는 그 결과의 사후 통지다.

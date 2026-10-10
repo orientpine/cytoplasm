@@ -65,4 +65,4 @@
 - 회귀: `tests/unit/test_calendar_digest_daily_thread.py`, `tests/unit/test_calendar_digest_recovery.py`,
   `tests/unit/test_calendar_confirm_message.py`, `tests/unit/test_calendar_confirm_token.py`
 - 검증 증거: `.omo/evidence/kfx/k4-digest-daily-thread/` (오프라인 다이제스트 → CLI → 게이트 → 워처 시나리오, Discord·캘린더·LLM·메일함은 가짜 경계)
-- 참고: [결과 통지 원채널 스레드](결과-통지-원채널-스레드-전스킬.md)
+- 참고: 결과 통지 원채널 스레드

@@ -1,7 +1,7 @@
 """Leak gate for a public development repository, run at commit, push and PR time.
 
-Until the cut-over to public-first development, nothing reached the public repository
-except through ``automation/public_export.sh``, which scanned a finished snapshot. Once
+Until the cut-over to public-first development (2026-10-07), nothing reached the public
+repository except through an export script that scanned a finished snapshot. Now that
 development happens in the public repository itself, every pushed branch, commit message
 and PR body is published the moment it is pushed, so the same checks have to run before
 the push, not at release time. This module is that check. It deliberately reuses the
@@ -18,10 +18,6 @@ Checks:
 
 Findings name the file, line and rule, never the matched value: CI logs of a public
 repository are public, and printing the value would publish what the gate refused.
-
-Modes are decided by the tree: a checkout that still tracks ``.omo`` and has the export
-manifest is the private source, where excluded paths are never published, so they are
-skipped and commit messages are not checked (private history is never exported).
 """
 
 from __future__ import annotations
@@ -41,7 +37,6 @@ if __package__ in (None, ""):
 from automation.public_export_redaction import _TOPOLOGY_RULES
 
 FORBIDDEN_PREFIXES: Final = (".omo", "docs/qa")
-MANIFEST: Final = "configs/public-export-manifest.txt"
 DENYLIST_ENV: Final = "PUBLIC_GATE_DENYLIST"
 OPS_REPO_KEY: Final = "autophagy.opsRepo"
 DENYLIST_RELPATH: Final = "leak/denylist.txt"
@@ -101,18 +96,6 @@ def resolve_denylist(repo: Path, explicit: str | None) -> tuple[str, ...] | None
         raise GateConfigError(f"denylist is configured but unreadable ({error.__class__.__name__})") from error
 
 
-def private_source_exclusions(repo: Path, rev: str) -> tuple[str, ...] | None:
-    tracks_omo = _git(repo, "ls-tree", "--name-only", rev, "--", ".omo", check=False).strip()
-    manifest = _git(repo, "show", f"{rev}:{MANIFEST}", check=False)
-    if not tracks_omo or not manifest:
-        return None
-    return tuple(line for line in manifest.splitlines() if line and not line.startswith("#"))
-
-
-def excluded(path: str, exclusions: tuple[str, ...]) -> bool:
-    return any(path == entry or (entry.endswith("/") and path.startswith(entry)) for entry in exclusions)
-
-
 def scan_text(where: str, text: str, denylist: tuple[str, ...] | None, *, topology: bool = True) -> list[Finding]:
     findings: list[Finding] = []
     for number, line in enumerate(text.splitlines(), 1):
@@ -156,16 +139,10 @@ def check_changes(
     *,
     paths: list[str],
     diff: str,
-    exclusions: tuple[str, ...] | None,
     denylist: tuple[str, ...] | None,
 ) -> list[Finding]:
-    findings: list[Finding] = []
-    published = [p for p in paths if exclusions is None or not excluded(p, exclusions)]
-    if exclusions is None:
-        findings.extend(Finding(p, "forbidden path (session evidence / QA stays in the ops repo)") for p in paths if forbidden(p))
+    findings = [Finding(p, "forbidden path (session evidence / QA stays in the ops repo)") for p in paths if forbidden(p)]
     for path, lines in added_lines(diff).items():
-        if path not in published:
-            continue
         for number, line in lines:
             findings.extend(
                 Finding(f"{path}:{number}", finding.rule)
@@ -177,13 +154,10 @@ def check_changes(
 def cmd_staged(repo: Path, denylist: tuple[str, ...] | None) -> list[Finding]:
     paths = [p for p in _git(repo, "diff", "--cached", "--name-only", "-z").split("\0") if p]
     diff = _git(repo, "diff", "--cached", "-U0", "--no-color", "--no-ext-diff")
-    exclusions = private_source_exclusions(repo, "HEAD") if _git(repo, "rev-parse", "--verify", "-q", "HEAD", check=False).strip() else None
-    return check_changes(repo, paths=paths, diff=diff, exclusions=exclusions, denylist=denylist)
+    return check_changes(repo, paths=paths, diff=diff, denylist=denylist)
 
 
 def cmd_message(text: str, denylist: tuple[str, ...] | None, repo: Path) -> list[Finding]:
-    if _git(repo, "rev-parse", "--verify", "-q", "HEAD", check=False).strip() and private_source_exclusions(repo, "HEAD") is not None:
-        return []
     body = "\n".join(line for line in text.splitlines() if not line.startswith("#"))
     return scan_text("commit message", body, denylist)
 
@@ -192,15 +166,13 @@ def cmd_range(repo: Path, base: str, head: str, denylist: tuple[str, ...] | None
     merge_base = _git(repo, "merge-base", base, head).strip()
     paths = [p for p in _git(repo, "diff", "--name-only", "-z", merge_base, head).split("\0") if p]
     diff = _git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", merge_base, head)
-    exclusions = private_source_exclusions(repo, head)
-    findings = check_changes(repo, paths=paths, diff=diff, exclusions=exclusions, denylist=denylist)
-    if exclusions is None:
-        log = _git(repo, "log", "--format=%H%x00%B%x01", f"{merge_base}..{head}")
-        for record in filter(None, (item.strip("\n") for item in log.split("\x01"))):
-            sha, _, body = record.partition("\0")
-            findings.extend(scan_text(f"commit {sha[:12]} message", body, denylist))
-        if extra_text:
-            findings.extend(scan_text("PR title/body", extra_text, denylist))
+    findings = check_changes(repo, paths=paths, diff=diff, denylist=denylist)
+    log = _git(repo, "log", "--format=%H%x00%B%x01", f"{merge_base}..{head}")
+    for record in filter(None, (item.strip("\n") for item in log.split("\x01"))):
+        sha, _, body = record.partition("\0")
+        findings.extend(scan_text(f"commit {sha[:12]} message", body, denylist))
+    if extra_text:
+        findings.extend(scan_text("PR title/body", extra_text, denylist))
     return findings
 
 

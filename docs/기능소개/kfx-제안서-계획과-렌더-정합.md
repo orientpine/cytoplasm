@@ -36,4 +36,4 @@ HWPX ZIP/XML과 저장소 미리보기 검증은 실제 한/글 조판 확인을
 - PR #510·#503·#519·#522·#517
 - `skills/proposal/engine/contract/work_packages.py`, `contracts/models.py`, `pipeline/schedule.py`
 - `skills/proposal/layout_profile.py`, `skills/proposal/scripts/proposal_refine.py`
-- [제안서 제출본 완성](제안서-제출본-완성.md)
+- 제안서 제출본 완성
