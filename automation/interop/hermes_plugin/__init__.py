@@ -19,7 +19,7 @@ from automation.interop.delegation import InteropEnvelope, format_envelope, pars
 from automation.interop.external_effect_gate import ApprovalContext, DenylistConfigurationError, ToolCall, evaluate_tool_call, load_denylist
 from automation.interop.injection_adapter import InboundEvent, accept_test_event
 from automation.interop.killswitch import PauseStore
-from automation.interop import chat_approval_guard, owner_proxy
+from automation.interop import chat_approval_guard, owner_proxy, owner_proxy_watch
 from automation.interop.loop_guard import LoopGuard
 from automation.interop.report import ReportStatus, TaskReport, format_report, parse_report
 
@@ -41,7 +41,7 @@ def register(ctx) -> None:
     ctx.register_hook("kanban_task_claimed", kanban_task_claimed)
     ctx.register_hook("kanban_task_completed", kanban_task_completed)
     ctx.register_hook("kanban_task_blocked", kanban_task_blocked)
-    LOGGER.warning("interop plugin registered")
+    LOGGER.warning("interop plugin registered proxy_watch_resumed=%d", owner_proxy_watch.resume())
 
 
 def pre_tool_call(tool_name, args, **kwargs):

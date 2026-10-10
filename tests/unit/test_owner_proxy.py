@@ -172,6 +172,63 @@ def test_a_corrupt_ledger_fails_closed(tmp_path: Path) -> None:
     assert verify(message(proxy_text(GUILD, ORIGIN_CHANNEL, origin)), reader_with(origin), tmp_path) == owner_proxy.Rejected("ledger_unavailable")
 
 
+OWNER_WEBHOOK = "100000000000000050"
+WEBHOOK_CONFIG = owner_proxy.ProxyConfig(
+    bot_id=PROXY_BOT, origin_channel_id=ORIGIN_CHANNEL, agent_chat_channel_id=AGENT_CHAT, owner_id=OWNER,
+    owner_webhook_ids=frozenset({OWNER_WEBHOOK}),
+)
+
+
+def webhook_reader(origin_id: str, *, channel: str = ORIGIN_CHANNEL, webhook: str = OWNER_WEBHOOK, author: str | None = None) -> FakeReader:
+    reader = reader_with(origin_id, channel=channel)
+    reader.messages[origin_id] = {
+        "id": origin_id, "channel_id": channel, "webhook_id": webhook,
+        "author": {"id": author or webhook, "bot": True, "username": "owner-voice"},
+    }
+    return reader
+
+
+def test_an_origin_posted_by_the_registered_owner_webhook_is_accepted(tmp_path: Path) -> None:
+    origin = snowflake(NOW - 60)
+    verdict = owner_proxy.verify(
+        message(proxy_text(GUILD, ORIGIN_CHANNEL, origin)), WEBHOOK_CONFIG, webhook_reader(origin),
+        owner_proxy.FileLedger(tmp_path / "ledger.json"), NOW,
+    )
+
+    assert isinstance(verdict, owner_proxy.Accepted)
+    assert verdict.via == "owner-webhook"
+
+
+@pytest.mark.parametrize(
+    ("config", "reader_kwargs", "origin_channel"),
+    [
+        (CONFIG, {}, ORIGIN_CHANNEL),  # 웹훅을 등록하지 않았다
+        (WEBHOOK_CONFIG, {"webhook": "100000000000000051"}, ORIGIN_CHANNEL),  # 다른 웹훅
+        (WEBHOOK_CONFIG, {"author": "100000000000000052"}, ORIGIN_CHANNEL),  # 작성자가 그 웹훅이 아니다
+        (WEBHOOK_CONFIG, {"channel": ORIGIN_THREAD}, ORIGIN_THREAD),  # 원문 채널 자체가 아니라 그 스레드
+    ],
+)
+def test_a_webhook_origin_is_trusted_only_for_the_registered_id_in_the_origin_channel(
+    tmp_path: Path, config: owner_proxy.ProxyConfig, reader_kwargs: dict[str, str], origin_channel: str
+) -> None:
+    origin = snowflake(NOW - 60)
+    verdict = owner_proxy.verify(
+        message(proxy_text(GUILD, origin_channel, origin)), config, webhook_reader(origin, **reader_kwargs),
+        owner_proxy.FileLedger(tmp_path / "ledger.json"), NOW,
+    )
+
+    assert verdict == owner_proxy.Rejected("origin_author")
+
+
+def test_malformed_webhook_ids_keep_the_webhook_path_closed() -> None:
+    base = {"agent_chat_channel_id": AGENT_CHAT, "owner_id": OWNER, "owner_proxy_bot_id": PROXY_BOT,
+            "owner_proxy_origin_channel_id": ORIGIN_CHANNEL}
+
+    assert owner_proxy.load_config({**base, "owner_proxy_origin_webhook_ids": [OWNER_WEBHOOK]}) == WEBHOOK_CONFIG
+    assert owner_proxy.load_config({**base, "owner_proxy_origin_webhook_ids": OWNER_WEBHOOK}) == CONFIG
+    assert owner_proxy.load_config({**base, "owner_proxy_origin_webhook_ids": [OWNER_WEBHOOK, "x"]}) == CONFIG
+
+
 def test_the_path_is_closed_until_both_private_keys_exist() -> None:
     base = {"agent_chat_channel_id": AGENT_CHAT, "owner_id": OWNER}
 
@@ -313,6 +370,27 @@ def test_an_accepted_proxy_request_still_needs_an_owner_approval_record(
     result = hermes_plugin.pre_tool_call("terminal", {"command": "gws calendar events insert --params '{}'"})
 
     assert result is not None and result["action"] == "block"
+
+
+def test_a_webhook_origin_request_is_marked_and_still_needs_an_owner_approval_record(
+    plugin: dict[str, FakeReader], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    origin = snowflake(time.time() - 60)
+    plugin["reader"] = webhook_reader(origin)
+    payload = hermes_plugin._config_payload() | {"owner_proxy_origin_webhook_ids": [OWNER_WEBHOOK]}
+    monkeypatch.setattr(hermes_plugin, "_config_payload", lambda: dict(payload))
+
+    result = _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), PROXY_BOT)
+
+    assert result is not None and result["action"] == "rewrite"
+    assert "(작성: owner-webhook)" in result["text"]
+    monkeypatch.setattr(hermes_plugin, "EXTERNAL_EFFECT_DENYLIST", Path(__file__).resolve().parents[2] / "configs/external-effect-tools.yaml")
+    monkeypatch.setattr(hermes_plugin, "EXTERNAL_EFFECT_APPROVAL_LOG", tmp_path / "approvals.jsonl")
+    monkeypatch.setattr(hermes_plugin, "_config", lambda: {"owner_id": OWNER})
+
+    blocked = hermes_plugin.pre_tool_call("terminal", {"command": "gws calendar events insert --params '{}'"})
+
+    assert blocked is not None and blocked["action"] == "block"
 
 
 def test_a_proxy_bot_reaction_is_never_an_owner_decision() -> None:
