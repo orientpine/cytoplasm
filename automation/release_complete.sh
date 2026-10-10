@@ -31,6 +31,26 @@ else
 fi
 export GIT_TERMINAL_PROMPT=0
 
+# 워크트리는 SOURCE_REPO 의 것이어야 한다. 저장소를 옮기면(2026-10-07 공개 우선 전환) 유닛은 새 체크아웃을
+# 가리키지만 이 워크트리는 옛 저장소에 묶인 채 남아, 매 틱 옛 origin/main 만 보고 옛 사본으로 SELF-UPDATE 했다 —
+# v1.15.1~v1.20.0 적용 통지 7건이 그렇게 빠졌다. 출처가 다르면 지우지 않고 옆으로 치운 뒤 다시 만든다.
+if [[ -d "$WORKTREE" ]]; then
+  want="$(git -C "$SOURCE_REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || want=""
+  have="$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || have=""
+  if [[ -z "$want" ]]; then
+    # 출처를 읽지 못하면 판정하지 않고 예전 동작(있는 워크트리를 fetch)으로 간다 — 치울 근거가 없다.
+    log "SOURCE-UNKNOWN: $SOURCE_REPO — worktree origin check skipped"
+  elif [[ "$have" != "$want" ]]; then
+    stale="$WORKTREE.stale-$(date -u +%Y%m%dT%H%M%SZ)"
+    log "WORKTREE-SOURCE-MISMATCH: $WORKTREE belongs to ${have:-unknown}, not $want — moved to $stale, recreating"
+    if ! mv -- "$WORKTREE" "$stale"; then
+      log "WORKTREE-MOVE-FAIL: $WORKTREE"
+      exit 1
+    fi
+    [[ -z "$have" ]] || git --git-dir="$have" worktree prune 2>/dev/null || true
+  fi
+fi
+
 if [[ ! -d "$WORKTREE" ]]; then
   if ! git -C "$SOURCE_REPO" fetch --quiet origin main --tags; then
     log "FETCH-FAIL"

@@ -155,6 +155,34 @@ def test_pending_creates_a_detached_main_worktree_without_releasing(
     _assert_decision_only(tmp_path)
 
 
+def test_a_worktree_left_from_another_repository_is_moved_aside_and_recreated(
+    tmp_path: Path,
+) -> None:
+    # 2026-10-07 저장소를 옮긴 뒤 유닛은 새 체크아웃을 가리켰지만 워크트리는 옛 저장소에 묶여 있었다.
+    (tmp_path / "old").mkdir()
+    (tmp_path / "new").mkdir()
+    _old_origin, old_source = _origin_and_source(tmp_path / "old")
+    _new_origin, new_source = _origin_and_source(tmp_path / "new")
+    state = tmp_path / "state"
+    state.mkdir()
+    _ = _git(old_source, "worktree", "add", "--detach", str(state / "worktree"), "origin/main")
+
+    result = _run(tmp_path, new_source, state, decision_rc=7)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "WORKTREE-SOURCE-MISMATCH" in result.stdout
+    common = ("rev-parse", "--path-format=absolute", "--git-common-dir")
+    assert _git(state / "worktree", *common) == _git(new_source, *common)
+    assert _git(state / "worktree", "rev-parse", "HEAD") == _git(new_source, "rev-parse", "origin/main")
+    assert len(list(state.glob("worktree.stale-*"))) == 1
+
+    again = _run(tmp_path, new_source, state, decision_rc=7)
+
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "WORKTREE-SOURCE-MISMATCH" not in again.stdout
+    assert len(list(state.glob("worktree.stale-*"))) == 1
+
+
 def test_approved_runs_release_once_and_records_completion(tmp_path: Path) -> None:
     _origin, source = _origin_and_source(tmp_path)
     state = tmp_path / "state"
