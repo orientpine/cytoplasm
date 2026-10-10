@@ -163,6 +163,22 @@ def main() -> int:
         }
 
         # --- case 3: GO branch — signed owner approval -> gate -> 1 gws send ---
+        # Offline signed approvals require the same persisted binding as production
+        # (a13fcbcb: the injected confirm reads the channel stored on the record and
+        # never resolves one). `--no-post` leaves none, so stamp it as mail's actor does.
+        bind = subprocess.run(  # noqa: S603
+            [
+                sys.executable, "-c",
+                "import sys; sys.path.insert(0, sys.argv[1]); import budget_gate; "
+                "d = budget_gate.load_draft(sys.argv[3]); "
+                "budget_gate.write_json(budget_gate.gate_dir() / 'drafts' / f\"{d['id']}.json\", "
+                "{**d, 'kind': 'budget-mail', 'surface': 'skill-approvals', "
+                "'channel_id': sys.argv[2], 'policy_version': 1})",
+                str(root / "skills" / "budget" / "scripts"), CHANNEL, draft_id,
+            ],
+            env=env_b, capture_output=True, text=True, check=False,
+        )
+        assert bind.returncode == 0, bind.stderr
         _cli(root, env_b, "sign", "--draft", draft_id, "--out", str(work / "ok.json"), "--user-id", OWNER, e2e=e2e)
         confirm = _cli(root, env_b, "confirm", "--draft", draft_id, "--injection-file", str(work / "ok.json"), e2e=e2e)
         records = _records(approval_log)
