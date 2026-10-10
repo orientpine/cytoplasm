@@ -112,7 +112,15 @@ def main() -> int:
         large = _cli(root, env, "generate", "--template", "fx/대형-용역요청서-샘플.hwpx",
                      "--fields-json", '{"품목":"대형 테스트","금액":"999,000원","업체":"합성벤더"}',
                      "--out", "out/large.hwpx")
-        review_env = {**env, "PROCURE_DISCORD_STUB": str(work / "stub"), "PROCURE_GWS_BIN": str(gws)}
+        # Since 3eb56da7 the Drive-link branch uploads through the shared facade
+        # (automation.drive_outputs), which is opt-in and reads its own gws binary.
+        review_env = {
+            **env,
+            "PROCURE_DISCORD_STUB": str(work / "stub"),
+            "DRIVE_PUBLISH_ENABLED": "1",
+            "DRIVE_GWS_BIN": str(gws),
+            "PYTHONPATH": str(root),
+        }
         small_review = _cli(root, review_env, "review", "--file", "out/draft.hwpx", "--note", "합성")
         large_review = _cli(root, review_env, "review", "--file", "out/large.hwpx", "--note", "합성 대형")
         gws_text = (work / "gws-calls.log").read_text(encoding="utf-8") if (work / "gws-calls.log").exists() else ""
