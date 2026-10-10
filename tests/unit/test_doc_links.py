@@ -15,15 +15,10 @@ _LINK: Final = re.compile(r"(?<!!)\[(?:[^\]]*)\]\(([^)]+)\)")
 _HEADING: Final = re.compile(r"^ {0,3}#{1,6}\s+(.+?)\s*$")
 _EXTERNAL: Final = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|/|~)", re.IGNORECASE)
 _CLOSING_HASHES: Final = re.compile(r"\s+#+\s*$")
-#: Paths the public export drops. The manifest itself ships, so the exported tree can
-#: name what it lacks on purpose.
-_EXPORT_MANIFEST: Final = _REPO_ROOT / "configs" / "public-export-manifest.txt"
-#: `docs/qa/` is tracked in the development origin and manifest-excluded, so its absence
-#: identifies the exported tree — the only tree where a governed link may point at a
-#: file that was dropped on purpose (2026-09-21: the v1.9.6 export gate failed on 46
-#: such links while every target existed in private).
-#: A public development checkout links `docs/qa` in from the private ops repository
-#: (automation/ops_link.sh); that symlink is not a tracked tree, so it still counts as exported.
+#: Paths kept in the private ops repository, never tracked here (`public_gate.FORBIDDEN_PREFIXES`).
+#: Governed docs may cite QA evidence there, so a link into them is not a broken link
+#: when the directory is absent (CI) or linked in by automation/ops_link.sh.
+_OPS_ONLY: Final = (".omo/", "docs/qa/")
 _QA_DIR: Final = _REPO_ROOT / "docs" / "qa"
 _EXPORTED_TREE: Final = _QA_DIR.is_symlink() or not _QA_DIR.is_dir()
 
@@ -132,17 +127,6 @@ def governed_markdown_files(root: Path) -> tuple[Path, ...]:
         *sorted((root / "docs" / "troubleshooting").glob("**/*.md")),
     )
     return tuple(path for path in candidates if path.is_file())
-
-
-def export_excluded_entries(manifest: Path) -> tuple[str, ...]:
-    """Repository-relative entries the public export removes (directories end with `/`)."""
-    if not manifest.is_file():
-        return ()
-    return tuple(
-        line.strip()
-        for line in manifest.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    )
 
 
 def is_export_excluded(relative: str, entries: Sequence[str]) -> bool:
@@ -316,12 +300,11 @@ def test_governed_docs_have_no_broken_relative_links() -> None:
     files = governed_markdown_files(_REPO_ROOT)
     assert files, "governed markdown glob matched nothing"
 
-    # When: the link guard scans those files — in the exported tree, links to files the
-    # manifest dropped on purpose are not broken links.
+    # When: the link guard scans those files — links into the ops-only paths are not
+    # broken links when this checkout does not track them.
     issues = collect_broken_links(files)
     if _EXPORTED_TREE:
-        entries = export_excluded_entries(_EXPORT_MANIFEST)
-        issues = tuple(issue for issue in issues if not dropped_by_export(issue, _REPO_ROOT, entries))
+        issues = tuple(issue for issue in issues if not dropped_by_export(issue, _REPO_ROOT, _OPS_ONLY))
 
     # Then: every relative markdown link and heading fragment resolves.
     assert not issues, "\n".join(

@@ -55,7 +55,7 @@ RAG 항목은 원격 감시 선언이다.
 
 - 구현: `automation/install/components.py`, `component_assets.py`, `profiles.py`,
   `plan.py`, `state.py`, `apply.py`.
-- 설정·기존 수동 배포: [보고 허브 운영 가이드](../guide/report-hub.md).
+- 설정·기존 수동 배포: 보고 허브 운영 가이드.
 - 회귀: `tests/unit/test_install_report_hub_component.py`.
 - 실측: [11-report-hub-component-container.txt](../qa/INSTALL-TUI/11-report-hub-component-container.txt).
   특권 systemd 컨테이너의 실제 ops 매니저에서 두 유닛 `enabled`, 소유권·모드·링크,

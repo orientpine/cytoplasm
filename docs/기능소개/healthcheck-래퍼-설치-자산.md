@@ -68,4 +68,4 @@ SSH_ORIGINAL_COMMAND='echo not-allowlisted' bash "$HOME/.local/libexec/autophagy
 - 생성기: `automation/healthcheck_probe_wrapper.sh`, `automation/provision-healthcheck-probe.sh`
 - 회귀 테스트: `tests/unit/test_install_healthcheck_probe_asset.py`
 - systemd 컨테이너 실측: [설치 자산 증거](../qa/INSTALL-TUI/10-wrapper-asset-container.txt)
-- 운영 절차: [운영 가이드](../guide/operations.md)
+- 운영 절차: 운영 가이드

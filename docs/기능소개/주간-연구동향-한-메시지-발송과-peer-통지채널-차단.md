@@ -53,4 +53,4 @@ Discord…」 nag 와 논평(「평문 메시지 수신 확인. 🟢」)을 남�
   `tests/unit/test_healthcheck_peer_gateway_probe.py`
 - [peer 게이트웨이 승인채널 차단 프로브](peer-게이트웨이-승인채널-차단-프로브.md) ·
   [오너 통지 단일 채널](오너-통지-단일-채널.md) ·
-  [2026-09-05 patch](../patch/2026-09-05-peer-gateway-ignores-approvals.md)
+  2026-09-05 patch
