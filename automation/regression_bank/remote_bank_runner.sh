@@ -23,6 +23,23 @@ record_state() {
 
 record_state 1
 
+# 매 회 하네스를 주 노드가 지금 돌리는 릴리스 트리로 맞춘다. 하네스는 deploy_lab_node.sh 를 손으로 돌릴 때만
+# 갱신됐고, 2026-07-20 사본이 그대로 남아 스킬 루트 반전(2026-08-15) 뒤 없어진 경로를 부르며 두 달간
+# 매주 실패했다. 릴리스 트리는 서명 검증을 거친 그 코드다. 푸시 전 작업 트리를 시험하려면
+# REGRESSION_BANK_REFRESH=0 으로 끄고 deploy_lab_node.sh 로 옮긴다.
+if [[ "${REGRESSION_BANK_REFRESH:-1}" != 0 ]]; then
+  source_tree="${REGRESSION_BANK_SOURCE:-$STATE_HOST:$NODE_RELEASE_CURRENT/}"
+  if ! rsync -a --delete \
+      --exclude='.git/' --exclude='configs/rag/' --exclude='**/.venv/' \
+      --exclude='**/node_modules/' --exclude='**/__pycache__/' --exclude='*.pyc' \
+      --exclude='logs/' --exclude='.omo/' \
+      "$source_tree" "$HARNESS_ROOT/"; then
+    printf '%s\n' "BANK-HARNESS-REFRESH-FAIL: could not sync $source_tree into $HARNESS_ROOT" >&2
+    exit 1
+  fi
+  printf '%s\n' "BANK-HARNESS-REFRESHED from $source_tree"
+fi
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_file="$LOG_DIR/bank-$timestamp.log"
 set +e

@@ -5,9 +5,11 @@
 # deadlock (peer gateway stopped → short-timeout escalation DM, 0 writes).
 # Production deadlock timeout is 600 s (10 min); the E2E injects 15/60 s.
 set -euo pipefail
-readonly HOST="<primary-node>"
 readonly PEER_READY_TIMEOUT_S=90
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# 공개 트리에는 설치별 호스트가 없다 — 노드 설정의 deploy_ssh_host 를 쓴다.
+eval "$(python3 "$repo/automation/node_config_sh.py" --print-env)"
+readonly HOST="$NODE_DEPLOY_SSH_HOST"
 
 agent() { ssh "$HOST" "sudo -n -u agent -H bash -lc $(printf '%q' "$1")"; }
 peer() { ssh "$HOST" "sudo -n -u peer -H bash -lc $(printf '%q' "$1")"; }
