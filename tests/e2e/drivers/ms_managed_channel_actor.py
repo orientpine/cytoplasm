@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Final, TypeAlias
 
 from automation.interop.injection_adapter import InboundEvent, sign_event
-from automation.managed_sync.cli import load_config
+from automation.group_roster.parser import ROSTER_ENV
+from automation.managed_sync.cli import SyncConfig, load_config
 from automation.managed_sync.state import SkillState, load_state
 from automation.managed_sync.verify import ManagedVerifyError, verify_release
 from automation.skill_review import skill_digest
@@ -319,8 +320,26 @@ def state_sequence(world: World) -> int:
     return load_state(world.state).skill(SKILL).highest_sequence
 
 
+def world_config(world: World) -> SyncConfig:
+    """Load the sync config in this process against the world's roster, never the runner's.
+
+    The subprocesses get HOME=world.home, but the in-process verify does not, and since the
+    publisher principal comes from the group roster (b4cade58, W-F3-A) load_config would read
+    the runner account's ~/.hermes/roster.yaml.
+    """
+    previous = os.environ.get(ROSTER_ENV)
+    os.environ[ROSTER_ENV] = str(world.home / ".hermes" / "roster.yaml")
+    try:
+        return load_config(world.config)
+    finally:
+        if previous is None:
+            _ = os.environ.pop(ROSTER_ENV, None)
+        else:
+            os.environ[ROSTER_ENV] = previous
+
+
 def verify_prefix(world: World, tag: str, *, allow_rollback: bool = False) -> str:
-    config = load_config(world.config)
+    config = world_config(world)
     try:
         _ = verify_release(config.mirror_dir, tag, config, load_state(config.state_path).skill(SKILL), allow_rollback=allow_rollback)
     except ManagedVerifyError as error:
@@ -402,7 +421,7 @@ def case_revocation(root: Path) -> dict[str, JsonValue]:
     (world.live / SKILL).symlink_to(world.quarantine / SKILL / v3.digest, target_is_directory=True)
     _ = world.publish(Release("v4", "publisher", (v3.digest,)))
     synced = world.sync()
-    config = load_config(world.config)
+    config = world_config(world)
     try:
         _ = verify_release(config.mirror_dir, f"{SKILL}/v3", config, SkillState(4, v2.digest, None, (v3.digest,)), allow_rollback=True)
     except ManagedVerifyError as error:
