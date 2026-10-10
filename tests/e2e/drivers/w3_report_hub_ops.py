@@ -29,15 +29,34 @@ from pathlib import Path
 
 DB = Path("/srv/autophagy-private/report-hub/reports.db")
 CREDENTIALS = Path.home() / "report-hub" / "dashboard-cha-credentials.txt"
+HUB_ENV = Path.home() / "report-hub" / "hub.env"
+
+
+def _hub_env() -> dict[str, str]:
+    try:
+        lines = HUB_ENV.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    pairs = (line.split("=", 1) for line in lines if "=" in line and not line.lstrip().startswith("#"))
+    return {key.strip(): value.strip().strip('"') for key, value in pairs}
+
+
 def dashboard_url() -> str:
     """The dashboard binds to this installation's tailnet interface, which is not
-    repository data. Fail closed rather than carry one installation's address."""
+    repository data. An explicit REPORT_HUB_DASHBOARD_URL wins; otherwise read the
+    address the hub itself binds from this ops account's hub.env. Fail closed rather
+    than carry one installation's address."""
     url = os.environ.get("REPORT_HUB_DASHBOARD_URL", "").strip()
-    if not url:
-        raise SystemExit(
-            "REPORT_HUB_DASHBOARD_URL is required: set it to this node's report-hub URL"
-        )
-    return url
+    if url:
+        return url
+    hub = _hub_env()
+    host, port = hub.get("REPORT_HUB_BIND_HOST", ""), hub.get("REPORT_HUB_BIND_PORT", "")
+    if host and port:
+        return f"http://{host}:{port}/"
+    raise SystemExit(
+        "REPORT_HUB_DASHBOARD_URL is required: set it to this node's report-hub URL "
+        f"(no REPORT_HUB_BIND_HOST/PORT in {HUB_ENV})"
+    )
 TASK_PREFIX = "W3-6-bank-"
 
 
