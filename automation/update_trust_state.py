@@ -8,8 +8,8 @@ every signature, principal, and TAG-RACE check passes, because the payload IS
 authentic. Only its freshness is wrong, so the reconciler "upgrades" prod onto
 a known-vulnerable release (classic TUF rollback, CWE-345).
 
-The anchor is the release tag's semantic version, which ``public_export.sh``
-already enforces at tag-creation time, persisted outside every git checkout.
+The anchor is the release tag's semantic version, which ``automation/release.sh``
+already fixes at tag-creation time, persisted outside every git checkout.
 That is deliberately the third replication of one rule this project already
 relies on — ``managed_sync.state.record_verified`` for managed-skill releases
 and ``group_roster.fetch._refuse_rollback`` for the roster — rather than a
@@ -56,7 +56,7 @@ _FLOOR_KEYS: Final = frozenset({"schema_version", "tag", "commit_sha"})
 _MAX_TAG_LENGTH: Final = 128
 _AUTHORITATIVE_FLOOR: Final = Path("/var/lib/autophagy/update-trust/release-floor.json")
 
-#: Exactly the shape ``automation/public_export.sh:54`` accepts for ``--version``.
+#: Exactly the ``vMAJOR.MINOR.PATCH`` shape the release procedure (``automation/release.sh``) cuts.
 #: Anything else never came from the release procedure and is refused rather
 #: than ordered by a rule this project has not written down anywhere.
 _VERSION_TAG: Final = re.compile(

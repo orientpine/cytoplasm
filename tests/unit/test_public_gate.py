@@ -116,20 +116,3 @@ def test_range_checks_commit_messages_and_pr_text(
     (repo / "code.py").write_text("VALUE = 2\n", encoding="utf-8")
     leaky = _commit(repo, f"fix: thanks {_SECRET_NAME}")
     assert _run(repo, denylist, "range", base, leaky) == public_gate.EXIT_FINDINGS
-
-
-def test_private_source_skips_excluded_paths_and_messages(repo: Path, denylist: Path, tmp_path: Path) -> None:
-    (repo / ".omo").mkdir()
-    (repo / ".omo" / "plan.md").write_text("plan\n", encoding="utf-8")
-    (repo / "configs").mkdir()
-    (repo / "configs" / "public-export-manifest.txt").write_text(".omo/\ndocs/ops/\n", encoding="utf-8")
-    base = _commit(repo, "private source")
-
-    (repo / "docs" / "ops").mkdir(parents=True)
-    (repo / "docs" / "ops" / "runbook.md").write_text(f"call {_SECRET_NAME}\n", encoding="utf-8")
-    excluded = _commit(repo, f"docs: runbook from {_SECRET_NAME}")
-    assert _run(repo, denylist, "range", base, excluded) == 0
-
-    (repo / "code.py").write_text(f"OWNER = '{_SECRET_NAME}'\n", encoding="utf-8")
-    published = _commit(repo, "feat: published code")
-    assert _run(repo, denylist, "range", excluded, published) == public_gate.EXIT_FINDINGS
