@@ -17,6 +17,9 @@ from coordination_card import OwnerCardDraft
 from coordination_finalize import finalize as finalize, _finalize_reaction as _finalize_reaction
 
 E2E_DM_PREFIX = "[E2E] "
+#: E2E runs that set this file get their owner notices appended there instead of DMed,
+#: so the weekly bank does not page the owner with test results. Ignored outside E2E.
+E2E_NOTICE_LOG_ENV = "COORDINATION_E2E_NOTICE_LOG"
 #: Terminal states a result notice may close its request thread with (origin_notice 소유).
 OUTCOME_DONE = "done"
 OUTCOME_CANCELLED = "cancelled"
@@ -244,6 +247,13 @@ def send_owner_dm(owner_id: str, content: str) -> tuple[str, str]:
     """Post a DM (E2E runs are prefixed) and return its channel/message identity."""
     if os.environ.get("E2E_TEST_MODE") == "1":
         content = E2E_DM_PREFIX + content
+        notice_log = os.environ.get(E2E_NOTICE_LOG_ENV, "").strip()
+        if notice_log:
+            path = Path(notice_log)
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+                _ = handle.write(content.replace("\n", " ") + "\n")
+            return "e2e-notice-log", str(path)
     channel_id = io.owner_approval_channel(owner_id)
     return channel_id, io.post_message(channel_id, content)
 

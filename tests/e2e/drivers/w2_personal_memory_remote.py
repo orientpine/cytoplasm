@@ -25,12 +25,19 @@ from os import environ
 from pathlib import Path
 
 HOME = Path.home()
-SKILLS = HOME / ".hermes" / "skills"
+# Governed skills live only at the read-only live mount since the 2026-08-15 skill-root
+# inversion; ~/.hermes/skills is the agent's own self-skill root and holds no deployed copy.
+# Same override name as automation.skill_mount.LIVE_ROOT_ENV (this file runs standalone).
+SKILLS = Path(environ.get("AUTOPHAGY_SKILL_LIVE_ROOT", "").strip() or "/srv/autophagy-skills/live")
 MEETING_CLI = str(SKILLS / "meeting" / "scripts" / "meeting_cli.py")
 WIKI_CLI = str(SKILLS / "wiki" / "scripts" / "wiki_cli.py")
 RECALL_CLI = str(SKILLS / "recall" / "scripts" / "recall_cli.py")
 MAKE_PDF = str(SKILLS / "meeting" / "scripts" / "make_fixture_pdf.py")
 RAG_RUNTIME = str(HOME / ".hermes" / "rag_ingest_runtime")
+# The runtime package imports `automation.*` (group_roster); the production watcher puts the
+# release tree right behind the runtime on sys.path (automation/rag_ingest/cron/rag_ingest_watch.py).
+RELEASE_ROOT = "/srv/autophagy-agent-current"
+WIKI_APPROVAL_CHANNEL = "999000000000000031"
 PROD_RAG_CONFIG = HOME / ".hermes" / "rag-ingest" / "config.json"
 MEETING_TOKEN = "w2e6-fixture-meeting-marker"
 WIKI_TOKEN = "w2e6-fixture-wiki-marker"
@@ -111,7 +118,7 @@ def rag_run(config: Path, verbose: bool) -> tuple[int, str]:
             "--sources", "wiki,meetings"]
     if verbose:
         argv.append("--verbose")
-    return run(argv, {"PYTHONPATH": RAG_RUNTIME})
+    return run(argv, {"PYTHONPATH": f"{RAG_RUNTIME}:{RELEASE_ROOT}"})
 
 
 def recall(config: Path, work: Path, query: str) -> tuple[int, dict]:
@@ -147,7 +154,8 @@ def case_happy_path(work: Path, fixtures: Path) -> dict:
     obs["meeting_exit"] = code
     summary = parse_json(out) if code == 0 else {}
     obs["meeting_provider"] = summary.get("provider")
-    obs["glm_called"] = summary.get("glm_called")
+    # cbe00c40 (2026-09-04) renamed the flag when meeting moved to the shared Codex client.
+    obs["codex_called"] = summary.get("codex_called")
     obs["team_posted"] = summary.get("team_posted")
     obs["cards_created"] = summary.get("cards")
     obs["milestones_added"] = summary.get("milestones_added")
@@ -171,9 +179,17 @@ def case_happy_path(work: Path, fixtures: Path) -> dict:
          "--tags", "meeting,e2e", "--body", body], wiki_env)
     draft_id = next((word.split("=", 1)[1] for word in out.split()
                      if word.startswith("id=")), "")
+    # An injected confirm consumes the binding persisted on the draft and never resolves
+    # one (a13fcbcb); stamp it the way skills/wiki/scripts/scenario.sh does.
+    run([sys.executable, "-c",
+         "import sys; sys.path.insert(0, sys.argv[1]); import wiki_gate; "
+         "d = wiki_gate.load_draft(sys.argv[2]); "
+         "wiki_gate._write_json(wiki_gate._draft_path(d['id']), {**d, 'kind': 'wiki', "
+         "'surface': 'owner-dm', 'channel_id': sys.argv[3], 'policy_version': 1})",
+         str(SKILLS / "wiki" / "scripts"), draft_id, WIKI_APPROVAL_CHANNEL], wiki_env)
     injection = work / "injection.json"
     run([sys.executable, WIKI_CLI, "sign", "--draft", draft_id, "--out",
-         str(injection)], wiki_env)
+         str(injection), "--channel-id", WIKI_APPROVAL_CHANNEL], wiki_env)
     code, out = run([sys.executable, WIKI_CLI, "confirm", "--draft", draft_id,
                      "--injection-file", str(injection)], wiki_env)
     obs["wiki_saved"] = code == 0 and "SAVED" in out

@@ -33,7 +33,7 @@ cases:
   - id: happy_path
     kind: happy
     steps:
-      - "meeting ingest: fixture md + recorded LLM extraction (provider=recorded, glm untouched)"
+      - "meeting ingest: fixture md + recorded LLM extraction (provider=recorded, no model call)"
       - "kanban: 2 my-todo cards really created on the agent board (unassigned => dispatcher-safe), visible via show --json"
       - "milestones: 2 entries merged into isolated milestones.yaml"
       - "wiki: draft -> HMAC signed injection (W1-6 adapter) -> confirm -> note saved in isolated WIKI_ROOT"
@@ -43,7 +43,7 @@ cases:
     expect:
       meeting_exit: 0
       meeting_provider: "recorded"
-      glm_called: false
+      codex_called: false
       team_posted: false
       cards_created: 2
       card_ids_count: 2

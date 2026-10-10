@@ -47,7 +47,7 @@ cases:
     steps:
       - "small file review takes the attach branch; 26MiB file takes the Drive-link branch (stub transports)"
       - "stub call log shows the drive upload but ZERO gmail +send and ZERO mailon invocations"
-      - "the Drive-link upload is parented into Autophagy Project Archive/procurement/<YYYY-MM> (never the Drive root)"
+      - "the Drive-link upload goes through the shared drive_outputs facade into a created folder (autophagy/구매/...; never the Drive root)"
       - "no approvals.jsonl created and no external-effect record in the audit log (documents path sends nothing)"
     expect:
       large_hwpx_generated: true

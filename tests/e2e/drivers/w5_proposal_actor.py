@@ -40,6 +40,9 @@ def main() -> int:
         status_root = work / "status"
         env = {
             "AUTOPHAGY_DEMO_SECRET": "DUMMY-w5-proposal",
+            # The shared client (automation.codex_llm) locates the account from HOME and
+            # refuses without one; keep it inside the throwaway world like the other w5 actors.
+            "HOME": str(work),
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "PROPOSAL_WORKSPACE_ROOT": str(workspace),
             "PROPOSAL_STATUS_ROOT": str(status_root),
@@ -65,7 +68,9 @@ def main() -> int:
             "assembled_sections": sum(f"## {heading}" in assembly.read_text(encoding="utf-8") for heading in ("Need", "Approach", "Impact")) if assembly.exists() else 0,
             "contribution_folded": drafted[2].returncode == 0 and "CONTRIBUTION-FOLDED" in drafted[2].stdout,
             "review_calls": len((logs / "llm-calls.jsonl").read_text(encoding="utf-8").splitlines()) if (logs / "llm-calls.jsonl").exists() else 0,
-            "review_provider_nonglm": reviewed.returncode == 0 and "provider=openai-codex" in reviewed.stdout,
+            # f532bd7a (2026-09-29): the review asks the account's main model chain from
+            # ~/.hermes/config.yaml instead of naming a provider, so the line now says so.
+            "review_uses_account_model": reviewed.returncode == 0 and "model=hermes-config" in reviewed.stdout,
             "workspace_private": (workspace / "w5-plan").exists() and stat.S_IMODE((workspace / "w5-plan").stat().st_mode) == 0o700,
             "status_metadata_body_absent": marker not in status_text,
             "git_history_body_absent": not _git_has(root, marker),

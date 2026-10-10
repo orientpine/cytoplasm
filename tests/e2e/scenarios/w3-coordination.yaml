@@ -5,23 +5,28 @@
 # What the wrapped script proves per run (all unattended, deterministic peer
 # brain, signed-injection owner confirms under E2E_TEST_MODE scoped to the
 # runner processes only):
-#   happy    peer offers slots -> agent proposes -> peer accepts -> injected
-#            owner confirm -> gated gws insert (+2 audit records) -> terse
-#            #team notice + owner DM -> 120s cascade monitor (bot-skip prefix
-#            rule: notices=1 others=0) -> gated delete restores the calendar.
+#   no_auto_accept  peer offers slots -> agent proposes -> the live peer declines
+#            although nothing asked it to and our owner confirm is injected
+#            (v1 safety floor W-F2.5-C, 8fd3d330: no auto-accept) -> exactly 1
+#            renegotiation -> exit 5, termination notice (test log), ZERO calendar writes.
+#            Until 2026-08-14 this case was `happy` (peer accepts -> gated
+#            write); that path was removed on purpose and returns with the
+#            bilateral approval flow of W-F2.5-D (v2). Why the normal path
+#            cannot run here and what covers it meanwhile:
+#            docs/guide/interop-규약.md § "v1 안전 최소선".
 #   refusal  peer declines twice -> exactly 1 renegotiation -> exit 5,
-#            termination DM, ZERO calendar writes.
+#            termination notice (test log), ZERO calendar writes.
 #   deadlock peer gateway stopped -> injected 15s timeout -> exit 4,
-#            escalation DM ("인간 협의"), ZERO calendar writes; peer gateway
+#            escalation notice (test log) ("인간 협의"), ZERO calendar writes; peer gateway
 #            restarted afterwards.
 #   overall  both gateways active at the end; script exit 0 only if all pass.
 #
 # The wrapped script asserts each observable itself (approvals deltas, event
-# counts, DM presence, cascade monitor); this scenario re-exposes those
+# counts, logged owner notices); this scenario re-exposes those
 # self-asserted markers to the bank judge for failure isolation.
 version: 1
 id: w3-coordination
-title: "W3 agent-to-agent coordination E2E bank (happy + refusal + deadlock)"
+title: "W3 agent-to-agent coordination E2E bank (no auto-accept + refusal + deadlock)"
 driver: tests/e2e/drivers/w3_coordination.sh
 # The bank may rerun this full live Discord/SSH integration once after a
 # transient driver failure; unmarked offline scenarios always remain exact,
@@ -31,23 +36,21 @@ remote_host: <primary-node>
 remote_account: agent
 
 cases:
-  - id: happy
-    kind: happy
+  - id: no_auto_accept
+    kind: security
     steps:
-      - "live peer slot negotiation -> injected owner confirm -> gated calendar write (+2 approvals, +1 event)"
-      - "result DM found; 120s #team cascade monitor: exactly 1 terse notice, 0 other bot messages"
-      - "gated delete cleanup: event count restored to baseline"
+      - "live peer slot negotiation with the owner confirm injected and no decline simulation"
+      - "peer declines both proposals -> exactly 1 renegotiation -> exit 5 + termination notice (test log)"
+      - "zero calendar writes proven (approvals delta 0, event count unchanged)"
     expect:
-      happy_pass: true
-      cascade_notice_only: true
-      team_monitor_clean: true
+      no_auto_accept_pass_full: true
       error: null
 
   - id: deadlock
     kind: failure
     fault: "peer gateway stopped -> coordination times out (15s injected)"
     steps:
-      - "request against stopped peer -> exit 4 + escalation DM (인간 협의)"
+      - "request against stopped peer -> exit 4 + escalation notice (test log) (인간 협의)"
       - "zero calendar writes proven (approvals delta 0, event count unchanged)"
     expect:
       deadlock_pass_full: true
@@ -57,7 +60,7 @@ cases:
     kind: failure
     fault: "peer declines every candidate (simulate marker)"
     steps:
-      - "peer declines twice -> exactly 1 renegotiation -> exit 5 + termination DM"
+      - "peer declines twice -> exactly 1 renegotiation -> exit 5 + termination notice (test log)"
       - "zero calendar writes proven"
     expect:
       refusal_pass_full: true

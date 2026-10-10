@@ -243,3 +243,14 @@ W1-6 구현 시 포함되는 테스트 어댑터는 다음 계약을 따릅니�
 
 v1에서 지원하지 않는 `query_*` 의도도 자동 수락하지 않는다. 명시된 allowlist 밖의
 질의는 `result: "declined"`, `reason: "unsupported_intent"`로 거부한다.
+
+**회귀 뱅크가 시험하는 것과 못 하는 것 (2026-10-10).** v1 peer 는 `query_confirm_slot` 에
+언제나 `declined` 로 답하고(`automation/interop/delegation.py` `response_for`), 상대 소유자가
+수락을 승인하는 경로(W-F2.5-D)는 아직 코드에 없다. 그래서 "peer 수락 → 내 소유자 승인 →
+캘린더 쓰기" 정상 경로는 라이브로 일어날 수 없고, 주간 뱅크 `w3-coordination` 은 그 대신
+`no_auto_accept` 보안 케이스(거절 유도 없이도 peer 가 거절 → 재협상 1회 → 쓰기 0)를 본다.
+peer 에 시험용 수락 분기를 넣으면 W-F2.5-C 가 막은 자동 수락을 다시 여는 것이라 넣지 않는다.
+대신 정상 경로의 나머지 절반은 이렇게 덮인다: 요청자 상태기계의 "양측 승인 뒤에만 쓰기"는
+`tests/unit/test_coordination.py::test_happy_path_writes_only_after_both_approvals`, 소유자 승인
+주입을 거친 실제 캘린더 쓰기·삭제는 뱅크 `w3-calendar` 의 `register_remind`. W-F2.5-D 가
+들어오면 그 승인을 시험용 서명 주입으로 넣는 정상 경로 케이스를 `w3-coordination` 에 되살린다.
