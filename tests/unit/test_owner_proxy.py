@@ -299,13 +299,59 @@ def test_the_hook_hands_a_verified_request_to_the_agent_with_its_origin(plugin: 
     assert f"<@{PROXY_BOT}>" not in result["text"]
 
 
-def test_the_hook_still_drops_other_bots_and_failed_checks(plugin: dict[str, FakeReader]) -> None:
+def test_the_hook_still_drops_other_bots(plugin: dict[str, FakeReader]) -> None:
+    origin = snowflake(time.time() - 60)
+    plugin["reader"] = reader_with(origin)
+
+    assert _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), OTHER_BOT) == {"action": "skip", "reason": "interop_bot_prose"}
+    assert plugin["reader"].calls == [], "대리 봇 글만 원문을 조회한다"
+
+
+def test_a_proxy_bot_request_whose_origin_fails_is_handled_as_a_proxy_bot_request(plugin: dict[str, FakeReader]) -> None:
     origin = snowflake(time.time() - 60)
     plugin["reader"] = reader_with(origin, author=OTHER_BOT)
 
-    assert _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), OTHER_BOT) == {"action": "skip", "reason": "interop_bot_prose"}
-    assert _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), PROXY_BOT) == {"action": "skip", "reason": "interop_bot_prose"}
-    assert plugin["reader"].calls, "대리 봇 글만 원문을 조회한다"
+    result = _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), PROXY_BOT)
+
+    assert result is not None and result["action"] == "rewrite"
+    assert "[소유자 대리 요청 · 대리 봇 요청]" in result["text"]
+    assert "출처 미검증(`origin_author`)" in result["text"] and "(작성: dori)" in result["text"]
+    assert f"/channels/{GUILD}/{ORIGIN_CHANNEL}/{origin}" in result["text"]
+    assert result["text"].endswith("내일 오후 3시 회의 일정 등록해줘")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "내일 오후 3시 회의 일정 등록해줘",
+        f"{PREFIX}https://discord.com/channels/{GUILD}/{ORIGIN_CHANNEL}/100000000000000077]   ",
+    ],
+)
+def test_proxy_bot_prose_without_a_prefix_or_body_is_still_dropped(plugin: dict[str, FakeReader], text: str) -> None:
+    plugin["reader"] = reader_with(snowflake(time.time() - 60))
+
+    assert _dispatch(text, PROXY_BOT) == {"action": "skip", "reason": "interop_bot_prose"}
+
+
+@pytest.mark.parametrize("author", [OTHER_BOT, "100000000000000004"])
+def test_admit_never_trusts_another_bot(tmp_path: Path, author: str) -> None:
+    origin = snowflake(NOW - 60)
+    verdict = owner_proxy.admit(
+        message(proxy_text(GUILD, ORIGIN_CHANNEL, origin), author=author), CONFIG, reader_with(origin),
+        owner_proxy.FileLedger(tmp_path / "ledger.json"), NOW,
+    )
+
+    assert verdict == owner_proxy.Rejected("not_proxy_bot")
+
+
+def test_admit_keeps_a_proxy_bot_request_without_a_valid_link() -> None:
+    verdict = owner_proxy.admit(
+        message(f"{PREFIX}원문 없음] 일정 등록해줘"), CONFIG, FakeReader(), owner_proxy.FileLedger(Path("/nonexistent")), NOW
+    )
+
+    assert verdict == owner_proxy.Accepted(
+        link=None, origin_message_id=None, body="일정 등록해줘", via="dori", origin_failure="link_count"
+    )
 
 
 def _dispatch_with_attachment(content: str, attachment_text: str, author: str = PROXY_BOT):
@@ -353,8 +399,9 @@ def test_the_hook_reuse_is_dropped(plugin: dict[str, FakeReader]) -> None:
     origin = snowflake(time.time() - 60)
     plugin["reader"] = reader_with(origin)
 
-    assert _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), PROXY_BOT)["action"] == "rewrite"
-    assert _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), PROXY_BOT) == {"action": "skip", "reason": "interop_bot_prose"}
+    assert "(작성: owner)" in _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), PROXY_BOT)["text"]
+    again = _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), PROXY_BOT)
+    assert again["action"] == "rewrite" and "출처 미검증(`origin_reused`)" in again["text"]
 
 
 def test_an_accepted_proxy_request_still_needs_an_owner_approval_record(
@@ -391,6 +438,21 @@ def test_a_webhook_origin_request_is_marked_and_still_needs_an_owner_approval_re
     blocked = hermes_plugin.pre_tool_call("terminal", {"command": "gws calendar events insert --params '{}'"})
 
     assert blocked is not None and blocked["action"] == "block"
+
+
+def test_a_proxy_bot_request_with_a_failed_origin_still_needs_an_owner_approval_record(
+    plugin: dict[str, FakeReader], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    origin = snowflake(time.time() - 60)
+    plugin["reader"] = reader_with(origin, author=OTHER_BOT)
+    assert "(작성: dori)" in _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin), PROXY_BOT)["text"]
+    monkeypatch.setattr(hermes_plugin, "EXTERNAL_EFFECT_DENYLIST", Path(__file__).resolve().parents[2] / "configs/external-effect-tools.yaml")
+    monkeypatch.setattr(hermes_plugin, "EXTERNAL_EFFECT_APPROVAL_LOG", tmp_path / "approvals.jsonl")
+    monkeypatch.setattr(hermes_plugin, "_config", lambda: {"owner_id": OWNER})
+
+    result = hermes_plugin.pre_tool_call("terminal", {"command": "gws calendar events insert --params '{}'"})
+
+    assert result is not None and result["action"] == "block"
 
 
 def test_a_proxy_bot_reaction_is_never_an_owner_decision() -> None:

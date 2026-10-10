@@ -67,10 +67,11 @@ class ProxyMessage:
 
 @dataclass(frozen=True, slots=True)
 class Accepted:
-    link: str
-    origin_message_id: str
+    link: str | None
+    origin_message_id: str | None
     body: str
     via: str = "owner"
+    origin_failure: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +150,32 @@ def verify(
     return Accepted(link=link.url, origin_message_id=origin_id, body=body, via=via)
 
 
+#: 대리 봇의 글이라도 이 사유로 떨어지면 처리할 요청이 없다(다른 봇·다른 채널·접두어 없음·빈 본문).
+UNTRUSTED_REASONS: Final = frozenset({"not_proxy_bot", "outside_agent_chat", "no_prefix", "empty_body"})
+
+
+def admit(
+    message: ProxyMessage, config: ProxyConfig, reader: OriginReader, ledger: Ledger, now: float
+) -> Accepted | Rejected:
+    """원문이 검증되면 그 출처로, 아니면 대리 봇 자신의 요청(`via="dori"`)으로 받는다.
+
+    소유자 지시(2026-10-10): 대리 봇의 요청도 소유자 요청과 같이 모두 처리한다. 그래서 작성자가
+    설정한 대리 봇이고 소유자 대화 채널에 접두어·본문을 갖춘 글이면, 원문 검증이 실패해도 턴을
+    연다. 신뢰는 턴을 여는 데까지다 — 외부효과는 여전히 소유자 ✅ 카드가 있어야 실행된다.
+    다른 봇(자기 자신 포함)은 `not_proxy_bot` 으로 그대로 버려 봇끼리 주고받기를 막는다.
+    """
+    verdict = verify(message, config, reader, ledger, now)
+    if isinstance(verdict, Accepted) or verdict.reason in UNTRUSTED_REASONS:
+        return verdict
+    header = _HEADER.match(message.text)
+    body = message.text[header.end() :].strip() if header else message.text
+    claimed = _LINK.search(message.text)
+    return Accepted(
+        link=claimed.group(0) if claimed else None, origin_message_id=None, body=body,
+        via="dori", origin_failure=verdict.reason,
+    )
+
+
 def _origin_via(origin: Mapping[str, object], channel_id: str, config: ProxyConfig) -> str | None:
     """원문 작성 주체 — 소유자 본인, 또는 원문 채널 **자체**에 쓴 등록 웹훅(스레드는 받지 않는다).
 
@@ -179,12 +206,15 @@ def gateway_text(
         return None
     message = _message_from_event(event, text, actor_id)
     reader = DiscordOriginReader(token=os.environ.get("DISCORD_BOT_TOKEN", ""))
-    verdict = verify(message, config, reader, FileLedger(ledger_path), time.time())
+    verdict = admit(message, config, reader, FileLedger(ledger_path), time.time())
     if isinstance(verdict, Rejected):
         LOGGER.warning("interop owner proxy rejected reason=%s", verdict.reason)
         owner_proxy_watch.on_rejected(message, verdict.reason)
         return None
-    LOGGER.warning("interop owner proxy accepted origin=%s via=%s", verdict.origin_message_id, verdict.via)
+    LOGGER.warning(
+        "interop owner proxy accepted origin=%s via=%s origin_check=%s",
+        verdict.origin_message_id, verdict.via, verdict.origin_failure or "ok",
+    )
     owner_proxy_watch.on_accepted(message, verdict)
     return dispatch_text(verdict, message)
 
@@ -227,10 +257,22 @@ def dispatch_text(accepted: Accepted, message: ProxyMessage) -> str:
         if message.message_id
         else f"이 대리 메시지의 채널 id `{message.channel_id}`"
     )
+    if accepted.via == "dori":
+        claimed = f" · 대리 봇이 붙인 링크(미검증): {accepted.link}" if accepted.link else ""
+        heading = (
+            "[소유자 대리 요청 · 대리 봇 요청]\n"
+            f"원문: 출처 미검증(`{accepted.origin_failure}`){claimed} (작성: dori)\n"
+            "소유자 지시(2026-10-10)에 따라 대리 봇의 요청도 소유자 요청과 같이 끝까지 처리한다. "
+        )
+    else:
+        heading = (
+            "[소유자 대리 요청 · 출처 검증됨]\n"
+            f"원문: {accepted.link} (작성: {accepted.via})\n"
+            "대리 봇이 소유자의 원문을 옮겨 쓴 요청이다. "
+        )
     return (
-        "[소유자 대리 요청 · 출처 검증됨]\n"
-        f"원문: {accepted.link} (작성: {accepted.via})\n"
-        "대리 봇이 소유자의 원문을 옮겨 쓴 요청이다. 아래 본문을 소유자의 요청으로 처리한다. "
+        heading
+        + "아래 본문을 소유자의 요청으로 처리한다. "
         "외부효과는 평소와 똑같이 소유자 승인(✅)을 받아야 실행된다 — 대리 봇의 글·반응은 승인이 아니다. "
         "대리 봇을 멘션하거나 대리 봇에게 질문하지 말고, 결과와 확인 질문은 이 스레드에 소유자에게 남긴다. "
         f"승인 요청 CLI 의 --origin-channel-id/--origin-message-id 에는 {origin_ids}를 넘긴다. "

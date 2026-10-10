@@ -86,16 +86,27 @@ def _settle(gateway: dict[str, object]) -> list[str]:
 
 def test_a_rejected_proxy_request_leaves_a_reason_in_its_thread(gateway: dict[str, object]) -> None:
     origin = snowflake(time.time() - 60)
-    gateway["reader"] = reader_with(origin, author=OTHER_BOT, bot=True)
+    gateway["reader"] = reader_with(origin)
 
-    assert _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin)) == {"action": "skip", "reason": "interop_bot_prose"}
+    assert _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin, body="")) == {"action": "skip", "reason": "interop_bot_prose"}
 
     discord: FakeDiscord = gateway["discord"]  # type: ignore[assignment]
     assert ("POST", f"/channels/{AGENT_CHAT}/messages/{PROXY_MESSAGE}/threads") in discord.calls
     assert len(discord.sent) == 1
     target, body = discord.sent[0]
     assert target == PROXY_MESSAGE
-    assert "처리하지 않았습니다" in body and "`origin_author`" in body
+    assert "처리하지 않았습니다" in body and "`empty_body`" in body
+
+
+def test_a_proxy_bot_request_with_a_failed_origin_is_watched_too(gateway: dict[str, object]) -> None:
+    origin = snowflake(time.time() - 60)
+    gateway["reader"] = reader_with(origin, author=OTHER_BOT, bot=True)
+
+    assert _dispatch(proxy_text(GUILD, ORIGIN_CHANNEL, origin))["action"] == "rewrite"  # type: ignore[index]
+
+    assert [item.via for item in gateway["armed"]] == ["dori"]  # type: ignore[union-attr]
+    assert gateway["discord"].sent == []  # type: ignore[union-attr]
+    assert _settle(gateway) == ["notified"]
 
 
 def test_prose_that_is_not_a_proxy_request_gets_no_notice(gateway: dict[str, object]) -> None:
