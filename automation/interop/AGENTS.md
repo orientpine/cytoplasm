@@ -16,7 +16,8 @@
 | `coordination.py` | 에이전트간 일정 조율 **순수 상태머신**. 가용성 교집합→후보 ≤3→양측 승인→소유자 승인=캘린더 쓰기 게이트. `correlation_id`는 `coord-` 접두사 |
 | `delegation.py` · `report.py` | 위임 봉투 / `#agents-log` 보고 포맷 |
 | `killswitch.py` | `!pause-agents`/`!resume-agents` (소유자만, 영속) |
-| `owner_proxy.py` | 소유자 대리 요청 — `interop_bot_prose` 의 유일한 예외. 사설 설정 `owner_proxy_bot_id`·`owner_proxy_origin_channel_id` 의 봇 하나가 `#agent-chat`(스레드 포함)에 옮겨 쓴 글을, 링크한 원문을 Discord API 로 읽어 소유자 작성·같은 guild·원문 채널(스레드)·24시간·1회(원장)를 모두 확인한 뒤에만 받는다. 확인 불가는 거부. 승인 게이트·✅ 판정은 불변. 규약 [interop §3.5](../../docs/guide/interop-규약.md) |
+| `owner_proxy.py` | 소유자 대리 요청 — `interop_bot_prose` 의 유일한 예외. 사설 설정 `owner_proxy_bot_id`·`owner_proxy_origin_channel_id` 의 봇 하나가 `#agent-chat`(스레드 포함)에 옮겨 쓴 글을, 링크한 원문을 Discord API 로 읽어 소유자 작성·같은 guild·원문 채널(스레드)·24시간·1회(원장)를 모두 확인한 뒤에만 받는다. 확인 불가는 거부. 선택 키 `owner_proxy_origin_webhook_ids` 의 소유자 웹훅이 원문 채널 자체에 쓴 글도 원문으로 받는다(`via=owner-webhook`). 승인 게이트·✅ 판정은 불변. I/O 어댑터(원장·원문 조회)는 `owner_proxy_io.py`. 규약 [interop §3.5](../../docs/guide/interop-규약.md) |
+| `owner_proxy_watch.py` | 대리 요청 누락 안전망 — 거부된 대리 요청은 즉시, 받았는데 3분 안에 이 봇의 글이 없는 요청은 기한 뒤에 대리 글 스레드에 통지한다(게이트웨이 ✅ 는 버린 글에도 붙는 영수증이다). 대기 목록은 파일이라 재시동 뒤 `register()` 가 다시 무장한다. 게이트웨이 주 프로세스에서만 동작하고 아무것도 실행하지 않는다 |
 | `loop_guard.py` | 봇 연쇄 분당 5회 상한 + 본문 해시 dedup |
 | `gate_driver.py` · `live_peer_driver.py` | 게이트/피어 드라이버 |
 | `production_guard.sh` | 프로덕션 게이트웨이에서 `E2E_TEST_MODE` 거부(부팅 차단) |
