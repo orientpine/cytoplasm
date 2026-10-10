@@ -13,6 +13,11 @@ ROOT="$(cd "$(dirname "$SCENARIO")/../../.." && pwd)"
 DRIVERS="$ROOT/tests/e2e/drivers"
 FIXTURES="$ROOT/tests/e2e/fixtures/w2-personal-memory"
 HOST="$(sed -n 's/^remote_host:[[:space:]]*//p' "$SCENARIO" | head -1)"
+# 공개 트리의 시나리오는 설치별 호스트 대신 자리표시자(<primary-node>)를 싣는다 — 노드 설정에서 푼다.
+if [[ -z "$HOST" || "$HOST" == *"<"* ]]; then
+  eval "$(python3 "$ROOT/automation/node_config_sh.py" --print-env)"
+  HOST="$NODE_DEPLOY_SSH_HOST"
+fi
 ACCOUNT="$(sed -n 's/^remote_account:[[:space:]]*//p' "$SCENARIO" | head -1)"
 PUSH_DIR="/home/$ACCOUNT/.cache/w2e6-bank-push"
 RUN_TIMEOUT=900
