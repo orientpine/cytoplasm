@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # W3-3 per-scenario E2E runner — executes ON the agent account (<primary-node>).
 # usage: w3_3_runner.sh <no_auto_accept|deadlock|refusal|cleanup> <range_start> <range_end>
-# Requires: ~/.w33-e2e.secret (per-run hex), ~/.w33_probe.py (pushed by the
+# Requires: ~/.w33-e2e.secret (per-run hex, pushed by the
 # orchestrator tests/e2e/w3_3_coordination.sh). Prints masked observables only.
 set -euo pipefail
 scenario="$1"; range_start="$2"; range_end="$3"
@@ -12,7 +12,10 @@ INTEROP_E2E_SECRET="$(cat "$HOME/.w33-e2e.secret")"
 export INTEROP_E2E_SECRET
 CLI="/srv/autophagy-skills/live/coordination/scripts/coordinate_cli.py"
 CAL="/srv/autophagy-skills/live/calendar/scripts/calendar_cli.py"
-PROBE="$HOME/.w33_probe.py"
+# Owner notices of these test runs go to a log here, never to the owner's DM
+# (coordination_lifecycle.E2E_NOTICE_LOG_ENV); the checks read that log.
+NOTICES="$HOME/.w33-notices.log"
+export COORDINATION_E2E_NOTICE_LOG="$NOTICES"
 APPR=/srv/autophagy-agents/logs/approvals.jsonl
 SUMMARY="W3-3 조율 테스트 미팅"
 
@@ -20,6 +23,16 @@ appr() { wc -l < "$APPR"; }
 evt() { python3 "$CAL" list --days 3 --query "W3-3" | { grep -c '^EVENT' || true; }; }
 say() { printf 'W33 %s\n' "$*"; }
 corr_of() { sed -n 's/.*correlation=\(coord-[0-9a-f]*\).*/\1/p' <<<"$1" | head -1; }
+notice_check() { # notice_check <needle...>: one logged notice must contain every needle
+  local line needle ok
+  [[ -f "$NOTICES" ]] || { echo "NOTICE-MISSING"; return 1; }
+  while IFS= read -r line; do
+    ok=1
+    for needle in "$@"; do [[ "$line" == *"$needle"* ]] || { ok=0; break; }; done
+    [[ $ok -eq 1 ]] && { echo "NOTICE-FOUND len=${#line}"; return 0; }
+  done < "$NOTICES"
+  echo "NOTICE-MISSING"; return 1
+}
 
 a0="$(appr)"; e0="$(evt)"
 say "T0 scenario=$scenario utc=$(date -u +%FT%TZ) approvals=$a0 events=$e0"
@@ -41,7 +54,7 @@ no_auto_accept)
   a1="$(appr)"; e1="$(evt)"
   say "post-run approvals_delta=$((a1 - a0)) events=$e1 (want 0, $e0)"
   [[ $((a1 - a0)) -eq 0 && "$e1" -eq "$e0" ]] || { say "FAIL zero-write proof"; exit 1; }
-  python3 "$PROBE" dm-check "$corr" "[E2E]" "일정 조율 종료" || { say "FAIL termination-dm"; exit 1; }
+  notice_check "$corr" "[E2E]" "일정 조율 종료" || { say "FAIL termination-notice"; exit 1; }
   say "NO-AUTO-ACCEPT-PASS corr=$corr renegotiations=1 calendar_writes=0"
   ;;
 cleanup)
@@ -69,7 +82,7 @@ deadlock)
   a1="$(appr)"; e1="$(evt)"
   say "post-run approvals_delta=$((a1 - a0)) events=$e1 (want 0, $e0)"
   [[ $((a1 - a0)) -eq 0 && "$e1" -eq "$e0" ]] || { say "FAIL zero-write proof"; exit 1; }
-  python3 "$PROBE" dm-check "$corr" "[E2E]" "에스컬레이션" "인간 협의" || { say "FAIL escalation-dm"; exit 1; }
+  notice_check "$corr" "[E2E]" "에스컬레이션" "인간 협의" || { say "FAIL escalation-notice"; exit 1; }
   say "DEADLOCK-PASS corr=$corr escalation_dm=found calendar_writes=0"
   ;;
 refusal)
@@ -82,7 +95,7 @@ refusal)
   a1="$(appr)"; e1="$(evt)"
   say "post-run approvals_delta=$((a1 - a0)) events=$e1 (want 0, $e0)"
   [[ $((a1 - a0)) -eq 0 && "$e1" -eq "$e0" ]] || { say "FAIL zero-write proof"; exit 1; }
-  python3 "$PROBE" dm-check "$corr" "[E2E]" "일정 조율 종료" || { say "FAIL termination-dm"; exit 1; }
+  notice_check "$corr" "[E2E]" "일정 조율 종료" || { say "FAIL termination-notice"; exit 1; }
   say "REFUSAL-PASS corr=$corr renegotiations=1 calendar_writes=0"
   ;;
 *)

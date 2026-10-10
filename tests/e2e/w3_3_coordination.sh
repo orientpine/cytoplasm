@@ -3,7 +3,7 @@
 # Scenarios: no_auto_accept (vs live peer, injected owner confirm: the v1 peer never
 # auto-accepts, so 1 renegotiation, terminate, 0 writes — W-F2.5-C),
 # refusal (peer declines twice → 1 renegotiation → terminate, 0 writes),
-# deadlock (peer gateway stopped → short-timeout escalation DM, 0 writes).
+# deadlock (peer gateway stopped → short-timeout escalation notice (test log), 0 writes).
 # Production deadlock timeout is 600 s (10 min); the E2E injects 15/60 s.
 set -euo pipefail
 readonly PEER_READY_TIMEOUT_S=90
@@ -45,14 +45,13 @@ range_end="${tomorrow}T18:00:00+09:00"
 echo "W3-3 E2E range=${range_start}..${range_end} (KST tomorrow)"
 
 push "$repo/tests/e2e/w3_3_runner.sh" ".w33_runner.sh"
-push "$repo/tests/e2e/w3_3_probe.py" ".w33_probe.py"
-agent 'umask 077; openssl rand -hex 32 > "$HOME/.w33-e2e.secret"'
+agent 'umask 077; rm -f "$HOME/.w33-notices.log"; openssl rand -hex 32 > "$HOME/.w33-e2e.secret"'
 peer_stopped=0
 cleanup() {
   if [[ "$peer_stopped" -eq 1 ]]; then
     peer_unit start >/dev/null 2>&1 || true
   fi
-  agent 'rm -f "$HOME/.w33-e2e.secret" "$HOME/.w33_runner.sh" "$HOME/.w33_probe.py" "$HOME/.w33-del.json"' || true
+  agent 'rm -f "$HOME/.w33-e2e.secret" "$HOME/.w33_runner.sh" "$HOME/.w33-notices.log" "$HOME/.w33-del.json"' || true
 }
 trap cleanup EXIT
 
@@ -76,7 +75,7 @@ echo "=== scenario 2/3: refusal (peer declines, 1 renegotiation, 0 writes) ==="
 sleep 61
 agent "bash \$HOME/.w33_runner.sh refusal $range_start $range_end" || failed=1
 
-echo "=== scenario 3/3: deadlock (peer stopped, escalation DM, 0 writes) ==="
+echo "=== scenario 3/3: deadlock (peer stopped, escalation notice (test log), 0 writes) ==="
 peer_log_lines=0
 if ! peer_log_lines="$(peer_gateway_log_lines)"; then
   echo "could not read peer gateway log before restart" >&2

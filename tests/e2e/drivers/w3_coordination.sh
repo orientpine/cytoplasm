@@ -3,7 +3,7 @@
 # W3-3 E2E orchestrator tests/e2e/w3_3_coordination.sh (reuse, not reimplement).
 # That script runs no_auto_accept (live peer + injected owner confirm; the v1 peer
 # never auto-accepts, so 1 renegotiation and 0 writes), refusal (1 renegotiation,
-# 0 writes) and deadlock (peer stopped -> escalation DM, 0 writes), then
+# 0 writes) and deadlock (peer stopped -> escalation notice (test log), 0 writes), then
 # verifies both gateways are active. This driver only extracts the script's
 # self-asserted observables from its output and judges them against the YAML.
 #
