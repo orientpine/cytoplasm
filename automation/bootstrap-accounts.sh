@@ -45,7 +45,7 @@
 # TWO-PHASE FLOW (production only; rag completes in a single run):
 #   Run 1: provisions everything up to the deploy key, then PRINTS the public
 #          key and EXITS 0. A human must register it as a READ-ONLY Deploy Key
-#          at https://github.com/orientpine/autophagy-agents/settings/keys
+#          at the origin repository's GitHub deploy-key page (derived from origin_url)
 #          (this script cannot do that: 'ops' has no authenticated gh, and
 #          deploy-key registration needs repo admin — deliberately human).
 #   Run 2: detects working key auth, clones the repo to /srv/autophagy-agents
@@ -63,7 +63,8 @@ eval "$(python3 "$REPO_ROOT/automation/node_config_sh.py" --print-env)"
 
 readonly GITLEAKS_VERSION="8.30.1"
 readonly REPO_SSH_URL="$NODE_ORIGIN_URL"
-readonly REPO_KEYS_URL="https://github.com/orientpine/autophagy-agents/settings/keys"
+repo_path="${NODE_ORIGIN_URL#*github.com[:/]}"
+readonly REPO_KEYS_URL="https://github.com/${repo_path%.git}/settings/keys"
 readonly DEPLOY_DIR="$NODE_DEPLOY_CHECKOUT"
 readonly REPAIR_WORK_DIR="$NODE_REPAIR_WORK"
 readonly PRIVATE_DIR="$NODE_PRIVATE_ROOT"

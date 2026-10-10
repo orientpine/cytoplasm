@@ -303,6 +303,10 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 
 > ↳ 2026-10-07 v1.14.9 사이클에서 해소 — 원문과 처리 근거는 [follow-ups-deferred.md](follow-ups-deferred.md) 의 같은 헤딩 아래.
 
+## cytoplasm 이전 전수 조사에서 남긴 것 (2026-10-10)
+
+- **공개 코드의 Discord User-Agent 가 옛 비공개 저장소 URL 을 가리킨다** — `DiscordBot (https://github.com/orientpine/autophagy-agents, 0)` 이 automation 과 스킬 스크립트 27곳(예: `automation/owner_notice.py:35`, `skills/mail/scripts/triage_confirm.py:18`)에 있다. 기능에는 영향이 없다. 스킬 파일을 고치면 그 스킬 10여 개가 다시 마운트되므로 통지 복구 릴리스에 섞지 않았다 → 한 상수(예: `automation/interop/user_agent.py`)로 모으고 cytoplasm URL 로 바꾼다. 스킬은 격리 샌드박스에서 automation 을 import 하지 못하는 것도 있어 사본이 필요할 수 있다. **영향: 공개 코드가 404 URL 을 광고 · 심각도 낮음**.
+
 ## 공개 우선 전환 준비 중 남긴 것 (2026-10-07)
 
 - **업스트림을 따르기만 하는 설치에도 릴리스 백로그 다이제스트가 `automation/release.sh` 를 안내한다** — 공개 우선 전환 뒤에는 cytoplasm main 에 태그 사이 서명 없는 개발 커밋이 쌓이므로, 제3자 노드의 리컨실러도 3일 뒤 「미배포 커밋 N건 · 릴리스하려면 release.sh」 를 보낸다. 그 소유자는 서명키가 없어 할 일이 없다. 문구는 `automation/deploy_reconcile_backlog.py` 가 만들고 지속 재시도 바이트를 `tests/unit/test_deploy_reconcile_owner_message.py` 가 고정하므로 이번 범위에서 바꾸지 않았다 → 노드가 유지보수자 설치인지(예: `node.toml` 키) 판정해 안내 줄을 고르고, 저장된 대기 통지는 옛 바이트 그대로 재시도되게 판본을 나눈다. **영향: 제3자 소유자에게 잘못된 조치 안내 · 심각도 낮음(사고 아님 문구 유지)**.
