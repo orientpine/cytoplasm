@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # W3-3 coordination protocol E2E orchestrator (runs from the repo machine).
-# Scenarios: happy (vs live peer, injected owner confirm, gated write+cleanup),
+# Scenarios: no_auto_accept (vs live peer, injected owner confirm: the v1 peer never
+# auto-accepts, so 1 renegotiation, terminate, 0 writes — W-F2.5-C),
 # refusal (peer declines twice → 1 renegotiation → terminate, 0 writes),
 # deadlock (peer gateway stopped → short-timeout escalation DM, 0 writes).
 # Production deadlock timeout is 600 s (10 min); the E2E injects 15/60 s.
@@ -56,31 +57,18 @@ cleanup() {
 trap cleanup EXIT
 
 failed=0
-cleanup_event() {
-  local event_id="$1" del_out del_id
-  del_out="$(python3 "$CAL" draft-delete --event-id "$event_id" --label "$SUMMARY")"
-  del_id="$(sed -n 's/^DRAFT-CREATED id=\([0-9a-f]*\) .*/\1/p' <<<"$del_out")"
-  [[ -n "$del_id" ]] || return 1
-  python3 "$CAL" sign --draft "$del_id" --out "$HOME/.w33-del.json" >/dev/null
-  python3 "$CAL" confirm --draft "$del_id" --injection-file "$HOME/.w33-del.json" \
-    | sed 's/event=[0-9a-zA-Z_-]\{7,\}/event=<masked>/'
-  rm -f "$HOME/.w33-del.json"
-}
+# The calendar CLI lives on the agent account, so the recovery cleanup runs there too
+# (it used to run here with $CAL unset, which made it a silent no-op).
 cleanup_w33_events() {
-  local event_id
-  while IFS= read -r event_id; do
-    [[ -n "$event_id" ]] || continue
-    cleanup_event "$event_id" || return 1
-  done < <(python3 "$CAL" list --days 3 --query "W3-3" |
-    sed -n 's/^EVENT id=\([^ ]*\) .*/\1/p')
+  agent "bash \$HOME/.w33_runner.sh cleanup $range_start $range_end"
 }
-echo "=== scenario 1/3: happy (live peer, both approvals, gated write) ==="
+echo "=== scenario 1/3: no_auto_accept (live peer never auto-accepts, 0 writes) ==="
 if ! cleanup_w33_events; then
-  echo "W33 FAIL recovery cleanup before happy" >&2
+  echo "W33 FAIL recovery cleanup before no_auto_accept" >&2
   failed=1
 fi
-if ! agent "bash \$HOME/.w33_runner.sh happy $range_start $range_end"; then
-  cleanup_w33_events || echo "W33 FAIL recovery cleanup after happy" >&2
+if ! agent "bash \$HOME/.w33_runner.sh no_auto_accept $range_start $range_end"; then
+  cleanup_w33_events || echo "W33 FAIL recovery cleanup after no_auto_accept" >&2
   failed=1
 fi
 

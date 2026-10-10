@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # W3-6 scenario driver (w3-coordination): thin wrapper around the verified
 # W3-3 E2E orchestrator tests/e2e/w3_3_coordination.sh (reuse, not reimplement).
-# That script runs happy (live peer + signed-injection confirms + gated write
-# + 120s #team cascade monitor + gated cleanup), refusal (1 renegotiation,
+# That script runs no_auto_accept (live peer + injected owner confirm; the v1 peer
+# never auto-accepts, so 1 renegotiation and 0 writes), refusal (1 renegotiation,
 # 0 writes) and deadlock (peer stopped -> escalation DM, 0 writes), then
 # verifies both gateways are active. This driver only extracts the script's
 # self-asserted observables from its output and judges them against the YAML.
@@ -31,11 +31,13 @@ import sys
 log = open(sys.argv[1], encoding="utf-8").read()
 rc = int(sys.argv[2])
 observations = {
-    "happy": {
-        "happy_pass": "W33 HAPPY-PASS corr=" in log,
-        "cascade_notice_only": "cascade-safe: terse notice only" in log,
-        "team_monitor_clean": bool(
-            re.search(r"TEAM-AFTER envelopes=\d+ notices=1 others=0", log)
+    "no_auto_accept": {
+        "no_auto_accept_pass_full": bool(
+            re.search(
+                r"W33 NO-AUTO-ACCEPT-PASS corr=coord-[0-9a-f]+ renegotiations=1"
+                r" calendar_writes=0",
+                log,
+            )
         ),
         "error": None,
     },
