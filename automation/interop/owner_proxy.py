@@ -9,7 +9,8 @@
 - 글이 소유자 대화 채널 또는 그 스레드에 있다.
 - `[<대리 이름> 대리 · 소유자 요청 <원문 링크>] <본문>` 형식이고 Discord 메시지 링크가 정확히 하나 있다.
   이름은 표시일 뿐 신원이 아니다 — 신원은 봇 id 가 정한다.
-- 링크한 원문을 Discord API 로 실제로 읽었고, 작성자가 소유자(`owner_id`, 사람)이며,
+- 링크한 원문을 Discord API 로 실제로 읽었고, 작성자가 소유자(`owner_id`, 사람)이거나 사설 설정
+  `owner_proxy_origin_webhook_ids` 에 등록한 소유자 웹훅(단축어 녹음)이 원문 채널 자체에 쓴 글이며,
   guild 가 대리 글과 같은 Discord 서버이고, 채널이 `owner_proxy_origin_channel_id` 이거나
   그 채널의 스레드이고, `MAX_AGE` 안에 쓰였다.
 - 같은 원문 id 로는 한 번만 받는다(재사용 원장). 소유자가 정정하면 새 메시지 = 새 id 다.
@@ -20,8 +21,6 @@
 
 from __future__ import annotations
 
-import fcntl
-import json
 import logging
 import os
 import re
@@ -30,25 +29,21 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
+from automation.interop import owner_proxy_watch
 from automation.interop.owner_message import discord_link
+from automation.interop.owner_proxy_io import DiscordOriginReader, FileLedger
 
 _HEADER: Final = re.compile(r"\[[^\]\n]{1,40}? 대리 · 소유자 요청 ([^\]\n]*)\]")
 LOGGER: Final = logging.getLogger("autophagy.interop")
 MAX_AGE_SECONDS: Final = 24 * 60 * 60
 #: 원문 시각이 미래로 찍힌 것처럼 보이는 시계 오차 허용치.
 CLOCK_SKEW_SECONDS: Final = 5 * 60
-#: 원장은 MAX_AGE 보다 오래된 id 를 다시 받을 일이 없으므로 그 두 배 뒤에 버린다.
-LEDGER_RETENTION_SECONDS: Final = 2 * MAX_AGE_SECONDS
 _DISCORD_EPOCH_MS: Final = 1420070400000
 _THREAD_TYPES: Final = frozenset({10, 11, 12})
 _LINK: Final = re.compile(
     r"https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/channels/(\d{15,22})/(\d{15,22})/(\d{15,22})"
 )
-_DISCORD_API: Final = "https://discord.com/api/v10"
-_USER_AGENT: Final = "DiscordBot (https://github.com/orientpine/autophagy-agents, 0)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +52,7 @@ class ProxyConfig:
     origin_channel_id: str
     agent_chat_channel_id: str
     owner_id: str
+    owner_webhook_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +67,11 @@ class ProxyMessage:
 
 @dataclass(frozen=True, slots=True)
 class Accepted:
-    link: str
-    origin_message_id: str
+    link: str | None
+    origin_message_id: str | None
     body: str
+    via: str = "owner"
+    origin_failure: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +95,9 @@ def load_config(payload: Mapping[str, object]) -> ProxyConfig | None:
     if not all(isinstance(value, str) and value.isdigit() for value in values):
         return None
     bot_id, origin_channel_id, agent_chat_channel_id, owner_id = (str(value) for value in values)
-    return ProxyConfig(bot_id, origin_channel_id, agent_chat_channel_id, owner_id)
+    webhooks = payload.get("owner_proxy_origin_webhook_ids")
+    valid = isinstance(webhooks, list) and all(isinstance(item, str) and item.isdigit() for item in webhooks)
+    return ProxyConfig(bot_id, origin_channel_id, agent_chat_channel_id, owner_id, frozenset(webhooks) if valid else frozenset())
 
 
 def verify(
@@ -133,10 +133,10 @@ def verify(
     in_thread = channel.get("type") in _THREAD_TYPES and str(channel.get("parent_id")) == config.origin_channel_id
     if channel_id != config.origin_channel_id and not in_thread:
         return Rejected("origin_channel")
-    author = origin.get("author")
     if str(origin.get("id")) != origin_id or str(origin.get("channel_id")) != channel_id:
         return Rejected("origin_mismatch")
-    if not isinstance(author, Mapping) or str(author.get("id")) != config.owner_id or author.get("bot") is True:
+    via = _origin_via(origin, channel_id, config)
+    if via is None:
         return Rejected("origin_author")
     try:
         fresh = ledger.claim(origin_id, now)
@@ -147,7 +147,50 @@ def verify(
     link = discord_link(space="guild", guild_id=guild_id, channel_id=channel_id, message_id=origin_id)
     if link.url is None:
         return Rejected("link_count")
-    return Accepted(link=link.url, origin_message_id=origin_id, body=body)
+    return Accepted(link=link.url, origin_message_id=origin_id, body=body, via=via)
+
+
+#: 대리 봇의 글이라도 이 사유로 떨어지면 처리할 요청이 없다(다른 봇·다른 채널·접두어 없음·빈 본문).
+UNTRUSTED_REASONS: Final = frozenset({"not_proxy_bot", "outside_agent_chat", "no_prefix", "empty_body"})
+
+
+def admit(
+    message: ProxyMessage, config: ProxyConfig, reader: OriginReader, ledger: Ledger, now: float
+) -> Accepted | Rejected:
+    """원문이 검증되면 그 출처로, 아니면 대리 봇 자신의 요청(`via="dori"`)으로 받는다.
+
+    소유자 지시(2026-10-10): 대리 봇의 요청도 소유자 요청과 같이 모두 처리한다. 그래서 작성자가
+    설정한 대리 봇이고 소유자 대화 채널에 접두어·본문을 갖춘 글이면, 원문 검증이 실패해도 턴을
+    연다. 신뢰는 턴을 여는 데까지다 — 외부효과는 여전히 소유자 ✅ 카드가 있어야 실행된다.
+    다른 봇(자기 자신 포함)은 `not_proxy_bot` 으로 그대로 버려 봇끼리 주고받기를 막는다.
+    """
+    verdict = verify(message, config, reader, ledger, now)
+    if isinstance(verdict, Accepted) or verdict.reason in UNTRUSTED_REASONS:
+        return verdict
+    header = _HEADER.match(message.text)
+    body = message.text[header.end() :].strip() if header else message.text
+    claimed = _LINK.search(message.text)
+    return Accepted(
+        link=claimed.group(0) if claimed else None, origin_message_id=None, body=body,
+        via="dori", origin_failure=verdict.reason,
+    )
+
+
+def _origin_via(origin: Mapping[str, object], channel_id: str, config: ProxyConfig) -> str | None:
+    """원문 작성 주체 — 소유자 본인, 또는 원문 채널 **자체**에 쓴 등록 웹훅(스레드는 받지 않는다).
+
+    웹훅 글은 URL 을 아는 누구나 쓸 수 있으므로 신뢰는 턴을 여는 데까지다 — 외부효과는 여전히
+    소유자 ✅ 카드가 있어야 실행된다(`external_effect_gate`).
+    """
+    author = origin.get("author")
+    if not isinstance(author, Mapping):
+        return None
+    if str(author.get("id")) == config.owner_id and author.get("bot") is not True:
+        return "owner"
+    webhook = str(origin.get("webhook_id") or "")
+    if webhook and webhook == str(author.get("id")) and webhook in config.owner_webhook_ids and channel_id == config.origin_channel_id:
+        return "owner-webhook"
+    return None
 
 
 def gateway_text(
@@ -163,11 +206,16 @@ def gateway_text(
         return None
     message = _message_from_event(event, text, actor_id)
     reader = DiscordOriginReader(token=os.environ.get("DISCORD_BOT_TOKEN", ""))
-    verdict = verify(message, config, reader, FileLedger(ledger_path), time.time())
+    verdict = admit(message, config, reader, FileLedger(ledger_path), time.time())
     if isinstance(verdict, Rejected):
         LOGGER.warning("interop owner proxy rejected reason=%s", verdict.reason)
+        owner_proxy_watch.on_rejected(message, verdict.reason)
         return None
-    LOGGER.warning("interop owner proxy accepted origin=%s", verdict.origin_message_id)
+    LOGGER.warning(
+        "interop owner proxy accepted origin=%s via=%s origin_check=%s",
+        verdict.origin_message_id, verdict.via, verdict.origin_failure or "ok",
+    )
+    owner_proxy_watch.on_accepted(message, verdict)
     return dispatch_text(verdict, message)
 
 
@@ -209,10 +257,22 @@ def dispatch_text(accepted: Accepted, message: ProxyMessage) -> str:
         if message.message_id
         else f"이 대리 메시지의 채널 id `{message.channel_id}`"
     )
+    if accepted.via == "dori":
+        claimed = f" · 대리 봇이 붙인 링크(미검증): {accepted.link}" if accepted.link else ""
+        heading = (
+            "[소유자 대리 요청 · 대리 봇 요청]\n"
+            f"원문: 출처 미검증(`{accepted.origin_failure}`){claimed} (작성: dori)\n"
+            "소유자 지시(2026-10-10)에 따라 대리 봇의 요청도 소유자 요청과 같이 끝까지 처리한다. "
+        )
+    else:
+        heading = (
+            "[소유자 대리 요청 · 출처 검증됨]\n"
+            f"원문: {accepted.link} (작성: {accepted.via})\n"
+            "대리 봇이 소유자의 원문을 옮겨 쓴 요청이다. "
+        )
     return (
-        "[소유자 대리 요청 · 출처 검증됨]\n"
-        f"원문: {accepted.link}\n"
-        "대리 봇이 소유자의 원문을 옮겨 쓴 요청이다. 아래 본문을 소유자의 요청으로 처리한다. "
+        heading
+        + "아래 본문을 소유자의 요청으로 처리한다. "
         "외부효과는 평소와 똑같이 소유자 승인(✅)을 받아야 실행된다 — 대리 봇의 글·반응은 승인이 아니다. "
         "대리 봇을 멘션하거나 대리 봇에게 질문하지 말고, 결과와 확인 질문은 이 스레드에 소유자에게 남긴다. "
         f"승인 요청 CLI 의 --origin-channel-id/--origin-message-id 에는 {origin_ids}를 넘긴다. "
@@ -225,65 +285,3 @@ def dispatch_text(accepted: Accepted, message: ProxyMessage) -> str:
 
 def _snowflake_seconds(snowflake: str) -> float:
     return ((int(snowflake) >> 22) + _DISCORD_EPOCH_MS) / 1000
-
-
-@dataclass(frozen=True, slots=True)
-class FileLedger:
-    """원문 id 별 1회 수락 원장 — `{id: 수락 시각}` JSON 을 flock 아래 원자 교체한다."""
-
-    path: Path
-
-    def claim(self, origin_message_id: str, now: float) -> bool:
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        lock = self.path.with_suffix(".lock")
-        with lock.open("a") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            seen = self._read()
-            if origin_message_id in seen:
-                return False
-            kept = {key: at for key, at in seen.items() if now - at < LEDGER_RETENTION_SECONDS}
-            kept[origin_message_id] = now
-            temporary = self.path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(kept, sort_keys=True), encoding="utf-8")
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, self.path)
-            return True
-
-    def _read(self) -> dict[str, float]:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
-        except json.JSONDecodeError as error:
-            raise OSError("owner proxy ledger is unreadable") from error
-        if not isinstance(payload, dict):
-            raise OSError("owner proxy ledger is not an object")
-        return {str(key): float(value) for key, value in payload.items() if isinstance(value, int | float)}
-
-
-@dataclass(frozen=True, slots=True)
-class DiscordOriginReader:
-    """원문 조회 — 읽기 전용 GET 두 번. 실패는 예외로 올려 `verify` 가 fail-closed 로 바꾼다."""
-
-    token: str
-    timeout: float = 5.0
-
-    def channel(self, channel_id: str) -> Mapping[str, object]:
-        return self._get(f"/channels/{channel_id}")
-
-    def message(self, channel_id: str, message_id: str) -> Mapping[str, object]:
-        return self._get(f"/channels/{channel_id}/messages/{message_id}")
-
-    def _get(self, path: str) -> Mapping[str, object]:
-        request = Request(
-            f"{_DISCORD_API}{path}",
-            headers={"Authorization": f"Bot {self.token}", "User-Agent": _USER_AGENT},
-        )
-        try:
-            with urlopen(request, timeout=self.timeout) as response:  # noqa: S310
-                payload = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError) as error:
-            raise OSError(f"discord origin lookup failed: {type(error).__name__}") from error
-        if not isinstance(payload, dict):
-            raise OSError("discord origin lookup returned a non-object")
-        return payload
