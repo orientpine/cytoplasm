@@ -415,9 +415,6 @@ def _digest_reactions() -> None:
               file=sys.stderr)
 
 
-def cmd_digest_react(args: argparse.Namespace) -> int:
-    """The gateway heard an owner press on one digest card — act on it now (same rules)."""
-    import digest_reaction_actions
 def cmd_digest_reactions_only(_args: argparse.Namespace) -> int:
     """Read only digest reactions; no draft approval loop, sync or thread settlement."""
     if triage_mode.effective_mode() != "no-go":
@@ -427,6 +424,9 @@ def cmd_digest_reactions_only(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_digest_react(args: argparse.Namespace) -> int:
+    """The gateway heard an owner press on one digest card — act on it now (same rules)."""
+    import digest_reaction_actions
 
     mode = triage_mode.effective_mode()
     if mode == "no-go":
@@ -750,14 +750,14 @@ def build_parser() -> argparse.ArgumentParser:
     digest_react.add_argument("--emoji", default="", help="게이트웨이가 들은 반응(📄 다시 누름이면 스레드 링크를 다시 남김)")
     digest_react.set_defaults(func=cmd_digest_react)
 
+    sub.add_parser("digest-reactions-only", help="최근 다이제스트 반응만 처리").set_defaults(
+        func=cmd_digest_reactions_only,
+    )
+
     confirm = sub.add_parser("confirm", help="소유자 승인 검증 후에만 발송")
     confirm.add_argument("--draft", required=True)
     confirm.add_argument("--injection-file", default="")
     confirm.set_defaults(func=cmd_confirm)
-
-    sub.add_parser("digest-reactions-only", help="최근 다이제스트 반응만 처리").set_defaults(
-        func=cmd_digest_reactions_only,
-    )
 
     discard = sub.add_parser("discard", help="초안 폐기 (승인 거부, 발송 0건)")
     discard.add_argument("--draft", required=True)
