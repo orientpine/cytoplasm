@@ -12,13 +12,15 @@ from typing import Final
 
 from automation.hermes_agent_chat_ignore import write_config
 from automation.hermes_memory_config import ConfigShapeError
+from automation.node_config import NodeConfigError
 
 ALGORITHM: Final = "yoodori-channel-v1"
 MARKER: Final = "YOODORI-CHANNEL"
 CHAT: Final = "agent_chat_channel_id"
 NOTICE: Final = "owner_notice_channel_id"
 BEFORE: Final = "_before_release"
-OVERRIDE: Final = ".hermes/interop/channel-override.json"
+# Logical declaration destination; the module resolves it against node.private_root, not HOME.
+OVERRIDE: Final = "private/channel-override.json"
 _ID: Final = re.compile(r"[1-9][0-9]{16,19}")
 
 
@@ -218,7 +220,12 @@ def main(argv: Sequence[str] | None = None, *, home: Path | None = None) -> int:
             if channel_override(root) is not None:
                 print(f"[PASS] {CHANNEL_OVERRIDE_NOTICE}")
             return 0
-        path = root / (OVERRIDE if args.role == "ops" else ".hermes/interop/config.json")
+        if args.role == "ops":
+            from automation.interop.approval_directory import channel_override_path
+
+            path = channel_override_path()
+        else:
+            path = root / ".hermes/interop/config.json"
         exists = path.exists()
         text = path.read_bytes().decode("utf-8") if exists else "{}"
         current = identity(text, args.role)
@@ -253,7 +260,7 @@ def main(argv: Sequence[str] | None = None, *, home: Path | None = None) -> int:
                     return 5
         print(f"{MARKER} have={wanted}")
         return 0
-    except (OSError, UnicodeError, ValueError) as error:
+    except (OSError, UnicodeError, ValueError, NodeConfigError) as error:
         print(f"{MARKER}-ERROR reason={type(error).__name__}", file=sys.stderr)
         return 3
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import io
 from dataclasses import replace
@@ -11,7 +12,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from automation import deploy_all_config, release_approval, yoodori_channel as move
+from automation import deploy_all_config, node_config, release_approval, yoodori_channel as move
 from automation.interop import approval_directory as directory, digest_thread
 from automation.owner_notice import owner_notice_channel
 from automation.release_spec import yoodori_channel_surface
@@ -24,8 +25,18 @@ from tests.unit.test_dori_switch_node_probe import _plan
 NOTICE = "444444444444444444"
 
 
-def _override(home: Path) -> Path:
-    path = home / move.OVERRIDE
+def _node_config(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = home.parent / f"{home.name}-node.toml"
+    path.write_text(
+        f"private_root = {json.dumps(str(home.parent / (home.name + '-private')))}\n"
+        f"ops_home = {json.dumps(str(home))}\n",
+    )
+    monkeypatch.setenv("HEALTHCHECK_NODE_CONFIG_PATH", str(path))
+
+
+def _override(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    _node_config(home, monkeypatch)
+    path = directory.channel_override_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({move.CHAT: NEW, move.NOTICE: NEW}))
     path.chmod(0o600)
@@ -42,7 +53,7 @@ def test_override_precedes_root_config_and_env_only_when_trusted(
     root_config.write_text(json.dumps({move.CHAT: OLD}))
     monkeypatch.setenv("INTEROP_CONFIG", str(root_config))
     monkeypatch.setenv("OWNER_NOTICE_CHANNEL_ID", NOTICE)
-    path = _override(tmp_path)
+    path = _override(tmp_path, monkeypatch)
     if case == "absent":
         path.unlink()
     elif case == "json":
@@ -79,10 +90,11 @@ def test_declared_channel_writer_moves_and_restores_both_accounts(
     path.write_text(original)
     monkeypatch.setenv("INTEROP_CONFIG", str(path))
     monkeypatch.setenv("OWNER_NOTICE_CHANNEL_ID", NOTICE)
+    _node_config(home, monkeypatch)
     args = ["--role", role, "--yoodori-channel", NEW]
     # When / Then
     assert move.main(["--apply", *args], home=home) == 0
-    target = home / move.OVERRIDE if role == "ops" else path
+    target = directory.channel_override_path() if role == "ops" else path
     data = json.loads(target.read_text())
     assert data[move.NOTICE] == NEW
     assert data[move.CHAT] == (OLD if role == "peer" else NEW)
@@ -158,7 +170,8 @@ def test_release_authorization_precedes_every_channel_write(
     else:
         assert json.loads(path.read_text())[move.CHAT] == NEW
         assert json.loads((tmp_path / "node/peer/.hermes/interop/config.json").read_text())[move.NOTICE] == NEW
-        assert (tmp_path / "node/ops" / move.OVERRIDE).exists()
+        private = node_config.load_node_config(Path(env["HEALTHCHECK_NODE_CONFIG_PATH"])).private_root
+        assert (private / "channel-override.json").exists()
         flag.unlink()
         restored = subprocess.run(
             ["bash", str(repo / "automation/memory_curator/deploy.sh")], env=env,
@@ -166,7 +179,7 @@ def test_release_authorization_precedes_every_channel_write(
         )
         assert restored.returncode == 0, restored.stdout + restored.stderr
         assert path.read_bytes() == before
-        assert not (tmp_path / "node/ops" / move.OVERRIDE).exists()
+        assert not (private / "channel-override.json").exists()
         assert NEW not in (tmp_path / "node/agent/.hermes/config.yaml").read_text()
 
 
@@ -233,12 +246,13 @@ def test_release_writer_validates_configured_owner_guild_before_writing(
 
 
 def test_override_status_is_pass_and_absence_is_silent(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given / When / Then
+    _node_config(tmp_path, monkeypatch)
     assert move.main(["--override-status"], home=tmp_path) == 0
     assert capsys.readouterr().out == ""
-    _override(tmp_path)
+    _override(tmp_path, monkeypatch)
     assert move.main(["--override-status"], home=tmp_path) == 0
     result = capsys.readouterr()
     assert result.out.startswith("[PASS]")
@@ -252,16 +266,20 @@ def test_doctor_and_healthcheck_report_override_as_pass(
     from automation.doctor.capabilities import evaluate
     from automation.install.checks import Status
     from tests.unit.test_doctor import _connected_home, _facts
-    from tests.unit.test_healthcheck_owner_notice_probe import _FILLED, _probe
+    from tests.unit.test_healthcheck_owner_notice_probe import _FILLED
 
     home = _connected_home(tmp_path)
-    _override(home)
+    _override(home, monkeypatch)
     credential = tmp_path / "notice.env"
     credential.write_text(_FILLED)
     monkeypatch.setenv("HOME", str(home))
     # When
     findings = evaluate(_facts(home))
-    check = _probe(credential)
+    check = subprocess.run(
+        ["bash", "-c", 'source "$1"; probe_owner_notice_credentials primary ops "$2"',
+         "_", str(REPO / "automation/owner_notice_probe.sh"), str(credential)],
+        env=dict(os.environ), capture_output=True, text=True, check=False, timeout=15,
+    )
     # Then
     found = next(f for f in findings if f.key == "channel-override")
     assert found.status is Status.PASS and not found.steps

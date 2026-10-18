@@ -5,4 +5,4 @@ agent|automation/memory_provider/agent_config.py|.hermes/config.yaml|v2:config;a
 peer|automation/memory_provider/config.py|.hermes/config.yaml|v2:config;algorithm=hermes-memory-profile-with-recall-v1;activation=gateway
 agent|automation/yoodori_channel.py|.hermes/interop/config.json|v2:config;algorithm=yoodori-channel-v1;activation=gateway
 peer|automation/yoodori_channel.py|.hermes/interop/config.json|v2:config;algorithm=yoodori-channel-v1
-ops|automation/yoodori_channel.py|.hermes/interop/channel-override.json|v2:config;algorithm=yoodori-channel-v1
+ops|automation/yoodori_channel.py|private/channel-override.json|v2:config;algorithm=yoodori-channel-v1

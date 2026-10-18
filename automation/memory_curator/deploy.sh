@@ -95,4 +95,4 @@ converge_config agent .hermes/config.yaml hermes-agent-profile-v1 --dori-agent-c
 converge_config peer .hermes/config.yaml hermes-memory-profile-with-recall-v1
 converge_config agent .hermes/interop/config.json yoodori-channel-v1 --yoodori-channel "${chat_channel:-off}"
 converge_config peer .hermes/interop/config.json yoodori-channel-v1 --yoodori-channel "${chat_channel:-off}"
-converge_config ops .hermes/interop/channel-override.json yoodori-channel-v1 --yoodori-channel "${chat_channel:-off}"
+converge_config ops private/channel-override.json yoodori-channel-v1 --yoodori-channel "${chat_channel:-off}"

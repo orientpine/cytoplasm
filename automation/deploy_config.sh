@@ -65,7 +65,8 @@ converge_config() { # converge_config <account> <destination-relative-to-HOME> <
     return 2
   fi
   module="${target%% *}"
-  [[ "$algorithm" != yoodori-channel-v1 || "$account" != ops ]] || target="$module .hermes/interop/channel-override.json"
+  # The ops algorithm binds this logical destination to node.private_root, outside ProtectHome.
+  [[ "$algorithm" != yoodori-channel-v1 || "$account" != ops ]] || target="$module private/channel-override.json"
   if [[ "$destination" != "${target#* }" ]]; then
     printf 'DEPLOY-BLOCK: algorithm %q writes %s, not %q.\n' "$algorithm" "${target#* }" "$destination" >&2
     return 2

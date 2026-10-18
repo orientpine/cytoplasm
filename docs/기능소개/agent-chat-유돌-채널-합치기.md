@@ -19,7 +19,9 @@
 - agent `~/.hermes/interop/config.json`의 `agent_chat_channel_id`와
   `owner_notice_channel_id`를 변경하고 각각의 `*_before_release`에 원래 값을 보존한다.
 - peer의 같은 파일에서는 `owner_notice_channel_id`만 변경·복원한다.
-- ops `~/.hermes/interop/channel-override.json`에 두 새 ID와 복원 정보를 쓴다.
+- ops는 노드 설정 `private_root` 아래 `channel-override.json`에 두 새 ID와 복원 정보를 쓴다
+  (기본 `/srv/autophagy-private/channel-override.json`). 두 수리 유닛의 `ProtectHome=yes`가
+  홈을 숨기므로 홈 파일은 읽지 않는다. 기존 ops 전용 디렉터리에 ops로 쓰며 root 권한을 늘리지 않는다.
   root 소유 `/etc/autophagy/interop-ops.json`과 `repair-approval.env`는 수정하지 않는다.
   이 파일은 읽는 계정 소유·0600 일반 파일이고 두 ID가 17~20자리 숫자일 때만
   `/etc`와 `OWNER_NOTICE_CHANNEL_ID`보다 우선한다. 잘못된 override는
@@ -29,7 +31,8 @@
 
 설정에 소유자 guild ID가 있으면 쓰기 전에 Discord GET으로 대상의 guild·텍스트
 채널 여부를 검증한다. 런타임 override 조회는 Discord를 호출하지 않는다.
-doctor·헬스체크에는 override 사용 시 정상(PASS) 한 줄이 표시된다.
+doctor·헬스체크에는 override 사용 시 `노드 설정 private_root/channel-override.json`이
+우선한다는 정상(PASS) 한 줄이 표시된다.
 파일을 지우고 재배포하면 두 계정의 저장값을 복원하고 ops override를 제거한다.
 같은 설정 재배포는 무동작이며 변경 시 백업·원자 교체·재조회로 확인한다.
 
@@ -67,6 +70,9 @@ ops 수리 카드는 정책 v8의 요청별 승인 스레드다.
 남는다. Hermes 캐시·peer 무시 목록과 미실행 일회성 `create_*.py`도 이 기능이
 정리하지 않는다. root 파일의 옛 ID는 override 아래에 그대로 남는다.
 복원 정보는 릴리스 수렴기만 읽으며 일반 발신 경로는 새 설정·override를 사용한다.
+
+선언의 `private/channel-override.json`은 HOME 상대 파일이 아니라 알고리즘이
+노드 설정 `private_root`에 바인딩하는 논리 목적지다. 읽기·쓰기·관측은 같은 경로 함수를 쓴다.
 
 관련: `automation/yoodori_channel.py`, `automation/memory_curator/deploy-manifest.txt`,
 `automation/interop/approval_directory.py`, `automation/owner_notice.py`,
