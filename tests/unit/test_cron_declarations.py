@@ -90,7 +90,7 @@ def declared_jobs(root: Path) -> tuple[tuple[Job, ...], tuple[Problem, ...]]:
     jobs: list[Job] = []
     problems: list[Problem] = []
     for row in all_declarations(root):
-        if row.kind != "cron":
+        if row.kind != "cron" or row.policy in ("held", "retired"):
             continue
         if row.attr("mode") != "no-agent":
             problems.append(Problem("mode", row.owner, row.destination))
@@ -235,7 +235,7 @@ def test_every_registration_matches_its_declaration() -> None:
     assert check(_REPO) == ()
     names = {account: {job.name for job in declared if job.account == account} for account in ("agent", "peer")}
     assert len(names["agent"]) == 31
-    assert names["peer"] == {"doctor-watch", "selfskill-audit-watch", "memory-relocate-peer-watch"}
+    assert names["peer"] == {"doctor-watch", "selfskill-audit-watch"}
     timers = {(r.job.account, r.job.name) for r in registered if r.via == "timer"}
     assert timers == {("agent", name) for name in names["agent"]}  # 바로 전환: agent 잡 전부가 타이머
     raw = {(registration.job.package, registration.job.name) for registration in registered
