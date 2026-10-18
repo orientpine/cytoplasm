@@ -264,7 +264,10 @@ def cmd_reply_request(args: argparse.Namespace) -> int:
         return cmd_draft(argparse.Namespace(
             uid=str(item["uid"]), instruction=args.instruction, attachment=[],
             no_post=args.no_post, with_evidence=args.with_evidence, reply_all=args.reply_all,
-            digest_card={"channel_id": item.get("channel_id", ""), "message_id": item["message_id"]},
+            digest_card={
+                "channel_id": getattr(args, "origin_channel_id", "") or item.get("channel_id", ""),
+                "message_id": getattr(args, "origin_message_id", "") or item["message_id"],
+            },
         ))
 
 
@@ -657,6 +660,8 @@ def build_parser() -> argparse.ArgumentParser:
     reply.add_argument("--key", required=True, help="답장 대상 메시지의 회신 키 (예: 1008-0800-3)")
     reply.add_argument("--author-id", required=True, help="답장한 Discord 사용자 id")
     reply.add_argument("--instruction", required=True, help="답장 본문 = 회신 요지")
+    reply.add_argument("--origin-channel-id", default="", help="원 지시 채널")
+    reply.add_argument("--origin-message-id", default="", help="원 지시 메시지")
     reply.add_argument("--no-post", action="store_true", help="초안만 만들고 승인 메시지 게시 생략")
     reply.add_argument("--with-evidence", action="store_true", help="상대·주제 관련 개인 근거 사용")
     reply.add_argument("--reply-all", action="store_true", help="전체회신")
