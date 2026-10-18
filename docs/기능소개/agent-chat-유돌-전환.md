@@ -19,6 +19,8 @@ agent의 `hermes-agent-profile-v1`이 메모리 상한·자동 회상과 이 선
 백업 한 번 → 임시 파일 → 원자 교체 → 두 설정 재조회 순서이며,
 peer는 기존 `hermes-memory-profile-with-recall-v1`을 유지한다.
 `activation=gateway`가 릴리스의 agent+peer 동시 재시동을 요구한다.
+단, [게이트웨이 멈춤](hermes-게이트웨이-멈춤.md) 스위치가 함께 켜졌으면 설정만 맞추고
+두 서비스를 정지 상태로 유지한다. 정지 모드에서는 세대 검사·재시동을 하지 않는다.
 
 ## 사용 시나리오
 

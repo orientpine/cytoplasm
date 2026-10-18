@@ -98,6 +98,7 @@ class Facts:
     #: 공급자별로 `exhausted`(일시 쿨다운) 자격이 다시 쓰이기까지 남은 초 — 가장 늦은 것. 알 수 없으면 None.
     cooldowns: Mapping[str, float | None] | None = None
     timers: tuple[TimerJob, ...] = ()
+    gateway_stopped_by_release: bool = False
 
 
 def mask(text: str) -> str:
@@ -335,6 +336,8 @@ def gather(
     run: Run = _run, discord_probe: DiscordProbe = _discord_probe, uid: int | None = None,
     repo: Path = _REPO, now: float | None = None,
 ) -> Facts:
+    from automation.hermes_gateways import stopped_by_release
+
     hermes_dir = home / ".hermes"
     secrets = read_env_file(home / ".env.secrets")
     names = None if secrets is None else frozenset(key for key, value in (secrets or {}).items() if value)
@@ -359,6 +362,7 @@ def gather(
         account=account, role=role, home=home, gateway_unit=gateway_unit,
         hermes=(home / ".local" / "bin" / "hermes").is_file(),
         gateway=_gateway(gateway_unit, run, os.getuid() if uid is None else uid),
+        gateway_stopped_by_release=stopped_by_release(home),
         auth=_auth(hermes_dir / "auth.json"),
         cooldowns=_cooldowns(hermes_dir / "auth.json", time.time() if now is None else now),
         model_provider=provider,
