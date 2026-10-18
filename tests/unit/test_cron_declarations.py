@@ -53,7 +53,7 @@ _OPERATORS: Final = frozenset({"||", "&&", ";", "|", "&"})
 _NAME: Final = re.compile(r"[a-z0-9][a-z0-9-]*")
 _SCRIPT: Final = re.compile(r"[A-Za-z0-9_]+\.py")
 _DELIVERIES: Final = frozenset({"local", "discord"})
-_EVERY: Final = re.compile(r"every [1-9][0-9]*[mh]")
+_EVERY: Final = re.compile(r"every [1-9][0-9]*[smh]")
 _CRON_FIELDS: Final = re.compile(r"[0-9*/,-]+( [0-9*/,-]+){4}")
 
 
@@ -234,7 +234,7 @@ def test_every_registration_matches_its_declaration() -> None:
 
     assert check(_REPO) == ()
     names = {account: {job.name for job in declared if job.account == account} for account in ("agent", "peer")}
-    assert len(names["agent"]) == 31
+    assert len(names["agent"]) == 32
     assert names["peer"] == {"doctor-watch", "selfskill-audit-watch"}
     timers = {(r.job.account, r.job.name) for r in registered if r.via == "timer"}
     assert timers == {("agent", name) for name in names["agent"]}  # 바로 전환: agent 잡 전부가 타이머
