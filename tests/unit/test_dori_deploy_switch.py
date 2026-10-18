@@ -24,7 +24,8 @@ def _rig(
     repo = tmp_path / "repo"
     automation = repo / "automation"
     (automation / "memory_curator").mkdir(parents=True)
-    for name in ("__init__.py", "hermes_agent_chat_ignore.py", "hermes_memory_config.py", "memory_provider"):
+    for name in ("__init__.py", "hermes_agent_chat_ignore.py", "hermes_memory_config.py", "memory_provider",
+                 "yoodori_channel.py"):
         (automation / name).symlink_to(REPO / "automation" / name)
     for name in ("memory_curator/deploy.sh", "deploy_config.sh"):
         shutil.copyfile(REPO / "automation" / name, automation / name)

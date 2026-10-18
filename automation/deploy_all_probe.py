@@ -190,12 +190,17 @@ def main(argv: list[str] | None = None) -> int:
         help="선언 밖 홈 파일도 drift 로 판정",
     )
     parser.add_argument("--rag-mcp-refresh", default="", help="MCP refresh result for the receipt")
+    from automation.yoodori_channel import channel_value
+
+    parser.add_argument("--yoodori-channel", type=channel_value, default="off",
+                        help="릴리스 호스트가 선택한 대화·알림 채널 또는 off")
     parser.add_argument(
         "--dori-agent-chat", choices=("on", "off"), required=True,
         help="릴리스 호스트가 읽은 도리 전환(노드는 그 파일을 갖지 않는다)",
     )
     args = parser.parse_args(argv)
-    observer = functools.partial(deploy_all_observe.observe_node, dori_agent_chat=args.dori_agent_chat)
+    observer = functools.partial(deploy_all_observe.observe_node, dori_agent_chat=args.dori_agent_chat,
+                                 agent_chat_channel=args.yoodori_channel)
     if args.format == "gateways":
         return _gateways(args.runtime_root)
     try:
