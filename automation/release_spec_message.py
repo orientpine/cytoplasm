@@ -6,7 +6,7 @@ from typing import Final, Protocol
 
 from automation.interop.chunker import chunk_lines
 
-YOODORI_CARD_COMMAND_COUNT: Final = 6
+YOODORI_CARD_COMMAND_COUNT: Final = 7
 YOODORI_GMAIL_READ_COUNT: Final = 2
 
 
