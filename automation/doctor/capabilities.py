@@ -347,4 +347,9 @@ def evaluate(facts: Facts) -> tuple[Finding, ...]:
         )
         findings.append(Finding(capability.key, capability.label, verdict.status, verdict.detail,
                                 capability.affects, steps, verdict.subjects))
+    if facts.channel_override:
+        from automation.interop.approval_directory import CHANNEL_OVERRIDE_NOTICE
+
+        findings.append(Finding("channel-override", "채널 덮어쓰기", Status.PASS,
+                                CHANNEL_OVERRIDE_NOTICE, "대화·알림 목적지", ()))
     return tuple(findings)

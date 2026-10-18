@@ -99,6 +99,7 @@ class Facts:
     cooldowns: Mapping[str, float | None] | None = None
     timers: tuple[TimerJob, ...] = ()
     gateway_stopped_by_release: bool = False
+    channel_override: bool = False
 
 
 def mask(text: str) -> str:
@@ -358,6 +359,8 @@ def gather(
             discord = discord_probe(token, interop_path if interop_path.is_file() else None)
         except Exception as error:  # noqa: BLE001 - a probe failure is a verdict, never a crash
             discord = type(error).__name__
+    from automation.interop.approval_directory import channel_override
+
     return Facts(
         account=account, role=role, home=home, gateway_unit=gateway_unit,
         hermes=(home / ".local" / "bin" / "hermes").is_file(),
@@ -377,6 +380,7 @@ def gather(
         gws=_gws_status(gws_binary, run) if online and gws_binary and gws_files else None,
         cron=cron,
         timers=timers,
+        channel_override=channel_override(home) is not None,
         discord=discord,
         model_default=default,
         fallback_models=fallback_models,
