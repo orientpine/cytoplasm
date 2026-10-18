@@ -64,6 +64,10 @@ case "$1" in
   timer) PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$2" python3 -B -m automation.cron_timer check-declared --role "$3" --name "$4" ;;
   delegated) timeout 300 bash "$2/automation/healthcheck_delegated.sh" ;;
   gateway) r="$2"; shift 2; PYTHONPATH="$r" python3 -B -m automation.gateway_generation --check --runtime-root "$r" "$@" ;;
+  gateway-service) export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    systemctl --user is-active hermes-gateway.service; rc=$?
+    if cmp -s "$HOME/.hermes/gateway-stopped-by-release" <(printf stopped); then echo marked; else echo unmarked; fi
+    exit "$rc" ;;
   *) exit 64 ;;
 esac"""
 
@@ -282,6 +286,7 @@ def _delegated(root: Path, call: Runner, ops_account: str) -> list[str]:
 def collect(
     runtime_root: Path, runner: Runner, ops_account: str, *, gateway_only: bool = False,
     dori_agent_chat: str | None = None,
+    hermes_gateways: str = "running",
 ) -> list[str]:
     """v2 선언의 관측 줄 + 게이트웨이 세대 + 위임 프로브 줄 + `OBS|artifacts|<n>`. legacy 행은 다루지 않는다.
 
@@ -311,11 +316,17 @@ def collect(
         lines.append(f"OBS|artifact|{head}|{decl.owner}|{decl.policy}|{decl.attr('activation')}|{status}"
                      f"|{'-' if decl.policy == 'retired' else seen.want}|{seen.have}")
         lines += [f"OBS|artifact-detail|{head}|{reason}|{quote(rel, safe='/._-+,@=~')}" for reason, rel in details]
-    lines += deploy_all_gateway.gateway_lines(declarations, statuses, runtime_root, call)
+    accounts = sorted({d.account for d in declarations if d.destination == deploy_all_gateway.DROPIN}
+                      | ({"agent", "peer"} if hermes_gateways == "stopped" else set()))
+    services = deploy_all_gateway.service_lines(accounts, hermes_gateways, call)
+    service_states = deploy_all_gateway.fold_services((line.split("|") for line in services), set(accounts), hermes_gateways)
+    lines += deploy_all_gateway.gateway_lines(declarations, statuses, runtime_root, call,
+                                              service_states, hermes_gateways=hermes_gateways)
     if gateway_only:
-        return [line for line in lines if line.startswith("OBS|gateway|")]
+        return [line for line in lines if line.startswith("OBS|gateway|")] + services
     count = sum(1 for line in lines if line.startswith("OBS|artifact|"))
-    return [*lines, *_delegated(runtime_root, call, ops_account), f"OBS|artifacts|{count}"]
+    return [*lines, f"OBS|gateway-mode|{hermes_gateways}", *services,
+            *_delegated(runtime_root, call, ops_account), f"OBS|artifacts|{count}"]
 
 
 def v2_file_destinations(runtime_root: Path) -> frozenset[tuple[str, str]]:
@@ -323,11 +334,14 @@ def v2_file_destinations(runtime_root: Path) -> frozenset[tuple[str, str]]:
     return frozenset((d.account, d.destination) for d in all_declarations(runtime_root) if not d.legacy and d.kind == "file")
 
 
-def observe_node(runtime_root: Path, *, gateway_only: bool = False, dori_agent_chat: str | None = None) -> list[str]:
+def observe_node(
+    runtime_root: Path, *, gateway_only: bool = False, dori_agent_chat: str | None = None,
+    hermes_gateways: str = "running",
+) -> list[str]:
     """노드의 기본 수집 — 노드 설정의 ops 계정으로 위임 프로브를 돌린다(설정 불가 = 확인 불가)."""
     try:
         ops_account = load_node_config().ops_account
     except (NodeConfigError, OSError):
         ops_account = ""
     return collect(runtime_root, default_runner, ops_account, gateway_only=gateway_only,
-                   dori_agent_chat=dori_agent_chat)
+                   dori_agent_chat=dori_agent_chat, hermes_gateways=hermes_gateways)
