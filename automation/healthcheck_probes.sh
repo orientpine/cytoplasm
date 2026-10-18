@@ -72,8 +72,14 @@ if [[ -z "${HEALTHCHECK_PROBES_LOADED:-}" ]]; then
     local response
 
     valid_account "$account" && valid_http_url "$url" || return 1
-    response="$(capture_on_node "$node" "sudo -n -u ${account} -H curl --fail --silent '${url}'")" || return 1
-    [[ "$response" == *'"status"'*'"ok"'* && "$response" == *'"model"'*'"BAAI/bge-m3"'* && "$response" == *'"dimensions"'*1024* ]]
+    # One slow answer is not an outage (2026-10-18: a single 26 s reply under load opened an incident).
+    # Each try is capped; a second try runs only after the first failed, and two failures stay a failure.
+    local attempt
+    for attempt in 1 2; do
+      response="$(capture_on_node "$node" "sudo -n -u ${account} -H curl --fail --silent --max-time 10 '${url}'")" || continue
+      [[ "$response" == *'"status"'*'"ok"'* && "$response" == *'"model"'*'"BAAI/bge-m3"'* && "$response" == *'"dimensions"'*1024* ]] && return 0
+    done
+    return 1
   }
 
   probe_qdrant_health() {
