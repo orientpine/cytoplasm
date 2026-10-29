@@ -20,8 +20,8 @@ from pathlib import Path
 # sshd runs this file with -I: only its own declared helper directory is added.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from yoodori_request_runtime import (  # noqa: E402
-    Refused, card_env, calendar_card, checked_value, job_env, original_name, stage_body, stage_file,
-    stage_mail_attachment, stage_name,
+    Refused, card_env, calendar_card, checked_value, job_env, named_attachment, original_name, stage_body,
+    stage_file, stage_mail_attachment, stage_name, stage_named,
 )
 import yoodori_jobs  # noqa: E402
 
@@ -153,7 +153,8 @@ USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          "  posted with mail-compose or mail-draft and the owner has not decided; never sends or approves).\n"
          "Dashboard order: order-status <n> <" + "|".join(ORDER_STATUSES) + ">"
          " [--dori <name>] [--post-url <https link>] [--note <text>].\n"
-         "Private upload: stage <name> (file bytes on SSH stdin, at most 64 MiB).\n"
+         "Private upload: stage <name> [--name <display name>] (file bytes on SSH stdin, at most 64 MiB;\n"
+         "  <name> is plain ASCII, --name is the Korean name a mail attachment shows, same extension).\n"
          "Received attachment: mail-attachment <uid> <file name as mail-get shows it> + origin\n"
          "  (copies that file of the owner's mail into staging; prints its staged path).\n"
          "Card requests (origin channel/message ids required): " + ", ".join(CARD_COMMANDS) + "\n"
@@ -248,6 +249,12 @@ def _card(name: str, args: list[str]) -> tuple[str, list[str], Path]:
         received = original_name(STAGING, values["--drive-share"])
         if received:
             values["--drive-name"] = _value(received, "short")
+    if name == "mail-compose":
+        # A staged file goes out under its display name (stage --name or a received attachment's own).
+        if "--attachment" in values:
+            values["--attachment"] = named_attachment(STAGING, values["--attachment"])
+        repeats = [(flag, named_attachment(STAGING, value) if flag == "--attachment" else value)
+                   for flag, value in repeats]
     tails: list[str] = []
     if name == "command-request":
         try:
@@ -565,9 +572,9 @@ def build(words: list[str]) -> tuple[str, list[str], Path]:
             raise Refused("plaud-written needs exactly <n>")
         return name, [_int(args[0], 1, 50)], HOME
     if name == "stage":
-        if len(args) != 1:
-            raise Refused("stage needs exactly one file name")
-        return name, [stage_name(args[0])], STAGING
+        if len(args) not in (1, 3) or (len(args) == 3 and args[1] != "--name"):
+            raise Refused("stage needs one file name, optionally --name <display name>")
+        return name, [stage_name(args[0]), *args[2:]], STAGING
     if name == "mail-attachment":
         rest, channel, message = _origin(args)
         if len(rest) != 2 or not _UID.fullmatch(rest[0]):
@@ -814,8 +821,10 @@ def main() -> int:
                     sys.stdout.buffer.write(chunk)
             rc = 0
         elif name == "stage":
-            path, digest, size = stage_file(STAGING, argv[0], sys.stdin.buffer)
-            print(f"STAGED {argv[0]} sha256={digest} bytes={size} path={path}")
+            shown = argv[1] if len(argv) > 1 else None
+            path, digest, size = stage_named(STAGING, argv[0], shown, sys.stdin.buffer)
+            print(f"STAGED {argv[0]} sha256={digest} bytes={size} path={path}"
+                  + (f" display={original_name(STAGING, str(path))}" if shown is not None else ""))
             rc = 0
         elif name == "mail-attachment":
             _, notice_bot = _release_modules()

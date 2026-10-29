@@ -92,6 +92,11 @@ ssh <노드-별칭> 'stage report.pdf' < ./report.pdf
 초과·읽기 실패는 `YOODORI-GATE-REFUSED`이며 부분 파일을 지우고 기존 완성 파일은 보존한다.
 폴더는 0700이고 이 단계는 노드 비공개 저장일 뿐, Drive·Obsidian에 쓰거나 카드를 올리지 않는다.
 
+메일 첨부가 한글 이름으로 나가야 하면 `stage <ASCII 이름> --name <표시 이름>`을 쓴다
+(예: `stage task_admin7_Hong.pptx --name 과제_행정7_홍길동.pptx`). 저장 이름은 위 규칙 그대로이고,
+표시 이름은 옆 파일에 남아 `mail-compose --attachment`의 카드와 받는 사람의 첨부 이름이 된다.
+자세한 것은 [메일 첨부 한글 이름](메일-첨부-한글-이름.md).
+
 전달 후 `drive-save --file report.pdf …`(스테이징한 이름 그대로, 또는 `path=` 의 절대 경로)로
 기존 승인 카드를 요청한다. 형의 카드 ✅ 이후에만 Drive에 저장한다.
 노트 본문은 별도 업로드 없이 `obsidian-request --relpath … --body-b64 <UTF-8-Base64> …`로
