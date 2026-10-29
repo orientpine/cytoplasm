@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO
@@ -24,6 +25,71 @@ def stage_name(name: str) -> str:
     if not re.fullmatch(r"(?!\.)[A-Za-z0-9._-]{1,120}", name):
         raise Refused("stage name must be 1-120 plain characters, with no leading dot")
     return name
+
+
+# Windows refuses these in a file name, so a recipient could not save the attachment.
+_NAME_FORBIDDEN = frozenset('/\\:*?"<>|')
+
+
+def display_name(name: str, staged: str) -> str:
+    """The attachment name a recipient sees: Korean allowed, never a path, control or format character.
+
+    Owner 2026-10-29: a submission rule asked for "과제_행정7_성명.pptx" while the staged
+    name stays plain ASCII. The extension must be the staged file's own, so a name cannot relabel a type.
+    """
+    shown = unicodedata.normalize("NFC", name.strip())
+    if (not 1 <= len(shown) <= 120 or len(shown.encode("utf-8")) > 240 or shown.startswith(".")
+            or shown.endswith(".") or any(c in _NAME_FORBIDDEN for c in shown)
+            or any(unicodedata.category(c) in {"Cc", "Cf", "Cs", "Co", "Zl", "Zp"} for c in shown)):
+        raise Refused("display name must be 1-120 characters with no path, control or format character")
+    if Path(shown).suffix.lower() != Path(staged).suffix.lower() or not Path(shown).stem.strip():
+        raise Refused("display name must keep the staged file's extension")
+    return shown
+
+
+def stage_named(root: Path, name: str, shown: str | None, source: BinaryIO) -> tuple[Path, str, int]:
+    """Stage one upload; a display name rides beside it, and a re-upload without one drops the old."""
+    shown = display_name(shown, stage_name(name)) if shown is not None else None
+    staged = stage_file(root, name, source)
+    sidecar = root / (name + ".name")
+    if shown is None:
+        if not sidecar.is_symlink() and sidecar.is_file():
+            sidecar.unlink()
+    else:
+        stage_file(root, sidecar.name, io.BytesIO(shown.encode("utf-8")))
+    return staged
+
+
+def named_attachment(staging: Path, staged: str) -> str:
+    """The staged file under its display name, as a hard link inside staging, or the path unchanged.
+
+    Both mail transports name the attachment after the file (gws -a, the webmail's file upload),
+    so the card, the approval digest and the recipient all see the display name.
+    """
+    path = Path(staged)
+    try:
+        shown = display_name(original_name(staging, staged), path.name)
+    except Refused:
+        return staged
+    if shown == path.name:
+        return staged
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(65536):
+                digest.update(chunk)
+        folder = staging / ".named" / digest.hexdigest()[:32]
+        target = folder / shown
+        if folder.is_symlink() or folder.parent.is_symlink():
+            raise Refused("staging directory must not be a symlink")
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if target.is_symlink() or (target.exists() and not target.samefile(path)):
+            target.unlink()
+        if not target.exists():
+            os.link(path, target)
+    except OSError:
+        raise Refused("staging file unreadable") from None
+    return str(target)
 
 
 def stage_file(root: Path, name: str, source: BinaryIO) -> tuple[Path, str, int]:
