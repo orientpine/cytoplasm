@@ -210,9 +210,23 @@ python3 -m automation.drive_publish_cli \
 | 변수 | 기본 | 용도 |
 |---|---|---|
 | `DRIVE_PUBLISH_ENABLED` | (미설정) | `1`일 때만 발행. 옵트인 — 미설정 환경과 테스트에서는 Drive 호출 0 |
-| `DRIVE_OUTPUTS_ROOT` | `autophagy` | 단일 루트 폴더명 |
+| `DRIVE_OUTPUTS_ROOT` | `autophagy` | 단일 루트 폴더명. 메일 첨부 아카이브(`<root>/메일 첨부파일/…`)·용어집·제안서 발행도 같은 값을 읽는다 |
 | `DRIVE_GWS_BIN` → `DRIVE_PUBLISH_GWS_BIN` | `gws` | gws 바이너리(앞의 것이 우선) |
 | `DRIVE_PUBLISH_CACHE` | `~/.hermes/drive-publish/folders.json` | 폴더 id 조회 캐시 |
+
+## 루트 폴더 이름 바꾸기
+
+루트는 이름으로 찾고, 찾지 못하면 새로 만든다. 노드 폴더 캐시(`DRIVE_PUBLISH_CACHE`, 메일 첨부
+아카이브의 `~/.hermes/mail-attachment-drive/folders.json` 등)는 옛 이름 키에 폴더 id 를 들고 있어,
+Drive 에서 이름만 바꾼 폴더(id 동일)에는 옛 설정으로도 계속 쓴다. 그래서 순서는 이렇다.
+
+1. 새 이름을 읽는 코드가 노드에 반영돼 있는지 확인한다(설정은 아직 옛 값).
+2. Drive 에서 루트 폴더 이름을 바꾼다(이동·새로 만들기 아님, id 유지).
+3. 그 직후 노드 서비스 계정 `~/.env.secrets` 에 `DRIVE_OUTPUTS_ROOT="<새 이름>"` 을 넣는다. 작은따옴표가
+   든 이름은 큰따옴표로 감싼다(systemd `EnvironmentFile` 도 같은 파일을 읽는다).
+4. 다음 발행·첨부 보관 한 번이 새 이름 아래로 들어가고 옛 이름 폴더가 새로 생기지 않았는지 Drive 목록으로 확인한다.
+
+설정을 이름 바꾸기보다 먼저 넣으면, 그 사이의 첫 틱이 새 이름 폴더를 찾지 못해 **같은 이름의 빈 루트를 하나 더 만든다**.
 
 ## 마이그레이션 (1회성, 소유자 실행)
 
