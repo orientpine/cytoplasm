@@ -9,6 +9,7 @@ fetched: the page must open offline as a mail attachment.
 from __future__ import annotations
 
 import base64
+import json
 from html import escape
 from typing import Final
 
@@ -468,7 +469,7 @@ def page_shell(title: str, body: str, brand: str) -> str:
     return (
         '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
-        f'<title>{escape(title)} · {name}</title>{head_icons(name)}<style>{CSS}</style></head><body>'
+        f'<title>{escape(title)} · {name}</title>{head_icons(brand)}<style>{CSS}</style></head><body>'
         f'{sprite()}<header><div class="bar"><a class="brand" href="/">{brand_mark()}{name}</a></div></header>{body}</body></html>'
     )
 
@@ -479,16 +480,25 @@ def notice_page(title: str, message: str, brand: str, *, action: str = "") -> st
     return page_shell(title, body, brand)
 
 
-# The product icon (owner 2026-10-31 "페이지 아이콘 만들어줘"): three rising bars - white, yellow, coral - and a sparkle on
-# the accent blue; the tallest bar has two eyes. A picture, not a letter, so it reads at 16px in a browser tab and stays
-# the same whatever the product is named. One drawing for the tab, the header and the home screen.
+# The product icon (owner 2026-10-31 "페이지 아이콘 만들어줘", Q402 "팔란티르 느낌나는 아이콘으로 하고 팔란티르로 하자"):
+# a seeing-stone - a dark orb on a gold stand, light swirling inside it and a star shining at its centre - drawn here,
+# not taken from a film or a company logo. A picture, not a letter: at 16px in a browser tab it still reads as a round
+# orb. One drawing for the tab, the header and the home screen.
+_ICON_DEFS: Final = (
+    "<radialGradient id='o' cx='.42' cy='.38' r='.7'><stop offset='0' stop-color='#4a7dff'/>"
+    "<stop offset='.45' stop-color='#16246a'/><stop offset='1' stop-color='#070b22'/></radialGradient>"
+    "<radialGradient id='c'><stop offset='0' stop-color='#fff'/><stop offset='.35' stop-color='#bfe3ff'/>"
+    "<stop offset='1' stop-color='#bfe3ff' stop-opacity='0'/></radialGradient>"
+)
 _ICON_ART: Final = (
-    "<rect x='12' y='35' width='11' height='17' rx='5.5' fill='#fff'/>"
-    "<rect x='26.5' y='25' width='11' height='27' rx='5.5' fill='#ffd23f'/>"
-    "<rect x='41' y='15' width='11' height='37' rx='5.5' fill='#ff7a59'/>"
-    "<path d='M19 10.5C20.5 17.5 20.5 17.5 27.5 19C20.5 20.5 20.5 20.5 19 27.5C17.5 20.5 17.5 20.5 10.5 19"
-    "C17.5 17.5 17.5 17.5 19 10.5Z' fill='#fff'/>"
-    "<circle cx='44.2' cy='21' r='1.6' fill='#7a2410'/><circle cx='48.8' cy='21' r='1.6' fill='#7a2410'/>"
+    "<path d='M25 46h14l3 6H22z' fill='#d9a441'/><path d='M17 52h30a3 3 0 0 1 0 6H17a3 3 0 0 1 0-6z' fill='#f5c96a'/>"
+    "<circle cx='32' cy='27' r='20' fill='url(#o)'/>"
+    "<circle cx='32' cy='27' r='19.2' fill='none' stroke='#a9c8ff' stroke-width='1.6'/>"
+    "<path d='M17 31C17 19 29 12 40 16' fill='none' stroke='#8fb6ff' stroke-width='2.4' stroke-linecap='round' opacity='.85'/>"
+    "<path d='M47 23C47 35 35 42 24 38' fill='none' stroke='#8fb6ff' stroke-width='2.4' stroke-linecap='round' opacity='.85'/>"
+    "<circle cx='32' cy='27' r='10' fill='url(#c)'/>"
+    "<path d='M32 19.5C33 25.5 33 25.5 39.5 27C33 28.5 33 28.5 32 34.5C31 28.5 31 28.5 24.5 27C31 25.5 31 25.5 32 19.5Z'"
+    " fill='#fff'/>"
 )
 
 
@@ -499,7 +509,8 @@ def icon_svg(*, full_bleed: bool = False) -> str:
     art = f"<g transform='translate(4.5 4.5) scale(.86)'>{_ICON_ART}</g>" if full_bleed else _ICON_ART
     return (
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
-        "<stop offset='0' stop-color='#5b8cff'/><stop offset='1' stop-color='#2f5bd3'/></linearGradient></defs>"
+        "<stop offset='0' stop-color='#5b8cff'/><stop offset='1' stop-color='#2f5bd3'/></linearGradient>"
+        f"{_ICON_DEFS}</defs>"
         f"<rect width='64' height='64'{corner} fill='url(#g)'/>{art}</svg>"
     )
 
@@ -509,14 +520,22 @@ def brand_mark() -> str:
     return f'<img class="mark" src="{favicon()}" alt="" width="30" height="30">'
 
 
-def head_icons(name: str) -> str:
-    """The tab icon, the home-screen icon and the home-screen name; ``name`` is already escaped.
+def head_icons(brand: str) -> str:
+    """The tab icon, the home-screen icon and the home-screen name (iPhone meta and the web app manifest).
 
-    Both icons are data URIs (base64), so the page asks for nothing and the offline copy carries no URL text.
+    All are data URIs (base64), so the page asks for nothing and the offline copy carries no URL text. The manifest
+    names no start URL (a phone opens the page it was added from) and points at the small SVG, not the PNG again.
     """
+    name = escape(brand, quote=True)
+    manifest = json.dumps(
+        {"name": brand, "short_name": brand, "display": "browser",
+         "icons": [{"src": favicon(), "sizes": "any", "type": "image/svg+xml"}]},
+        ensure_ascii=False, separators=(",", ":"),
+    )
     return (
         f'<link rel="icon" href="{favicon()}">'
         f'<link rel="apple-touch-icon" sizes="180x180" href="{touch_icon()}">'
+        f'<link rel="manifest" href="data:application/manifest+json;base64,{base64.b64encode(manifest.encode()).decode()}">'
         f'<meta name="apple-mobile-web-app-title" content="{name}"><meta name="application-name" content="{name}">'
     )
 

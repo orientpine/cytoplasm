@@ -1329,7 +1329,7 @@ def render_dashboard(
     return (
         '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
-        f'{meta}<title>{name}</title>{head_icons(name)}'
+        f'{meta}<title>{name}</title>{head_icons(brand or DEFAULT_BRAND)}'
         f"<style>{CSS}{nav_css}{ORDERS_CSS if orders is not None else ''}{FIND_CSS}</style></head><body>"
         f'{sprite()}<a class="skip" href="#main">본문으로 건너뛰기</a>'
         f'<header><div class="bar"><a class="brand" href="#summary">{brand_mark()}{name}</a>'
