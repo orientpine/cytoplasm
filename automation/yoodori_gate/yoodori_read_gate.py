@@ -158,6 +158,8 @@ USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          "Received attachment: mail-attachment <uid> <file name as mail-get shows it> + origin\n"
          "  (copies that file of the owner's mail into staging; prints its staged path).\n"
          "Card requests (origin channel/message ids required): " + ", ".join(CARD_COMMANDS) + "\n"
+         "  calendar-request --card: post the event card even for the owner's own message\n"
+         "  (without --card his own event is written at once when the node switch is on).\n"
          "Owner-command jobs (origin = the owner's own message, checked on the node):\n"
          "  doc <" + "|".join(k for k in TOOLS if k not in {"patent", "stt", "meeting"}) + "> <sub> [args],\n"
          "  patent <create|checklist|draft|status|export> [args], stt <transcribe|ingest|polish> [args],\n"
@@ -356,6 +358,25 @@ def note_path(relpath: str) -> Path:
     except OSError:
         raise Refused("note unreadable") from None
     return real
+
+
+def card_choice(words: list[str]) -> tuple[list[str], bool]:
+    """``calendar-request --card``: the owner asked for a card, so Q233's cardless write is skipped.
+
+    Only a flag position counts, so a value that reads "--card" stays a value.
+    """
+    if not words or words[0] != "calendar-request":
+        return words, False
+    rest, kept, chosen, index = words[1:], [words[0]], False, 0
+    while index < len(rest):
+        if rest[index] == "--card":
+            if chosen:
+                raise Refused("--card given twice")
+            chosen, index = True, index + 1
+            continue
+        kept.extend(rest[index:index + 2])
+        index += 2
+    return kept, chosen
 
 
 def cardless_job(name: str, argv: list[str]) -> Job:
@@ -786,8 +807,9 @@ def main() -> int:
             name, argv, cwd = words[0], words[1:], HOME
             yoodori_jobs.job_dir(HOME, argv[0])
         else:
+            words, card = card_choice(words)
             name, argv, cwd = build(words)
-            if name in CARDLESS and _switched(CARDLESS[name]):
+            if name in CARDLESS and not card and _switched(CARDLESS[name]):
                 if name == "obsidian-request":
                     argv = stage_body(argv, STAGING)
                 job = cardless_job(name, argv)
