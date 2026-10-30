@@ -9,8 +9,11 @@ fetched: the page must open offline as a mail attachment.
 from __future__ import annotations
 
 import base64
+import json
 from html import escape
 from typing import Final
+
+from .dashboard_icon_png import TOUCH_ICON_PNG
 
 _TOKENS: Final = """
 :root{color-scheme:light dark;
@@ -53,8 +56,8 @@ header{position:sticky;top:0;z-index:10;background:var(--header);backdrop-filter
 -webkit-backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--line)}
 .bar{max-width:var(--max);margin:0 auto;padding:var(--s2) var(--s6);display:flex;align-items:center;gap:var(--s6);min-height:60px}
 .brand{display:flex;align-items:center;gap:var(--s3);min-height:var(--hit);font-weight:700;font-size:var(--t-lg);color:var(--text);white-space:nowrap}
-.mark{width:30px;height:30px;border-radius:9px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;
-font-size:var(--t-md);font-weight:800}
+.mark{width:30px;height:30px;flex:none;display:block}
+.brand-name{font-family:"Noto Serif KR","Noto Serif CJK KR","AppleMyungjo","Nanum Myeongjo",Batang,serif;letter-spacing:.06em}
 nav{display:flex;gap:var(--s1)}
 .fresh{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text-3);font-size:var(--t-sm);white-space:nowrap}
 .fresh.is-error{color:var(--danger);font-weight:600}
@@ -467,8 +470,8 @@ def page_shell(title: str, body: str, brand: str) -> str:
     return (
         '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
-        f'<title>{escape(title)} · {name}</title><link rel="icon" href="{favicon(brand)}"><style>{CSS}</style></head><body>'
-        f'{sprite()}<header><div class="bar"><a class="brand" href="/">{brand_mark(brand)}{name}</a></div></header>{body}</body></html>'
+        f'<title>{escape(title)} · {name}</title>{head_icons(brand)}<style>{CSS}</style></head><body>'
+        f'{sprite()}<header><div class="bar"><a class="brand" href="/">{brand_mark()}<span class="brand-name">{name}</span></a></div></header>{body}</body></html>'
     )
 
 
@@ -478,16 +481,77 @@ def notice_page(title: str, message: str, brand: str, *, action: str = "") -> st
     return page_shell(title, body, brand)
 
 
-def brand_mark(brand: str) -> str:
-    return f'<span class="mark" aria-hidden="true">{escape(brand[:1] or "P")}</span>'
+# The product icon (owner 2026-10-31 "페이지 아이콘 만들어줘", Q402 "팔란티르 느낌나는 아이콘으로 하고 팔란티르로 하자",
+# 04:21 KST "반지의 제왕에서 나올법한 테마로 해줘"): a seeing-stone - black glass with fire swirling orange inside, held by an
+# old bronze claw on a stone plinth marked with runes - on a night-sky stone tile with a few stars. Drawn here, not taken
+# from a film or a company logo. At 16px in a browser tab it still reads as a glowing orb. One drawing for the tab, the
+# header and the home screen.
+_ICON_DEFS: Final = (
+    "<radialGradient id='o' cx='.5' cy='.5' r='.5'><stop offset='0' stop-color='#ffe08a'/>"
+    "<stop offset='.22' stop-color='#ff8a1f'/><stop offset='.55' stop-color='#5a1404'/>"
+    "<stop offset='.85' stop-color='#120706'/><stop offset='1' stop-color='#050303'/></radialGradient>"
+    "<linearGradient id='s' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#9a8257'/>"
+    "<stop offset='1' stop-color='#4e3f27'/></linearGradient>"
+)
+_ICON_ART: Final = (
+    "<circle cx='9' cy='10' r='.9' fill='#cfd6ff'/><circle cx='55' cy='8' r='.7' fill='#cfd6ff'/>"
+    "<circle cx='57' cy='20' r='.6' fill='#cfd6ff'/><circle cx='7' cy='24' r='.6' fill='#cfd6ff'/>"
+    "<path d='M21 44l5-3h12l5 3 2 7H19z' fill='url(#s)'/><path d='M14 51h36l2 7H12z' fill='url(#s)'/>"
+    "<path d='M14 51h36' stroke='#c9ad74' stroke-width='1'/>"
+    "<path d='M18 55h2M24 54v2M29 55h3M36 54v2M42 55h3M47 54v2' stroke='#e2c88f' stroke-width='1.1' stroke-linecap='round'/>"
+    "<path d='M19 44l-3-6M45 44l3-6M32 41v-1' stroke='#8a7349' stroke-width='2.4' stroke-linecap='round'/>"
+    "<circle cx='32' cy='25' r='19' fill='url(#o)'/>"
+    "<path d='M19 29c0-11 13-16 21-9' fill='none' stroke='#ff9b3d' stroke-width='2.2' stroke-linecap='round' opacity='.9'/>"
+    "<path d='M45 21c1 11-11 17-20 11' fill='none' stroke='#ff7a1a' stroke-width='2' stroke-linecap='round' opacity='.85'/>"
+    "<circle cx='32' cy='25' r='18.4' fill='none' stroke='#6b5a3e' stroke-width='1.2'/>"
+    "<ellipse cx='25' cy='15' rx='5' ry='2.6' fill='#fff' opacity='.18' transform='rotate(-30 25 15)'/>"
+)
 
 
-def favicon(brand: str) -> str:
-    """A data-URI icon (base64, so the offline copy carries no URL text) showing the brand's first letter."""
-    letter = escape(brand[:1] or "P")
-    svg = (
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='#2f5bd3'/>"
-        f"<text x='16' y='22' text-anchor='middle' font-size='17' font-weight='700' fill='#fff' "
-        f"font-family='system-ui,sans-serif'>{letter}</text></svg>"
+def icon_svg(*, full_bleed: bool = False) -> str:
+    """The icon as SVG: a rounded tile with a stone edge (tab, header), or a full square with the art inside the corner
+    mask's safe zone (home screen: the phone rounds the corners itself and wants no transparency)."""
+    if full_bleed:
+        tile = "<rect width='64' height='64' fill='#161b2e'/>"
+        art = f"<g transform='translate(4.5 4.5) scale(.86)'>{_ICON_ART}</g>"
+    else:
+        tile = (
+            "<rect width='64' height='64' rx='14' fill='#161b2e'/>"
+            "<rect x='.75' y='.75' width='62.5' height='62.5' rx='13.3' fill='none' stroke='#4a5272' stroke-width='1.5'/>"
+        )
+        art = _ICON_ART
+    return f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs>{_ICON_DEFS}</defs>{tile}{art}</svg>"
+
+def brand_mark() -> str:
+    """The icon beside the product name in the header: the tab icon's data URI, so the sprite stays the only inline art."""
+    return f'<img class="mark" src="{favicon()}" alt="" width="30" height="30">'
+
+
+def head_icons(brand: str) -> str:
+    """The tab icon, the home-screen icon and the home-screen name (iPhone meta and the web app manifest).
+
+    All are data URIs (base64), so the page asks for nothing and the offline copy carries no URL text. The manifest
+    names no start URL (a phone opens the page it was added from) and points at the small SVG, not the PNG again.
+    """
+    name = escape(brand, quote=True)
+    manifest = json.dumps(
+        {"name": brand, "short_name": brand, "display": "browser",
+         "icons": [{"src": favicon(), "sizes": "any", "type": "image/svg+xml"}]},
+        ensure_ascii=False, separators=(",", ":"),
     )
-    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return (
+        f'<link rel="icon" href="{favicon()}">'
+        f'<link rel="apple-touch-icon" sizes="180x180" href="{touch_icon()}">'
+        f'<link rel="manifest" href="data:application/manifest+json;base64,{base64.b64encode(manifest.encode()).decode()}">'
+        f'<meta name="apple-mobile-web-app-title" content="{name}"><meta name="application-name" content="{name}">'
+    )
+
+
+def touch_icon() -> str:
+    """The 180px home-screen icon (iPhone "홈 화면에 추가"): an opaque PNG, since the phone does not take SVG there."""
+    return "data:image/png;base64," + TOUCH_ICON_PNG
+
+
+def favicon() -> str:
+    """The tab icon as a data URI (base64, so the offline copy carries no URL text)."""
+    return "data:image/svg+xml;base64," + base64.b64encode(icon_svg().encode("utf-8")).decode("ascii")

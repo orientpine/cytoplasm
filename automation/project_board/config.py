@@ -22,7 +22,7 @@ from .models import DEFAULT_GRADE, GRADES, ProjectBoardError
 ROOT_ENV: Final = "PROJECT_BOARD_ROOT"
 CONFIG_ENV: Final = "PROJECT_BOARD_CONFIG"
 DEFAULT_PORT: Final = 8810
-DEFAULT_BRAND: Final = "프로젝트 대시보드"
+DEFAULT_BRAND: Final = "팔란티르"
 MAX_BRAND: Final = 40
 
 

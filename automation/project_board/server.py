@@ -53,7 +53,8 @@ MIN_TOKEN: Final = 32
 COOKIE: Final = "pb_token"
 _CSP: Final = (
     "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; "
-    "form-action 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+    # the home-screen name and icon come inline (dashboard_theme.head_icons): a data: manifest, nothing fetched
+    "manifest-src data:; form-action 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
 )
 _MAX_BODY: Final = 4096
 # an order is up to 1000 characters; percent-encoded Hangul takes 9 bytes each

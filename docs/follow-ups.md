@@ -10,6 +10,11 @@
 > (`4716602d`)의 불릿 삭제를 막는다. 그래서 **삭제가 아니라 이동**으로 처리하고, 가드가 두 문서를 합쳐 읽도록 고쳤다.
 > 원 묶음 `##` 헤딩을 양쪽에서 그대로 유지하는 것이 그 가드의 대조 키다.
 
+## 대시보드 아이콘·이름 바꾸기에서 남긴 것 (2026-10-31)
+
+- **중간 · 기관메일 동기화가 없는 계정에서 띄운 대시보드는 첨부가 있는 근거 하나 때문에 빈 응답을 준다**: `server._servable` 이 첨부마다 `_stored` → `cli` 의 `sources.mail_attachment` 를 부르는데, 기관메일 `state.db` 가 없으면 그 함수가 `ProjectBoardError` 를 던지고 요청 처리 스레드가 죽어 브라우저는 `ERR_EMPTY_RESPONSE` 를 받는다(운영 노드는 메일 동기화가 있어 안 보이고, 새 설치나 메일을 켜지 않은 설치, 실데이터 사본 QA 에서 난다) → 첨부 조회 실패를 「건넬 수 없는 첨부」로 보고 칩만 빼도록 `_stored` 에서 그 오류를 받는다(첨부 내려받기 경로는 지금처럼 오류를 낸다). 영향: 메일 동기화 없는 설치에서 대시보드가 아예 안 열림 · 심각도 중.
+- **낮음 · `test_document_ocr_relay.py::test_relay_hands_the_file_over_and_prints_the_answer` 가 가끔 빈 답을 읽는다**: 시험의 가짜 중계기가 답 파일을 `write_bytes` 로 바로 쓰는데(만들기와 쓰기 사이 틈), `document_ocr.relay` 는 `is_file()` 이 참이 되자마자 읽는다. PR #204 의 CI verify 에서 한 번 `'' == '# 표…'` 로 실패했고 같은 시험이 직전 푸시와 로컬 5회는 통과했다 → 가짜 중계기를 임시 이름 + `os.replace` 로 쓰게 하고, 실제 중계기도 답을 원자적으로 놓는지 확인해 아니면 읽는 쪽이 빈 파일을 기다리게 한다. 영향: CI 가 무관한 PR 을 가끔 막음(실제 중계기가 비원자 쓰기면 OCR 답이 비어 보일 수 있음) · 심각도 낮음.
+
 ## 메일 열 때 받는 사람 보기에서 남긴 것 (2026-10-30)
 
 - **낮음 · `skills/mail/vendor` 를 `sys.path` 에 넣는 시험이 저장소 `tests` 패키지를 가린다**: `vendor/tests` 는 `__init__.py` 가 있는 일반 패키지라 이름공간 패키지인 저장소 `tests` 보다 먼저 잡힌다. 그래서 `test_mailon_large_box_and_buttons.py` 와 `test_yoodori_gmail.py` 를 한 프로세스에서 차례로 돌리면 `from tests.unit.test_yoodori_gate import ORIGIN` 이 깨져 11건이 실패한다(병렬 `-n auto` 에서는 워커 배치에 따라 숨는다) → vendor 를 경로에 넣는 시험들이 `test_mail_get_recipients.py` 처럼 `mailon` 패키지만 직접 올리게 바꾼다. 영향: 직렬 실행·워커 배치에 따라 시험이 흔들림 · 심각도 낮음.

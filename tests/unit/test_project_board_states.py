@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import gzip
 import http.client
 import json
+import re
+import struct
 import threading
+import zlib
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -61,7 +65,7 @@ def test_a_pending_proposal_of_an_archived_project_stays_off_the_summary(tmp_pat
 def test_the_brand_name_comes_from_config_and_is_checked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "config.json"
     monkeypatch.setenv("PROJECT_BOARD_CONFIG", str(path))
-    assert load_config().brand == "프로젝트 대시보드"
+    assert load_config().brand == "팔란티르"  # owner Q402 2026-10-31 "팔란티르로 하자"
     path.write_text(json.dumps({"dashboard": {"brand": "  가상연구소   과제 현황 "}}), encoding="utf-8")
     assert load_config().brand == "가상연구소 과제 현황"
     for bad in ("  ", "가" * 41, 7):
@@ -69,7 +73,35 @@ def test_the_brand_name_comes_from_config_and_is_checked(tmp_path: Path, monkeyp
         with pytest.raises(ProjectBoardError):
             load_config()
     page = render_dashboard(_store(tmp_path).snapshot(today=TODAY), mode="file", brand="가상연구소 과제 현황")
-    assert "<title>가상연구소 과제 현황</title>" in page and '<span class="mark" aria-hidden="true">가</span>' in page
+    assert "<title>가상연구소 과제 현황</title>" in page
+    assert '<meta name="apple-mobile-web-app-title" content="가상연구소 과제 현황">' in page
+
+
+@pytest.mark.parametrize("mode", ["served", "file"])
+def test_the_icon_is_a_picture_for_the_tab_the_header_and_the_home_screen(tmp_path: Path, mode: str) -> None:
+    page = render_dashboard(_store(tmp_path).snapshot(today=TODAY), mode=mode, token=TOKEN, brand="가상연구소 과제 현황")
+    head = page.split("</head>", 1)[0]
+    icons = dict(re.findall(r'<link rel="(icon|apple-touch-icon|manifest)"[^>]*? href="([^"]+)"', head))
+    svg = base64.b64decode(icons["icon"].removeprefix("data:image/svg+xml;base64,")).decode("utf-8")
+    assert "<text" not in svg and svg.count("<circle") >= 2  # a drawing (the orb), not the brand's first letter
+    png = base64.b64decode(icons["apple-touch-icon"].removeprefix("data:image/png;base64,"))
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height, depth, colour = struct.unpack(">IIBB", png[16:26])
+    assert (width, height, depth) == (180, 180, 8) and colour in (2, 3)  # 180px, RGB or palette, no alpha channel
+    chunks: dict[bytes, list[bytes]] = {}
+    at = 8
+    while at < len(png):
+        size, kind = struct.unpack(">I4s", png[at:at + 8])
+        chunks.setdefault(kind, []).append(png[at + 8:at + 8 + size])
+        at += size + 12
+    assert b"tRNS" not in chunks  # opaque: the phone rounds the corners itself
+    assert len(zlib.decompress(b"".join(chunks[b"IDAT"]))) == 180 * (1 + 180 * (3 if colour == 2 else 1))
+    header = page.split('<a class="brand"', 1)[1].split("</a>", 1)[0]
+    assert f'<img class="mark" src="{icons["icon"]}" alt=""' in header  # the same drawing beside the name
+    manifest = json.loads(base64.b64decode(icons["manifest"].removeprefix("data:application/manifest+json;base64,")))
+    assert manifest["name"] == manifest["short_name"] == "가상연구소 과제 현황" and "start_url" not in manifest
+    assert [icon["src"] for icon in manifest["icons"]] == [icons["icon"]]
+    assert "http" not in "".join(head.split(icons["icon"])).replace(icons["apple-touch-icon"], "").replace(icons["manifest"], "")
 
 
 @pytest.fixture
@@ -120,6 +152,17 @@ def test_a_browser_that_accepts_gzip_gets_the_page_compressed(served: int) -> No
     assert response.getheader("Content-Encoding") == "gzip" and response.getheader("Vary") == "Accept-Encoding"
     page = gzip.decompress(raw).decode("utf-8")
     assert "가상연구소 과제 현황" in page and len(raw) * 3 < len(page.encode("utf-8"))
+
+
+def test_the_page_policy_lets_only_the_inline_manifest_in(served: int) -> None:
+    conn = http.client.HTTPConnection("127.0.0.1", served, timeout=5)
+    conn.request("GET", "/", headers={"Cookie": f"pb_token={TOKEN}"})
+    response = conn.getresponse()
+    page = response.read().decode("utf-8")
+    conn.close()
+    policy = dict(part.strip().split(" ", 1) for part in response.getheader("Content-Security-Policy").split(";"))
+    assert policy["default-src"] == "'none'" and policy["manifest-src"] == "data:" and policy["img-src"] == "data:"
+    assert '<link rel="manifest" href="data:application/manifest+json;base64,' in page
 
 
 def test_icons_are_defined_once_and_long_records_fold_under_more(tmp_path: Path) -> None:
