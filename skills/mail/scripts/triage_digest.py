@@ -1,4 +1,4 @@
-"""Daily owner digest: classify actions, summarize, deliver, then record success."""
+"""Owner digest (09:00, 13:00, 19:00 KST): classify actions, summarize, deliver, then record success."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from dataclasses import replace
 
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Final
 from zoneinfo import ZoneInfo
 
@@ -419,14 +420,15 @@ def thread_intro(dm_items: list[dict], *, kst_now: datetime) -> str:
     this says what arrived and how to act on a card. Never asks for a ✅ — decisions are
     made on the approval cards themselves, which reply under their mail card here.
     """
-    stamp = kst_now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M")
+    clock = kst_now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%H:%M")
     counts = [
         (label, sum(1 for item in dm_items if flag in item["flags"]))
         for flag, label in (("reply_needed", "회신 필요"), ("schedule_needed", "일정"), ("budget", "예산"))
     ]
     tally = " · ".join(f"{label} {count}" for label, count in counts if count)
     return "\n".join([
-        f"{stamp} KST · 신규 {len(dm_items)}건" + (f" ({tally})" if tally else ""),
+        # The day's thread (named by the day) holds every run, so each run opens with its own title.
+        f"## 📬 {clock} 다이제스트 · 신규 {len(dm_items)}건" + (f" ({tally})" if tally else ""),
         "👇 메일 카드에서 📄 전문 · ✍️ 회신 초안 · 답장하면 그 말대로 초안",
         "회신 초안과 일정의 승인 카드는 그 메일 카드 아래 답글로 이 스레드에 올라옵니다",
     ])
@@ -471,12 +473,12 @@ def _attach_reactions(channel_id: str, message_id: str) -> None:
               file=sys.stderr)
 
 
-def _open_thread(kst_now: datetime, count: int) -> str:
+def _open_thread(kst_now: datetime) -> str:
     """Today's standard approval thread id, or '' to keep the older flat layout."""
     try:
         import triage_digest_thread
 
-        return str(triage_digest_thread.open_for(kst_now, count).channel_id)
+        return str(triage_digest_thread.open_for(kst_now).channel_id)
     except Exception as error:  # noqa: BLE001 — the digest must still reach the owner
         print(f"DIGEST-THREAD-FAIL stage=open err={type(error).__name__}", file=sys.stderr)
         return ""
@@ -484,7 +486,7 @@ def _open_thread(kst_now: datetime, count: int) -> str:
 
 def _deliver(parts: list[str], dm_items: list[dict], kst_now: datetime) -> tuple[list[str], str]:
     """Post the digest; ids are [header, card…] and the channel the cards went to."""
-    thread_id = _open_thread(kst_now, len(dm_items)) if len(parts) > 1 else ""
+    thread_id = _open_thread(kst_now) if len(parts) > 1 else ""
     if thread_id:
         intro = thread_intro(dm_items, kst_now=kst_now)
         if parts[0].startswith("⚠️"):  # the sync warning stays the first thing seen
@@ -527,6 +529,12 @@ def _delegate_after_post(
         triage_confirm.edit_message(channel_id, message_id, render_item(dm_item, kst_now=kst_now))
     except Exception as error:  # noqa: BLE001 — the card stays; only its calendar line is late
         print(f"DIGEST-CARD-EDIT-FAIL msg={message_id} err={type(error).__name__}", file=sys.stderr)
+
+
+def _ran_today(db: Path, kst_now: datetime) -> bool:
+    """Whether an earlier digest run was recorded since 00:00 KST of ``kst_now``'s day."""
+    midnight = kst_now.astimezone(ZoneInfo("Asia/Seoul")).replace(hour=0, minute=0, second=0, microsecond=0)
+    return triage_store.digest_run_count_since(db, since=midnight.astimezone(UTC).isoformat()) > 0
 
 
 def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
@@ -582,9 +590,16 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
     parts = render_digest_parts(dm_items, kst_now=kst_now)
     if sync_failed:
         parts[0] = "⚠️ mailon 동기화 실패 — 로컬 DB 기준 (재인증 필요할 수 있음)\n" + parts[0]
+    # Three runs a day (owner 2026-10-30): only the day's first run says "no new mail";
+    # a later empty run is recorded and stays silent.
+    quiet = not dm_items and not sync_failed and _ran_today(db, kst_now)
     if dry_run:
-        print("\n\n".join(parts))
-        print(f"DIGEST dry-run items={len(dm_items)} messages={len(parts)}")
+        print("" if quiet else "\n\n".join(parts))
+        print(f"DIGEST dry-run items={len(dm_items)} messages={0 if quiet else len(parts)}")
+        return 0
+    if quiet:
+        run_id = triage_store.record_digest_run(db, triage_core.utc_now(), [])
+        print(f"DIGEST run={run_id} items=0 quiet")
         return 0
     try:  # Delivery first — failure leaves every mail undigested
         message_ids, thread_id = _deliver(parts, dm_items, kst_now)

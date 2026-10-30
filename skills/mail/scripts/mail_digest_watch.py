@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""no_agent wrapper for Hermes cron `mail-daily-digest` (08:00 KST) that sends
+"""no_agent wrapper for the `mail-daily-digest` timer (09:00, 13:00, 19:00 KST) that sends
 the owner mail digest; silent on success.
 
 Thin wrapper: runs the mounted mail skill CLI `digest` subcommand. no_agent

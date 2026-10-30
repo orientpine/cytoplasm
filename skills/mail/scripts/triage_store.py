@@ -235,6 +235,16 @@ def latest_digest_items(
     ]
 
 
+def digest_run_count_since(db_path: Path, *, since: str) -> int:
+    """How many digest runs were recorded at or after ``since`` (an ISO instant)."""
+    if not db_path.exists():
+        return 0
+    with _connect(db_path) as connection:
+        rows = connection.execute("SELECT sent_at FROM digest_runs").fetchall()
+    floor = _instant(since)
+    return sum(1 for row in rows if _instant(str(row[0])) >= floor)
+
+
 def recent_digest_cards(db_path: Path, *, since: str) -> list[dict[str, int | str]]:
     """Digest mail cards posted with a known channel by runs sent at or after ``since``."""
     if not db_path.exists():

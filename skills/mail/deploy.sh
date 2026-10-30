@@ -103,13 +103,13 @@ source "$repo_root/automation/deploy_timer.sh"
 converge_timer mail-triage-watch "*/2 * * * *" mail_triage_watch.py discord
 push_file "$repo_root/skills/mail/scripts/mail_digest_reactions_watch.py" '.hermes/scripts/mail_digest_reactions_watch.py'
 converge_timer mail-digest-reactions "every 20s" mail_digest_reactions_watch.py local
-# Register (or converge) the daily digest cron. --deliver discord routes the
+# Register (or converge) the digest cron (09:00, 13:00, 19:00 KST; owner 2026-10-30). --deliver discord routes the
 # no-agent script's stdout to the owner DM, so a failure marker line + exit 1
 # actually reaches cha (the 2026-07-31 incident vanished under --deliver local,
 # which has 0 delivery targets). An already-registered job is converged in
 # place with `edit` (preserving its job id/history); otherwise it is created.
-run_agent 'PATH="$HOME/.local/bin:$PATH"; { [ -e "$HOME/.hermes/peer-retired" ] || ! command -v hermes >/dev/null; } && exit 0; job_id=$(hermes cron list --all | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-daily-digest\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "0 8 * * *" --deliver discord --no-agent --script mail_digest_watch.py; else hermes cron create "0 8 * * *" --name mail-daily-digest --no-agent --script mail_digest_watch.py --deliver discord; fi'
-converge_timer mail-daily-digest "0 8 * * *" mail_digest_watch.py discord
+run_agent 'PATH="$HOME/.local/bin:$PATH"; { [ -e "$HOME/.hermes/peer-retired" ] || ! command -v hermes >/dev/null; } && exit 0; job_id=$(hermes cron list --all | awk "/^  [0-9a-f]+ \[/{id=\$1} /Name:[[:space:]]+mail-daily-digest\$/{print id; exit}"); if [ -n "$job_id" ]; then hermes cron edit "$job_id" --schedule "0 9,13,19 * * *" --deliver discord --no-agent --script mail_digest_watch.py; else hermes cron create "0 9,13,19 * * *" --name mail-daily-digest --no-agent --script mail_digest_watch.py --deliver discord; fi'
+converge_timer mail-daily-digest "0 9,13,19 * * *" mail_digest_watch.py discord
 source "$repo_root/automation/deploy_cron.sh"
 converge_timer mail-attachment-drive-watch "every 30m" mail_attachment_drive_watch.py discord
 # Workday hourly collection (2026-10-13): the 08:00 digest sync was the only scheduled one,
@@ -118,10 +118,10 @@ push_file "$repo_root/skills/mail/scripts/mail_sync_watch.py" '.hermes/scripts/m
 run_agent "chmod 700 \"\$HOME/.hermes/scripts/mail_sync_watch.py\""
 converge_timer mail-sync-watch "*/10 7-23 * * *" mail_sync_watch.py discord
 
-# N1: 다이제스트 실패 → 수리 티켓(09:10 KST). 같은 이름의 손으로 넣은 에이전트 모드 Hermes 잡은
+# N1: 다이제스트 실패 → 수리 티켓(다이제스트마다 40분 뒤, 09:40·13:40·19:40 KST). 같은 이름의 손으로 넣은 에이전트 모드 Hermes 잡은
 # converge_timer 가 일시정지한다(지우지 않는다).
 push_file "$repo_root/skills/mail/scripts/mail_digest_repair_watch.py" '.hermes/scripts/mail_digest_repair_watch.py'
-converge_timer mail-triage-repair-daily "10 9 * * *" mail_digest_repair_watch.py local
+converge_timer mail-triage-repair-daily "40 9,13,19 * * *" mail_digest_repair_watch.py local
 run_agent 'PATH="$HOME/.local/bin:$PATH"; hermes cron list --all'
 
 # Build + activate the vendored mailon runtime release on the node.

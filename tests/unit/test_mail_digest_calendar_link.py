@@ -75,7 +75,7 @@ def _calendar_line(monkeypatch) -> list[str]:
     monkeypatch.setattr(triage_digest.triage_confirm, "edit_message",
                         lambda _channel, _message, content: edits.append(content))
     monkeypatch.setattr(triage_digest, "_flat_channel", lambda: "owner-channel")
-    monkeypatch.setattr(triage_digest, "_open_thread", lambda _now, _count: "")
+    monkeypatch.setattr(triage_digest, "_open_thread", lambda _now: "")
     return edits
 
 

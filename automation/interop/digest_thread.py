@@ -1,4 +1,7 @@
-"""One standard approval thread per morning digest (owner Q187, 2026-10-16).
+"""One standard approval thread per digest day (owner Q187, 2026-10-16).
+
+The digest runs at 09:00, 13:00 and 19:00 KST (owner 2026-10-30); all runs of one KST
+day share that day's thread.
 
 The mail digest opens it through the standard per-request path (`approval_surface`
 `resolve_new_binding` with a `RequestThread`), so its parent notice, name and big title
