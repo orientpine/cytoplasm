@@ -7,6 +7,7 @@ CLI stay an effect-only boundary while preserving the existing on-disk contract.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sqlite3
 import unicodedata
@@ -20,7 +21,9 @@ SOURCE_DB = HOME / ".hermes/mailon-runtime/state/data/state.db"
 RUNTIME_ATTACHMENTS = HOME / ".hermes/mailon-runtime/state/data/attachments"
 STATE_DIR = HOME / ".hermes/mail-attachment-drive"
 STATE_DB = STATE_DIR / "archive.db"
-ROOT_PARTS = ("autophagy", "메일 첨부파일")
+OUTPUTS_ROOT_ENV = "DRIVE_OUTPUTS_ROOT"
+DEFAULT_OUTPUTS_ROOT = "autophagy"
+ARCHIVE_FOLDER = "메일 첨부파일"
 BOGUS_NAMES = frozenset({"Save", "Download all"})
 MAX_REMOTE_NAME_BYTES = 240
 
@@ -71,8 +74,18 @@ def attachment_key(uid: str, filename: str) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def root_parts() -> tuple[str, str]:
+    """The archive sits under the same Drive outputs root `drive_taxonomy` reads.
+
+    Spelled here rather than imported: this module stays importable without the
+    automation runtime on sys.path (the sync CLI adds it only when Drive is needed).
+    """
+    root = os.environ.get(OUTPUTS_ROOT_ENV) or DEFAULT_OUTPUTS_ROOT
+    return (unicodedata.normalize("NFC", root), ARCHIVE_FOLDER)
+
+
 def folder_parts(item: Attachment) -> tuple[str, ...]:
-    return (*ROOT_PARTS, item.year, item.month, item.mailbox)
+    return (*root_parts(), item.year, item.month, item.mailbox)
 
 
 def resolve_local(uid: str, filename: str, local_path: str | None) -> Path | None:

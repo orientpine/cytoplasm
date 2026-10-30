@@ -250,7 +250,7 @@ def test_existing_folder_cache_keys_resolve_without_creating_folders(
     )
     fake = FakeGws()
 
-    parent_id = syncer.ensure_parent(_client(fake), (*archive.ROOT_PARTS, "2023", "07", "sent"))
+    parent_id = syncer.ensure_parent(_client(fake), (*archive.root_parts(), "2023", "07", "sent"))
 
     assert parent_id == "fold-sent"
     assert _calls_of(fake, "files", "create") == []

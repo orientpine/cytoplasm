@@ -451,3 +451,8 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 
 - **Gmail 경로 첨부 이름 헤더가 RFC 2231 이 아니다** — `gws gmail +send -a` 가 한글 파일 이름을 `filename="=?utf-8?B?…?="`(RFC 2047 인코딩 낱말을 따옴표 안에) 꼴로 넣는다. Python·Gmail 파서는 한글로 복원하지만 표준 꼴은 `filename*=utf-8''…`이다 → Gmail 발송을 `gws` 의 원문(raw) 업로드로 바꿔 헤더를 직접 만들지, gws 업스트림 수정을 기다릴지 정한다. 영향: 엄격한 받는 쪽 메일 프로그램에서 이름이 깨질 수 있음, 기관메일(웹메일 서버가 헤더를 만듦)은 무관 · 심각도 낮음.
 - **gws 0.22.5 는 현재 폴더 밖의 첨부를 거절한다** — 워크스테이션 실측에서 `-a <절대 경로>`가 「outside the current directory」로 거부됐다. Gmail 발송(`mail_gmail_send`)은 작업 폴더를 정하지 않으므로 노드 gws 판이 같으면 유돌 비공개 폴더의 첨부가 Gmail 로 못 나간다 → 노드 gws 판과 Gmail 첨부 발송을 실측하고, 필요하면 발송 때 cwd 를 첨부 폴더의 공통 조상으로 둔다. 영향: Gmail 첨부 발송 실패 가능(발송은 막히고 잘못 나가지 않음) · 심각도 중.
+
+## Drive 루트 이름 바꾸기에서 남긴 것 (2026-10-30)
+
+- **상태 백업은 산출물 루트 밖의 별도 루트 `autophagy-backups` 에 쌓인다** — `automation/state_backup/backup.py` 의 `BACKUP_ROOT_FOLDER` 가 고정 이름이라 산출물 루트 이름을 바꿔도 Drive 맨 위에 옛 이름 폴더가 하나 남는다 → 백업도 산출물 루트 아래로 옮길지, 별도 루트를 유지할지 정한 뒤 정하면 같은 순서(이름 바꾸기 → 설정)로 옮긴다. 영향: Drive 맨 위 정리 · 심각도 낮음.
+- **제안서 설정의 `PROPOSAL_DRIVE_ROOT` 는 읽히지만 쓰는 곳이 없다** — `skills/proposal/scripts/proposal_config.py` 의 `drive_root` 필드를 아무도 읽지 않고, 실제 발행은 `DRIVE_OUTPUTS_ROOT` 를 따른다 → 필드와 기본값을 지운다. 영향: 설정을 찾는 사람의 혼동 · 심각도 낮음.
