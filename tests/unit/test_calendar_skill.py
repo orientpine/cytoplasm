@@ -96,6 +96,56 @@ def test_past_time_rejected() -> None:
         calendar_core.parse_request("오늘 오전 9시 회고", NOW)
 
 
+# --- owner's written forms (YooDori 2026-10-30: AMBIGUOUS-TIME on these) ------
+
+OCT30 = datetime(2026, 10, 30, 12, 0, tzinfo=calendar_core.KST)  # Friday
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end"),
+    [
+        ("11/25(수) 오후 4시부터 5시까지 자문회의", "2026-11-25T16:00", "2026-11-25T17:00"),
+        ("11/25(수) 16:00-17:00 자문회의", "2026-11-25T16:00", "2026-11-25T17:00"),
+        ("11/25 오후 2시 자문회의", "2026-11-25T14:00", "2026-11-25T15:00"),
+        ("11월 25일(수요일) 오전 11시부터 1시까지 자문회의", "2026-11-25T11:00", "2026-11-25T13:00"),
+    ],
+)
+def test_owner_date_and_clock_forms_parse_without_reask(text: str, start: str, end: str) -> None:
+    # Given / When
+    parsed = calendar_core.parse_request(text, OCT30)
+    # Then: one event, the weekday tag and the range words never reach the title.
+    assert (parsed.start.isoformat()[:16], parsed.end.isoformat()[:16]) == (start, end)
+    assert parsed.summary == "자문회의" and not parsed.all_day
+
+
+@pytest.mark.parametrize("switch", [False, True])
+def test_multi_day_range_with_weekdays_keeps_every_day(switch: bool) -> None:
+    # Given: the 12/9~10 workshop that reached the calendar as 12/9 only.
+    parsed = calendar_core.parse_request("12월 9일(수)~10일(목) 워크숍", OCT30, all_day_undated=switch)
+    # Then: all-day, exclusive end after the 10th.
+    assert parsed.all_day and parsed.summary == "워크숍"
+    assert (parsed.start.date().isoformat(), parsed.end.date().isoformat()) == ("2026-12-09", "2026-12-11")
+    argv = calendar_core.build_create_argv("primary", parsed)
+    assert json.loads(argv[-1])["end"] == {"date": "2026-12-11"}
+
+
+@pytest.mark.parametrize(
+    ("text", "asks"),
+    [
+        ("11/26(수) 오후 2시 회의", "11월 26일은 목요일"),
+        ("12월 9일(목)~10일(목) 워크숍", "12월 9일은 수요일"),
+        ("12월 9일(수)~10일(금) 워크숍", "12월 10일은 목요일"),
+        ("12월 9일~10일 오후 2시 워크숍", "여러 날"),
+        ("11/25 출장", "몇 시"),
+    ],
+)
+def test_wrong_weekday_or_unclear_span_is_reasked(text: str, asks: str) -> None:
+    # A date and its weekday disagree: neither is picked, nothing is drafted.
+    with pytest.raises(calendar_core.AmbiguousTime) as excinfo:
+        calendar_core.parse_request(text, OCT30)
+    assert asks in excinfo.value.question
+
+
 # --- gws argv + change summary -------------------------------------------------
 
 def _create_argv() -> tuple[str, ...]:
