@@ -31,10 +31,17 @@ _TRAILING_VERBS = re.compile(
 )
 _DATE_ISO = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 _DATE_MD = re.compile(r"(\d{1,2})월\s*(\d{1,2})일")
+_DATE_SLASH = re.compile(r"(?<![\d/])(\d{1,2})/(\d{1,2})(?![\d/])")
+# "11/25(수)", "12월 9일(목요일)": a weekday tag must match its date or the request is re-asked.
+_WEEKDAY_TAG = re.compile(r"\s*\(\s*([월화수목금토일])(?:요일)?\s*\)")
+_ALL_DAY_WORD = re.compile(r"(?:하루\s*)?종일")
 _DATE_WORD = re.compile("|".join(_DAY_WORDS))
 _DATE_WEEK = re.compile(r"(이번|다음|다다음)\s*주(?:\s*([월화수목금토일])요일)?")
 _DATE_OFFSET = re.compile(r"(\d{1,2})일\s*(?:뒤|후)")
-_DATE_RANGE_END = re.compile(r"\s*(?:~|-|부터)\s*(?:(\d{1,2})월\s*)?(\d{1,2})일(?!\s*(?:간|동안))(?:\s*까지)?")
+_DATE_RANGE_END = re.compile(
+    r"\s*(?:~|-|부터)\s*(?:(?:(\d{1,2})월\s*)?(\d{1,2})일(?!\s*(?:간|동안))|(\d{1,2})/(\d{1,2})(?![\d/:]))"
+    r"(?:\s*\(\s*([월화수목금토일])(?:요일)?\s*\))?(?:\s*까지)?"
+)
 # A length ("3일간", "2박", "2주 동안") is not an end day; an all-day draft re-asks for the last day.
 _SPAN_LENGTH = re.compile(r"\d{1,3}\s*(?:박|(?:일|주|개월|달)\s*(?:간|동안))")
 _HALF_DAY = re.compile(r"오전|오후")
@@ -88,10 +95,22 @@ def parse_request(text: str, now: datetime, *, all_day_undated: bool = False) ->
     spans: list[Span] = []
     day = _extract_date(body, now.astimezone(KST).date(), spans)
     times = _extract_times(body, spans)
-    if not times and all_day_undated:
+    after = _date_end(body, spans)
+    ranged = after is not None and _DATE_RANGE_END.match(body, after) is not None
+    whole = _ALL_DAY_WORD.search(body)
+    # A day range ("12월 9일~10일") or "종일" with no clock time is an all-day event by itself.
+    if not times and (all_day_undated or ranged or whole):
+        if whole is not None:
+            spans.append(whole.span())
         return _all_day(body, day, now, spans)
     if not times:
         raise AmbiguousTime("몇 시로 잡을까요? 시각(예: 오후 3시, 15:00)을 알려주세요.")
+    if ranged:
+        raise AmbiguousTime(
+            "여러 날 일정에 시각이 함께 있어요. 종일 일정이면 시각을 빼고, "
+            "하루 일정이면 날짜 하나만 알려주세요."
+        )
+    _check_weekday(body, spans[0][1], day)
     duration = _extract_duration(body, spans)
     start = datetime.combine(day, times[0], KST)
     if len(times) >= 2:
@@ -126,23 +145,29 @@ def _all_day(body: str, day: date, now: datetime, spans: list[Span]) -> ParsedRe
         spans[0] = explicit.span()
     elif _YEAR_WORD.search(body):
         raise AmbiguousTime("연도가 어느 날짜의 것인지 알 수 없어요. 날짜(예: 2026-11-18)로 알려주세요.")
-    yearless = _DATE_MD.search(body)
-    if spans and yearless is not None and yearless.span() == spans[0] and day.year > today.year:
+    yearless = next((found for pattern in (_DATE_MD, _DATE_SLASH)
+                     if (found := pattern.search(body)) is not None and spans and found.span() == spans[0]),
+                    None)
+    if yearless is not None and day.year > today.year:
         raise AmbiguousTime(
             f"{yearless[0]}은 올해 이미 지났어요. 몇 년 일정인지 날짜(예: {day.isoformat()})로 알려주세요."
         )
     last = day
-    if spans and (tail := _DATE_RANGE_END.match(body, spans[0][1])):
+    after = _check_weekday(body, spans[0][1], day) if spans else 0
+    if spans and (tail := _DATE_RANGE_END.match(body, after)):
         spans.append(tail.span())
-        month = int(tail[1]) if tail[1] else day.month
+        named_month = tail[1] or tail[3]
+        month = int(named_month) if named_month else day.month
         try:
-            last = date(day.year, month, int(tail[2]))
+            last = date(day.year, month, int(tail[2] or tail[4]))
         except ValueError as error:
             raise ParseRejected(f"날짜 범위를 읽을 수 없습니다: {tail[0].strip()}") from error
-        if last < day and tail[1]:
+        if last < day and named_month:
             last = last.replace(year=day.year + 1)
         if last < day:
             raise ParseRejected("끝 날짜가 시작 날짜보다 빠릅니다")
+        if tail[5]:
+            _weekday_matches(last, tail[5])
     if day < today:
         raise ParseRejected(f"이미 지난 날짜입니다: {day.isoformat()}")
     return ParsedRequest(
@@ -175,9 +200,12 @@ def resolve_relative_day(text: str, now: datetime) -> date:
     match = _DATE_ISO.search(text)
     if match:
         return date(int(match[1]), int(match[2]), int(match[3]))
-    match = _DATE_MD.search(text)
+    match = _DATE_MD.search(text) or _DATE_SLASH.search(text)
     if match:
-        candidate = date(today.year, int(match[1]), int(match[2]))
+        try:
+            candidate = date(today.year, int(match[1]), int(match[2]))
+        except ValueError as error:
+            raise ParseRejected(f"날짜를 읽을 수 없습니다: {match[0]}") from error
         return candidate.replace(year=today.year + 1) if candidate < today else candidate
     match = _DATE_WORD.search(text)
     if match:
@@ -203,11 +231,40 @@ def _extract_date(text: str, today: date, spans: list[Span]) -> date:
     span = _date_span(text)
     if span is not None:
         spans.append(span)
+        tag = _WEEKDAY_TAG.match(text, span[1])
+        if tag is not None:
+            spans.append(tag.span())
     return resolve_relative_day(text, datetime.combine(today, time.min, KST))
 
 
+def _date_end(text: str, spans: list[Span]) -> int | None:
+    """Where the first date (and its weekday tag) ends, so a range end can follow it."""
+    if not spans:
+        return None
+    tag = _WEEKDAY_TAG.match(text, spans[0][1])
+    return tag.end() if tag is not None else spans[0][1]
+
+
+def _check_weekday(text: str, position: int, day: date) -> int:
+    """A weekday written beside a date must be that date's weekday; never pick one of the two."""
+    tag = _WEEKDAY_TAG.match(text, position)
+    if tag is None:
+        return position
+    _weekday_matches(day, tag[1])
+    return tag.end()
+
+
+def _weekday_matches(day: date, written: str) -> None:
+    actual = _WEEKDAY_KO[day.weekday()]
+    if written != actual:
+        raise AmbiguousTime(
+            f"{day.month}월 {day.day}일은 {actual}요일인데 ({written})로 적혀 있어요. "
+            "날짜와 요일 중 어느 쪽이 맞는지 알려주세요."
+        )
+
+
 def _date_span(text: str) -> Span | None:
-    for pattern in (_DATE_ISO, _DATE_MD, _DATE_WORD, _DATE_WEEK, _DATE_OFFSET):
+    for pattern in (_DATE_ISO, _DATE_MD, _DATE_SLASH, _DATE_WORD, _DATE_WEEK, _DATE_OFFSET):
         match = pattern.search(text)
         if match:
             return match.span()
@@ -216,17 +273,25 @@ def _date_span(text: str) -> Span | None:
 
 def _extract_times(text: str, spans: list[Span]) -> list[time]:
     times: list[time] = []
+    half: str | None = None
     for match in _TIME.finditer(text):
         if any(match.start() < hi and match.end() > lo for lo, hi in spans):
             continue
         spans.append(match.span())
-        times.append(_time_of(match))
-        if len(times) == 2:
-            break
+        if not times:
+            times.append(_time_of(match))
+            half = match[1] if match[2] else None
+            continue
+        # "오후 4시부터 5시까지": the end clock keeps the start's 오전/오후 when it names none.
+        end = _time_of(match, half if match[2] and not match[1] else None)
+        if half == "오전" and not match[1] and match[2] and end <= times[0] and end.hour < 12:
+            end = end.replace(hour=end.hour + 12)
+        times.append(end)
+        break
     return times
 
 
-def _time_of(match: re.Match[str]) -> time:
+def _time_of(match: re.Match[str], half: str | None = None) -> time:
     if match[7]:
         return time(12, 0)
     if match[8]:
@@ -236,9 +301,10 @@ def _time_of(match: re.Match[str]) -> time:
     else:
         hour = int(match[2])
         minute = 30 if match[4] else int(match[3] or 0)
-        if match[1] == "오후":
+        marker = match[1] or (half if 1 <= hour <= 12 else None)
+        if marker == "오후":
             hour = 12 if hour == 12 else hour + 12
-        elif match[1] == "오전":
+        elif marker == "오전":
             hour = 0 if hour == 12 else hour
         elif 1 <= hour <= 12:
             raise AmbiguousTime(
@@ -265,7 +331,7 @@ def _strip_spans(text: str, spans: list[Span]) -> str:
         ch for i, ch in enumerate(text) if not any(lo <= i < hi for lo, hi in spans)
     )
     kept = re.sub(r"\s+", " ", kept).strip()
-    kept = re.sub(r"(?<!\S)(?:에|부터|까지)(?!\S)", "", kept)
+    kept = re.sub(r"(?<!\S)(?:에|부터|까지|~|-)(?!\S)", "", kept)
     kept = re.sub(r"\s+", " ", kept).strip()
     kept = re.sub(r"^[\s,]*(?:에|부터|까지)\s+", "", kept)
     kept = _TRAILING_VERBS.sub("", kept)

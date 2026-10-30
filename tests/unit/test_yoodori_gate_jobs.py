@@ -239,6 +239,37 @@ def test_card_path_stays_when_the_switch_is_off(staged: Path, monkeypatch: pytes
     assert jobs_seen[0].argv[2] == "write-now" and jobs_seen[0].kind == "todo"
 
 
+def test_calendar_card_flag_posts_the_card_even_with_the_switch_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: auto-write-calendar is on, so the owner's own event would be written without a card.
+    drafts: list[list[str]] = []
+    jobs_seen: list[gate.Job] = []
+    monkeypatch.setattr(gate, "_switched", lambda kind: kind == "calendar")
+    monkeypatch.setattr(gate, "card_env", lambda *a: {})
+    monkeypatch.setattr(gate, "calendar_card", lambda argv, *a: drafts.append(argv) or 0)
+    monkeypatch.setattr(gate, "run_job", lambda job: jobs_seen.append(job) or 0)
+    monkeypatch.setattr(gate, "_log", lambda *a: None)
+    request = ["calendar-request", "--text", "'11/25(수) 오후 4시부터 5시까지 회의'", *ORIGIN]
+    # When: the owner said "일정 추가는 카드 올려" and YooDori adds --card.
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", " ".join([request[0], "--card", *request[1:]]))
+    assert gate.main() == 0
+    # Then: the draft card path ran with the same flags and nothing was written.
+    assert not jobs_seen and drafts[0][2] == "draft-create" and "--card" not in drafts[0]
+    assert drafts[0][3:] == ["--text", "11/25(수) 오후 4시부터 5시까지 회의", *ORIGIN]
+    # And without --card Q233 stays: the cardless owner-create job runs, no card.
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", " ".join(request))
+    assert gate.main() == 0
+    assert len(drafts) == 1 and jobs_seen[0].argv[2] == "owner-create"
+
+
+@pytest.mark.parametrize("words", [
+    ["calendar-request", "--card", "--card", "--text", "x", *ORIGIN],
+    ["todo-request", "--card", "--title", "t", *ORIGIN],
+])
+def test_card_flag_is_calendar_only_and_single(words: list[str]) -> None:
+    with pytest.raises(gate.Refused):
+        gate.build(gate.card_choice(words)[0])
+
+
 def test_marker_decides_whether_a_cardless_job_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ledger = tmp_path / "ledger"
     monkeypatch.setattr(auto_write, "state_root", lambda home=None: ledger)
