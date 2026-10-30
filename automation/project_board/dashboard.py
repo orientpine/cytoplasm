@@ -1332,7 +1332,7 @@ def render_dashboard(
         f'{meta}<title>{name}</title>{head_icons(brand or DEFAULT_BRAND)}'
         f"<style>{CSS}{nav_css}{ORDERS_CSS if orders is not None else ''}{FIND_CSS}</style></head><body>"
         f'{sprite()}<a class="skip" href="#main">본문으로 건너뛰기</a>'
-        f'<header><div class="bar"><a class="brand" href="#summary">{brand_mark()}{name}</a>'
+        f'<header><div class="bar"><a class="brand" href="#summary">{brand_mark()}<span class="brand-name">{name}</span></a>'
         f'<nav aria-label="화면"{nav_class}>{_NAV}{orders_nav}</nav>{fresh}</div></header><main id="main">'
         f"{empty}{_summary(snapshot, today, '' if mode == 'file' else summary_line(sessions))}"
         f"{summary_box(orders, snapshot) if orders is not None else ''}{_projects(snapshot, today, _shelf_link(shelf, new_in_shelf))}"

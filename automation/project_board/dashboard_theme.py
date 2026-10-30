@@ -57,6 +57,7 @@ header{position:sticky;top:0;z-index:10;background:var(--header);backdrop-filter
 .bar{max-width:var(--max);margin:0 auto;padding:var(--s2) var(--s6);display:flex;align-items:center;gap:var(--s6);min-height:60px}
 .brand{display:flex;align-items:center;gap:var(--s3);min-height:var(--hit);font-weight:700;font-size:var(--t-lg);color:var(--text);white-space:nowrap}
 .mark{width:30px;height:30px;flex:none;display:block}
+.brand-name{font-family:"Noto Serif KR","Noto Serif CJK KR","AppleMyungjo","Nanum Myeongjo",Batang,serif;letter-spacing:.06em}
 nav{display:flex;gap:var(--s1)}
 .fresh{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text-3);font-size:var(--t-sm);white-space:nowrap}
 .fresh.is-error{color:var(--danger);font-weight:600}
@@ -470,7 +471,7 @@ def page_shell(title: str, body: str, brand: str) -> str:
         '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
         f'<title>{escape(title)} · {name}</title>{head_icons(brand)}<style>{CSS}</style></head><body>'
-        f'{sprite()}<header><div class="bar"><a class="brand" href="/">{brand_mark()}{name}</a></div></header>{body}</body></html>'
+        f'{sprite()}<header><div class="bar"><a class="brand" href="/">{brand_mark()}<span class="brand-name">{name}</span></a></div></header>{body}</body></html>'
     )
 
 
@@ -480,40 +481,46 @@ def notice_page(title: str, message: str, brand: str, *, action: str = "") -> st
     return page_shell(title, body, brand)
 
 
-# The product icon (owner 2026-10-31 "페이지 아이콘 만들어줘", Q402 "팔란티르 느낌나는 아이콘으로 하고 팔란티르로 하자"):
-# a seeing-stone - a dark orb on a gold stand, light swirling inside it and a star shining at its centre - drawn here,
-# not taken from a film or a company logo. A picture, not a letter: at 16px in a browser tab it still reads as a round
-# orb. One drawing for the tab, the header and the home screen.
+# The product icon (owner 2026-10-31 "페이지 아이콘 만들어줘", Q402 "팔란티르 느낌나는 아이콘으로 하고 팔란티르로 하자",
+# 04:21 KST "반지의 제왕에서 나올법한 테마로 해줘"): a seeing-stone - black glass with fire swirling orange inside, held by an
+# old bronze claw on a stone plinth marked with runes - on a night-sky stone tile with a few stars. Drawn here, not taken
+# from a film or a company logo. At 16px in a browser tab it still reads as a glowing orb. One drawing for the tab, the
+# header and the home screen.
 _ICON_DEFS: Final = (
-    "<radialGradient id='o' cx='.42' cy='.38' r='.7'><stop offset='0' stop-color='#4a7dff'/>"
-    "<stop offset='.45' stop-color='#16246a'/><stop offset='1' stop-color='#070b22'/></radialGradient>"
-    "<radialGradient id='c'><stop offset='0' stop-color='#fff'/><stop offset='.35' stop-color='#bfe3ff'/>"
-    "<stop offset='1' stop-color='#bfe3ff' stop-opacity='0'/></radialGradient>"
+    "<radialGradient id='o' cx='.5' cy='.5' r='.5'><stop offset='0' stop-color='#ffe08a'/>"
+    "<stop offset='.22' stop-color='#ff8a1f'/><stop offset='.55' stop-color='#5a1404'/>"
+    "<stop offset='.85' stop-color='#120706'/><stop offset='1' stop-color='#050303'/></radialGradient>"
+    "<linearGradient id='s' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#9a8257'/>"
+    "<stop offset='1' stop-color='#4e3f27'/></linearGradient>"
 )
 _ICON_ART: Final = (
-    "<path d='M25 46h14l3 6H22z' fill='#d9a441'/><path d='M17 52h30a3 3 0 0 1 0 6H17a3 3 0 0 1 0-6z' fill='#f5c96a'/>"
-    "<circle cx='32' cy='27' r='20' fill='url(#o)'/>"
-    "<circle cx='32' cy='27' r='19.2' fill='none' stroke='#a9c8ff' stroke-width='1.6'/>"
-    "<path d='M17 31C17 19 29 12 40 16' fill='none' stroke='#8fb6ff' stroke-width='2.4' stroke-linecap='round' opacity='.85'/>"
-    "<path d='M47 23C47 35 35 42 24 38' fill='none' stroke='#8fb6ff' stroke-width='2.4' stroke-linecap='round' opacity='.85'/>"
-    "<circle cx='32' cy='27' r='10' fill='url(#c)'/>"
-    "<path d='M32 19.5C33 25.5 33 25.5 39.5 27C33 28.5 33 28.5 32 34.5C31 28.5 31 28.5 24.5 27C31 25.5 31 25.5 32 19.5Z'"
-    " fill='#fff'/>"
+    "<circle cx='9' cy='10' r='.9' fill='#cfd6ff'/><circle cx='55' cy='8' r='.7' fill='#cfd6ff'/>"
+    "<circle cx='57' cy='20' r='.6' fill='#cfd6ff'/><circle cx='7' cy='24' r='.6' fill='#cfd6ff'/>"
+    "<path d='M21 44l5-3h12l5 3 2 7H19z' fill='url(#s)'/><path d='M14 51h36l2 7H12z' fill='url(#s)'/>"
+    "<path d='M14 51h36' stroke='#c9ad74' stroke-width='1'/>"
+    "<path d='M18 55h2M24 54v2M29 55h3M36 54v2M42 55h3M47 54v2' stroke='#e2c88f' stroke-width='1.1' stroke-linecap='round'/>"
+    "<path d='M19 44l-3-6M45 44l3-6M32 41v-1' stroke='#8a7349' stroke-width='2.4' stroke-linecap='round'/>"
+    "<circle cx='32' cy='25' r='19' fill='url(#o)'/>"
+    "<path d='M19 29c0-11 13-16 21-9' fill='none' stroke='#ff9b3d' stroke-width='2.2' stroke-linecap='round' opacity='.9'/>"
+    "<path d='M45 21c1 11-11 17-20 11' fill='none' stroke='#ff7a1a' stroke-width='2' stroke-linecap='round' opacity='.85'/>"
+    "<circle cx='32' cy='25' r='18.4' fill='none' stroke='#6b5a3e' stroke-width='1.2'/>"
+    "<ellipse cx='25' cy='15' rx='5' ry='2.6' fill='#fff' opacity='.18' transform='rotate(-30 25 15)'/>"
 )
 
 
 def icon_svg(*, full_bleed: bool = False) -> str:
-    """The icon as SVG: a rounded tile (tab, header), or a full square with the art inside the corner mask's safe
-    zone (home screen: the phone rounds the corners itself and wants no transparency)."""
-    corner = "" if full_bleed else " rx='14'"
-    art = f"<g transform='translate(4.5 4.5) scale(.86)'>{_ICON_ART}</g>" if full_bleed else _ICON_ART
-    return (
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
-        "<stop offset='0' stop-color='#5b8cff'/><stop offset='1' stop-color='#2f5bd3'/></linearGradient>"
-        f"{_ICON_DEFS}</defs>"
-        f"<rect width='64' height='64'{corner} fill='url(#g)'/>{art}</svg>"
-    )
-
+    """The icon as SVG: a rounded tile with a stone edge (tab, header), or a full square with the art inside the corner
+    mask's safe zone (home screen: the phone rounds the corners itself and wants no transparency)."""
+    if full_bleed:
+        tile = "<rect width='64' height='64' fill='#161b2e'/>"
+        art = f"<g transform='translate(4.5 4.5) scale(.86)'>{_ICON_ART}</g>"
+    else:
+        tile = (
+            "<rect width='64' height='64' rx='14' fill='#161b2e'/>"
+            "<rect x='.75' y='.75' width='62.5' height='62.5' rx='13.3' fill='none' stroke='#4a5272' stroke-width='1.5'/>"
+        )
+        art = _ICON_ART
+    return f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs>{_ICON_DEFS}</defs>{tile}{art}</svg>"
 
 def brand_mark() -> str:
     """The icon beside the product name in the header: the tab icon's data URI, so the sprite stays the only inline art."""
