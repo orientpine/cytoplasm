@@ -29,7 +29,6 @@ _DEPLOY_SCRIPTS = (
     "automation/repair/deploy.sh",
     "automation/selfskill_audit/deploy.sh",
     "automation/skill_generation/deploy.sh",
-    "automation/state_backup/deploy.sh",
     "automation/stt_eval/deploy.sh",
     "automation/voice_catalog/deploy.sh",
     "skills/calendar/deploy.sh",

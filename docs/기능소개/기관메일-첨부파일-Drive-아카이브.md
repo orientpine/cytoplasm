@@ -10,7 +10,7 @@ MailOn의 첨부파일을 Google Drive `<산출물 루트>/메일 첨부파일/<
 
 ## 핵심 동작 (불변식)
 - `(uid, filename)`의 비공개 SHA-256 키와 `~/.hermes/mail-attachment-drive/archive.db`로 중복 보관을 막는다. 업로드가 owner-only 권한과 `sha256Checksum` 메타데이터 검증을 통과한 뒤에만 원장을 기록한다. 검증을 위해 다시 내려받지 않는다.
-- Drive I/O는 `automation.drive_client.DriveClient`만 사용해 폴더 보장과 파일 upsert를 수행한다. 이 보관물은 산출물이 아니라 저수준 클라이언트 재사용 기능이므로 `automation/state_backup`과 같은 이유로 Drive 산출물 taxonomy를 적용하지 않는다. 루트 폴더 이름만은 산출물과 같은 `DRIVE_OUTPUTS_ROOT`를 읽어, 루트 이름을 바꿔도 첨부가 옛 이름 폴더를 새로 만들지 않는다(절차: [drive-publish.md 「루트 폴더 이름 바꾸기」](../guide/drive-publish.md#루트-폴더-이름-바꾸기)).
+- Drive I/O는 `automation.drive_client.DriveClient`만 사용해 폴더 보장과 파일 upsert를 수행한다. 이 보관물은 산출물이 아니라 저수준 클라이언트 재사용 기능이므로 Drive 산출물 taxonomy를 적용하지 않는다. 루트 폴더 이름만은 산출물과 같은 `DRIVE_OUTPUTS_ROOT`를 읽어, 루트 이름을 바꿔도 첨부가 옛 이름 폴더를 새로 만들지 않는다(절차: [drive-publish.md 「루트 폴더 이름 바꾸기」](../guide/drive-publish.md#루트-폴더-이름-바꾸기)).
 - 동기화는 `/srv/autophagy-skills/live/mail/scripts/mail_attachment_drive_sync.py`에서만 실행한다. 마운트가 있는 호스트에서 다른 사본을 실행하면 `mail_runtime.governed_copy_refusal`이 거부한다.
 - Hermes cron `mail-attachment-drive-watch`가 30분마다 live 동기화를 호출한다. 홈에는 `~/.hermes/scripts/mail_attachment_drive_watch.py` 래퍼만 있으며 `skills/mail/deploy-manifest.txt`가 이를 선언한다.
 - 성공은 무음이다. 실패는 주소·파일명·본문을 감춘 단일 `MAIL-ATTACHMENT-DRIVE-FAIL code=<code>` 마커로만 전달한다.

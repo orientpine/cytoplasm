@@ -454,5 +454,4 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 
 ## Drive 루트 이름 바꾸기에서 남긴 것 (2026-10-30)
 
-- **상태 백업은 산출물 루트 밖의 별도 루트 `autophagy-backups` 에 쌓인다** — `automation/state_backup/backup.py` 의 `BACKUP_ROOT_FOLDER` 가 고정 이름이라 산출물 루트 이름을 바꿔도 Drive 맨 위에 옛 이름 폴더가 하나 남는다 → 백업도 산출물 루트 아래로 옮길지, 별도 루트를 유지할지 정한 뒤 정하면 같은 순서(이름 바꾸기 → 설정)로 옮긴다. 영향: Drive 맨 위 정리 · 심각도 낮음.
 - **제안서 설정의 `PROPOSAL_DRIVE_ROOT` 는 읽히지만 쓰는 곳이 없다** — `skills/proposal/scripts/proposal_config.py` 의 `drive_root` 필드를 아무도 읽지 않고, 실제 발행은 `DRIVE_OUTPUTS_ROOT` 를 따른다 → 필드와 기본값을 지운다. 영향: 설정을 찾는 사람의 혼동 · 심각도 낮음.

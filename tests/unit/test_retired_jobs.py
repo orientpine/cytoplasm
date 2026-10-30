@@ -1,6 +1,7 @@
 """Removal uses the release declaration, stopped-unit read-back and exact data paths."""
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -161,11 +162,11 @@ def test_second_run_is_a_noop(tmp_path: Path) -> None:
 def test_removed_jobs_have_no_schedule_and_cleanup_is_required() -> None:
     rows = all_declarations(ROOT)
     removed = {"budget-watch", "memory-curator-watch", "memory-relocate-watch", "reminder-poller",
-               "daily-cost-report", "research-trends"}
+               "daily-cost-report", "research-trends", "state-backup-watch"}
     assert not any(row.kind == "cron" and row.destination in removed for row in rows)
     assert not any(row.source.startswith("automation/reminder_poller/") for row in rows)
     cleanup = [row for row in rows if row.owner == "automation/retired_jobs" and row.kind == "derived"]
-    assert len(cleanup) == 11
+    assert len(cleanup) == 12
     assert all(row.kind == "derived" and row.policy == "required" for row in cleanup)
     assert {row.destination for row in cleanup if row.destination.startswith("state/")} == set(retired_jobs.DATA)
 
@@ -226,7 +227,7 @@ def test_release_observer_dispatches_every_cleanup_declaration(status: str) -> N
         assert result.state == ("unknown" if status == "unexpected" else status)
     assert [call[2] for call in calls] == [
         "budget-watch", "memory-curator-watch", "memory-relocate-watch", "reminder-poller", "research-trends",
-        "reminder-poller", "reminder-poller", "wiki-confirm-watch",
+        "state-backup-watch", "reminder-poller", "reminder-poller", "wiki-confirm-watch",
         "wiki-confirm-watch", "interop-plugin", "interop-plugin",
     ]
     assert all(call[:2] == ("retired-job", str(ROOT)) for call in calls)
@@ -400,3 +401,79 @@ def test_budget_cleanup_refuses_a_symlink_inside_its_data(tmp_path: Path) -> Non
     with pytest.raises(ValueError):
         retired_jobs.install(home, "budget-watch", _runner(home, []))
     assert outside.is_dir()
+
+
+def test_state_backup_release_cleanup_removes_units_wrapper_and_data(tmp_path: Path) -> None:
+    units = retired_jobs.unit_paths(tmp_path, "state-backup-watch")
+    units[0].parent.mkdir(parents=True)
+    for path in units:
+        path.write_bytes(b"old unit")
+    removed = (tmp_path / ".hermes/scripts/state_backup_watch.py",
+               tmp_path / ".hermes/backup/backup.key", tmp_path / ".hermes/backup/state.json")
+    kept = tmp_path / ".hermes/scripts/watch_failure_streak.py"
+    for path in (*removed, kept):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    removed[1].chmod(0o600)
+    calls: list[tuple[str, ...]] = []
+    runner = _live_runner(calls, obeys=True)
+    assert retired_jobs.check(tmp_path, "state-backup-watch", runner) == "stale"
+
+    retired_jobs.install(tmp_path, "state-backup-watch", runner)
+
+    assert ("systemctl", "--user", "disable", "--now", units[0].name) in calls
+    assert ("systemctl", "--user", "stop", units[1].name) in calls
+    assert all(not path.exists() for path in (*units, *removed))
+    assert not (tmp_path / ".hermes/backup").exists()
+    assert kept.read_bytes() == b"x"
+    assert retired_jobs.check(tmp_path, "state-backup-watch", runner) == "ok"
+
+
+def test_state_backup_data_alone_is_stale_and_removed(tmp_path: Path) -> None:
+    tree = tmp_path / ".hermes/backup"
+    tree.mkdir(parents=True)
+    runner = _runner(tmp_path, [])
+    assert retired_jobs.check(tmp_path, "state-backup-watch", runner) == "stale"
+    retired_jobs.install(tmp_path, "state-backup-watch", runner)
+    assert not tree.exists()
+    assert retired_jobs.check(tmp_path, "state-backup-watch", runner) == "ok"
+
+
+@pytest.mark.parametrize("relative", (".hermes/backup", ".hermes/backup/backup.key"))
+def test_state_backup_cleanup_refuses_links_before_deleting(tmp_path: Path, relative: str) -> None:
+    home = tmp_path / "home"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep"
+    sentinel.write_bytes(b"keep")
+    link = home / relative
+    link.parent.mkdir(parents=True)
+    link.symlink_to(outside)
+    units = retired_jobs.unit_paths(home, "state-backup-watch")
+    units[0].parent.mkdir(parents=True)
+    for path in units:
+        path.write_bytes(b"old unit")
+    calls: list[tuple[str, ...]] = []
+    runner = _runner(home, calls)
+    assert retired_jobs.check(home, "state-backup-watch", runner) == "unknown"
+    calls.clear()
+    with pytest.raises(ValueError):
+        retired_jobs.install(home, "state-backup-watch", runner)
+    assert calls == []
+    assert all(path.read_bytes() == b"old unit" for path in units)
+    assert link.is_symlink() and sentinel.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("relative", (".hermes/backup", ".hermes/backup/special"))
+def test_state_backup_cleanup_refuses_path_type_mismatch(tmp_path: Path, relative: str) -> None:
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    if relative == ".hermes/backup":
+        path.write_bytes(b"not a tree")
+    else:
+        os.mkfifo(path)
+    runner = _runner(tmp_path, [])
+    assert retired_jobs.check(tmp_path, "state-backup-watch", runner) == "unknown"
+    with pytest.raises(ValueError, match="type mismatch"):
+        retired_jobs.install(tmp_path, "state-backup-watch", runner)
+    assert path.exists()

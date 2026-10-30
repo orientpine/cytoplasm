@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from automation.node_config import NodeConfig
 
 JOBS: Final = ("budget-watch", "memory-curator-watch", "memory-relocate-watch", "reminder-poller", "research-trends",
-               "wiki-confirm-watch")
+               "state-backup-watch", "wiki-confirm-watch")
 ALGORITHM: Final = "retired-job-v1"
 DATA: Final = ("state/reminders.db", "state/milestones.yaml")
 WIKI_SCRIPT: Final = ".hermes/scripts/wiki_confirm_reaction_watch.py"
@@ -27,6 +27,7 @@ SCRIPTS: Final = {
     "memory-relocate-watch": ".hermes/scripts/memory_relocate_watch.py",
     "reminder-poller": ".hermes/scripts/poll_reminders.py",
     "research-trends": ".hermes/scripts/research_trends.py",
+    "state-backup-watch": ".hermes/scripts/state_backup_watch.py",
     "wiki-confirm-watch": WIKI_SCRIPT,
 }
 # Weekly research trends moved to a separate research agent (owner 2026-10-21: no node
@@ -57,6 +58,19 @@ BUDGET_FILES: Final = ("state/budget.db", "state/budget.db-wal", "state/budget.d
 BUDGET_TREES: Final = (".hermes/budget", ".hermes/budget-gate")
 BUDGET_ENV: Final = ".env.secrets"
 BUDGET_ENV_KEY: Final = b"BUDGET_SHEET_ID="
+
+
+def state_backup_paths(home: Path) -> tuple[Path, ...]:
+    """Validate the retired tree and every child before observing or removing it."""
+    tree = safe_path(home, ".hermes/backup")
+    if tree.exists() and not tree.is_dir():
+        raise ValueError("RETIRED-JOB-REFUSED: backup path type mismatch")
+    if tree.is_dir():
+        for child in tree.rglob("*"):
+            safe_path(home, str(child.relative_to(home)))
+            if not child.is_file() and not child.is_dir():
+                raise ValueError("RETIRED-JOB-REFUSED: backup child type mismatch")
+    return (tree,)
 
 
 def budget_paths(home: Path) -> tuple[Path, ...]:
@@ -154,6 +168,8 @@ def check(home: Path, name: str, runner: Runner = run) -> str:
         data = tuple(safe_path(home, path) for path in DATA) if name == "reminder-poller" else ()
         if name == "research-trends":
             data = research_paths(home)
+        if name == "state-backup-watch":
+            data = state_backup_paths(home)
         if name == "budget-watch":
             data = budget_paths(home)
             if budget_env(home) is not None:
@@ -203,6 +219,8 @@ def install(home: Path, name: str, runner: Runner = run) -> None:
         for path in DATA:
             safe_path(home, path)
     leftovers = research_paths(home) if name == "research-trends" else ()
+    if name == "state-backup-watch":
+        leftovers = state_backup_paths(home)
     if name == "budget-watch":
         leftovers = budget_paths(home)
         budget_env(home)
