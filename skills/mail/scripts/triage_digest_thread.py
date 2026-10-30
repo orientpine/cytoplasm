@@ -1,4 +1,8 @@
-"""The morning digest as one standard approval thread (owner Q187, 2026-10-16).
+"""The day's digests as one standard approval thread (owner Q187, 2026-10-16).
+
+The digest runs at 09:00, 13:00 and 19:00 KST (owner 2026-10-30); every run of a KST day
+posts into that day's one thread, so the thread name carries the day only and each run's
+first message carries its own time and count.
 
 Mail owns the digest, so it opens the day's thread and decides when it is finished; the
 shared state and the thread marks live in ``automation.interop.digest_thread``. A reply
@@ -25,11 +29,11 @@ def _shared() -> ModuleType:
     return triage_approval._repo_module("digest_thread")
 
 
-def open_for(kst_now: datetime, count: int) -> object:
+def open_for(kst_now: datetime) -> object:
     surface = triage_approval._repo_module("approval_surface")
     shared = _shared()
     day = kst_now.date().isoformat()
-    title = f"다이제스트 {kst_now:%m-%d %H:%M} · {count}건"
+    title = f"다이제스트 {kst_now:%m-%d}"
 
     def opener() -> object:
         try:

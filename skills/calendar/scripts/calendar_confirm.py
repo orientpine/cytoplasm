@@ -174,7 +174,7 @@ def post_confirmation_message(draft: DraftRecord, channel_id: str) -> tuple[str,
     content = draft.get("approval_content") or render_confirmation(draft)
     payload: dict[str, object] = {"content": content}
     if draft.get("digest_reply_to") and draft.get("digest_reply_channel") == channel_id:
-        # Under its mail card in the morning digest thread (owner Q187, 2026-10-16).
+        # Under its mail card in the day's digest thread (owner Q187, 2026-10-16).
         payload["message_reference"] = {"message_id": draft["digest_reply_to"], "fail_if_not_exists": False}
     message = _api("POST", f"/channels/{channel_id}/messages", payload)
     message_id = _required_string(message, "id", "확정 DM 메시지 id가 없습니다")

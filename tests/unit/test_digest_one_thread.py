@@ -182,7 +182,7 @@ def test_the_digest_posts_its_cards_in_the_thread_then_hands_events_over_under_e
             "flags": ("schedule_needed",), "summary": "요약", "recv_date": "2026-10-16T23:00:00Z", "note": "",
             "schedule_text": "10/19 13:30 회의"}
     posts: list[tuple[str, str]] = []
-    monkeypatch.setattr(triage_digest, "_open_thread", lambda _now, _count: THREAD)
+    monkeypatch.setattr(triage_digest, "_open_thread", lambda _now: THREAD)
     monkeypatch.setattr(triage_confirm, "post_in",
                         lambda channel, body: posts.append((channel, body)) or f"p-{len(posts)}")
     monkeypatch.setattr(triage_confirm, "dm_owner", lambda _body: pytest.fail("posted outside the thread"))

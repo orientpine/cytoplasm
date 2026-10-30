@@ -10,7 +10,7 @@ Hermes 외부효과 평가기·플러그인·규칙 파일은 폐기했다(이�
 | `channel_move.py` · `approval_directory.channel_override` | 삭제 전 미결 승인 조회(GET·파일 읽기만)와 ops 채널 override 판정. 노드 설정 `private_root/channel-override.json`은 ops 소유·0600 일반 파일·17~20자리 두 채널 ID일 때만 기존 설정보다 우선한다. 홈 경로는 `ProtectHome` 수리 유닛에서 보이지 않아 쓰지 않는다. 부재는 기존 경로, 오류는 값 없는 경고 후 기존 경로다. 승인 판정·lifecycle은 바꾸지 않는다 |
 | `effect_approval.py` | 카드 생산자가 고정한 `target_id`·도구 인자·소유자·방법에 묶인 기존 승인 JSONL 검증과 격리 E2E 서명 기록. 해시·챌린지·저장 형식은 그대로며 도구 분류·denylist 평가·Hermes 등록은 없다 |
 | `approval_types.py` · `approval_reminder.py` · `approval_lease.ReminderJournal` | `approval_types`에는 레거시 저장용 `ApprovalContext`·결과 값 `ExternalEffectDecision`·`JsonValue`만 두며 승인 평가 구현은 없다. 기존 승인 레코드의 key·원문 message id·실제 게시 시각에 고정된 리마인더 계산. 기존 key lease 안에서 lifecycle 관찰→영속 claim→최소정보 원문 링크 전송하며 catch-up은 최신 due 구간 1건만 시도한다. 별도 승인 상태머신이 아니다 |
-| `digest_thread.py` | 아침 다이제스트의 하루 한 표준 승인 스레드(2026-10-16 Q187) — 날짜별 바인딩 파일(0600, flock)을 메일·캘린더가 공유하고, `settle` 이 미결 카드 수로 🔔 / ✅ 완료 표시를 맞춘다(이름 변경은 `origin_notice.rename_thread`·`close_thread`). 승인 판정은 없다 |
+| `digest_thread.py` | 다이제스트(09·13·19 KST)의 하루 한 표준 승인 스레드(2026-10-16 Q187, 그날 세 실행이 공유) — 날짜별 바인딩 파일(0600, flock)을 메일·캘린더가 공유하고, `settle` 이 미결 카드 수로 🔔 / ✅ 완료 표시를 맞춘다(이름 변경은 `origin_notice.rename_thread`·`close_thread`). 승인 판정은 없다 |
 | `approval_reminder_config.py` | `config.yaml`의 `approval_reminders`를 검증된 enabled·initial/repeat 모델로 로드(기본 true·3h·1h, 간격 오류 fail-fast) |
 | `thread_pointer.py` | 승인 요청 CLI 가 게시 직후 내는 `APPROVAL-THREAD <키>=<값> url=<링크>` 줄의 단일 정의. 좌표는 레코드의 `approval_guild_id`·`approval_thread_id`, 링크는 `owner_message.discord_link`, 좌표 결손은 `url=unavailable search=<값>`(추측 금지). I/O 없음 |
 | `discord_transport.py` · `chunker.py` | `DiscordTransport` 순차 청킹 전송 + 429 `Retry-After` 백오프. `chunk_message`=2000자 분할 |

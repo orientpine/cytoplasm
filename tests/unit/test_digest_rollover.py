@@ -50,14 +50,14 @@ def opened(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
 def test_mail_opening_next_day_archives_previous_as_done(opened):
     # Given: an older mail digest; a calendar-only digest must not age it out.
-    first = triage_digest_thread.open_for(_KST, 1)
+    first = triage_digest_thread.open_for(_KST)
     for index in range(digest_thread.KEEP_DAYS):
         (digest_thread.state_dir() / f"reminder-{index}.json").write_text("{}")
     name = opened[first.channel_id]["name"]
     calendar_digest.daily_binding({"digest_day": "2026-10-19"})
     assert opened[first.channel_id]["archived"] is False
     # When: the next mail digest opens.
-    triage_digest_thread.open_for(_KST + timedelta(days=1), 2)
+    triage_digest_thread.open_for(_KST + timedelta(days=1))
     # Then: the previous mail thread is closed and its mark persisted.
     assert opened[first.channel_id] == {"name": f"✅ 완료 · {name}", "archived": True}
     assert digest_thread.load(first.day).mark == digest_thread.MARK_DONE
@@ -75,7 +75,7 @@ def test_standalone_calendar_opening_next_day_uses_shared_settle(opened, monkeyp
     monkeypatch.setattr(digest_thread, "settle", settle)
     first = calendar_digest.daily_binding({"digest_day": "2026-10-17"})
     name = opened[first.channel_id]["name"]
-    mail = triage_digest_thread.open_for(_KST + timedelta(days=2), 1)
+    mail = triage_digest_thread.open_for(_KST + timedelta(days=2))
     assert opened[first.channel_id]["archived"] is False
     # When: the next calendar-only digest opens.
     calendar_digest.daily_binding({"digest_day": "2026-10-18"})
@@ -88,11 +88,11 @@ def test_standalone_calendar_opening_next_day_uses_shared_settle(opened, monkeyp
 @pytest.mark.parametrize("pending,reason", [(1, "live-cards"), (None, "unknown-cards")])
 def test_mail_rollover_keeps_live_or_unknown_cards_visible(opened, monkeypatch, capsys, pending, reason):
     # Given: the older thread has undecided cards or an unreadable card store.
-    first = triage_digest_thread.open_for(_KST, 1)
+    first = triage_digest_thread.open_for(_KST)
     monkeypatch.setattr(triage_transport, "_calendar_digest_pending",
                         lambda ids: None if pending is None else dict.fromkeys(ids, pending))
     # When: the next mail digest opens.
-    triage_digest_thread.open_for(_KST + timedelta(days=1), 1)
+    triage_digest_thread.open_for(_KST + timedelta(days=1))
     # Then: the older thread stays visible and its skip reason is logged.
     assert opened[first.channel_id]["archived"] is False
     assert f"thread={first.channel_id} reason={reason}" in capsys.readouterr().err

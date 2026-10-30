@@ -257,9 +257,9 @@ def test_one_digest_day_on_the_owners_screen(world: World, monkeypatch: pytest.M
     cards = [m for m in inside if m["content"].startswith("### ")]
     calendar_card = next(m for m in inside if "캘린더 변경" in m["content"])
     # Q1: same shape as every approval thread.
-    assert parent["content"].splitlines()[0] == "## 📬 기관메일 · 다이제스트 10-17 08:00 · 2건"
+    assert parent["content"].splitlines()[0] == "## 📬 기관메일 · 다이제스트 10-17"
     assert "🔔 승인 대기" in parent["content"] and "대상:" not in parent["content"]
-    assert thread["name"] == "📬 기관메일 · 다이제스트 10-17 08:00 · 2건"
+    assert thread["name"] == "📬 기관메일 · 다이제스트 10-17"
     assert "✅" not in inside[0]["content"] and "신규 2건" in inside[0]["content"]
     # Q3: the event card is in the same thread, under its mail card, which links it.
     assert calendar_card["reply_to"] == cards[1]["id"]
@@ -299,7 +299,7 @@ def test_one_digest_day_on_the_owners_screen(world: World, monkeypatch: pytest.M
         child.setattr(sys, "argv", ["calendar_cli.py", "discard", "--draft", entry_draft])
         calendar_cli.main()
     triage_cli.cmd_watch(argparse.Namespace())
-    assert thread["name"] == "✅ 완료 · 📬 기관메일 · 다이제스트 10-17 08:00 · 2건" and thread["archived"] is True
+    assert thread["name"] == "✅ 완료 · 📬 기관메일 · 다이제스트 10-17" and thread["archived"] is True
 
     # Q7: a reply asked outside the digest still gets its own request thread.
     monkeypatch.setattr(triage_cli, "_get_mail", lambda uid: _mails(("u-9", "합성 별건", False))[0])
