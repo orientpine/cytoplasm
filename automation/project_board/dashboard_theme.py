@@ -12,6 +12,8 @@ import base64
 from html import escape
 from typing import Final
 
+from .dashboard_icon_png import TOUCH_ICON_PNG
+
 _TOKENS: Final = """
 :root{color-scheme:light dark;
 --bg:#f6f7f9;--surface:#fff;--surface-2:#f0f2f5;--line:#e2e5ea;--line-strong:#c9ced6;
@@ -53,8 +55,7 @@ header{position:sticky;top:0;z-index:10;background:var(--header);backdrop-filter
 -webkit-backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--line)}
 .bar{max-width:var(--max);margin:0 auto;padding:var(--s2) var(--s6);display:flex;align-items:center;gap:var(--s6);min-height:60px}
 .brand{display:flex;align-items:center;gap:var(--s3);min-height:var(--hit);font-weight:700;font-size:var(--t-lg);color:var(--text);white-space:nowrap}
-.mark{width:30px;height:30px;border-radius:9px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;
-font-size:var(--t-md);font-weight:800}
+.mark{width:30px;height:30px;flex:none;display:block}
 nav{display:flex;gap:var(--s1)}
 .fresh{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text-3);font-size:var(--t-sm);white-space:nowrap}
 .fresh.is-error{color:var(--danger);font-weight:600}
@@ -467,8 +468,8 @@ def page_shell(title: str, body: str, brand: str) -> str:
     return (
         '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
-        f'<title>{escape(title)} · {name}</title><link rel="icon" href="{favicon(brand)}"><style>{CSS}</style></head><body>'
-        f'{sprite()}<header><div class="bar"><a class="brand" href="/">{brand_mark(brand)}{name}</a></div></header>{body}</body></html>'
+        f'<title>{escape(title)} · {name}</title>{head_icons(name)}<style>{CSS}</style></head><body>'
+        f'{sprite()}<header><div class="bar"><a class="brand" href="/">{brand_mark()}{name}</a></div></header>{body}</body></html>'
     )
 
 
@@ -478,16 +479,53 @@ def notice_page(title: str, message: str, brand: str, *, action: str = "") -> st
     return page_shell(title, body, brand)
 
 
-def brand_mark(brand: str) -> str:
-    return f'<span class="mark" aria-hidden="true">{escape(brand[:1] or "P")}</span>'
+# The product icon (owner 2026-10-31 "페이지 아이콘 만들어줘"): three rising bars - white, yellow, coral - and a sparkle on
+# the accent blue; the tallest bar has two eyes. A picture, not a letter, so it reads at 16px in a browser tab and stays
+# the same whatever the product is named. One drawing for the tab, the header and the home screen.
+_ICON_ART: Final = (
+    "<rect x='12' y='35' width='11' height='17' rx='5.5' fill='#fff'/>"
+    "<rect x='26.5' y='25' width='11' height='27' rx='5.5' fill='#ffd23f'/>"
+    "<rect x='41' y='15' width='11' height='37' rx='5.5' fill='#ff7a59'/>"
+    "<path d='M19 10.5C20.5 17.5 20.5 17.5 27.5 19C20.5 20.5 20.5 20.5 19 27.5C17.5 20.5 17.5 20.5 10.5 19"
+    "C17.5 17.5 17.5 17.5 19 10.5Z' fill='#fff'/>"
+    "<circle cx='44.2' cy='21' r='1.6' fill='#7a2410'/><circle cx='48.8' cy='21' r='1.6' fill='#7a2410'/>"
+)
 
 
-def favicon(brand: str) -> str:
-    """A data-URI icon (base64, so the offline copy carries no URL text) showing the brand's first letter."""
-    letter = escape(brand[:1] or "P")
-    svg = (
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='#2f5bd3'/>"
-        f"<text x='16' y='22' text-anchor='middle' font-size='17' font-weight='700' fill='#fff' "
-        f"font-family='system-ui,sans-serif'>{letter}</text></svg>"
+def icon_svg(*, full_bleed: bool = False) -> str:
+    """The icon as SVG: a rounded tile (tab, header), or a full square with the art inside the corner mask's safe
+    zone (home screen: the phone rounds the corners itself and wants no transparency)."""
+    corner = "" if full_bleed else " rx='14'"
+    art = f"<g transform='translate(4.5 4.5) scale(.86)'>{_ICON_ART}</g>" if full_bleed else _ICON_ART
+    return (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+        "<stop offset='0' stop-color='#5b8cff'/><stop offset='1' stop-color='#2f5bd3'/></linearGradient></defs>"
+        f"<rect width='64' height='64'{corner} fill='url(#g)'/>{art}</svg>"
     )
-    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
+def brand_mark() -> str:
+    """The icon beside the product name in the header: the tab icon's data URI, so the sprite stays the only inline art."""
+    return f'<img class="mark" src="{favicon()}" alt="" width="30" height="30">'
+
+
+def head_icons(name: str) -> str:
+    """The tab icon, the home-screen icon and the home-screen name; ``name`` is already escaped.
+
+    Both icons are data URIs (base64), so the page asks for nothing and the offline copy carries no URL text.
+    """
+    return (
+        f'<link rel="icon" href="{favicon()}">'
+        f'<link rel="apple-touch-icon" sizes="180x180" href="{touch_icon()}">'
+        f'<meta name="apple-mobile-web-app-title" content="{name}"><meta name="application-name" content="{name}">'
+    )
+
+
+def touch_icon() -> str:
+    """The 180px home-screen icon (iPhone "홈 화면에 추가"): an opaque PNG, since the phone does not take SVG there."""
+    return "data:image/png;base64," + TOUCH_ICON_PNG
+
+
+def favicon() -> str:
+    """The tab icon as a data URI (base64, so the offline copy carries no URL text)."""
+    return "data:image/svg+xml;base64," + base64.b64encode(icon_svg().encode("utf-8")).decode("ascii")

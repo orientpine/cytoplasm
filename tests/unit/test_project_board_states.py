@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import gzip
 import http.client
 import json
+import re
+import struct
 import threading
+import zlib
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -69,7 +73,31 @@ def test_the_brand_name_comes_from_config_and_is_checked(tmp_path: Path, monkeyp
         with pytest.raises(ProjectBoardError):
             load_config()
     page = render_dashboard(_store(tmp_path).snapshot(today=TODAY), mode="file", brand="가상연구소 과제 현황")
-    assert "<title>가상연구소 과제 현황</title>" in page and '<span class="mark" aria-hidden="true">가</span>' in page
+    assert "<title>가상연구소 과제 현황</title>" in page
+    assert '<meta name="apple-mobile-web-app-title" content="가상연구소 과제 현황">' in page
+
+
+@pytest.mark.parametrize("mode", ["served", "file"])
+def test_the_icon_is_a_picture_for_the_tab_the_header_and_the_home_screen(tmp_path: Path, mode: str) -> None:
+    page = render_dashboard(_store(tmp_path).snapshot(today=TODAY), mode=mode, token=TOKEN, brand="가상연구소 과제 현황")
+    head = page.split("</head>", 1)[0]
+    icons = dict(re.findall(r'<link rel="(icon|apple-touch-icon)"[^>]*? href="([^"]+)"', head))
+    svg = base64.b64decode(icons["icon"].removeprefix("data:image/svg+xml;base64,")).decode("utf-8")
+    assert "<text" not in svg and svg.count("<rect") == 4  # a drawing (tile + three bars), not the brand's first letter
+    png = base64.b64decode(icons["apple-touch-icon"].removeprefix("data:image/png;base64,"))
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height, depth, colour = struct.unpack(">IIBB", png[16:26])
+    assert (width, height, depth, colour) == (180, 180, 8, 2)  # 180px, opaque RGB: the phone rounds the corners
+    chunks, at = [], 8
+    while at < len(png):
+        size, kind = struct.unpack(">I4s", png[at:at + 8])
+        if kind == b"IDAT":
+            chunks.append(png[at + 8:at + 8 + size])
+        at += size + 12
+    assert len(zlib.decompress(b"".join(chunks))) == 180 * (1 + 180 * 3)
+    header = page.split('<a class="brand"', 1)[1].split("</a>", 1)[0]
+    assert f'<img class="mark" src="{icons["icon"]}" alt=""' in header  # the same drawing beside the name
+    assert "http" not in head.replace(icons["icon"], "").replace(icons["apple-touch-icon"], "")  # no URL text
 
 
 @pytest.fixture

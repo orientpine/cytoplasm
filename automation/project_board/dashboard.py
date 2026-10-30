@@ -19,7 +19,7 @@ from typing import Final, Literal
 from urllib.parse import quote
 
 from .config import DEFAULT_BRAND
-from .dashboard_theme import CSS, brand_mark, favicon, fold, icon, sprite
+from .dashboard_theme import CSS, brand_mark, fold, head_icons, icon, sprite
 from .models import (
     GRADES, NEVER_EXPORTED, OPEN_STATUSES, BoardSnapshot, EventRow, ProjectView, SourceRow, TodoExtra, TodoRow,
 )
@@ -1329,10 +1329,10 @@ def render_dashboard(
     return (
         '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
-        f'{meta}<title>{name}</title><link rel="icon" href="{favicon(brand or DEFAULT_BRAND)}">'
+        f'{meta}<title>{name}</title>{head_icons(name)}'
         f"<style>{CSS}{nav_css}{ORDERS_CSS if orders is not None else ''}{FIND_CSS}</style></head><body>"
         f'{sprite()}<a class="skip" href="#main">본문으로 건너뛰기</a>'
-        f'<header><div class="bar"><a class="brand" href="#summary">{brand_mark(brand or DEFAULT_BRAND)}{name}</a>'
+        f'<header><div class="bar"><a class="brand" href="#summary">{brand_mark()}{name}</a>'
         f'<nav aria-label="화면"{nav_class}>{_NAV}{orders_nav}</nav>{fresh}</div></header><main id="main">'
         f"{empty}{_summary(snapshot, today, '' if mode == 'file' else summary_line(sessions))}"
         f"{summary_box(orders, snapshot) if orders is not None else ''}{_projects(snapshot, today, _shelf_link(shelf, new_in_shelf))}"
