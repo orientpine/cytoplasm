@@ -17,7 +17,11 @@ real mailon sync first; on the known structural sync failure (exit 3, e.g.
 the W0-7a folderUid selector) it degrades to the local state.db read and says
 so; on auth/browser failure (exit 2) it surfaces re-auth guidance and exit 2.
 
-Explicit redaction: `--masked` replaces subjects/senders with opaque sha256-derived
+`get <uid>` also returns the stored To/Cc/Bcc (`bcc` is null until the sync fills it for
+a sent mail saved before 2026-10-30); `list`/`search` never carry recipients and search
+does not match or quote the Bcc line.
+
+Explicit redaction: `--masked` replaces subjects/senders/recipients with opaque sha256-derived
 ids and omits bodies — the only mode whose output may leave the agent home
 (QA/repo/git). Classification is metadata-only (subject/sender strings);
 this wrapper itself never sends mail content to a model.
@@ -43,7 +47,9 @@ from mail_wrapper_read import (
     _render_mail,
     distinct_addresses,
     rank_candidates,
+    recipients,
     render_candidate,
+    without_bcc,
     build_subprocess_env,  # noqa: F401 - stable public helper re-export
     classify_stderr,
     mask_value,
@@ -135,9 +141,15 @@ def cmd_get(args) -> int:
     if not rows:
         return _error("get", "not_found", f"uid {args.uid} 없음 (state.db 기준).")
     mail = _render_mail(rows[0], args.masked, cfg["mask_salt"])
+    md_rel = rows[0]["markdown_path"]
+    md_path = cfg["repo"] / md_rel if md_rel else None
+    # Opening one mail shows its To/Cc/Bcc as written (owner Q393 2026-10-30); list/search do not.
+    stored = recipients(md_path.read_text(encoding="utf-8")) if md_path and md_path.is_file() else {}
+    for key in ("to", "cc", "bcc"):
+        value = stored.get(key)
+        value = value if value is not None or key == "bcc" else ""
+        mail[key] = mask_value(value, cfg["mask_salt"]) if args.masked and value is not None else value
     if args.body:
-        md_rel = rows[0]["markdown_path"]
-        md_path = cfg["repo"] / md_rel if md_rel else None
         if md_path is None or not md_path.is_file():
             mail["body"] = None
             mail["body_note"] = "markdown 파일 없음"
@@ -194,7 +206,7 @@ def cmd_search(args) -> int:
         fields = {"subject": (row["subject"] or "").casefold(),
                   "sender": (row["sender"] or "").casefold()}
         rest = [word for word in words if not any(word in text for text in fields.values())]
-        body = md_path.read_text(encoding="utf-8", errors="replace") if rest and has_body else ""
+        body = without_bcc(md_path.read_text(encoding="utf-8", errors="replace")) if rest and has_body else ""
         if any(word not in body.casefold() for word in rest) or (rest and len(by_body) >= args.limit):
             continue
         mail = _render_mail(row, args.masked, cfg["mask_salt"])

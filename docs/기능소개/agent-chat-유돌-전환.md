@@ -109,7 +109,7 @@ Gmail 읽기는 원 지시 좌표 없이 사용한다.
 | SSH 명령 | 고정 gws argv | 검증·출력 |
 |---|---|---|
 | `gmail-list <n> [query words...]` | `gws gmail users messages list --params '{"userId":"me","maxResults":n,"q":"query"}'`, 각 id에 `messages get --params '{"userId":"me","id":"…","format":"metadata"}'` | n=1~50, query≤200자(선택, 없으면 q 생략). `{status:"ok",mails:[{id,from,subject,date,snippet}]}` |
-| `gmail-get <id> [--body]` | `gws gmail users messages get --params '{"userId":"me","id":"…","format":"metadata 또는 full"}'` | id는 소문자 16진수 8~32자. `{status:"ok",mail:{id,from,subject,date,snippet,body?}}` |
+| `gmail-get <id> [--body]` | `gws gmail users messages get --params '{"userId":"me","id":"…","format":"metadata 또는 full"}'` | id는 소문자 16진수 8~32자. `{status:"ok",mail:{id,from,subject,date,snippet,to,cc,bcc,body?}}` (받는 사람은 단건 조회에만, 형 Q393) |
 
 “Gmail에서 안 읽은 메일 5개 보여 줘” → `gmail-list 5 is:unread` →
 목록을 읽고 각 메시지의 메타데이터만 조회해 한 줄 JSON으로 돌려준다.

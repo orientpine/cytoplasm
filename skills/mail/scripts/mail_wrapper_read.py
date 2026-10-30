@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -143,6 +144,36 @@ def _render_mail(row: dict, masked: bool, salt: str) -> dict:
         out["markdown_path"] = mask_value(out["markdown_path"] or "", salt)
     return out
 
+
+
+_RECIPIENT_KEYS = ("to", "cc", "bcc")
+_YAML_ESCAPE = re.compile(r"\\(.)")
+
+
+def recipients(markdown: str) -> dict[str, str | None]:
+    """To/Cc/Bcc from the mailon front matter as written; a missing key is None (Bcc not filled yet)."""
+    found: dict[str, str | None] = dict.fromkeys(_RECIPIENT_KEYS)
+    lines = markdown.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return found
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        key, _sep, value = line.partition(":")
+        value = value.strip()
+        if key in found and found[key] is None:
+            quoted = len(value) >= 2 and value[0] == value[-1] == '"'
+            found[key] = _YAML_ESCAPE.sub(r"\1", value[1:-1]) if quoted else value
+    return found
+
+
+def without_bcc(markdown: str) -> str:
+    """The document minus its front-matter ``bcc:`` line (search and snippets never show Bcc)."""
+    lines = markdown.split("\n")
+    if not lines or lines[0].strip() != "---" or "---" not in (line.strip() for line in lines[1:]):
+        return markdown
+    end = next(i for i, line in enumerate(lines[1:], 1) if line.strip() == "---")
+    return "\n".join(line for i, line in enumerate(lines) if not (0 < i < end and line.startswith("bcc:")))
 
 
 def rank_candidates(candidates: list[dict]) -> list[dict]:

@@ -129,7 +129,7 @@ def test_gws_reads_only_list_and_get_and_outputs_compact_json(
     mails = result["mails"] if words[0] == "list" else [result["mail"]]
     for row in mails:
         assert set(row) == {"id", "from", "subject", "date", "snippet"} | (
-            {"body"} if "--body" in words else set())
+            {"body"} if "--body" in words else set()) | ({"to", "cc", "bcc"} if words[0] == "get" else set())
         assert row["from"] == "reader@example.invalid"
         assert row["subject"] == "제목"
         if "--body" in words:
