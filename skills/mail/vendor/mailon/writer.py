@@ -47,6 +47,7 @@ class Mail:
     sender: str
     to: str = ""
     cc: str = ""
+    bcc: str = ""             # sent mail only; front matter only (never quoted or forwarded)
     date: datetime | None = None
     body_text: str = ""       # plain text view (preferred for Markdown body)
     body_html: str = ""       # optional raw HTML for reference
@@ -97,6 +98,7 @@ def build_markdown(mail: Mail, project_root: Path, md_path: Path) -> str:
         f"from: {_yaml_escape(mail.sender)}",
         f"to: {_yaml_escape(mail.to)}",
         f"cc: {_yaml_escape(mail.cc)}",
+        f"bcc: {_yaml_escape(mail.bcc)}",
         f"date: {_yaml_escape(date_iso)}",
         f"collected_at: {_yaml_escape(collected_iso)}",
         f"attachments:{_yaml_list(a.filename for a in mail.attachments)}",

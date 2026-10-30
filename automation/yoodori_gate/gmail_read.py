@@ -93,7 +93,7 @@ def _body(payload: dict[str, Json]) -> str:
     return "\n".join(" ".join(line.split()) for line in "".join(parser.chunks).splitlines()).strip()
 
 
-def _mail(message_id: str, with_body: bool) -> dict[str, Json]:
+def _mail(message_id: str, with_body: bool, *, with_recipients: bool = False) -> dict[str, Json]:
     message = _read("get", {"userId": "me", "id": _id(message_id),
                             "format": "full" if with_body else "metadata"})
     payload = message.get("payload")
@@ -111,6 +111,8 @@ def _mail(message_id: str, with_body: bool) -> dict[str, Json]:
         "id": message_id, "from": headers.get("from", ""), "subject": headers.get("subject", ""),
         "date": headers.get("date", ""), "snippet": str(message.get("snippet", "")),
     }
+    if with_recipients:  # one opened mail only (owner Q393 2026-10-30); list rows stay without them
+        mail.update({key: headers.get(key, "") for key in ("to", "cc", "bcc")})
     if with_body:
         mail["body"] = _body(payload)
     return mail
@@ -123,7 +125,7 @@ def request(words: list[str]) -> dict[str, Json]:
     if words[0] == "get" and len(words) in {2, 3}:
         if len(words) == 3 and words[2] != "--body":
             raise GmailReadError("usage")
-        return {"status": "ok", "mail": _mail(_id(words[1]), len(words) == 3)}
+        return {"status": "ok", "mail": _mail(_id(words[1]), len(words) == 3, with_recipients=True)}
     if (words[0] != "list" or len(words) not in {2, 3}
             or not re.fullmatch(r"[0-9]{1,2}", words[1]) or not 1 <= int(words[1]) <= 50):
         raise GmailReadError("usage")

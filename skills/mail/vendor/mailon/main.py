@@ -31,7 +31,7 @@ from .browser import AgentBrowser, BrowserError, unique_session_name
 from .config import PROJECT_ROOT, load_config, load_totp_secret
 from .login import LoginError, login
 from .folders import resolve_folder_uid
-from .heal import backfill_large_links, prune_buttons
+from .heal import backfill_bcc, backfill_large_links, prune_buttons
 from .resolve import parse_candidates, resolve_name
 from .scraper import SYNC_LARGE_DOWNLOAD_BUDGET_S, InboxScraper
 from .send import (
@@ -293,6 +293,7 @@ def cmd_sync(args) -> int:
                      retry_ok, retry_fail)
         prune_buttons(db, PROJECT_ROOT, cfg.attachments_dir)
         backfill_large_links(db, scraper, cfg.mails_dir, PROJECT_ROOT, folder_uids=folder_uids)
+        backfill_bcc(db, scraper, PROJECT_ROOT, folder_uids=folder_uids)
 
         db.finish_run(run_id, status="ok", new_mails=new_count)
         att_stats = db.attachment_stats()

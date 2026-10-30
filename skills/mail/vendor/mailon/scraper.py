@@ -30,6 +30,7 @@ REVERSE-ENGINEERED APIs (Crinity G-Cloud):
          <li id="from-item-0" data-address="..." data-personal="..." />
          <li id="to-item-0"   data-address="..." data-personal="..." />
          <li id="cc-item-0"   ... />                 (optional)
+         <li id="bcc-item-0"  ... />                 (optional; a sent mail, sender's view)
          <div class="bd">
            <div class="ct">...full body HTML...</div>
          </div>
@@ -246,7 +247,7 @@ def parse_view_async_html(html: str) -> dict:
     soup = BeautifulSoup(html, "lxml")
 
     out: dict = {
-        "subject": "", "from": "", "to": "", "cc": "",
+        "subject": "", "from": "", "to": "", "cc": "", "bcc": "",
         "date": None, "body_html": "", "body_text": "",
         "attachments": [],
     }
@@ -270,8 +271,9 @@ def parse_view_async_html(html: str) -> dict:
                 break
     out["subject"] = subject
 
-    # From / To / Cc
-    for kind, key in (("from", "from-item-"), ("to", "to-item-"), ("cc", "cc-item-")):
+    # From / To / Cc / Bcc (the sender's own view of a sent mail lists bcc-item-N rows)
+    for kind, key in (("from", "from-item-"), ("to", "to-item-"), ("cc", "cc-item-"),
+                      ("bcc", "bcc-item-")):
         parts: list[str] = []
         for li in soup.select(f'li[id^="{key}"]'):
             addr = str(li.get("data-address") or "").strip()
@@ -609,6 +611,7 @@ class InboxScraper:
             sender=sender.strip(),
             to=(parsed["to"] or ref.to).strip(),
             cc=parsed["cc"].strip(),
+            bcc=parsed["bcc"].strip(),
             date=date,
             body_text=parsed["body_text"],
             body_html=parsed["body_html"],

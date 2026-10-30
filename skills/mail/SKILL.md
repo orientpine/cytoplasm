@@ -45,6 +45,9 @@ python3 /srv/autophagy-skills/live/mail/scripts/mail_wrapper.py list --limit 5
 python3 /srv/autophagy-skills/live/mail/scripts/mail_wrapper.py list --limit 20 --sync --all-folders
 
 # 단건 조회 (--body는 agent 홈 안에서만; 마스킹 시 본문 대신 sha256+bytes)
+# mail.to·cc·bcc 는 저장된 받는 사람 그대로(형 Q393: 메일 한 통을 열 때만). bcc 는 보낸 메일만, null 이면
+# 2026-10-30 전에 저장돼 아직 수집이 안 채운 보낸 메일(10분 수집이 한 번에 25통씩 채운다).
+# list·search 에는 받는 사람이 없고, search 는 숨은참조 줄로 찾거나 인용하지 않는다.
 python3 /srv/autophagy-skills/live/mail/scripts/mail_wrapper.py get <uid> --body
 
 # 메타데이터 분류 (제목/발신자 문자열만 사용, LLM 무경유)
