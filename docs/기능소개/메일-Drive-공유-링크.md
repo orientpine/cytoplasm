@@ -13,7 +13,7 @@
 - 새 카드나 새 워처를 만들지 않았다. compose 초안 레코드에 `drive_share` 필드를 더했고, 이 필드가 승인 해시(`triage_core.draft_sha256`)에 묶인다. 묶이는 값은 파일 sha256·크기, Drive 폴더·파일명, 공유받는 사람, 역할 `reader` 다.
 - 요청 시점에 파일을 비공개 폴더(`~/.hermes/mail-triage/drive-share/`, 0700)에 복사한다. ✅ 뒤 그 사본이 한 바이트라도 다르면 올리지 않는다.
 - ✅ 를 받으면 같은 `mail-triage-watch` tick 에서 다음 순서로 진행한다.
-  1. Drive 파사드 `automation.drive_outputs.share` 로 `autophagy/공유/<연도>/` 에 올린다.
+  1. Drive 파사드 `automation.drive_outputs.share` 로 `<산출물 루트>/공유/<연도>/` 에 올린다.
   2. Drive 가 계산한 sha256·크기를 대조한다.
   3. 소유자 외 권한이 없는지 확인한다.
   4. 사람마다 `type=user, role=reader` 권한을 준다. 먼저 Drive 알림 없이 공유하고, 받는 사람에게 구글 계정이 없어 Drive 가 그것을 거절하면 구글 초대 알림 메일을 켜고 다시 공유한다(형 결정 Q273, 2026-10-19). 같은 폴더에 같은 바이트 파일이 이미 있으면 다시 올리지 않는다.
@@ -35,11 +35,13 @@
 
 **거부** — 본문에 `<Drive 링크>` 자리가 없거나 `--share-with` 가 이메일 주소가 아니면 exit 2 로 끝나고, 초안도 복사본도 남지 않는다. 반대로 본문에 `<Drive 링크>` 자리가 있는데 `--drive-share` 가 없어도 카드를 올리지 않고 exit 2 로 거절한다(2026-10-19 형 "앞으로 이런 실수 없도록 해" — 전에는 발송 때에야 실패했다).
 
+**2026-10-31 사례** — 산출물 루트 이름을 바꾼 뒤 유돌이 올린 카드에 옛 루트 폴더가 묶였다. 유돌 게이트가 루트 설정을 compose 에 넘기지 않았고, cha 가 ✅ 를 누른 뒤에야 발송 단계가 폴더를 거절했다. 지금은 게이트가 같은 값을 넘기고, 폴더가 지금 공유 루트 밖인 대기 카드는 `mail-triage-watch` 가 ✅ 전에 닫으며 「유돌에게 새 카드를 요청해 주세요」 라고 같은 스레드에 알린다. 폴더 검사 자체는 그대로다.
+
 ## 관련
 
 - 스킬: `skills/mail/SKILL.md` §4-2. 코드는 `skills/mail/scripts/mail_drive_share.py`, `triage_cli.py`(`cmd_compose`), `triage_gate.py`(`execute_draft`), Drive 쪽은 `automation/drive_outputs.py`(`share_target`·`share`)와 `automation/drive_client.py`(`shared_readers`·`grant_reader`)다.
 - 승인: 기존 mail compose 카드와 `mail-triage-watch`. 외부효과 규칙 `gws_drive_permission_grant` 의 카드 생산자는 `triage_approval.request_approval` 이다.
 - 테스트: `tests/unit/test_mail_drive_share.py`
-- 한계: 기관메일(mailon) 발송만 지원한다. Gmail 발송 초안에는 붙일 수 없다. Drive 폴더는 `autophagy/공유/` 아래로 제한된다.
+- 한계: 기관메일(mailon) 발송만 지원한다. Gmail 발송 초안에는 붙일 수 없다. Drive 폴더는 `<산출물 루트>/공유/` 아래로 제한된다.
 
 **2026-10-19 원래 파일 이름** — 받은 메일 첨부를 `mail-attachment` 로 꺼내 공유하면 드라이브·카드에 임시 이름(`mail-<uid>-<n>.hwpx`) 대신 첨부의 원래 이름(한글·빈칸 그대로)이 쓰인다. `mail-attachment` 가 원래 이름을 staging 옆에 남기고 게이트가 그것을 `--drive-name` 으로 넘긴다. 직접 `--drive-name <이름>` 을 줄 수도 있다(경로 문자는 걸러지고 확장자는 남는다).

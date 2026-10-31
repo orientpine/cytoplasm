@@ -482,6 +482,12 @@ def cmd_watch(_args: argparse.Namespace) -> int:
         for draft in triage_gate.list_drafts():
             if draft.get("status") != "pending":
                 continue
+            if mail_drive_share.folder_moved(draft):
+                import triage_supersede
+
+                if triage_supersede.close_moved_share(draft):
+                    print(f"EXPIRED draft={draft['id']} reason=drive-share-folder-moved")
+                    continue
             try:
                 if triage_approval.expire_retired_approval(draft):
                     print(f"EXPIRED draft={draft['id']} reason=approval-surface-retired")

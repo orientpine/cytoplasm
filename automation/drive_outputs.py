@@ -220,6 +220,13 @@ def share_target(name: str, *, on: date, project: str | None = None) -> tuple[tu
     return parts, drive_name
 
 
+def require_share_folder(parts: Sequence[str]) -> None:
+    """Refuse a folder outside this environment's share tree."""
+    share_root = (outputs_root(), category("share").folder)
+    if tuple(parts[:2]) != share_root:
+        raise ShareRefused(f"share folder outside {'/'.join(share_root)}", "drive_folder_refused")
+
+
 def _same_bytes(drive: DriveClient, file_id: str, sha256: str, size: int) -> bool:
     try:
         return drive.file_checksum(file_id) == (sha256, size)
@@ -254,9 +261,7 @@ def share(
     is reused instead of uploading the same file again.
     """
     checked = ensure_depth((*parts, _nfc(name)))
-    share_root = (outputs_root(), category("share").folder)
-    if tuple(checked[:2]) != share_root:
-        raise ShareRefused(f"share folder outside {'/'.join(share_root)}", "drive_folder_refused")
+    require_share_folder(checked)
     people = tuple(sorted({person.strip().lower() for person in grantees}))
     if not people or any("@" not in person for person in people):
         raise ShareRefused("share needs at least one named person", "drive_grantee_invalid")

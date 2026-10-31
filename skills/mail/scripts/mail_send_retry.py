@@ -90,6 +90,8 @@ def failure_text(draft: dict, reason: str) -> str:
         if error.get("error_kind"):
             line += f" · 오류: {error['error_kind']}"
         lines.append(line)
+        if cause == "drive_folder_refused":
+            lines.append("이 카드에 적힌 드라이브 폴더가 지금 공유 폴더와 달라 보내지 않았습니다. 유돌에게 새 카드를 요청해 주세요.")
     else:
         lines.append(f"사유: {reason}")
     attempts = draft.get("failed_attempts")
