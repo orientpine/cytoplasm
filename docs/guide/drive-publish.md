@@ -210,7 +210,7 @@ python3 -m automation.drive_publish_cli \
 | 변수 | 기본 | 용도 |
 |---|---|---|
 | `DRIVE_PUBLISH_ENABLED` | (미설정) | `1`일 때만 발행. 옵트인 — 미설정 환경과 테스트에서는 Drive 호출 0 |
-| `DRIVE_OUTPUTS_ROOT` | `autophagy` | 단일 루트 폴더명. 메일 첨부 아카이브(`<root>/메일 첨부파일/…`)·용어집·제안서 발행도 같은 값을 읽는다 |
+| `DRIVE_OUTPUTS_ROOT` | `autophagy` | 단일 루트 폴더명. 메일 첨부 아카이브(`<root>/메일 첨부파일/…`)·공유 링크 메일(`<root>/공유/…`)·용어집·제안서 발행도 같은 값을 읽는다. 유돌 게이트는 이 값을 카드 요청에도 넘긴다 |
 | `DRIVE_GWS_BIN` → `DRIVE_PUBLISH_GWS_BIN` | `gws` | gws 바이너리(앞의 것이 우선) |
 | `DRIVE_PUBLISH_CACHE` | `~/.hermes/drive-publish/folders.json` | 폴더 id 조회 캐시 |
 
@@ -225,6 +225,7 @@ Drive 에서 이름만 바꾼 폴더(id 동일)에는 옛 설정으로도 계속
 3. 그 직후 노드 서비스 계정 `~/.env.secrets` 에 `DRIVE_OUTPUTS_ROOT="<새 이름>"` 을 넣는다. 작은따옴표가
    든 이름은 큰따옴표로 감싼다(systemd `EnvironmentFile` 도 같은 파일을 읽는다).
 4. 다음 발행·첨부 보관 한 번이 새 이름 아래로 들어가고 옛 이름 폴더가 새로 생기지 않았는지 Drive 목록으로 확인한다.
+5. 옛 이름이 묶인 대기 중 공유 메일 카드는 다음 `mail-triage-watch` 틱이 ✅ 전에 닫는다. 새 카드를 올린다.
 
 설정을 이름 바꾸기보다 먼저 넣으면, 그 사이의 첫 틱이 새 이름 폴더를 찾지 못해 **같은 이름의 빈 루트를 하나 더 만든다**.
 

@@ -266,11 +266,15 @@ def checked_value(value: str, kind: str, staging: Path) -> str:
 
 
 def card_env(home: Path, release: Path, baseline: dict[str, str]) -> dict[str, str]:
-    """Load only the card producer credentials, never SSH configuration overrides."""
+    """Load only what a card producer needs, never SSH configuration overrides.
+
+    The Drive outputs root travels too: a share folder is frozen into the card and checked
+    against this same setting at send time (2026-10-31: ec6197 was frozen under the default root).
+    """
     values = dict(baseline)
     for line in (home / ".env.secrets").read_text(encoding="utf-8").splitlines():
         key, sep, value = line.strip().removeprefix("export ").partition("=")
-        if sep and key in {"DISCORD_BOT_TOKEN", "AUTOPHAGY_OWNER_ID"}:
+        if sep and key in {"DISCORD_BOT_TOKEN", "AUTOPHAGY_OWNER_ID", "DRIVE_OUTPUTS_ROOT"}:
             values[key] = value.strip().strip("\"'")
     values.update(PYTHONPATH=str(release), AUTOPHAGY_REPO_ROOT=str(release),
                   AUTOPHAGY_RUNTIME_ROOT=str(release))

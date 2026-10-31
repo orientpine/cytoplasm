@@ -147,6 +147,22 @@ def with_link(draft: dict, link: str) -> dict:
     return {**draft, "send_argv": argv}
 
 
+def folder_moved(draft: dict) -> bool:
+    """Whether this draft's frozen folder would be refused at send time; a card must not wait for ✅ then."""
+    spec = draft.get("drive_share")
+    if not spec:
+        return False
+    try:
+        from automation import drive_outputs
+    except ImportError:  # run() reports the missing facade on the draft
+        return False
+    try:
+        drive_outputs.require_share_folder(spec.get("folder") or ())
+    except drive_outputs.ShareRefused:
+        return True
+    return False
+
+
 def _fail(draft: dict, cause: str, *, retryable: bool, detail: str = "") -> triage_gate.GateError:
     error = {"error_code": "drive_share_failed", "stage": "drive_share",
              "retryable": retryable, "cause": cause}

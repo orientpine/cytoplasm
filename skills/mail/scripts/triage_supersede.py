@@ -1,4 +1,4 @@
-"""Close an undecided mail card without the owner: a newer draft, or its requester's withdrawal.
+"""Close an undecided mail card without the owner: a newer draft, its requester, or a moved share.
 
 Owner 2026-10-19 00:00 KST: revising one mail three times in one thread must not leave three
 live cards. Only compose drafts written from that same thread qualify (a digest thread holds
@@ -21,6 +21,8 @@ import triage_gate
 REASON = "superseded-by-newer-draft"
 NOTICE = "🔁 새 판으로 대체됨 — 이 카드는 실행되지 않습니다. 아래 새 카드에서 승인해 주세요."
 WITHDRAWN = "withdrawn-by-requester"
+SHARE_MOVED = "drive-share-folder-moved"
+SHARE_MOVED_NOTICE = "⛔ 드라이브 공유 폴더가 바뀌어 닫은 카드 — 이 메일은 나가지 않습니다. 유돌에게 새 카드를 요청해 주세요."
 #: Discord refuses to edit a message inside an archived thread with HTTP 400 and this code.
 ARCHIVED_THREAD = 50083
 
@@ -52,7 +54,26 @@ def supersede_older(draft: dict) -> list[str]:
     return closed
 
 
-def _close(record: dict) -> bool:
+def close_moved_share(record: dict) -> bool:
+    """Close an undecided card whose Drive folder the send step would refuse (2026-10-31, ec6197).
+
+    A card the owner already decided stays with the watcher, like every other close here.
+    """
+    try:
+        closed = _close(record, SHARE_MOVED, SHARE_MOVED_NOTICE)
+    except Exception as error:  # noqa: BLE001 — the send step still refuses this folder
+        print(f"MAIL-SHARE-MOVED-FAIL draft={record.get('id')} err={type(error).__name__}", file=sys.stderr)
+        return False
+    if closed:
+        try:
+            import_module("triage_confirm").notify_result(
+                record, f"⛔ 발송 취소: {record['subject']} → {record['to']}\n{SHARE_MOVED_NOTICE}")
+        except Exception as error:  # noqa: BLE001 — the close is already committed
+            print(f"NOTIFY-FAIL draft={record.get('id')} err={type(error).__name__}", file=sys.stderr)
+    return closed
+
+
+def _close(record: dict, reason: str = REASON, notice: str = NOTICE) -> bool:
     """Expire only the old card, never the thread holding the newer pending card."""
     approval = import_module("triage_approval")
     gate_module = import_module("triage_approval_gate")
@@ -62,16 +83,16 @@ def _close(record: dict) -> bool:
             return False
         message_id = approval._bound_message_id(record)
         if not message_id:
-            triage_gate.expire_draft(str(record["id"]), "", REASON)
+            triage_gate.expire_draft(str(record["id"]), "", reason)
             return True
         request = approval.request_of(record)
         state = approval.lifecycle().Probe
         probe = gate_module.MailApprovalGate(record).probe(request)
         if probe in (state.APPROVED, state.CANCELLED):
             return False
-        triage_gate.expire_draft(str(record["id"]), message_id, REASON)
+        triage_gate.expire_draft(str(record["id"]), message_id, reason)
         if probe is state.BOUND_PENDING:
-            _mark(request.channel_id, message_id)
+            _mark(request.channel_id, message_id, notice)
         return True
 
 
