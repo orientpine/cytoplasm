@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""SSH forced command: reads and card requests, never effects; logs name/rc/seconds only."""
+"""SSH forced command: reads and card requests, never effects; logs name/rc/seconds only (todo-done adds its id)."""
 from __future__ import annotations
 
 import base64
@@ -137,6 +137,10 @@ ORDER_STATUSES = ("받음", "넘김", "처리 중", "끝")
 _ORDER_NUMBER = re.compile(r"[1-9][0-9]{0,6}")
 _POST_URL = re.compile(r"https://[A-Za-z0-9._~:/?#@!+,=%-]{1,290}")
 _ORDER_FLAGS = {"--dori": 20, "--post-url": 300, "--note": 300}
+# Dashboard todos (owner 2026-10-31 "처리되면 네가 대시보드에서 알아서 완료로 처리해줘"): completion only.
+_TODO_ID = re.compile(r"pb-[0-9a-f]{12}-[1-9][0-9]{0,3}")
+_TODO_NOTE_LIMIT = 200
+_NOTE_SHELL = re.compile(r"[;&|`$<>\\(){}*?!'\"]")
 
 USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          "mail-get <uid> [--body], recall <question...>, status.\n"
@@ -153,6 +157,8 @@ USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          "  posted with mail-compose or mail-draft and the owner has not decided; never sends or approves).\n"
          "Dashboard order: order-status <n> <" + "|".join(ORDER_STATUSES) + ">"
          " [--dori <name>] [--post-url <https link>] [--note <text>].\n"
+         "Dashboard todo done: todo-done <pb-<12 hex>-<n>> [--note <text, 1-200>] (completion only;\n"
+         "  already done = no change, prints ALREADY; recorded as 유돌).\n"
          "Private upload: stage <name> [--name <display name>] (file bytes on SSH stdin, at most 64 MiB;\n"
          "  <name> is plain ASCII, --name is the Korean name a mail attachment shows, same extension).\n"
          "Received attachment: mail-attachment <uid> <file name as mail-get shows it> + origin\n"
@@ -576,12 +582,29 @@ def order_status(args: list[str]) -> list[str]:
             "--status", args[1], *pairs, "--by", "유돌"]
 
 
+def todo_done(args: list[str]) -> list[str]:
+    """``progress <id> --status 완료`` argv for one dashboard todo; never deletes, reopens or edits other fields."""
+    if not args or not _TODO_ID.fullmatch(args[0]):
+        raise Refused("todo-done needs <pb-<12 hex>-<n>> [--note <text>]")
+    rest = args[1:]
+    if rest and (len(rest) != 2 or rest[0] != "--note"):
+        raise Refused("todo-done takes only one --note <text>")
+    note = rest[1] if rest else None
+    if note is not None and (not note.strip() or len(note) > _TODO_NOTE_LIMIT or _CTRL.search(note)
+                             or _NOTE_SHELL.search(note)):
+        raise Refused(f"--note must be 1-{_TODO_NOTE_LIMIT} characters on one line without shell characters")
+    return ["/usr/bin/python3", "-m", "automation.project_board", "progress", args[0], "--status", "완료",
+            *(["--note", note] if note is not None else []), "--by", "유돌"]
+
+
 def build(words: list[str]) -> tuple[str, list[str], Path]:
     if not words:
         raise Refused("empty command")
     name, args = words[0], words[1:]
     if name == "order-status":
         return name, order_status(args), RELEASE
+    if name == "todo-done":
+        return name, todo_done(args), RELEASE
     if name == "card-withdraw":
         return name, card_withdraw(args), RELEASE
     if name == "release-notes":
@@ -872,7 +895,7 @@ def main() -> int:
     except subprocess.TimeoutExpired:
         sys.stderr.write(f"YOODORI-GATE-TIMEOUT {name} after {TIMEOUT}s\n")
         rc = 124
-    _log(name, rc, started)
+    _log(f"{name} id={argv[4]}" if name == "todo-done" else name, rc, started)
     return rc
 
 
