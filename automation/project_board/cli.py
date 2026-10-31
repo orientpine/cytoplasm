@@ -147,7 +147,13 @@ def cmd_proposals(args: argparse.Namespace) -> int:
 
 def cmd_progress(args: argparse.Namespace) -> int:
     board = Board.default()
-    todo = board.store.record_progress(args.todo, status=args.status, progress=args.progress, note=args.note)
+    current = board.store.todo(args.todo)
+    if current is not None and args.status == "완료" and current.status == "완료" and args.progress is None:
+        print(f"ALREADY todo={current.todo_id} status={current.status} progress={current.progress}")
+        return 0
+    todo = board.store.record_progress(
+        args.todo, status=args.status, progress=args.progress, note=args.note, by=args.by,
+    )
     path = rebuild_dashboard(board, today=today_kst())
     print(f"PROGRESS todo={todo.todo_id} status={todo.status} progress={todo.progress} dashboard={path}")
     return 0
@@ -371,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     progress.add_argument("--status", choices=STATUSES)
     progress.add_argument("--progress", type=int)
     progress.add_argument("--note")
+    progress.add_argument("--by", default="", help="who records this (shown as the event's actor)")
     progress.set_defaults(handler=cmd_progress)
 
     orders = commands.add_parser("orders", help="list dashboard orders (newest last)")

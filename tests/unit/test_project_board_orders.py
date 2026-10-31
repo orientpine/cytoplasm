@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from automation.project_board import cli
 from automation.project_board.board_store import BoardStore
 from automation.project_board.dashboard import render_dashboard
 from automation.project_board.models import ProjectBoardError, proposal_from_dict
@@ -264,6 +265,60 @@ def test_the_yoodori_gate_writes_order_status_through_fixed_argv() -> None:
                   ["order-status", "1", "끝", "--dori", "x" * 21], ["order-status", "1", "끝", "--note"]):
         with pytest.raises(gate.Refused):
             gate.build(words)
+
+
+TODO_ID = "pb-9e9899a8a04b-1"
+
+
+def test_the_yoodori_gate_marks_one_dashboard_todo_done_through_fixed_argv() -> None:
+    name, argv, cwd = gate.build(["todo-done", TODO_ID, "--note", "지시 9 끝"])
+    assert (name, cwd) == ("todo-done", gate.RELEASE)
+    assert argv == ["/usr/bin/python3", "-m", "automation.project_board", "progress", TODO_ID, "--status", "완료",
+                    "--note", "지시 9 끝", "--by", "유돌"]
+    assert gate.build(["todo-done", TODO_ID])[1][-4:] == ["--status", "완료", "--by", "유돌"]
+    for words in (["todo-done"], ["todo-done", "pb-1-1"], ["todo-done", "pb-9E9899A8A04B-1"],
+                  ["todo-done", TODO_ID + "x"], ["todo-done", "../pb-9e9899a8a04b-1"],
+                  ["todo-done", TODO_ID, "--status", "열림"], ["todo-done", TODO_ID, "--by", "형"],
+                  ["todo-done", TODO_ID, "--note"], ["todo-done", TODO_ID, "--note", "a", "--note", "b"],
+                  ["todo-done", TODO_ID, "--note", "x" * 201], ["todo-done", TODO_ID, "--note", "a(b)"],
+                  ["todo-done", TODO_ID, "--note", "줄\n바꿈"], ["todo-done", TODO_ID, "--note", "  "]):
+        with pytest.raises(gate.Refused):
+            gate.build(words)
+
+
+def test_the_yoodori_gate_logs_the_todo_id_but_never_the_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list[list[str]] = []
+
+    class Done:
+        returncode = 0
+
+    def run(argv: list[str], **_kwargs: object) -> Done:
+        ran.append(argv)
+        return Done()
+
+    monkeypatch.setattr(gate, "LOG", tmp_path / "gate.log")
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", f"todo-done {TODO_ID} --note '비밀 메모'")
+    assert gate.main() == 0
+    assert ran[0][4:7] == [TODO_ID, "--status", "완료"]
+    line = (tmp_path / "gate.log").read_text(encoding="utf-8")
+    assert f" todo-done id={TODO_ID} rc=0 " in line and "비밀" not in line
+
+
+def test_progress_marks_done_as_the_named_writer_and_leaves_a_done_todo_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    store = _store(tmp_path)
+    monkeypatch.setattr(cli.Board, "default", classmethod(lambda cls: cls(tmp_path)))
+    assert cli.main(["progress", "pb-1-1", "--status", "완료", "--note", "끝냄", "--by", "유돌"]) == 0
+    done = store.todo("pb-1-1")
+    assert done is not None and (done.status, done.progress) == ("완료", 100)
+    assert [e.actor for e in store.snapshot(today=TODAY).events if e.kind == "progress"] == ["유돌"]
+    capsys.readouterr()
+    assert cli.main(["progress", "pb-1-1", "--status", "완료", "--note", "다시", "--by", "유돌"]) == 0
+    assert capsys.readouterr().out.startswith("ALREADY todo=pb-1-1 status=완료")
+    assert [e.actor for e in store.snapshot(today=TODAY).events if e.kind == "progress"] == ["유돌"]
+    assert store.todo("pb-1-1") == done
 
 
 PHONE, PHONE_IP, SERVER, SERVER_IP = "nPhoneAAAA11CNTRL", "192.0.2.23", "nServerBBB11CNTRL", "192.0.2.95"
