@@ -80,6 +80,44 @@ def scan(drive: Drive, parts: tuple[str, ...]) -> tuple[MinutesFile, ...]:
     return tuple(sorted(found, key=lambda f: (f.modified, f.name)))
 
 
+def scan_outputs(drive: Drive) -> tuple[MinutesFile, ...]:
+    """Every minutes file of the node's Drive layout, oldest first. Never creates a folder.
+
+    PARA keeps a project's minutes in ``1_Project/<YYYY>_<project>/회의록``; the legacy
+    ``회의록/<과제>/<연도>`` tree is still read while the folders are moved, and a
+    file seen in both places counts once.
+    """
+    from automation import drive_taxonomy as taxonomy  # noqa: PLC0415 - the registry owns the names
+
+    if not taxonomy.para_enabled():
+        return scan(drive, taxonomy.category_parts("meeting"))
+    found: dict[str, MinutesFile] = {}
+    root = drive.find_folder_path(taxonomy.projects_parts())
+    sub = taxonomy.category("meeting").para_in_project
+    for folder in _folders(drive.list_children(root)) if root else ():
+        project = taxonomy.project_of_folder(_nfc(folder.get("name")))
+        if not project:
+            continue
+        minutes = next(
+            (child for child in _folders(drive.list_children(str(folder.get("id", ""))))
+             if _nfc(child.get("name")) == sub),
+            None,
+        )
+        for child in drive.list_children(str(minutes.get("id", ""))) if minutes else ():
+            name = _nfc(child.get("name"))
+            file_id = str(child.get("id", ""))
+            if child.get("mimeType") == FOLDER_MIME or not name.endswith(".md") or not _ID.match(file_id):
+                continue
+            year = name[:4] if _DATE.match(name) else ""
+            found[file_id] = MinutesFile(
+                file_id, name, project, year,
+                str(child.get("modifiedTime") or child.get("createdTime") or ""),
+            )
+    for item in scan(drive, taxonomy.legacy_category_parts("meeting")):
+        found.setdefault(item.file_id, item)
+    return tuple(sorted(found.values(), key=lambda f: (f.modified, f.name)))
+
+
 def cache_path(cache: Path, source_id: str) -> Path | None:
     if not source_id.startswith(DRIVE_PREFIX) or not _ID.match(source_id[len(DRIVE_PREFIX):]):
         return None

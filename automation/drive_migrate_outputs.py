@@ -401,6 +401,12 @@ def run(
     env = os.environ if environ is None else environ
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
+    if (env.get("DRIVE_LAYOUT") or "").strip().lower() == "para":
+        # This tool moves files INTO the legacy root; a PARA node files them by hand
+        # through YooDori's move plan instead.
+        print("MIGRATE-ERROR reason=DRIVE_LAYOUT=para uses the PARA move plan, not this migration",
+              file=err)
+        return 2
     active_client = _default_client(env) if client is None else client
     try:
         plan = build_plan(active_client, env)

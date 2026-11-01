@@ -274,7 +274,7 @@ def card_env(home: Path, release: Path, baseline: dict[str, str]) -> dict[str, s
     values = dict(baseline)
     for line in (home / ".env.secrets").read_text(encoding="utf-8").splitlines():
         key, sep, value = line.strip().removeprefix("export ").partition("=")
-        if sep and key in {"DISCORD_BOT_TOKEN", "AUTOPHAGY_OWNER_ID", "DRIVE_OUTPUTS_ROOT"}:
+        if sep and key in {"DISCORD_BOT_TOKEN", "AUTOPHAGY_OWNER_ID", "DRIVE_OUTPUTS_ROOT", "DRIVE_LAYOUT"}:
             values[key] = value.strip().strip("\"'")
     values.update(PYTHONPATH=str(release), AUTOPHAGY_REPO_ROOT=str(release),
                   AUTOPHAGY_RUNTIME_ROOT=str(release))

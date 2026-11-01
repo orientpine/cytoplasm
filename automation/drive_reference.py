@@ -31,6 +31,9 @@ from automation.interop.approval_types import JsonValue
 
 ROOT_ENV: Final = "DRIVE_REFERENCE_ROOT"
 DEFAULT_ROOT: Final = "KIMM"
+#: With ``DRIVE_LAYOUT=para`` the owner's projects are the reference tree; the legacy
+#: ``KIMM`` tree is still read when ``1_Project`` does not exist yet.
+PARA_DEFAULT_ROOT: Final = "1_Project"
 ENABLE_ENV: Final = "DRIVE_PUBLISH_ENABLED"
 
 OK: Final = "ok"
@@ -102,11 +105,26 @@ class ReferenceResult:
     notes: tuple[str, ...] = ()
 
 
-def root_parts(env: Mapping[str, str]) -> tuple[str, ...]:
-    configured = (env.get(ROOT_ENV) or DEFAULT_ROOT).strip()
+def _para(env: Mapping[str, str]) -> bool:
+    return (env.get("DRIVE_LAYOUT") or "").strip().lower() == "para"
+
+
+def _split(configured: str) -> tuple[str, ...]:
     return tuple(
         reference_rank.nfc(part.strip()) for part in configured.split("/") if part.strip()
     )
+
+
+def root_parts(env: Mapping[str, str]) -> tuple[str, ...]:
+    default = PARA_DEFAULT_ROOT if _para(env) else DEFAULT_ROOT
+    return _split((env.get(ROOT_ENV) or default).strip())
+
+
+def fallback_root_parts(env: Mapping[str, str]) -> tuple[tuple[str, ...], ...]:
+    """Roots read when the first one is missing: only PARA's unset default falls back."""
+    if _para(env) and not (env.get(ROOT_ENV) or "").strip():
+        return (_split(DEFAULT_ROOT),)
+    return ()
 
 
 def enabled(env: Mapping[str, str]) -> bool:
@@ -234,6 +252,11 @@ def collect(
     try:
         drive = client if client is not None else _default_client(environment)
         folder = drive.find_folder_path(parts)
+        for other in fallback_root_parts(environment) if folder is None else ():
+            folder = drive.find_folder_path(other)
+            if folder is not None:
+                root = "/".join(other)
+                break
         if folder is None:
             return _refused(ROOT_MISSING, root, f"참고자료 폴더를 찾지 못했습니다: {root}")
         files, notes = walk(drive, folder, root)

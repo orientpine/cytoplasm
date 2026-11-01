@@ -4,6 +4,12 @@
     autophagy/<문서 종류>/용어집.csv          그 종류의 문서에만 (회의록·전사본·라이프로그 …)
     autophagy/<문서 종류>/<과제>/용어집.csv   그 과제의 그 문서에만 (가장 강함)
 
+`DRIVE_LAYOUT=para` 노드에서는 같은 세 층이 형의 PARA 자리에 있다(옛 층은 한 릴리스 동안 읽기만):
+
+    3_Resource/용어집/용어집.csv                   모든 산출물
+    3_Resource/용어집/<문서 종류>/용어집.csv       그 종류의 문서에만
+    1_Project/<연도>_<과제>/용어집.csv             그 과제(전사본·회의록이 함께 쓴다)
+
 깊은 층이 이긴다. 한 번 적은 이름이 모든 문서에 걸리고, 안쪽 폴더는 **그 이름 하나만** 덮어쓴다
 — 문서 종류마다 어휘가 다르기 때문이다(회의록은 기관명, 라이프로그는 사람·장소).
 
@@ -20,6 +26,7 @@ import sys
 import tempfile
 import unicodedata
 from collections.abc import Mapping, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Final
 
@@ -62,8 +69,29 @@ def folder_for(kind: str) -> str:
     return extra
 
 
-def layers(kind: str, project: str = "") -> tuple[tuple[str, ...], ...]:
-    """뿌리부터 안쪽까지, 바깥이 먼저 — 읽는 순서가 곧 우선순위다."""
+def layers(kind: str, project: str = "", *, project_folder: str = "") -> tuple[tuple[str, ...], ...]:
+    """뿌리부터 안쪽까지, 바깥이 먼저 — 읽는 순서가 곧 우선순위다.
+
+    `DRIVE_LAYOUT=para` 이면 전역·종류 층은 참고 자료 칸(`3_Resource/용어집[/<종류>]`), 과제 층은
+    그 과제 폴더(`1_Project/<연도>_<과제>/용어집.csv`)다 — 과제 하나에 용어집 하나를 전사본과
+    회의록이 함께 쓴다. `project_folder` 는 Drive 에서 찾은 과제 폴더 이름이다.
+    """
+    taxonomy = _taxonomy()
+    if taxonomy.para_enabled():
+        found = [taxonomy.GLOSSARY_HOME, (*taxonomy.GLOSSARY_HOME, folder_for(kind))]
+        named = unicodedata.normalize("NFC", project).strip()
+        if named:
+            try:
+                folder = project_folder or taxonomy.project_folder_name(named, year=date.today().year)
+            except taxonomy.TaxonomyError as error:
+                raise TermGlossaryError(f"invalid project segment: {project!r}") from error
+            found.append((*taxonomy.projects_parts(), folder))
+        return tuple(tuple(item) for item in found)
+    return legacy_layers(kind, project)
+
+
+def legacy_layers(kind: str, project: str = "") -> tuple[tuple[str, ...], ...]:
+    """옛 `<뿌리>/<종류>/<과제>` 층 — PARA 로 옮기는 동안에는 읽기만 한다."""
     parts = [_taxonomy().outputs_root(), folder_for(kind)]
     named = unicodedata.normalize("NFC", project).strip()
     if named:
@@ -132,7 +160,7 @@ def _fetch(
     merged: dict[str, str] = {}
     try:
         drive = client if client is not None else _client()
-        for parts in layers(kind, project):
+        for parts in _read_layers(drive, kind, project):
             text = _layer_text(drive, parts)
             if text is not None:
                 merged.update(dict(term_correction.parse_glossary(text)))
@@ -142,6 +170,22 @@ def _fetch(
         print(f"GLOSSARY-FETCH-FAIL kind={kind} {type(failure).__name__}", file=sys.stderr)
         return None
     return merged
+
+
+def _project_folder(drive: object, project: str) -> str:
+    if not project.strip() or not _taxonomy().para_enabled():
+        return ""
+    from automation import drive_outputs  # noqa: PLC0415 - lazy: Drive 접촉은 옵트인 뒤에만
+
+    return drive_outputs.resolve_project(project, client=drive, on=date.today()) or ""
+
+
+def _read_layers(drive: object, kind: str, project: str) -> tuple[tuple[str, ...], ...]:
+    """읽을 층: PARA 이면 옛 층(약함)을 먼저 읽고 PARA 층이 이긴다 — 옮기는 동안 한 릴리스."""
+    current = layers(kind, project, project_folder=_project_folder(drive, project))
+    if not _taxonomy().para_enabled():
+        return current
+    return (*legacy_layers(kind, project), *current)
 
 
 def _client():
@@ -210,7 +254,7 @@ def add_pair(
     drive = client
     if drive is None and source.get("DRIVE_PUBLISH_ENABLED") == "1":
         drive = _client()
-    parts = layers(kind, project)[-1]
+    parts = layers(kind, project, project_folder=_project_folder(drive, project) if drive else "")[-1]
     cache = cache_path(kind, project, source)
     if drive is not None:
         text = _layer_text(drive, parts)

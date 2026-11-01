@@ -24,10 +24,15 @@ from automation.drive_taxonomy import (
     bundle_name,
     category,
     TaxonomyError,
+    dated,
     ensure_depth,
+    file_title,
     folder_parts,
-    outputs_root,
+    para_enabled,
     period_key,
+    project_folder_name,
+    projects_parts,
+    share_root,
 )
 
 _DEFAULT_CACHE: Final = Path.home() / ".hermes" / "drive-publish" / "folders.json"
@@ -91,14 +96,38 @@ def _validate_inputs(
     return normalized_title, tuple(checked_artifacts), tuple(checked_companions)
 
 
+def resolve_project(project: str | None, *, client: DriveClient, on: date) -> str | None:
+    """The PARA project folder name for ``project``: an existing ``YYYY_<project>`` wins.
+
+    Reads ``1_Project`` with ``find_folder_path`` (never creates it). Without PARA, or
+    without a project, the value comes back unchanged.
+    """
+    if not project or not para_enabled():
+        return project
+    folder = client.find_folder_path(projects_parts())
+    existing = (
+        [_nfc(str(child.get("name", ""))) for child in client.list_children(folder)
+         if str(child.get("mimeType", "")) == _FOLDER_MIME]
+        if folder else []
+    )
+    return project_folder_name(project, year=on.year, existing=existing)
+
+
 def _sticky_period(
     client: DriveClient,
     category_folder_id: str,
     title: str,
+    *,
+    yearly: bool = True,
 ) -> str | None:
-    """Find a one-shot's original day by scanning numeric years newest-first."""
+    """Find a one-shot's original day by scanning numeric years newest-first.
+
+    ``yearly=False`` scans the folder itself: a PARA project subfolder has no years.
+    """
     years: list[tuple[int, str]] = []
-    for child in client.list_children(category_folder_id):
+    if not yearly:
+        years.append((0, category_folder_id))
+    for child in client.list_children(category_folder_id) if yearly else ():
         name = _nfc(str(child.get("name", "")))
         folder_id = str(child.get("id", ""))
         mime_type = str(child.get("mimeType", ""))
@@ -142,15 +171,24 @@ def publish(
         title, artifacts, companions
     )
     drive = client or client_from_environment()
+    project = resolve_project(project, client=drive, on=requested_on)
+    initial_parts = folder_parts(kind, requested_on.year, project=project)
+    normalized_title = file_title(kind, normalized_title, project)
+    checked_artifacts = tuple(
+        (local, file_title(kind, artifact_title, project))
+        for local, artifact_title in checked_artifacts
+    )
+    yearly = dated(kind, project)
 
     period = period_key(selected.periodicity, requested_on)
     if selected.periodicity == "oneshot":
         # Everything but the year: the folder whose year children hold prior copies.
         # With a project that is the project folder, so a re-publish keeps its original
-        # date instead of starting a second copy under today's.
-        scan_parts = ensure_depth(initial_parts[:-1])
+        # date instead of starting a second copy under today's. A PARA project
+        # subfolder has no year level, so it is scanned itself.
+        scan_parts = ensure_depth(initial_parts[:-1] if yearly else initial_parts)
         scan_folder_id = drive.ensure_folder_path(scan_parts)
-        sticky = _sticky_period(drive, scan_folder_id, normalized_title)
+        sticky = _sticky_period(drive, scan_folder_id, normalized_title, yearly=yearly)
         if sticky is not None:
             period = sticky
 
@@ -222,9 +260,9 @@ def share_target(name: str, *, on: date, project: str | None = None) -> tuple[tu
 
 def require_share_folder(parts: Sequence[str]) -> None:
     """Refuse a folder outside this environment's share tree."""
-    share_root = (outputs_root(), category("share").folder)
-    if tuple(parts[:2]) != share_root:
-        raise ShareRefused(f"share folder outside {'/'.join(share_root)}", "drive_folder_refused")
+    root = share_root()
+    if tuple(parts[: len(root)]) != root:
+        raise ShareRefused(f"share folder outside {'/'.join(root)}", "drive_folder_refused")
 
 
 def _same_bytes(drive: DriveClient, file_id: str, sha256: str, size: int) -> bool:
@@ -344,18 +382,27 @@ def fetch_state_file(
     dest: Path,
     *,
     client: DriveClient | None = None,
+    fallback: Sequence[Sequence[str]] = (),
 ) -> bool:
-    """Download one named non-dated state file when it exists in ``parts``."""
+    """Download one named non-dated state file when it exists in ``parts``.
+
+    ``fallback`` folders (the legacy layout while PARA settles in) are only read:
+    looked up with ``find_folder_path`` and never created.
+    """
     drive = client or client_from_environment()
-    parent_id = drive.ensure_folder_path(tuple(parts))
     normalized_name = _nfc(name)
-    for child in drive.list_children(parent_id):
-        if _nfc(str(child.get("name", ""))) != normalized_name:
+    folders: list[str | None] = [drive.ensure_folder_path(tuple(parts))]
+    folders += [drive.find_folder_path(tuple(other)) for other in fallback]
+    for parent_id in folders:
+        if parent_id is None:
             continue
-        file_id = str(child.get("id", ""))
-        if file_id:
-            _ = drive.download_file(file_id, dest)
-            return True
+        for child in drive.list_children(parent_id):
+            if _nfc(str(child.get("name", ""))) != normalized_name:
+                continue
+            file_id = str(child.get("id", ""))
+            if file_id:
+                _ = drive.download_file(file_id, dest)
+                return True
     return False
 
 

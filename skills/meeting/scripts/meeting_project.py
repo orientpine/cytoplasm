@@ -8,6 +8,7 @@ import unicodedata
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Final
 
@@ -93,37 +94,101 @@ def pending_transcripts(*, client: object | None = None) -> tuple[PendingTranscr
         outputs = _repo("drive_outputs")
         taxonomy = _repo("drive_taxonomy")
         drive = client if client is not None else outputs.client_from_environment()
-        minutes_projects = _folders(
-            drive.list_children(drive.ensure_folder_path(taxonomy.category_parts("meeting")))
-        )
-        transcripts = drive.ensure_folder_path(taxonomy.category_parts("transcript"))
-        for project in _folders(drive.list_children(transcripts)):
-            name = unicodedata.normalize("NFC", str(project.get("name", "")))
-            twin = _named(minutes_projects, name)
-            twin_years = _folders(drive.list_children(str(twin.get("id", "")))) if twin else []
-            for year in _folders(drive.list_children(str(project.get("id", "")))):
-                year_name = unicodedata.normalize("NFC", str(year.get("name", "")))
-                twin_year = _named(twin_years, year_name)
-                published = [
-                    unicodedata.normalize("NFC", str(child.get("name", "")))
-                    for child in (
-                        drive.list_children(str(twin_year.get("id", ""))) if twin_year else []
-                    )
-                ]
-                for child in drive.list_children(str(year.get("id", ""))):
-                    file_name = unicodedata.normalize("NFC", str(child.get("name", "")))
-                    if not file_name.endswith(".md"):
-                        continue
-                    marker = f"회의록-{file_name[:-3]}"
-                    if any(marker in existing for existing in published):
-                        continue
-                    found.append(
-                        PendingTranscript(name, year_name, str(child.get("id", "")), file_name)
-                    )
+        if taxonomy.para_enabled():
+            found += _pending_para(drive, taxonomy)
+        found += _pending_legacy(drive, taxonomy, read_only=taxonomy.para_enabled())
     except Exception as failure:  # noqa: BLE001 - a scan failure means no candidate, never a crash
         print(f"PENDING-SCAN-FAIL {type(failure).__name__}", file=sys.stderr)
         return ()
     return tuple(found)
+
+
+def _project_folders(drive: object, taxonomy: object) -> dict[str, object]:
+    """PARA project slug -> its ``1_Project`` folder (read only)."""
+    root = drive.find_folder_path(taxonomy.projects_parts())
+    named: dict[str, object] = {}
+    for child in _folders(drive.list_children(root)) if root else ():
+        slug = taxonomy.project_of_folder(str(child.get("name", "")))
+        if slug:
+            named.setdefault(slug, child)
+    return named
+
+
+def _pending_para(drive: object, taxonomy: object) -> list[PendingTranscript]:
+    """``4_Archive/전사본/<YYYY>/<date>_<project>_<label>.md`` with no minutes in the project yet.
+
+    The project is the name's second segment, and only a project that already has a
+    ``1_Project`` folder counts — a label that merely contains ``_`` is not a project.
+    The minutes name is the one the CLI derives from the label, so the marker drops the
+    project segment again (``회의록-<date>_<label>``).
+    """
+    root = drive.find_folder_path(taxonomy.category_parts("transcript"))
+    if root is None:
+        return []
+    projects = _project_folders(drive, taxonomy)
+    published: dict[str, list[str]] = {}
+    found: list[PendingTranscript] = []
+    for year in _folders(drive.list_children(root)):
+        year_name = unicodedata.normalize("NFC", str(year.get("name", "")))
+        for child in drive.list_children(str(year.get("id", ""))):
+            file_name = unicodedata.normalize("NFC", str(child.get("name", "")))
+            parts = file_name[:-3].split("_", 2) if file_name.endswith(".md") else []
+            if len(parts) != 3 or parts[1] not in projects:
+                continue
+            slug = parts[1]
+            if slug not in published:
+                folder = projects[slug]
+                minutes = drive.find_folder_path(
+                    (*taxonomy.projects_parts(), str(folder.get("name", "")),
+                     taxonomy.category("meeting").para_in_project)
+                )
+                published[slug] = [
+                    unicodedata.normalize("NFC", str(item.get("name", "")))
+                    for item in (drive.list_children(minutes) if minutes else [])
+                ]
+            marker = f"회의록-{parts[0]}_{parts[2]}"
+            if any(marker in existing for existing in published[slug]):
+                continue
+            found.append(PendingTranscript(slug, year_name, str(child.get("id", "")), file_name))
+    return found
+
+
+def _pending_legacy(drive: object, taxonomy: object, *, read_only: bool) -> list[PendingTranscript]:
+    """The legacy ``전사본/<과제>/<연도>`` walk; under PARA it only reads what is left."""
+    found: list[PendingTranscript] = []
+    if read_only:
+        minutes_root = drive.find_folder_path(taxonomy.legacy_category_parts("meeting"))
+        transcripts = drive.find_folder_path(taxonomy.legacy_category_parts("transcript"))
+        if transcripts is None:
+            return found
+    else:
+        minutes_root = drive.ensure_folder_path(taxonomy.category_parts("meeting"))
+        transcripts = drive.ensure_folder_path(taxonomy.category_parts("transcript"))
+    minutes_projects = _folders(drive.list_children(minutes_root)) if minutes_root else []
+    for project in _folders(drive.list_children(transcripts)):
+        name = unicodedata.normalize("NFC", str(project.get("name", "")))
+        twin = _named(minutes_projects, name)
+        twin_years = _folders(drive.list_children(str(twin.get("id", "")))) if twin else []
+        for year in _folders(drive.list_children(str(project.get("id", "")))):
+            year_name = unicodedata.normalize("NFC", str(year.get("name", "")))
+            twin_year = _named(twin_years, year_name)
+            published = [
+                unicodedata.normalize("NFC", str(child.get("name", "")))
+                for child in (
+                    drive.list_children(str(twin_year.get("id", ""))) if twin_year else []
+                )
+            ]
+            for child in drive.list_children(str(year.get("id", ""))):
+                file_name = unicodedata.normalize("NFC", str(child.get("name", "")))
+                if not file_name.endswith(".md"):
+                    continue
+                marker = f"회의록-{file_name[:-3]}"
+                if any(marker in existing for existing in published):
+                    continue
+                found.append(
+                    PendingTranscript(name, year_name, str(child.get("id", "")), file_name)
+                )
+    return found
 
 
 def download_transcript(
@@ -151,12 +216,24 @@ def detect_project(label: str, *, client: object | None = None) -> str:
         outputs = _repo("drive_outputs")
         taxonomy = _repo("drive_taxonomy")
         drive = client if client is not None else outputs.client_from_environment()
-        folder = drive.ensure_folder_path(taxonomy.category_parts("meeting"))
-        names = [
-            unicodedata.normalize("NFC", str(child.get("name", "")))
-            for child in drive.list_children(folder)
-            if str(child.get("mimeType", "")) == _FOLDER_MIME
-        ]
+        if taxonomy.para_enabled():
+            # PARA: the project part of each 1_Project/<YYYY>_<project> folder, spaced
+            # spellings included; the legacy minutes folders are only read.
+            names = []
+            for slug in _project_folders(drive, taxonomy):
+                names += [slug] + ([slug.replace("-", " ")] if "-" in slug else [])
+            legacy = drive.find_folder_path(taxonomy.legacy_category_parts("meeting"))
+            names += [
+                unicodedata.normalize("NFC", str(child.get("name", "")))
+                for child in (_folders(drive.list_children(legacy)) if legacy else [])
+            ]
+        else:
+            folder = drive.ensure_folder_path(taxonomy.category_parts("meeting"))
+            names = [
+                unicodedata.normalize("NFC", str(child.get("name", "")))
+                for child in drive.list_children(folder)
+                if str(child.get("mimeType", "")) == _FOLDER_MIME
+            ]
     except Exception as failure:  # noqa: BLE001 - detection is optional to minutes creation
         print(f"PROJECT-DETECT-FAIL {type(failure).__name__}", file=sys.stderr)
         return ""
@@ -164,6 +241,12 @@ def detect_project(label: str, *, client: object | None = None) -> str:
     if not found or any(other not in found[0] for other in found[1:]):
         return ""
     return found[0]
+
+
+def _board_parts(outputs: object, taxonomy: object, drive: object, project: str) -> tuple[str, ...]:
+    """The folder holding the project's form and action-item board (PARA: its 회의록)."""
+    folder = outputs.resolve_project(project, client=drive, on=date.today())
+    return taxonomy.project_parts("meeting", folder)
 
 
 def load_board(project: str, *, client: object | None = None) -> Board:
@@ -179,8 +262,16 @@ def load_board(project: str, *, client: object | None = None) -> Board:
         outputs = _repo("drive_outputs")
         taxonomy = _repo("drive_taxonomy")
         drive = client if client is not None else outputs.client_from_environment()
-        folder = drive.ensure_folder_path(taxonomy.project_parts("meeting", project))
+        folder = drive.ensure_folder_path(_board_parts(outputs, taxonomy, drive, project))
         children = tuple(drive.list_children(folder))
+        if taxonomy.para_enabled() and not any(
+            str(child.get("name", "")) == meeting_action_db.DB_FILENAME
+            or _form_child([child]) is not None for child in children
+        ):
+            # Not moved yet: read the legacy project folder (never create it).
+            legacy = drive.find_folder_path(taxonomy.legacy_project_parts("meeting", project))
+            if legacy is not None:
+                children = tuple(drive.list_children(legacy))
         with tempfile.TemporaryDirectory(prefix="meeting-board-") as tmp:
             base = Path(tmp)
             form = _form_child(children)
@@ -205,7 +296,10 @@ def load_board(project: str, *, client: object | None = None) -> Board:
                 records = meeting_action_db.load(local.read_text(encoding="utf-8"))
             local = base / REGISTRY_FILENAME
             if outputs.fetch_state_file(
-                taxonomy.category_parts("meeting"), REGISTRY_FILENAME, local, client=drive
+                taxonomy.registry_parts(), REGISTRY_FILENAME, local, client=drive,
+                fallback=(
+                    (taxonomy.legacy_category_parts("meeting"),) if taxonomy.para_enabled() else ()
+                ),
             ):
                 registry = meeting_action_id.load_registry(local.read_text(encoding="utf-8"))
         code, resolved = meeting_action_id.resolve_code(project, registry)
@@ -234,7 +328,7 @@ def save_board(
                 database = base / meeting_action_db.DB_FILENAME
                 database.write_text(meeting_action_db.dump(records), encoding="utf-8")
                 db_link = outputs.publish_state_file(
-                    taxonomy.project_parts("meeting", board.project),
+                    _board_parts(outputs, taxonomy, drive, board.project),
                     meeting_action_db.DB_FILENAME,
                     database,
                     client=drive,
@@ -248,7 +342,7 @@ def save_board(
                         meeting_action_id.dump_registry(dict(board.registry)), encoding="utf-8"
                     )
                     registry_link = outputs.publish_state_file(
-                        taxonomy.category_parts("meeting"), REGISTRY_FILENAME, registry, client=drive
+                        taxonomy.registry_parts(), REGISTRY_FILENAME, registry, client=drive
                     )
                 except Exception as failure:  # noqa: BLE001 - saving state must not lose meeting minutes
                     print(f"BOARD-SAVE-FAIL project={board.project} {type(failure).__name__}", file=sys.stderr)

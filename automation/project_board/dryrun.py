@@ -115,8 +115,6 @@ def run_minutes(
     stored_projects: Sequence[str] = (),
 ) -> DryRunSummary:
     """The N newest finalized minutes, analysed oldest first; earlier todos count as already open."""
-    from automation.drive_taxonomy import category_parts
-
     if _inside_checkout(out.parent.resolve()):
         raise ProjectBoardError("dry-run output must stay outside any git checkout")
     out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -127,7 +125,7 @@ def run_minutes(
     meetings: dict[str, str] = {}
     duplicates = 0
     with tempfile.TemporaryDirectory(prefix="pb-dry-minutes-") as cache:
-        for item in minutes.scan(drive, category_parts("meeting"))[-limit:] if limit > 0 else ():
+        for item in minutes.scan_outputs(drive)[-limit:] if limit > 0 else ():
             try:
                 document = minutes.fetch(drive, item, Path(cache))
             except Exception as error:  # noqa: BLE001 - one unreadable file is a row, not a stopped run
