@@ -2,18 +2,26 @@
 from __future__ import annotations
 
 import fcntl
+import io
 import json
 import os
+import select
+import signal
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
 LIMIT = 256 * 1024
+TIMEOUT = 300
+CANCELLED = 130
+_POLL_SECONDS = 0.5
+_GRACE_SECONDS = 2.0
 ARGV = ("omo", "-p", "--mode", "json", "--no-tools", "--no-extensions", "--no-skills",
         "--no-context-files", "--no-session", "--offline", "--system-prompt",
         "Answer the request using only the supplied text. You have no tools.")
@@ -48,6 +56,62 @@ def answer(stdout: str) -> dict[str, str]:
             "model": str(selected.get("model") or "unknown")}
 
 
+class Cancelled(Exception):
+    """The caller's SSH session closed while omo was still answering."""
+
+
+def _hangup_probe(output: TextIO) -> Callable[[], bool]:
+    try:
+        fd = output.fileno()
+    except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+        return lambda: False
+    watch = select.poll()
+    watch.register(fd, 0)  # mask 0: report only POLLHUP/POLLERR, i.e. the reading side is gone
+    return lambda: any(event & (select.POLLHUP | select.POLLERR) for _fd, event in watch.poll(0))
+
+
+def _stop(process: subprocess.Popen[str]) -> None:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(_GRACE_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def complete(argv: tuple[str, ...], *, text: str, cwd: str, timeout: float,
+             output: TextIO) -> subprocess.CompletedProcess[str]:
+    """Run omo in its own process group; stop the whole group on timeout or caller hang-up.
+
+    A non-pty SSH session does not signal the forced command when the client goes away, so a
+    caller that gave up (YooDori's recall after 45 s) used to leave omo holding a relay slot for
+    up to 300 s. Owner Q433: a cut call stops here too.
+    """
+    hung_up = _hangup_probe(output)
+    deadline = time.monotonic() + timeout
+    pending: str | None = text
+    with subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, cwd=cwd, start_new_session=True) as process:
+        try:
+            while True:
+                try:
+                    stdout, stderr = process.communicate(pending, timeout=_POLL_SECONDS)
+                    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+                except subprocess.TimeoutExpired:
+                    pending = None
+                    if hung_up():
+                        raise Cancelled from None
+                    if time.monotonic() >= deadline:
+                        raise subprocess.TimeoutExpired(argv, timeout) from None
+        finally:
+            if process.poll() is None:
+                _stop(process)
+
+
 def run(source: BinaryIO, output: TextIO, home: Path) -> int:
     started = time.monotonic()
     root = home / ".dori/omo-relay"
@@ -76,10 +140,8 @@ def run(source: BinaryIO, output: TextIO, home: Path) -> int:
                 rc = 75
                 return rc
             with tempfile.TemporaryDirectory(prefix="omo-relay-") as cwd:
-                result = subprocess.run(
-                    ARGV, input=payload.decode("utf-8"), text=True, capture_output=True,
-                    cwd=cwd, timeout=300, check=False,
-                )
+                result = complete(ARGV, text=payload.decode("utf-8"), cwd=cwd, timeout=TIMEOUT,
+                                  output=output)
             rc = result.returncode
             if rc:
                 if any(token in result.stderr.lower() + result.stdout.lower()
@@ -94,6 +156,9 @@ def run(source: BinaryIO, output: TextIO, home: Path) -> int:
             return rc
     except subprocess.TimeoutExpired:
         rc = 124
+        return rc
+    except Cancelled:
+        rc = CANCELLED
         return rc
     except ValueError:
         # Some providers report overload as a JSON assistant error with rc=0.

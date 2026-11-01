@@ -52,6 +52,8 @@ command="env PATH=<omo-bin-dir>:/usr/bin:/bin <relay-script-absolute-path>",rest
   `agent_end.messages` 또는 `message_end.message`의 마지막 assistant에서 텍스트와
   실제 provider/model을 읽어 `{text, provider, model}` JSON 하나만 돌려준다.
 - 256 KiB 초과는 rc 2, 동시 두 슬롯이 차면 rc 75, 실행 300초 초과는 rc 124다.
+  노드 쪽 호출자가 끊거나 죽으면(예: 유돌이 recall 을 포기) 노드 ssh 가 함께 죽고, 이 PC 러너는 그 연결이
+  끊긴 것을 보고 omo 와 그 자식까지 멈춘 뒤 rc 130 을 남긴다. 시간 초과도 자식까지 함께 멈춘다(2026-11-01 Q433).
   접속 실패·시간 초과·busy·429는 30초 뒤 한 번만 재시도한 뒤
   `CodexUnavailableError`로 다음 작업에 양보한다. 빈 답은 `CodexError`다.
 - 연속 실패 워커 3개(한 워커의 여러 호출·재시도는 한 틱) 또는 30분 지속 실패를

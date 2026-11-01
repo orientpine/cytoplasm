@@ -118,14 +118,14 @@ def test_runner_timeout_and_overload_return_bounded_error_codes(tmp_path, monkey
             raise outcome
         return outcome
 
-    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(runner, "complete", run)
     assert runner.run(io.BytesIO(b"prompt"), io.StringIO(), tmp_path) == expected
 
 
 def test_relay_refuses_oversize_and_busy_without_running_omo(tmp_path, monkeypatch):
     from automation.omo_relay import runner
 
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("must not run"))
+    monkeypatch.setattr(runner, "complete", lambda *a, **k: pytest.fail("must not run"))
     assert runner.run(io.BytesIO(b"x" * (256 * 1024 + 1)), io.StringIO(), tmp_path) == 2
     root = tmp_path / ".dori/omo-relay"
     with (root / "slot-0.lock").open("a") as first, (root / "slot-1.lock").open("a") as second:
@@ -142,7 +142,7 @@ def test_relay_logs_only_metadata_and_uses_empty_private_cwd(tmp_path, monkeypat
         assert cwd.stat().st_mode & 0o777 == 0o700
         assert list(cwd.iterdir()) == []
         assert kwargs["timeout"] == 300
-        assert kwargs["input"] == "private prompt"
+        assert kwargs["text"] == "private prompt"
         assert not {"--model", "-m"} & set(argv)
         assert {"--no-tools", "--no-extensions", "--no-context-files",
                 "--no-skills", "--no-session", "--offline"} <= set(argv)
@@ -151,7 +151,7 @@ def test_relay_logs_only_metadata_and_uses_empty_private_cwd(tmp_path, monkeypat
                 "model": "answerer", "content": [{"type": "text", "text": "private answer"}]}]
         }) + "\n", "")
 
-    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(runner, "complete", run)
     output = io.StringIO()
     assert runner.run(io.BytesIO(b"private prompt"), output, tmp_path) == 0
     assert json.loads(output.getvalue())["text"] == "private answer"

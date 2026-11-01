@@ -34,6 +34,7 @@ import recall_runtime  # noqa: E402 - resolved from the script dir inserted abov
 sys.path.insert(0, str(recall_runtime.runtime_root()))
 
 import recall_core  # noqa: E402
+import recall_hangup  # noqa: E402
 import recall_pick  # noqa: E402
 
 _RUNTIME_DEFAULT = "~/.hermes/rag_ingest_runtime"
@@ -250,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.query.strip():
         parser.error("query must not be empty")
+    recall_hangup.exit_on_hangup()
     return run_search(args) if args.command == "search" else run_evidence(args)
 
 
