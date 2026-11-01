@@ -193,6 +193,7 @@ def run_search(args: argparse.Namespace) -> int:
         picked=picked,
     )
     _log_line(response, network_log)
+    recall_hangup.answered()
     if args.json:
         print(json.dumps(response, ensure_ascii=False, indent=2))
     else:
@@ -213,6 +214,7 @@ def run_evidence(args: argparse.Namespace) -> int:
         env=env,
     )
     sources = render_citations(pack, "sources")
+    recall_hangup.answered()
     if args.json:
         payload = {
             "version": pack.version,

@@ -15,14 +15,22 @@ from typing import Final
 
 CANCELLED: Final = 130
 _POLL_MS: Final = 500
+_ANSWERED: Final = threading.Event()
 
 
 def _watch(fd: int) -> None:
     watch = select.poll()
     watch.register(fd, 0)  # mask 0: only POLLHUP/POLLERR, i.e. the reading side is gone
-    while True:
+    while not _ANSWERED.is_set():
         if any(event & (select.POLLHUP | select.POLLERR) for _fd, event in watch.poll(_POLL_MS)):
-            os._exit(CANCELLED)
+            if not _ANSWERED.is_set():
+                os._exit(CANCELLED)
+            return
+
+
+def answered() -> None:
+    """Call right before printing: a reader that leaves after the answer (grep -q) is not a cancel."""
+    _ANSWERED.set()
 
 
 def exit_on_hangup() -> None:

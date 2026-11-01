@@ -88,6 +88,19 @@ def test_recall_exits_when_its_reader_goes_away() -> None:
     assert child.wait(timeout=10) == 130
 
 
+def test_a_reader_that_leaves_after_the_answer_is_not_a_cancel() -> None:
+    # PR #210 CI: `recall_cli ... | grep -q` under pipefail exited 130 when grep left before Python finished.
+    code = ("import recall_hangup, time; recall_hangup.exit_on_hangup(); recall_hangup.answered(); "
+            "print('ANSWER', flush=True); time.sleep(1.5)")
+    child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                             env={**os.environ, "PYTHONPATH": str(SCRIPTS)})
+    assert child.stdout is not None
+    assert child.stdout.readline() == b"ANSWER\n"
+    child.stdout.close()
+
+    assert child.wait(timeout=10) == 0
+
+
 def test_relay_ssh_child_dies_with_its_caller(tmp_path: Path) -> None:
     pidfile = tmp_path / "pid"
     code = (
