@@ -295,10 +295,8 @@ def analyze_new_minutes(
     post: Poster | None,
 ) -> AnalyzeTick:
     """Finalized minutes that appeared since the first tick → proposals. The first tick only records what exists."""
-    from automation.drive_taxonomy import category_parts
-
     state = board.root / "minutes-state.json"
-    files = minutes.scan(drive, category_parts("meeting"))
+    files = minutes.scan_outputs(drive)
     seen = minutes.read_seen(state)
     if seen is None:
         minutes.write_seen(state, frozenset(f.file_id for f in files))

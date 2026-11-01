@@ -34,6 +34,32 @@ def _root_folder() -> str:
     return os.environ.get("DRIVE_OUTPUTS_ROOT") or "autophagy"
 
 
+_PARA_UNSORTED: Final = ("0_Inbox", "분류대기", "제안서")
+_FOLDER_MIME: Final = "application/vnd.google-apps.folder"
+
+
+def _proposal_root(transport: object, slug: str) -> tuple[str, ...]:
+    """Folders above ``<slug>/<version>``: legacy ``<root>/proposal``, PARA a project's ``제안서``.
+
+    With ``DRIVE_LAYOUT=para`` a proposal keeps living where it already is: the
+    ``1_Project/<YYYY>_<project>/제안서`` folder that already holds ``<slug>`` wins, read
+    with ``find_folder_path`` only. A proposal no project holds yet waits in
+    ``0_Inbox/분류대기/제안서`` until YooDori files it.
+    """
+    if (os.environ.get("DRIVE_LAYOUT") or "").strip().lower() != "para":
+        return (_root_folder(), "proposal")
+    find = getattr(transport, "find_folder_path", None)
+    listing = getattr(transport, "list_children", None)
+    projects = find(("1_Project",)) if find is not None and listing is not None and slug else None
+    for child in listing(projects) if projects else ():
+        name = str(child.get("name", ""))
+        if child.get("mimeType") == _FOLDER_MIME and name:
+            candidate = ("1_Project", name, "제안서")
+            if find((*candidate, slug)) is not None:
+                return candidate
+    return _PARA_UNSORTED
+
+
 class PublishError(RuntimeError):
     """A publication could not finish and must not be reported as successful."""
 
@@ -125,7 +151,7 @@ class FakeDriveTransport:
         return cast(dict[str, dict[str, str]], files)
 
     def _relative_path(self, name: str) -> str:
-        directory = self._folder_parts[4:]
+        directory = self._folder_parts[len(_proposal_root(self, "")) + 2:]
         return "/".join((*directory, name))
 
     def ensure_folder_path(self, parts: tuple[str, ...]) -> str:
@@ -388,10 +414,12 @@ def _upload(
     version: str,
     local: Path,
     prior: dict[str, str] | None,
+    base: tuple[str, ...] = (),
 ) -> PublishedFile:
     relative = local.relative_to(version_dir).as_posix()
     _route_check(local, relative)
-    folder_parts = (_root_folder(), "proposal", slug, version, *relative.split("/")[:-1])
+    folder_parts = (*(base or _proposal_root(transport, slug)), slug, version,
+                    *relative.split("/")[:-1])
     try:
         parent_id = transport.ensure_folder_path(folder_parts)
         result = transport.upsert_file(local, local.name, parent_id, (prior or {}).get("id"))
@@ -463,6 +491,7 @@ def publish_version(
     drive = transport or _transport_from_environment(root)
     uploads: list[PublishedFile] = []
     published: list[PublishedFile] = []
+    base_parts = _proposal_root(drive, slug)
 
     for local in tree_files:
         relative = local.relative_to(version_dir).as_posix()
@@ -479,7 +508,7 @@ def publish_version(
                 )
             )
             continue
-        uploaded = _upload(drive, version_dir, slug, version, local, previous)
+        uploaded = _upload(drive, version_dir, slug, version, local, previous, base_parts)
         uploads.append(uploaded)
         published.append(uploaded)
         prior[relative] = _record(uploaded)
@@ -499,7 +528,7 @@ def publish_version(
         )
     else:
         manifest_file = _upload(
-            drive, version_dir, slug, version, manifest_path, manifest_prior
+            drive, version_dir, slug, version, manifest_path, manifest_prior, base_parts
         )
         uploads.append(manifest_file)
 
@@ -517,7 +546,7 @@ def publish_version(
         )
     else:
         receipt_file = _upload(
-            drive, version_dir, slug, version, receipt_path, receipt_previous
+            drive, version_dir, slug, version, receipt_path, receipt_previous, base_parts
         )
         uploads.append(receipt_file)
     _atomic_write(

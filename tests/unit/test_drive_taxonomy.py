@@ -58,31 +58,42 @@ def test_registry_pins_folders_periodicity_and_flags() -> None:
             folder="주간동향",
             periodicity="weekly",
             always_bundle=True,
+            para_home=("2_Area", "연구동향", "주간동향"),
+            para_in_project="보고서",
         ),
-        "proposal": Category(folder="제안서", periodicity="oneshot"),
-        "budget": Category(folder="예산", periodicity="monthly"),
+        "proposal": Category(folder="제안서", periodicity="oneshot", para_in_project="제안서"),
+        "budget": Category(
+            folder="예산", periodicity="monthly", para_home=("2_Area", "예산"), para_in_project="예산",
+        ),
         "meeting": Category(
             folder="회의록",
             periodicity="oneshot",
             skill_owned="skills/meeting/scripts/meeting_cli.py ingest --project <과제명>",
+            para_in_project="회의록",
         ),
         "transcript": Category(
             folder="전사본",
             periodicity="oneshot",
             skill_owned="skills/speechtotext/scripts/speechtotext_cli.py",
+            para_home=("4_Archive", "전사본"),
         ),
         "audio": Category(
             folder="녹음원본",
             periodicity="oneshot",
             skill_owned="plaud_sync",
+            para_home=("4_Archive", "녹음원본"),
         ),
-        "procurement": Category(folder="구매", periodicity="oneshot"),
-        "doctype": Category(folder="문서", periodicity="oneshot"),
+        "procurement": Category(
+            folder="구매", periodicity="oneshot",
+            para_home=("2_Area", "행정-결재", "구매"), para_in_project="구매",
+        ),
+        "doctype": Category(folder="문서", periodicity="oneshot", para_in_project="문서"),
         "patent": Category(folder="특허", periodicity="oneshot", gate_only=True),
         "share": Category(
             folder="공유",
             periodicity="oneshot",
             skill_owned="skills/mail/scripts/triage_cli.py compose --drive-share <파일> --share-with <주소>",
+            para_home=("4_Archive", "공유한-파일"),
         ),
     }
 

@@ -13,7 +13,9 @@ from typing import Protocol, cast
 
 from automation.drive_client import DriveClient
 from automation.drive_outputs import client_from_environment
-from automation.drive_taxonomy import category_parts
+from automation.drive_taxonomy import (
+    category_parts, legacy_category_parts, para_enabled, project_of_folder, projects_parts,
+)
 from automation.entity_preflight.contracts import JsonValue
 from automation.plaud_sync.store import load_note_body, load_state
 # mirror 경로 해석의 단일 정의가 이 사설 함수뿐이라 사본을 만들지 않고 재사용한다.
@@ -75,39 +77,57 @@ def default_drive() -> DriveClient:
     return client_from_environment()
 
 
+def _folders(drive: ReadDrive, folder_id: str | None) -> list[dict[str, JsonValue]]:
+    return [item for item in (drive.list_children(folder_id) if folder_id else [])
+            if item.get("mimeType") == _FOLDER_MIME]
+
+
+def _transcript_years(drive: ReadDrive) -> Iterator[tuple[dict[str, JsonValue], frozenset[str]]]:
+    """전사본 연도 폴더와 이름 앞에 올 수 있는 과제 — PARA 는 4_Archive/전사본/<연도>, 옛 트리는 읽기만."""
+    if para_enabled():
+        projects = frozenset(
+            slug for slug in (project_of_folder(str(item.get("name", "")))
+                              for item in _folders(drive, drive.find_folder_path(projects_parts())))
+            if slug
+        )
+        for year in _folders(drive, drive.find_folder_path(category_parts("transcript"))):
+            yield year, projects
+        legacy = drive.find_folder_path(legacy_category_parts("transcript"))
+    else:
+        legacy = drive.find_folder_path(category_parts("transcript"))
+    for project in _folders(drive, legacy):
+        for year in _folders(drive, str(project["id"])):
+            yield year, frozenset()
+
+
 def meeting_documents(home: Path, env: Mapping[str, str], drive: ReadDrive) -> Iterator[Document]:
     """pending_transcripts의 과제/연도 순회만 재사용한다. 회의록 유무는 필터가 아니다."""
-    root = drive.find_folder_path(category_parts("transcript"))
-    if root is None:
-        return
     local_root = Path(env.get("SPEECHTOTEXT_TRANSCRIPT_DIR", str(home / ".hermes/speechtotext/transcripts"))).expanduser()
-    for project in drive.list_children(root):
-        if project.get("mimeType") != _FOLDER_MIME:
-            continue
-        for year in drive.list_children(str(project["id"])):
-            if year.get("mimeType") != _FOLDER_MIME:
+    for year, projects in _transcript_years(drive):
+        for child in drive.list_children(str(year["id"])):
+            name = unicodedata.normalize("NFC", str(child.get("name", "")))
+            if not name.endswith(".md"):
                 continue
-            for child in drive.list_children(str(year["id"])):
-                name = unicodedata.normalize("NFC", str(child.get("name", "")))
-                if not name.endswith(".md"):
-                    continue
-                if Path(name).name != name or "\\" in name:
-                    raise ValueError("capture unsafe Drive filename")
-                # 회의 원장의 정본 키는 Drive 워처가 전달한 오디오 label이다.
-                # Drive는 title을 보존하므로 발행 날짜만 한 번 벗기고, 동결본은
-                # CLI의 공용 파일명 규칙으로 찾는다. lifelog의 stem은 건드리지 않는다.
-                stem = Path(name).stem
-                dated = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_(.+)", stem)
-                local_name = name
-                if dated is not None:
-                    stem = dated[2]
-                    local_name = stt_transcript.transcript_name(stem, datetime.fromisoformat(dated[1]))
-                local = local_root / local_name
-                _ = local.resolve().relative_to(local_root.resolve())
-                frozen = local.read_text(encoding="utf-8") if local.exists() else None
-                with tempfile.TemporaryDirectory(prefix="stt-eval-capture-") as temporary:
-                    downloaded = Path(temporary) / "transcript.md"
-                    _ = drive.download_file(str(child["id"]), downloaded)
-                    current = downloaded.read_text(encoding="utf-8")
-                stamp = str(child.get("modifiedTime") or datetime.now(UTC).isoformat())
-                yield Document("meeting", stem, current, frozen, stamp)
+            if Path(name).name != name or "\\" in name:
+                raise ValueError("capture unsafe Drive filename")
+            # 회의 원장의 정본 키는 Drive 워처가 전달한 오디오 label이다.
+            # Drive는 title을 보존하므로 발행 날짜만 한 번 벗기고, 동결본은
+            # CLI의 공용 파일명 규칙으로 찾는다. lifelog의 stem은 건드리지 않는다.
+            stem = Path(name).stem
+            dated = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_(.+)", stem)
+            local_name = name
+            if dated is not None:
+                stem = dated[2]
+                head, sep, rest = stem.partition("_")
+                if sep and head in projects:  # PARA 이름 앞의 과제는 label 이 아니다
+                    stem = rest
+                local_name = stt_transcript.transcript_name(stem, datetime.fromisoformat(dated[1]))
+            local = local_root / local_name
+            _ = local.resolve().relative_to(local_root.resolve())
+            frozen = local.read_text(encoding="utf-8") if local.exists() else None
+            with tempfile.TemporaryDirectory(prefix="stt-eval-capture-") as temporary:
+                downloaded = Path(temporary) / "transcript.md"
+                _ = drive.download_file(str(child["id"]), downloaded)
+                current = downloaded.read_text(encoding="utf-8")
+            stamp = str(child.get("modifiedTime") or datetime.now(UTC).isoformat())
+            yield Document("meeting", stem, current, frozen, stamp)

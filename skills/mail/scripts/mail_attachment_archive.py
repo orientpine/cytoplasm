@@ -22,6 +22,8 @@ RUNTIME_ATTACHMENTS = HOME / ".hermes/mailon-runtime/state/data/attachments"
 STATE_DIR = HOME / ".hermes/mail-attachment-drive"
 STATE_DB = STATE_DIR / "archive.db"
 OUTPUTS_ROOT_ENV = "DRIVE_OUTPUTS_ROOT"
+LAYOUT_ENV = "DRIVE_LAYOUT"
+PARA_ARCHIVE = "4_Archive"
 DEFAULT_OUTPUTS_ROOT = "autophagy"
 ARCHIVE_FOLDER = "메일 첨부파일"
 BOGUS_NAMES = frozenset({"Save", "Download all"})
@@ -79,7 +81,10 @@ def root_parts() -> tuple[str, str]:
 
     Spelled here rather than imported: this module stays importable without the
     automation runtime on sys.path (the sync CLI adds it only when Drive is needed).
+    With ``DRIVE_LAYOUT=para`` (the owner's PARA tree) it is ``4_Archive/메일 첨부파일``.
     """
+    if (os.environ.get(LAYOUT_ENV) or "").strip().lower() == "para":
+        return (PARA_ARCHIVE, ARCHIVE_FOLDER)
     root = os.environ.get(OUTPUTS_ROOT_ENV) or DEFAULT_OUTPUTS_ROOT
     return (unicodedata.normalize("NFC", root), ARCHIVE_FOLDER)
 
