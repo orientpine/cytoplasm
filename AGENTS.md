@@ -27,7 +27,7 @@
 - 전사는 기본 로컬 `whisper.cpp`, 원음을 노드 밖으로 내보내지 않는다(speechtotext).
 - 모델: 코드·스킬·환경변수에 모델을 적지 않고 argv에 `--provider`/`-m` 넣지 않는다(`test_model_single_source_conformance.py`). 확인은 `python3 -m automation.doctor`의 「주 모델」·「폴백」 줄. 주 모델 변경 뒤 모델 고정 없는 agent 모드 cron을 같은 정의로 재생성, 잡별 모델 고정 금지(`configs/routing-policy.md` 「Changing the main model」, `drift_skip`은 첫 회부터 고장). 제안서 윤문도 이 경로(Codex CLI는 codex 그림 생성만), `codex_llm.py`에 `--ignore-user-config` 없음. 폴백 추가·제거는 `~/.hermes/config.yaml`에서만. 라우팅 로그는 `served_provider`·`served_model`(`codex_llm.complete_served`). 내용에 따라 경로를 고르거나 막지 않는다.
 - Drive 참고자료: 읽기 전용, 루트 `DRIVE_REFERENCE_ROOT`(기본 `KIMM`)는 산출물 `autophagy/`와 다른 트리. `ensure_folder_path` 금지, `find_folder_path` 사용. 회의록 참고자료는 `Deck` 경로로 받고 질의는 회의 라벨·과제명+전사 본문 상위 낱말. 읽을 수 없는 형식·크기는 `reference_rank.refusal`이 내려받기 전에 판정.
-- Drive 산출물: `project=`를 주면 카테고리와 연도 사이에 과제 한 단, 안 주면 기존 경로.
+- Drive 산출물: `project=`를 주면 카테고리와 연도 사이에 과제 한 단, 안 주면 기존 경로. `DRIVE_LAYOUT=para` 노드는 형 PARA 자리(`1_Project/<연도>_<과제>/…`, `4_Archive/…`, 참고자료 기본 `1_Project`)에 쓰고 옛 트리는 한 릴리스 동안 읽기만(`docs/guide/drive-publish.md` 「PARA 구조」).
 - QA 증적: 공개 문서는 경로만 인용, 내용을 옮기지 않는다.
 - 승인 표면: 공급망 승인(배포·발행·managed 활성화·release)=개인 서버 `#approvals`. 표면은 `approval_surface.py`·conformance 테스트가 단일 진실.
 - 정기 통지(일일 지출·주간 동향·아침 감사·헬스체크·리마인더)는 `owner_notice_channel_id`(미설정=DM), 발신은 `automation/owner_notice.py` 파사드만. 파사드 밖 DM 오픈 신설=RED.
@@ -337,9 +337,9 @@
 ## 산출물 출처 규칙 (cha 지시, 2026-08-26)
 
 - 회의 파생 산출물은 반드시 완성 회의록에서만. 전사본은 출처가 아니다.
-- 회의록: Drive `autophagy/회의록/<과제명>/<연도>/`(발행 `meeting_cli ingest --project <과제명>`). 산출물 전 반드시 읽는다(읽기는 승인 불요). `.md`는 `files export` 아닌 `files get --params {fileId, alt:media}`, `gws`는 cwd 밖 `--output` 거부라 목적지에서 실행.
+- 회의록: Drive `autophagy/회의록/<과제명>/<연도>/`(PARA 노드는 `1_Project/<연도>_<과제명>/회의록/`, 발행 `meeting_cli ingest --project <과제명>`). 산출물 전 반드시 읽는다(읽기는 승인 불요). `.md`는 `files export` 아닌 `files get --params {fileId, alt:media}`, `gws`는 cwd 밖 `--output` 거부라 목적지에서 실행.
 - 로컬(`~/notes/meetings/*.md`) 정본 아님. `APPENDIX_HEADING` 아래=전사본. `meeting_minutes.finalized_view(text)` 필수(사본 금지).
-- 상태 파일: `회의록/<과제>/action-items.csv`, `회의록/project-codes.csv`. 규약·진입점(`drive_outputs.publish_state_file`/`fetch_state_file`): `docs/guide/drive-publish.md`.
+- 상태 파일: `회의록/<과제>/action-items.csv`, `회의록/project-codes.csv`(PARA: `1_Project/<연도>_<과제>/회의록/`, `1_Project/project-codes.csv`). 규약·진입점(`drive_outputs.publish_state_file`/`fetch_state_file`): `docs/guide/drive-publish.md`.
 - `--project` 인제스트 카드는 `출처(정본): Drive 회의록/<과제명>/` 먼저, 로컬 사본 뒤. 과제명 모르면 지어내지 않고 기존 로컬 경로만.
 원문: [RULES.md](RULES.md) 「산출물 출처 규칙」 · 장부 `cyto-output-from-minutes`
 

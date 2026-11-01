@@ -384,6 +384,9 @@ python3 $C match <전사본.md> [--audio <원음>]
 | `autophagy/<문서 종류>/용어집.csv` | 그 종류의 문서(`회의록`·`전사본`·`라이프로그` …) | 중간 |
 | `autophagy/<문서 종류>/<과제>/용어집.csv` | 그 과제의 그 문서 | 가장 강함 |
 
+PARA 노드(`DRIVE_LAYOUT=para`)는 `3_Resource/용어집/`, `3_Resource/용어집/<문서 종류>/`, `1_Project/<연도>_<과제>/` 의
+`용어집.csv` 를 같은 순서로 읽는다(옛 층은 한 릴리스 동안 읽기만).
+
 이 스킬이 읽는 종류는 `전사본` 이고, 읽은 이름은 **힌트로만** 쓴다. 같은 회의의 회의록은
 `회의록` 층으로, plaud 노트는 `라이프로그` 층으로 **그 문서를 만들 때** 교정된다 — 문서 종류마다
 어휘가 다르기 때문이다(회의록은 기관명, 라이프로그는 사람·장소).
@@ -409,11 +412,12 @@ python3 $C match <전사본.md> [--audio <원음>]
 **과제는 파일 이름이 정한다**: `_` 로 나눈 토큰 중 **날짜가 아닌 첫 토큰**. `20260825_해양고신뢰성.m4a`
 와 `해양고신뢰성_킥오프.m4a` 는 같은 과제이고, 이름이 날짜뿐이면 과제 없음(예전처럼 연도 폴더에
 바로 놓인다). `--project` 로 언제든 덮어쓸 수 있다. 전사본은 `전사본/<과제>/<YYYY>/` 에, 회의록은
-meeting 이 같은 과제 이름으로 `회의록/<과제>/<YYYY>/` 에 놓는다.
+meeting 이 같은 과제 이름으로 `회의록/<과제>/<YYYY>/` 에 놓는다. PARA 노드(`DRIVE_LAYOUT=para`)는 전사본을
+`4_Archive/전사본/<YYYY>/<날짜>_<과제>_<라벨>.md` 에, 회의록을 `1_Project/<YYYY>_<과제>/회의록/` 에 둔다.
 
 ## Drive 감시 폴더
 
-`SPEECHTOTEXT_DRIVE_FOLDER` 에 지정한 폴더만 본다(운영값 `autophagy/회의녹음` — 산출물과 같은 루트 아래의 유일한 입력 폴더). **미설정이면 아무것도 하지 않는다**
+`SPEECHTOTEXT_DRIVE_FOLDER` 에 지정한 폴더만 본다(운영값 `autophagy/회의녹음` — 산출물과 같은 루트 아래의 유일한 입력 폴더, PARA 노드는 `0_Inbox/회의녹음`). **미설정이면 아무것도 하지 않는다**
 (어떤 폴더인지 추측하지 않는다). 소유자 본인만 접근 가능한 파일만 처리하고(공유된 파일은
 `SPEECHTOTEXT-SKIP reason=not-owner-only`), 회의록 생성이 성공한 뒤에만 처리 완료로 기록해
 실패한 틱은 다음 틱에 다시 시도한다. 폴링 대상은 Drive이므로 실시간 에이전트의 Discord
@@ -421,7 +425,7 @@ meeting 이 같은 과제 이름으로 `회의록/<과제>/<YYYY>/` 에 놓는�
 
 전사본은 `~/.hermes/speechtotext/transcripts/`(0700)에 정본으로 남고,
 `DRIVE_PUBLISH_ENABLED=1` 이면(끄려면 **값 `0`** — CLI 가 `~/.env.secrets` 를 환경에 싣기
-때문에 `unset` 으로는 막히지 않는다) 공용 파사드로 `autophagy/전사본/<YYYY>/` 에
+때문에 `unset` 으로는 막히지 않는다) 공용 파사드로 `autophagy/전사본/<YYYY>/`(PARA 노드는 `4_Archive/전사본/<YYYY>/`) 에
 best-effort 발행된다(실패해도 로컬 전사본과 회의록은 그대로 진행).
 
 ## 사용 중 평가 자료 수집
@@ -436,7 +440,7 @@ best-effort 발행된다(실패해도 로컬 전사본과 회의록은 그대로
 
 | 키 | 뜻 | 기본 |
 |---|---|---|
-| `SPEECHTOTEXT_DRIVE_FOLDER` | 감시할 Drive 폴더 경로(`/` 구분, 운영값 `autophagy/회의녹음`) | **없음 = 무동작** |
+| `SPEECHTOTEXT_DRIVE_FOLDER` | 감시할 Drive 폴더 경로(`/` 구분, 운영값 `autophagy/회의녹음`, PARA 노드는 `0_Inbox/회의녹음`) | **없음 = 무동작** |
 | `SPEECHTOTEXT_BACKEND` | `auto` / `local` / `api` | `auto` |
 | `SPEECHTOTEXT_WHISPER_BIN` · `SPEECHTOTEXT_WHISPER_MODEL` | whisper.cpp 바이너리·ggml 모델 | PATH 의 `whisper-cli` / 없음 |
 | `SPEECHTOTEXT_FFMPEG_BIN` · `SPEECHTOTEXT_FFPROBE_BIN` | 변환·길이 측정 | PATH |

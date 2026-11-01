@@ -87,7 +87,7 @@ python3 /srv/autophagy-skills/live/recall/scripts/recall_cli.py search "<관계 
 python3 /srv/autophagy-skills/live/recall/scripts/recall_reference.py "<질의>" [--limit 3] [--json]
 ```
 
-- 루트는 `DRIVE_REFERENCE_ROOT`(기본 `KIMM`, `/`로 중첩 경로 가능), Drive 접근은 다른 Drive
+- 루트는 `DRIVE_REFERENCE_ROOT`(기본 `KIMM`, `DRIVE_LAYOUT=para` 노드는 `1_Project` 이고 없으면 `KIMM`, `/`로 중첩 경로 가능), Drive 접근은 다른 Drive
   경로와 같은 옵트인 `DRIVE_PUBLISH_ENABLED=1`을 따른다. 꺼져 있으면 아무것도 조회하지 않는다.
 - **읽기 전용**이다. 그 폴더에 폴더·파일을 만들지 않으며, 루트가 없으면 만들지 않고
   `REFERENCE-ROOT-MISSING` 사유만 낸다.

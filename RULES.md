@@ -522,10 +522,10 @@ automation/worktree.sh finish <이름>                          # 세션 종료
 
 **공정표·계획서·보고서 등 회의에서 파생되는 산출물은 완성 회의록에서만 작성한다 — 음성 전사본은 출처가 아니다.**
 
-- **완성 회의록이 있는 곳**: Drive `autophagy/회의록/<과제명>/<연도>/`. `meeting_cli ingest --project <과제명>` 이 그 자리에 발행하고, 경로 규칙은 `automation/drive_taxonomy.py` 의 `meeting` 카테고리가 소유한다. 산출물을 만들기 전에 **거기부터 읽는다**. 읽기는 승인 게이트 대상이 아니다(denylist 는 `gws drive files create|+upload` 만 건다). `.md` 는 Google Docs 가 아니므로 `files export` 가 아니라 `files get --params {fileId, alt:media}` 이며, `gws` 는 cwd 밖 `--output` 을 거부하므로 목적지에서 실행한다.
+- **완성 회의록이 있는 곳**: Drive `autophagy/회의록/<과제명>/<연도>/`(`DRIVE_LAYOUT=para` 노드는 `1_Project/<연도>_<과제명>/회의록/`). `meeting_cli ingest --project <과제명>` 이 그 자리에 발행하고, 경로 규칙은 `automation/drive_taxonomy.py` 의 `meeting` 카테고리가 소유한다. 산출물을 만들기 전에 **거기부터 읽는다**. 읽기는 승인 게이트 대상이 아니다(denylist 는 `gws drive files create|+upload` 만 건다). `.md` 는 Google Docs 가 아니므로 `files export` 가 아니라 `files get --params {fileId, alt:media}` 이며, `gws` 는 cwd 밖 `--output` 을 거부하므로 목적지에서 실행한다.
 - **로컬 노트(`~/notes/meetings/*.md`)는 정본이 아니다.** 그 파일은 `meeting_minutes.APPENDIX_HEADING`(`## 부록 · 근거와 원문`) 아래에 **원문 전사본을 통째로 안고 있다**. 부록 위만 회의가 결론 낸 것이고, 아래는 재료다. 파일을 통째로 읽으면 음성 인식 결과를 사실로 읽게 된다.
 - **경계는 코드가 소유한다.** `meeting_minutes.finalized_view(text)` 가 부록 위만 돌려준다. 그 상수 옆에 붙어 있으므로 사본을 만들면 갈라진다 — 새로 자르지 말고 그 함수를 쓴다. 전사본 절은 렌더러가 `TRANSCRIPT_WARNING` 을 바로 아래에 찍어 금지를 유혹이 있는 자리에 둔다(회귀 고정: `tests/unit/test_meeting_skill.py`).
-- **회의 상태 파일 두 개도 같은 트리에 있다.** 과제의 미결·완료 action item 원장(`회의록/<과제>/action-items.csv`)과 관리번호 코드 레지스트리(`회의록/project-codes.csv`)는 날짜 없는 상태 파일이며, 규약과 진입점(`drive_outputs.publish_state_file` / `fetch_state_file`)은 [drive-publish.md](docs/guide/drive-publish.md) 가 단독으로 소유한다.
+- **회의 상태 파일 두 개도 같은 트리에 있다.** 과제의 미결·완료 action item 원장(`회의록/<과제>/action-items.csv`)과 관리번호 코드 레지스트리(`회의록/project-codes.csv`, PARA 노드는 각각 `1_Project/<연도>_<과제>/회의록/`·`1_Project/`)는 날짜 없는 상태 파일이며, 규약과 진입점(`drive_outputs.publish_state_file` / `fetch_state_file`)은 [drive-publish.md](docs/guide/drive-publish.md) 가 단독으로 소유한다.
 - **카드도 정본을 먼저 가리킨다.** `--project` 를 준 인제스트의 카드 본문은 `출처(정본): Drive 회의록/<과제명>/` 을 먼저 적고 로컬 사본을 뒤에 적는다. 과제명을 모르면 없는 경로를 지어내지 않고 기존 로컬 경로만 적는다.
 - **배경(사후 반영)**: 2026-08-26, 전사본에서 만든 공정표 템플릿이 기관명을 틀렸다 — `한정기술`(정본은 **한국전력기술**, 다른 회사), `현대중공업 서부기계`(정본 **현대중공업터보기계**), 열교환기 `대통`(정본 **계통**) 열수력. 마감일도 `2028-02-01/04-01`(정본 **02-29/04-30**)로 어긋났고, 회의록이 규정한 열 위치(B2=기관명, B~E=대·중·소분류, H~I=시작·종료일, N=결과물)를 무시한 간트 격자를 지어냈다. 그 파일은 8개 참여기관에 배포될 것이었다. 완성 회의록에는 「용어·명칭 교정 기준」 표가 있어 이 오기들이 이미 교정돼 있었다 — 읽을 곳을 안 읽은 것이 유일한 원인이다.
 ## 산출물은 Drive에 둔다 (cha 지시, 2026-08-26)
