@@ -177,8 +177,12 @@ def test_a_transcript_is_archived_by_year_with_the_project_in_its_name(para: Non
 
     drive_outputs.publish("transcript", "정기회의", [(text, "정기회의")],
                           on=date(2026, 10, 20), project="데모과제", client=drive)
+    text.write_text("다듬은 전사\n", encoding="utf-8")
+    again = drive_outputs.publish("transcript", "정기회의", [(text, "정기회의")],
+                                  on=date(2026, 10, 22), project="데모과제", client=drive)
 
-    assert drive.files() == {"4_Archive/전사본/2026/2026-10-20_데모과제_정기회의.md"}
+    assert drive.files() == {"4_Archive/전사본/2026/데모과제_2026-10-20_정기회의.md"}
+    assert again.action == "updated"
     assert _legacy_created(drive) == []
 
 
@@ -242,9 +246,10 @@ def test_pending_transcripts_follow_the_para_names(para: None) -> None:
     drive = TreeDrive()
     drive.folder("1_Project", "2026_데모과제", "회의록")
     drive.file(("1_Project", "2026_데모과제", "회의록"), "2026-10-20_회의록-2026-10-20_정기회의.md")
-    drive.file(("4_Archive", "전사본", "2026"), "2026-10-20_데모과제_정기회의.md")
-    waiting = drive.file(("4_Archive", "전사본", "2026"), "2026-10-27_데모과제_후속회의.md")
-    drive.file(("4_Archive", "전사본", "2026"), "2026-10-28_잡담_녹음.md")
+    drive.file(("4_Archive", "전사본", "2026"), "데모과제_2026-10-20_정기회의.md")
+    waiting = drive.file(("4_Archive", "전사본", "2026"), "데모과제_2026-10-27_후속회의.md")
+    drive.file(("4_Archive", "전사본", "2026"), "잡담_2026-10-28_녹음.md")
+    drive.file(("4_Archive", "전사본", "2026"), "2026-10-29_과제없는회의.md")
 
     pending = meeting_project.pending_transcripts(client=drive)
 

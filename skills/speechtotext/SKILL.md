@@ -413,7 +413,7 @@ PARA 노드(`DRIVE_LAYOUT=para`)는 `3_Resource/용어집/`, `3_Resource/용어�
 와 `해양고신뢰성_킥오프.m4a` 는 같은 과제이고, 이름이 날짜뿐이면 과제 없음(예전처럼 연도 폴더에
 바로 놓인다). `--project` 로 언제든 덮어쓸 수 있다. 전사본은 `전사본/<과제>/<YYYY>/` 에, 회의록은
 meeting 이 같은 과제 이름으로 `회의록/<과제>/<YYYY>/` 에 놓는다. PARA 노드(`DRIVE_LAYOUT=para`)는 전사본을
-`4_Archive/전사본/<YYYY>/<날짜>_<과제>_<라벨>.md` 에, 회의록을 `1_Project/<YYYY>_<과제>/회의록/` 에 둔다.
+`4_Archive/전사본/<YYYY>/<과제>_<날짜>_<라벨>.md` 에, 회의록을 `1_Project/<YYYY>_<과제>/회의록/` 에 둔다.
 
 ## Drive 감시 폴더
 

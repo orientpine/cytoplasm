@@ -114,13 +114,13 @@ def meeting_documents(home: Path, env: Mapping[str, str], drive: ReadDrive) -> I
             # Drive는 title을 보존하므로 발행 날짜만 한 번 벗기고, 동결본은
             # CLI의 공용 파일명 규칙으로 찾는다. lifelog의 stem은 건드리지 않는다.
             stem = Path(name).stem
+            head, sep, rest = stem.partition("_")
+            if sep and head in projects:  # PARA 이름 맨 앞의 과제는 label 이 아니다
+                stem = rest
             dated = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_(.+)", stem)
             local_name = name
             if dated is not None:
                 stem = dated[2]
-                head, sep, rest = stem.partition("_")
-                if sep and head in projects:  # PARA 이름 앞의 과제는 label 이 아니다
-                    stem = rest
                 local_name = stt_transcript.transcript_name(stem, datetime.fromisoformat(dated[1]))
             local = local_root / local_name
             _ = local.resolve().relative_to(local_root.resolve())

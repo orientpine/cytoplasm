@@ -115,12 +115,12 @@ def _project_folders(drive: object, taxonomy: object) -> dict[str, object]:
 
 
 def _pending_para(drive: object, taxonomy: object) -> list[PendingTranscript]:
-    """``4_Archive/전사본/<YYYY>/<date>_<project>_<label>.md`` with no minutes in the project yet.
+    """``4_Archive/전사본/<YYYY>/<project>_<date>_<label>.md`` with no minutes in the project yet.
 
-    The project is the name's second segment, and only a project that already has a
-    ``1_Project`` folder counts — a label that merely contains ``_`` is not a project.
-    The minutes name is the one the CLI derives from the label, so the marker drops the
-    project segment again (``회의록-<date>_<label>``).
+    The project is the name's first segment (owner Q429 "이름 앞에 과제명"), and only a
+    project that already has a ``1_Project`` folder counts — a label that merely contains
+    ``_`` is not a project. The minutes name is the one the CLI derives from the label, so
+    the marker drops the project segment again (``회의록-<date>_<label>``).
     """
     root = drive.find_folder_path(taxonomy.category_parts("transcript"))
     if root is None:
@@ -133,9 +133,9 @@ def _pending_para(drive: object, taxonomy: object) -> list[PendingTranscript]:
         for child in drive.list_children(str(year.get("id", ""))):
             file_name = unicodedata.normalize("NFC", str(child.get("name", "")))
             parts = file_name[:-3].split("_", 2) if file_name.endswith(".md") else []
-            if len(parts) != 3 or parts[1] not in projects:
+            if len(parts) != 3 or parts[0] not in projects:
                 continue
-            slug = parts[1]
+            slug, day, label = parts
             if slug not in published:
                 folder = projects[slug]
                 minutes = drive.find_folder_path(
@@ -146,7 +146,7 @@ def _pending_para(drive: object, taxonomy: object) -> list[PendingTranscript]:
                     unicodedata.normalize("NFC", str(item.get("name", "")))
                     for item in (drive.list_children(minutes) if minutes else [])
                 ]
-            marker = f"회의록-{parts[0]}_{parts[2]}"
+            marker = f"회의록-{day}_{label}"
             if any(marker in existing for existing in published[slug]):
                 continue
             found.append(PendingTranscript(slug, year_name, str(child.get("id", "")), file_name))
