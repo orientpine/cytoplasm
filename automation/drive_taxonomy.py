@@ -241,11 +241,16 @@ def dated(kind: str, project: str | None = None) -> bool:
     return not (para_enabled() and project and found.para_in_project)
 
 
-def file_title(kind: str, title: str, project: str | None = None) -> str:
-    """The title a file is named after: PARA archive kinds put the project in front."""
+def name_prefix(kind: str, project: str | None = None) -> str:
+    """What goes before the date: PARA archive kinds lead with the project.
+
+    Owner Q429 "4_Archive/전사본/연도에 두고 이름 앞에 과제명": the year folder holds every
+    project's transcripts, so the project comes first (``<project>_<YYYY-MM-DD>_<title>``) and
+    one project's files sort together. Everything else keeps the date in front.
+    """
     if para_enabled() and project and kind in _PROJECT_IN_NAME:
-        return _nfc(f"{project_slug(project)}_{title}")
-    return _nfc(title)
+        return _nfc(f"{project_slug(project)}_")
+    return ""
 
 
 def period_key(periodicity: Periodicity, on: date) -> str:
@@ -319,14 +324,17 @@ def project_parts(kind: str, project: str, *, year: int | None = None) -> tuple[
     return (outputs_root(), _nfc(found.folder), named)
 
 
-def artifact_name(period: str, title: str, suffix: str) -> str:
-    """File name with the date prefix that keeps re-runs on a single copy."""
-    return _nfc(f"{period}_{title}{suffix}")
+def artifact_name(period: str, title: str, suffix: str, *, prefix: str = "") -> str:
+    """File name with the date prefix that keeps re-runs on a single copy.
+
+    ``prefix`` is ``name_prefix(kind, project)``: empty except for PARA archive kinds.
+    """
+    return _nfc(f"{prefix}{period}_{title}{suffix}")
 
 
-def bundle_name(period: str, title: str) -> str:
+def bundle_name(period: str, title: str, *, prefix: str = "") -> str:
     """Folder name for a multi-artifact output — the file name without a suffix."""
-    return artifact_name(period, title, "")
+    return artifact_name(period, title, "", prefix=prefix)
 
 
 def ensure_depth(parts: Sequence[str]) -> tuple[str, ...]:

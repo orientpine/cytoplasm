@@ -26,7 +26,7 @@ from automation.drive_taxonomy import (
     TaxonomyError,
     dated,
     ensure_depth,
-    file_title,
+    name_prefix,
     folder_parts,
     para_enabled,
     period_key,
@@ -119,6 +119,7 @@ def _sticky_period(
     title: str,
     *,
     yearly: bool = True,
+    prefix: str = "",
 ) -> str | None:
     """Find a one-shot's original day by scanning numeric years newest-first.
 
@@ -135,7 +136,7 @@ def _sticky_period(
             years.append((int(name), folder_id))
 
     target = re.compile(
-        rf"^(\d{{4}}-\d{{2}}-\d{{2}})_{re.escape(title)}(?:\.[^/]*)?$"
+        rf"^{re.escape(prefix)}(\d{{4}}-\d{{2}}-\d{{2}})_{re.escape(title)}(?:\.[^/]*)?$"
     )
     for _, year_folder_id in sorted(years, reverse=True):
         for child in client.list_children(year_folder_id):
@@ -173,11 +174,7 @@ def publish(
     drive = client or client_from_environment()
     project = resolve_project(project, client=drive, on=requested_on)
     initial_parts = folder_parts(kind, requested_on.year, project=project)
-    normalized_title = file_title(kind, normalized_title, project)
-    checked_artifacts = tuple(
-        (local, file_title(kind, artifact_title, project))
-        for local, artifact_title in checked_artifacts
-    )
+    prefix = name_prefix(kind, project)
     yearly = dated(kind, project)
 
     period = period_key(selected.periodicity, requested_on)
@@ -188,7 +185,7 @@ def publish(
         # subfolder has no year level, so it is scanned itself.
         scan_parts = ensure_depth(initial_parts[:-1] if yearly else initial_parts)
         scan_folder_id = drive.ensure_folder_path(scan_parts)
-        sticky = _sticky_period(drive, scan_folder_id, normalized_title, yearly=yearly)
+        sticky = _sticky_period(drive, scan_folder_id, normalized_title, yearly=yearly, prefix=prefix)
         if sticky is not None:
             period = sticky
 
@@ -198,14 +195,14 @@ def publish(
     base_parts = folder_parts(kind, target_year, project=project)
     bundled = selected.always_bundle or len(checked_artifacts) + len(checked_companions) > 1
     if bundled:
-        parent_parts = ensure_depth((*base_parts, bundle_name(period, normalized_title)))
+        parent_parts = ensure_depth((*base_parts, bundle_name(period, normalized_title, prefix=prefix)))
     else:
         parent_parts = ensure_depth(base_parts)
     parent_id = drive.ensure_folder_path(parent_parts)
 
     uploads: list[tuple[Path, str]] = []
     for local, artifact_title in checked_artifacts:
-        name = artifact_name(period, artifact_title, local.suffix)
+        name = artifact_name(period, artifact_title, local.suffix, prefix=prefix)
         _ = ensure_depth((*parent_parts, name))
         uploads.append((local, name))
     for local in checked_companions:
