@@ -50,11 +50,11 @@ def test_window_without_query_overlap_is_the_cleaned_prefix() -> None:
     assert pick.window(text, pick.tokens("완전히 다른 말"), {"": 1.0}) == pick.clean(text)[:pick.WINDOW_CHARS]
 
 
-def test_shortlist_prompt_numbers_notes_shows_two_windows_and_searches_left() -> None:
+def test_pick_prompt_numbers_notes_shows_two_windows_and_searches_left() -> None:
     groups = [("wiki:" + "a" * 120 + ".md", [_row("w", "첫 조각"), _row("w", "둘째 조각"), _row("w", "셋째")]),
               ("obsidian:b.md", [_row("o", "다른 노트")])]
 
-    prompt = pick.shortlist_prompt("질문", groups, ["질문"], 2)
+    prompt = pick.pick_prompt("질문", [], groups, ["질문"], 2)
 
     first = prompt.split("[c001] ", 1)[1].split("\n\n", 1)[0]
     source, body = first.split("\n", 1)
@@ -65,11 +65,23 @@ def test_shortlist_prompt_numbers_notes_shows_two_windows_and_searches_left() ->
     assert "질문" in prompt
 
 
-def test_confirm_prompt_shows_the_two_passages_in_full() -> None:
-    long = "사실이 뒤에 있다 " * 100 + "결론 값 42"
-    prompt = pick.confirm_prompt("질문", [("wiki:a.md", [_row("w", long), _row("w", "둘째")])])
+def test_pinned_card_comes_first_in_full_and_shifts_the_note_numbers() -> None:
+    card = "- ATTRIBUTE: 소속 " + "가" * 1000 + " 끝에 있는 직급"
+    pinned = [("obsidian:copy.md#owner-card", [_row("obsidian:copy.md#owner-card", card)])]
 
-    assert "결론 값 42\n…\n둘째" in prompt
+    prompt = pick.pick_prompt("질문", pinned, [("wiki:a.md", [_row("w", "노트")])], ["질문"], 0)
+
+    assert f"[c001] 소유자 카드\n{card}\n\n[c002] wiki:a.md\n노트" in prompt
+
+
+def test_the_prompt_stays_within_the_smaller_budget() -> None:
+    groups = [(f"wiki:{n}.md", [_row("w", "긴 본문 " * 400), _row("w", "긴 본문 " * 400)])
+              for n in range(pick.CANDIDATE_NOTES)]
+
+    prompt = pick.pick_prompt("질문", [], groups, ["질문"], 2)
+
+    template = len(pick.PICK_PROMPT.read_text(encoding="utf-8"))
+    assert len(prompt) - template < pick.CANDIDATE_NOTES * (pick.PASSAGES_PER_NOTE * (pick.WINDOW_CHARS + 3) + 40)
 
 
 def test_parse_answer_reads_search_ids_in_order_and_rejects_other_shapes() -> None:
@@ -89,9 +101,9 @@ class _Store:
         return self.pages[len(self.calls) - 1] if len(self.calls) <= len(self.pages) else []
 
 
-def test_choose_searches_again_then_shortlists_then_confirms_on_full_text() -> None:
+def test_choose_searches_again_then_picks_in_one_call() -> None:
     store = _Store([[_row("wiki:a.md#c0", "A")], [_row("wiki:a.md#c0", "A"), _row("obsidian:b.md#c1", "B 사실 7579")]])
-    answers = iter(['{"search": "노트 말"}', '{"ids": ["c002", "c001"]}', '{"ids": ["c001"]}'])
+    answers = iter(['{"search": "노트 말"}', '{"ids": ["c002"]}'])
     prompts: list[str] = []
 
     def complete(prompt: str) -> str:
@@ -103,8 +115,32 @@ def test_choose_searches_again_then_shortlists_then_confirms_on_full_text() -> N
     assert store.calls == [("내선 뭐였지", frozenset({"wiki:core.md"})),
                            ("노트 말", frozenset({"wiki:core.md", "wiki:a.md"}))]
     assert [key for key, _rows in chosen] == ["obsidian:b.md"]
+    assert len(prompts) == 2
     assert "남은 검색: 2번" in prompts[0] and "남은 검색: 1번" in prompts[1]
-    assert "[c001] obsidian:b.md\nB 사실 7579" in prompts[2]
+    assert "[c002] obsidian:b.md\nB 사실 7579" in prompts[1]
+
+
+def test_a_picked_pinned_card_leads_so_long_notes_cannot_crowd_it_out() -> None:
+    card = ("obsidian:copy.md#owner-card", [_row("obsidian:copy.md#owner-card", "- INSTRUCTION: 규칙")])
+    store = _Store([[_row("wiki:a.md#c0", "가" * 3000), _row("wiki:b.md#c0", "나" * 3000)]])
+
+    chosen = pick.choose("규칙", store, lambda _p: '{"ids": ["c002", "c003", "c001"]}', pinned=[card])
+
+    assert [key for key, _rows in chosen] == ["obsidian:copy.md#owner-card", "wiki:a.md", "wiki:b.md"]
+    assert pick.attached_rows(chosen)[0]["content"] == "- INSTRUCTION: 규칙"
+
+
+def test_a_pinned_card_alone_is_still_offered_but_not_when_excluded() -> None:
+    card = ("obsidian:copy.md#owner-card", [_row("obsidian:copy.md#owner-card", "카드")])
+    calls: list[str] = []
+
+    def complete(prompt: str) -> str:
+        calls.append(prompt)
+        return '{"ids": ["c001"]}'
+
+    assert pick.choose("질문", _Store([[]]), complete, pinned=[card]) == [card]
+    assert pick.choose("질문", _Store([[]]), complete, exclude={card[0]}, pinned=[card]) == []
+    assert len(calls) == 1
 
 
 def test_a_search_request_with_no_searches_left_attaches_nothing() -> None:
@@ -120,11 +156,16 @@ def test_a_search_request_with_no_searches_left_attaches_nothing() -> None:
     assert len(calls) == pick.MAX_SEARCHES
 
 
-@pytest.mark.parametrize("confirm", ['{"ids": []}', "모르겠다"])
-def test_an_empty_or_garbled_confirm_attaches_nothing(confirm: str) -> None:
-    answers = iter(['{"ids": ["c001"]}', confirm])
+@pytest.mark.parametrize("answer", ['{"ids": []}', "모르겠다"])
+def test_an_empty_or_garbled_answer_attaches_nothing(answer: str) -> None:
+    assert pick.choose("질문", _Store([[_row("wiki:a.md")]]), lambda _p: answer) == []
 
-    assert pick.choose("질문", _Store([[_row("wiki:a.md")]]), lambda _p: next(answers)) == []
+
+def test_at_most_four_notes_are_kept() -> None:
+    store = _Store([[_row(f"wiki:{n}.md") for n in range(6)]])
+    answer = '{"ids": ["c001", "c002", "c003", "c004", "c005"]}'
+
+    assert len(pick.choose("질문", store, lambda _p: answer)) == pick.MAX_PICKS
 
 
 def test_an_empty_store_never_calls_the_model() -> None:
@@ -154,14 +195,13 @@ class _Client:
         return [_row("wiki:a.md#c0", "A")]
 
 
-def test_the_facade_asks_for_sixty_notes_two_passages_and_the_exclusions(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_facade_asks_for_thirty_notes_two_passages_and_the_exclusions(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _Client()
     monkeypatch.setattr("automation.knowledge.adapters.rag.memory_client", lambda _env: client)
-    answers = iter(['{"ids": ["c001"]}', '{"ids": ["c001"]}'])
 
-    pack = pick.pick_evidence(QUERY, lambda _p: next(answers), env={}, exclude={"wiki:z.md", "obsidian:y.md"})
+    pack = pick.pick_evidence(QUERY, lambda _p: '{"ids": ["c001"]}', env={}, exclude={"wiki:z.md", "obsidian:y.md"})
 
-    assert client.calls == [{"query": QUERY.text, "limit": 60, "one_per_note": True, "per_note": 2,
+    assert client.calls == [{"query": QUERY.text, "limit": 30, "one_per_note": True, "per_note": 2,
                              "exclude_notes": ["obsidian:y.md", "wiki:z.md"]}]
     assert pack.verdict == "hit"
     assert [item.content for item in pack.items] == ["A"]

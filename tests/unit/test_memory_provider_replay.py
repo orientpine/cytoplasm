@@ -119,10 +119,10 @@ def test_user_turn_recalls_fact_or_returns_empty_at_deadline(
         assert payload["notes"][0]["source"] == "obsidian:reference/배양기-점검.md"
     assert len(queries) == 1
     assert calls[0]["one_per_note"] is True
-    assert calls[0]["limit"] == 60
+    assert calls[0]["limit"] == 30
     assert calls[0]["per_note"] == 2
     assert calls[0]["exclude_notes"] == [relocated_key]
     if not stall:
-        assert len(prompts) == 2
+        assert len(prompts) == 1
         assert "[c001] obsidian:reference/배양기-점검.md" in prompts[0]
-        assert "청록 점검표" in prompts[1]
+        assert "청록 점검표" in prompts[0]

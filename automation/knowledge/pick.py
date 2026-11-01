@@ -1,11 +1,12 @@
-"""Whole-store recall pick: up to three searches, a shortlist, then a full-text confirm.
+"""Whole-store recall pick: up to three searches, then one model call that picks.
 
-Owner Q170 (2026-10-15): "다 보류하고 고르는 판단 한 번 더(새 세트 H로)". Each search keeps the
-first 60 new notes with their two best passages. The model shortlists from 300-character windows
-cut where the owner's words (and its own search lines) are rarest among the candidates, then
-reads the shortlisted notes in full and keeps the ones that state the needed fact. Tuned on
-evaluation set T only, judged once on sealed set H (found 59/69, wrong-only 3/69, unrelated empty
-45/45). The caller supplies the model call and the search, so this module never names a model.
+Each search keeps the first 30 new notes with their two best passages, shown as 240-character
+windows cut where the owner's words (and the model's own search lines) are rarest among the
+candidates. Pinned groups (the owner card, owner Q433) come first and are shown in full. One
+model call per search either asks for another search or returns the notes that state the fact.
+Owner Q433 (2026-11-01) asked for a smaller selector input: the earlier shortlist-then-confirm
+pair sent 35-65 KB and made two relay calls of 4-13 s each per recall. The caller supplies the
+model call and the search, so this module never names a model.
 """
 
 from __future__ import annotations
@@ -22,16 +23,15 @@ from typing import Any, Final
 from automation.knowledge.pack import EvidencePack, KnowledgeQuery
 from automation.knowledge.rank import item_from_rag
 
-CANDIDATE_NOTES: Final = 60
+CANDIDATE_NOTES: Final = 30
 PASSAGES_PER_NOTE: Final = 2
-WINDOW_CHARS: Final = 300
+WINDOW_CHARS: Final = 240
+PINNED_CHARS: Final = 3000
 MAX_SEARCHES: Final = 3
-SHORTLIST: Final = 8
 MAX_PICKS: Final = 4
 ATTACH_CHARS: Final = 4000
 _PROMPTS: Final = Path(__file__).resolve().parents[2] / "prompts"
-SHORTLIST_PROMPT: Final = _PROMPTS / "memory-pick-v2-shortlist.md"
-CONFIRM_PROMPT: Final = _PROMPTS / "memory-confirm-v1.md"
+PICK_PROMPT: Final = _PROMPTS / "memory-pick-v3.md"
 _OBJECT: Final = re.compile(r"\{.*\}", re.S)
 _CANDIDATE_ID: Final = re.compile(r"c(\d{3})")
 _CHUNK_SUFFIX: Final = re.compile(r"#c\d+$")
@@ -101,26 +101,21 @@ def window(text: str, query_words: set[str], weights: Mapping[str, float], width
     return ("…" if start else "") + body[start:start + width]
 
 
-def shortlist_prompt(message: str, groups: Sequence[Group], queries: Sequence[str], searches_left: int) -> str:
+def pick_prompt(message: str, pinned: Sequence[Group], groups: Sequence[Group], queries: Sequence[str],
+                searches_left: int) -> str:
     query_words = set().union(*(tokens(query) for query in queries)) if queries else set()
     weights = rarity(groups)
     blocks = [
+        f"[c{index:03d}] 소유자 카드\n" + "\n".join(str(row.get("content", "")) for row in rows)[:PINNED_CHARS]
+        for index, (_key, rows) in enumerate(pinned, 1)
+    ] + [
         f"[c{index:03d}] {key[:80]}\n" + "\n…\n".join(
             window(str(row.get("content", "")), query_words, weights) for row in rows[:PASSAGES_PER_NOTE])
-        for index, (key, rows) in enumerate(groups, 1)
+        for index, (key, rows) in enumerate(groups, len(pinned) + 1)
     ]
-    template = SHORTLIST_PROMPT.read_text(encoding="utf-8")
+    template = PICK_PROMPT.read_text(encoding="utf-8")
     return (template.replace("{LEFT}", str(searches_left)).replace("{MESSAGE}", message)
             .replace("{CANDIDATES}", "\n\n".join(blocks)))
-
-
-def confirm_prompt(message: str, groups: Sequence[Group]) -> str:
-    blocks = [
-        f"[c{index:03d}] {key[:80]}\n" + "\n…\n".join(clean(row.get("content", "")) for row in rows[:PASSAGES_PER_NOTE])
-        for index, (key, rows) in enumerate(groups, 1)
-    ]
-    template = CONFIRM_PROMPT.read_text(encoding="utf-8")
-    return template.replace("{MESSAGE}", message).replace("{CANDIDATES}", "\n\n".join(blocks))
 
 
 def parse_answer(answer: str, count: int, cap: int) -> tuple[str, Any]:
@@ -149,13 +144,16 @@ def parse_answer(answer: str, count: int, cap: int) -> tuple[str, Any]:
     return ("ids", picked)
 
 
-def choose(text: str, search: Search, complete: Complete, exclude: Collection[str] = frozenset()) -> list[Group]:
+def choose(text: str, search: Search, complete: Complete, exclude: Collection[str] = frozenset(),
+           pinned: Sequence[Group] = ()) -> list[Group]:
+    pinned = [(key, rows) for key, rows in pinned if key not in exclude and rows]
     groups = group(search(text, exclude), exclude)
     queries = [text]
     searches = 1
-    while groups:
-        kind, value = parse_answer(complete(shortlist_prompt(text, groups, queries, MAX_SEARCHES - searches)),
-                                   len(groups), SHORTLIST)
+    while groups or pinned:
+        candidates = [*pinned, *groups]
+        kind, value = parse_answer(complete(pick_prompt(text, pinned, groups, queries, MAX_SEARCHES - searches)),
+                                   len(candidates), MAX_PICKS)
         if kind == "search" and searches < MAX_SEARCHES:
             seen = {key for key, _rows in groups}
             more_exclude = {*exclude, *seen}
@@ -163,11 +161,10 @@ def choose(text: str, search: Search, complete: Complete, exclude: Collection[st
             queries.append(value)
             searches += 1
             continue
-        shortlisted = [groups[position] for position in value] if kind == "ids" else []
-        if not shortlisted:
+        if kind != "ids":
             return []
-        kind, value = parse_answer(complete(confirm_prompt(text, shortlisted)), len(shortlisted), MAX_PICKS)
-        return [shortlisted[position] for position in value] if kind == "ids" else []
+        # A picked pinned card leads, so the attach budget never cuts it behind long notes.
+        return sorted((candidates[position] for position in value), key=lambda chosen: chosen not in pinned)
     return []
 
 

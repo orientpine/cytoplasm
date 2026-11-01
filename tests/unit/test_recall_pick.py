@@ -58,18 +58,38 @@ def test_the_pick_can_be_turned_off() -> None:
 
 
 def test_the_agent_call_searches_the_whole_store_two_passages_per_note_and_keeps_the_pick(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    _model(monkeypatch, '{"ids": ["c002"]}', '{"ids": ["c001"]}')
+    _model(monkeypatch, '{"ids": ["c002"]}')
     client = _Client()
-    pick = recall_pick.picker({})
+    pick = recall_pick.picker({"HOME": str(tmp_path)})
     assert pick is not None
 
     rows, picked = pick(client, "질문", 5, _OldServerError)
 
     assert picked is True
     assert [row["source"] for row in rows] == ["wiki:b.md"]
-    assert client.calls == [(60, True, 2)]
+    assert client.calls == [(30, True, 2)]
+
+
+def test_the_owner_card_from_the_memory_copy_is_offered_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from automation.knowledge import owner_card
+
+    note = tmp_path / owner_card.MIRROR / owner_card.RELPATH
+    note.parent.mkdir(parents=True)
+    note.write_text("# 사본\n\n## system/ 카드 줄\n\n### human.md\n\n- ATTRIBUTE: 직급 값\n\n## notes/facts/\n\n다른 사실\n",
+                    encoding="utf-8")
+    _model(monkeypatch, '{"ids": ["c001"]}')
+    pick = recall_pick.picker({"HOME": str(tmp_path)})
+    assert pick is not None
+
+    rows, picked = pick(_Client(), "직급이 뭐야", 5, _OldServerError)
+
+    assert picked is True
+    assert [row["source"] for row in rows] == [owner_card.KEY]
+    assert rows[0]["content"] == "### human.md\n\n- ATTRIBUTE: 직급 값"
 
 
 @pytest.mark.parametrize("failure", ["model", "old-server"])
@@ -84,6 +104,16 @@ def test_a_failed_pick_falls_back_to_the_plain_search(monkeypatch: pytest.Monkey
     assert picked is False
     assert client.calls[-1] == (5, False, 1)
     assert len(rows) == 2
+
+
+def test_a_picked_row_shows_its_whole_attached_text_but_a_plain_hit_stays_cut() -> None:
+    long = {**_row("wiki:a.md", 0.9), "content": "앞" * 500 + " 직급 값"}
+
+    picked = recall_core.build_response("직급", [long], picked=True)
+    plain = recall_core.build_response("직급", [long])
+
+    assert picked["results"][0]["excerpt"].endswith("직급 값")
+    assert len(plain["results"][0]["excerpt"]) == recall_core.EXCERPT_CHARS
 
 
 def test_picked_rows_are_not_gated_by_score() -> None:

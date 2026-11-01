@@ -54,7 +54,7 @@ def attribution(source: str, metadata: dict[str, Any]) -> str:
     return f"출처: {source}"
 
 
-def _build_result(rank: int, row: dict[str, Any], grounded: bool) -> dict[str, Any]:
+def _build_result(rank: int, row: dict[str, Any], grounded: bool, excerpt_chars: int = EXCERPT_CHARS) -> dict[str, Any]:
     raw = row.get("metadata")
     metadata = raw if isinstance(raw, dict) else {}
     content = str(row.get("content", ""))
@@ -67,7 +67,7 @@ def _build_result(rank: int, row: dict[str, Any], grounded: bool) -> dict[str, A
         "source_type": str(metadata.get("source_type", "")),
         "attribution": attribution(source, metadata),
         "title": str(metadata.get("title", "")),
-        "excerpt": content[:EXCERPT_CHARS],
+        "excerpt": content[:excerpt_chars],
         "metadata": {key: metadata[key] for key in _METADATA_KEYS if key in metadata},
     }
 
@@ -100,7 +100,8 @@ def build_response(
         status, results, message = STATUS_UNAVAILABLE, [], UNAVAILABLE_MESSAGE
     else:
         results = (
-            [_build_result(rank, row, True) for rank, row in enumerate(rows[:limit], start=1)]
+            # A pick already cut its rows to the attach budget; a 200-char cut hid the owner card's facts (Q433).
+            [_build_result(rank, row, True, len(str(row.get("content", "")))) for rank, row in enumerate(rows[:limit], start=1)]
             if picked
             else classify(classification_query or query, rows, threshold, strong_threshold)
         )

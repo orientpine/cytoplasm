@@ -1,7 +1,9 @@
 """Node transport; the release-installed marker selects this route, never the host flag."""
 from __future__ import annotations
 
+import ctypes
 import json
+import signal
 import subprocess
 import tempfile
 import time
@@ -28,6 +30,14 @@ def argv(home: Path) -> list[str]:
             "-i", str(config.omo_relay_key), config.omo_relay_target]
 
 
+_PR_SET_PDEATHSIG = 1
+
+
+def _die_with_parent() -> None:
+    """Runs in the forked ssh child: a killed or cancelled caller takes its relay call down too."""
+    ctypes.CDLL(None, use_errno=True).prctl(_PR_SET_PDEATHSIG, signal.SIGTERM)
+
+
 def complete(home: str, prompt: str, timeout: float) -> Served:
     """Retry transport/overload once, preserving the public error and Served types."""
     from automation.codex_llm import CodexError, CodexUnavailableError, Served
@@ -46,7 +56,7 @@ def complete(home: str, prompt: str, timeout: float) -> Served:
         try:
             result = subprocess.run(
                 command, input=prompt, text=True, capture_output=True, check=False,
-                timeout=timeout, cwd=tempfile.gettempdir(),
+                timeout=timeout, cwd=tempfile.gettempdir(), preexec_fn=_die_with_parent,
                 env={"HOME": home, "PATH": f"{home}/.local/bin:/usr/bin:/bin"},
             )
         except (OSError, subprocess.TimeoutExpired):
