@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from triage_core import shown
+
 if TYPE_CHECKING:
     from automation.interop.owner_message import OwnerMessage
 
@@ -26,7 +28,7 @@ def result_message(draft: dict[str, str], content: str, outcome: str) -> OwnerMe
         case _:
             return None  # outcome은 개방형 문자열이며 중간 통지는 종결이 아니다.
     return OwnerMessage(
-        subject_key=draft["id"], subject=draft["subject"], fact=content,
+        subject_key=draft["id"], subject=shown(draft, "subject"), fact=content,
         location=approval_location(draft, search=("Discord 검색", draft["id"])),
         owner=Action(verb="none"), agent_next=None, recovery=recovery, detail=detail,
     )

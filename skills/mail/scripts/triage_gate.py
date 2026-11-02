@@ -183,8 +183,15 @@ def create_draft(
     return record
 
 
-def create_gmail_draft(snapshot: gmail_approval_gate.GmailApprovalSnapshot) -> dict:
-    """Persist a canonical Gmail action for the existing mail approval lifecycle."""
+def create_gmail_draft(
+    snapshot: gmail_approval_gate.GmailApprovalSnapshot, *,
+    origin_channel_id: str = "", origin_message_id: str = "", reply_inherit: dict | None = None,
+) -> dict:
+    """Persist a canonical Gmail action for the existing mail approval lifecycle.
+
+    ``reply_inherit`` (a ``+reply``'s recipient and subject read from the original) is
+    bound into the draft hash; the origin pair stays outside it, as on every mail draft.
+    """
     import gmail_approval_gate
 
     directory = _public_drafts_dir()
@@ -194,6 +201,11 @@ def create_gmail_draft(snapshot: gmail_approval_gate.GmailApprovalSnapshot) -> d
     record = gmail_approval_gate.approval_draft(
         snapshot, draft_id=draft_id, created_at=triage_core.utc_now()
     )
+    if origin_channel_id or origin_message_id:
+        record.update(origin_channel_id=origin_channel_id, origin_message_id=origin_message_id)
+    if reply_inherit is not None:
+        record["reply_inherit"] = reply_inherit
+        record["sha256"] = triage_core.draft_sha256(record)
     write_json(directory / f"{draft_id}.json", record)
     return record
 

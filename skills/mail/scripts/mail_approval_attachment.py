@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from mail_quote import with_quote
+from triage_core import shown
 
 if TYPE_CHECKING:
     from automation.entity_preflight.contracts import JsonValue
@@ -68,8 +69,8 @@ def summary(draft: Mapping[str, JsonValue], instruction: str) -> str:
     metadata = body_attachment(draft).metadata
     return "\n".join((
         "[mail-triage] 발송 승인 요청 (SUMMARY)",
-        f"- 제목: {draft['subject']}",
-        f"- To: {draft['to']}",
+        f"- 제목: {shown(draft, 'subject')}",
+        f"- To: {shown(draft, 'to')}",
         f"- Cc: {draft.get('cc') or '-'}",
         f"- draft: `{draft['id']}` sha256: `{draft['sha256']}`",
         f"- body sha256: `{metadata['sha256']}`",
@@ -80,14 +81,14 @@ def summary(draft: Mapping[str, JsonValue], instruction: str) -> str:
 
 
 def _summary_v4(draft: Mapping[str, JsonValue], instruction: str, *, share: bool = False) -> str:
-    recipients = f"- To: {draft['to']}\n- Cc: {draft.get('cc') or '-'}"
+    recipients = f"- To: {shown(draft, 'to')}\n- Cc: {draft.get('cc') or '-'}"
     if draft.get("bcc"):
         from mail_bcc import summary as bcc_summary
 
         recipients = bcc_summary(str(draft["to"]), str(draft.get("cc") or ""),
                                  tuple(str(address) for address in draft["bcc"]))
     size = body_attachment(draft).metadata["size"]
-    lines = ["📨 **메일 발송 승인**", f"- 제목: {draft['subject']}", recipients,
+    lines = ["📨 **메일 발송 승인**", f"- 제목: {shown(draft, 'subject')}", recipients,
              f"- 본문: 첨부 파일 참조 ({size} bytes)"]
     spec = draft.get("drive_share")
     if share:  # v5: the long-body card showed neither the attachments nor the share
@@ -112,7 +113,7 @@ def _summary_v3(draft: Mapping[str, JsonValue], instruction: str) -> str:
         raise CardRenderError("mail attachment envelope unavailable")
     metadata = body_attachment(draft).metadata
     here = om.Ref("self")
-    recipients = f"To: {draft['to']}\nCc: {draft.get('cc') or '-'}"
+    recipients = f"To: {shown(draft, 'to')}\nCc: {draft.get('cc') or '-'}"
     if draft.get("bcc"):
         from mail_bcc import summary as bcc_summary
 
@@ -120,7 +121,7 @@ def _summary_v3(draft: Mapping[str, JsonValue], instruction: str) -> str:
                                  tuple(str(address) for address in draft["bcc"]))
     message = om.OwnerMessage(
         subject_key=str(draft["id"]), subject="메일 발송 승인",
-        fact=(f"제목: {draft['subject']}\n{recipients}\n"
+        fact=(f"제목: {shown(draft, 'subject')}\n{recipients}\n"
               f"본문: 첨부 파일 참조 ({metadata['size']} bytes)"),
         location=here, owner=om.Action("react", here, instruction),
         agent_next="승인된 메일만 발송", recovery="irreversible",

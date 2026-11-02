@@ -67,7 +67,7 @@ Gmail 읽기(`gmail-list`, `gmail-get`)와
 
 | SSH 명령 | 고정 생산자 argv (`P` 뒤) | 허용 입력 |
 |---|---|---|
-| `mail-compose` | `S/mail/scripts/triage_cli.py compose` | 필수 `--to`(새 메일은 `--subject --body` 도 — compose 가 판정), 선택 `--cc --bcc`(반복 가능) `--bcc-file --bcc-column --attachment`(반복, 올린 파일) `--in-reply-to`, 전달 `--forward <uid>`·`--forward-gmail <hex id>`(셋 중 하나), Drive 공유 링크 `--drive-share <올린 파일> --share-with <주소>`(반복) `--drive-folder` |
+| `mail-compose` | `S/mail/scripts/triage_cli.py compose` | 필수 `--to`(새 메일은 `--subject --body` 도 — compose 가 판정), 선택 `--cc --bcc`(반복 가능) `--bcc-file --bcc-column --attachment`(반복, 올린 파일) `--in-reply-to`, 전달 `--forward <uid>`·`--forward-gmail <hex id>`(셋 중 하나), Gmail 답장 `--reply-gmail <hex id>`(`--to` 없이 `--body`·`--cc` 만, [소개](유돌-Gmail-답장.md)), Drive 공유 링크 `--drive-share <올린 파일> --share-with <주소>`(반복) `--drive-folder` |
 | `mail-draft <회신 키>` | `S/mail/scripts/triage_cli.py reply-request --key <키> --author-id <설정 owner_id>` → 기존 `cmd_draft` | 필수 `--instruction-b64`, 원 지시 좌표; 키는 숫자 4-4-1~3자리, 디코딩한 지시문 최대 2,000자 |
 | `calendar-request` | `S/calendar/scripts/calendar_cli.py draft-create`, 성공 시 같은 CLI `post-confirm --draft <반환 id>` | 필수 `--text`, 선택 `--summary` |
 | `todo-request` | `S/todo/scripts/todo_cli.py request` | 필수 `--title`, 선택 `--notes --due`; tasklist는 기본 `@default` |

@@ -27,6 +27,17 @@ def render_approvals_message(
             f"- 제목: `{draft['subject']}`",
             "- 본문:", "```", draft["body"], "```",
         ]
+    elif draft.get("provider") == "gmail" and isinstance(draft.get("reply_inherit"), dict):
+        inherit = draft["reply_inherit"]
+        lines = ["[mail-triage] Gmail 답장 발송 승인 요청 (DM 확정)",
+                 f"- 받는 사람: `{inherit['to']}` (원메일에서 이어받음)"]
+        if draft.get("cc"):
+            lines.append(f"- Cc: `{draft['cc']}`")
+        lines.extend([
+            f"- 제목: `{inherit['subject']}`",
+            "- 본문:", "```", draft["body"], "```",
+            "- 원문 인용: Gmail 이 원메일을 답장 아래에 붙여 같은 대화로 보냅니다",
+        ])
     elif draft.get("provider") == "gmail":
         lines = [
             "[mail-triage] Gmail 발송 승인 요청 (DM 확정)",

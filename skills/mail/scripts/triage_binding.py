@@ -10,6 +10,7 @@ from types import ModuleType
 from typing import Protocol
 
 import triage_confirm
+import triage_core
 import triage_gate
 
 
@@ -97,7 +98,7 @@ def request_thread(draft: dict) -> object:
     """
     surface_module = _repo_module("approval_surface")
     return surface_module.RequestThread(
-        title=str(draft.get("subject") or ""),
+        title=triage_core.shown(draft, "subject"),
         origin_channel_id=str(draft.get("origin_channel_id") or ""),
         origin_message_id=str(draft.get("origin_message_id") or ""),
     )
