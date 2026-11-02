@@ -65,7 +65,7 @@ class Board:
         return OrderStore(self.root / ORDERS_FILE)
 
     def gate_token(self) -> str:
-        """The node gate's own key for ``/api/orders`` (``orders-gate.token``, 0600 in the private root)."""
+        """The node gate's key for orders and todos (``orders-gate.token``, 0600 in the private root)."""
         path = self.root / "orders-gate.token"
         try:
             value = path.read_text(encoding="utf-8").strip()

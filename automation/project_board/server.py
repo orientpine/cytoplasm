@@ -24,9 +24,11 @@ tailnet host and the configured origin goes stale (2026-10-21: every save was re
 from __future__ import annotations
 
 import gzip
+import hashlib
 import hmac
 import json
 import logging
+import re
 import subprocess
 import threading
 from collections.abc import Callable, Mapping
@@ -60,6 +62,7 @@ _MAX_BODY: Final = 4096
 # an order is up to 1000 characters; percent-encoded Hangul takes 9 bytes each
 _MAX_ORDER_BODY: Final = 16384
 GATE_HEADER: Final = "X-PB-Gate-Token"
+_TODO_ID: Final = re.compile(r"pb-[0-9a-f]{12}-[1-9][0-9]{0,3}")
 # opened from the dashboard: go back to that very screen and say its name; opened directly: the plain link
 _BACK_JS: Final = (
     "<script>(function(){var a=document.querySelector('[data-back]'),n='';"
@@ -90,6 +93,7 @@ class _Handler(BaseHTTPRequestHandler):
     orders: OrderStore | None = None
     order_receiver: str = ""
     gate_token: str = ""
+    card_of: Callable[[str], tuple[str, str] | None]
     owner_devices: Mapping[str, str] = MappingProxyType({})
     peer_uid: Callable[[int, int], int | None]
     whois: Callable[[str], tuple[str, str] | None]
@@ -167,6 +171,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._text(403, "forbidden")
             return
         valid = len(parts) == 3 if method == "GET" else len(parts) == 4 and parts[3] == "use"
+        if valid and parts[1] == "todos" and self.orders is not None:
+            self._todo_api(method, parts[2])
+            return
         if not valid or parts[1] != "orders" or not parts[2].isdigit() or self.orders is None:
             self._text(404, "not found")
             return
@@ -184,6 +191,30 @@ class _Handler(BaseHTTPRequestHandler):
             "todo_id": order.todo_id, "project": order.project, "uses": order.uses,
             "first_used_at": order.first_used_at, "device": order.device_id, "device_name": order.device_name,
             "device_ip": order.device_ip,
+        }, ensure_ascii=False)
+        self._send(200, body.encode("utf-8"), "application/json; charset=utf-8")
+
+    def _todo_api(self, method: str, todo_id: str) -> None:
+        if not _TODO_ID.fullmatch(todo_id):
+            self._text(404, "not found")
+            return
+        evidence = self.store.todo_evidence(todo_id)
+        if evidence is None or self.orders is None:
+            self._text(404, "not found")
+            return
+        todo, message_id = evidence
+        binding = self.card_of(todo.proposal_id)
+        card = None
+        if binding is not None and binding[0] and binding[1] and binding[1] == message_id:
+            card = {"channel_id": binding[0], "message_id": binding[1]}
+        uses, first_used_at = (
+            self.orders.record_todo_use(todo_id) if method == "POST" else self.orders.todo_usage(todo_id)
+        )
+        body = json.dumps({
+            "todo_id": todo.todo_id, "proposal_id": todo.proposal_id, "project": todo.project,
+            "status": todo.status, "approved_at": todo.approved_at, "auto_applied": not message_id,
+            "card": card, "title_sha256": hashlib.sha256(todo.title.encode("utf-8")).hexdigest(),
+            "uses": uses, "first_used_at": first_used_at,
         }, ensure_ascii=False)
         self._send(200, body.encode("utf-8"), "application/json; charset=utf-8")
 
@@ -482,6 +513,7 @@ def make_server(
     orders: OrderStore | None = None,
     order_receiver: str = "",
     gate_token: str = "",
+    card_of: Callable[[str], tuple[str, str] | None] = lambda _proposal_id: None,
     owner_devices: tuple[tuple[str, str], ...] = (),
     peer_uid: Callable[[int, int], int | None] = loopback_peer_uid,
     whois: Callable[[str], tuple[str, str] | None] = tailscale_whois,
@@ -511,6 +543,7 @@ def make_server(
             "orders": orders,
             "order_receiver": order_receiver,
             "gate_token": gate_token if len(gate_token) >= MIN_TOKEN else "",
+            "card_of": staticmethod(card_of),
             "owner_devices": MappingProxyType(dict(owner_devices)),
             "peer_uid": staticmethod(peer_uid),
             "whois": staticmethod(whois),
