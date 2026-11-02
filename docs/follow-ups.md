@@ -470,3 +470,8 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 - **중계가 바쁘면 recall 도 30초 쉬고 한 번 더 부른다** — `omo_relay.client.complete` 는 배치 작업을 위해 rc 75·429·접속 실패에 30초 뒤 한 번 재시도하는데, 유돌이 기다리는 recall 도 같은 경로라 두 자리가 다 차 있으면 한 번에 30초 넘게 걸린다 → recall 쪽 호출은 재시도 없이 바로 예전 검색(점수 문턱)으로 떨어지게 하거나 대기 시간을 호출자가 정하게 한다. 영향: 바쁜 때 유돌 recall 시간 초과 · 심각도 중.
 - **모델 호출 하나가 가끔 45~149초 걸려 recall 이 게이트 150초에 끊긴다** — v2.7.16 배포 뒤 유돌 `node-read recall` 22번 중 2번이 `YOODORI-GATE-TIMEOUT recall after 150s` 였다. 같은 때 작은 입력은 4~5초, 같은 질문이 배포 전엔 5.5초라 입력 크기·자리 다툼이 아니라 호출별 모델 지연이다(끊긴 호출은 중계에서 rc 130 으로 멈춤 확인) → recall 쪽 모델 호출에만 짧은 상한(예: 60초)을 두고 넘으면 예전 검색(점수 문턱)으로 답하게 한다. 영향: 유돌 recall-watch 120초 안에 답 못 하는 경우 · 심각도 중.
 - **recall 품질 숫자가 같은 10문항으로 고치고 다시 잰 값이다** — 형 카드 순서 고침(q08)은 그 10문항에서 찾은 결함이라 맞춤 위험이 있다 → 형 기억에서 새로 뽑은 봉인 질문 세트로 한 번 재서 일반 성능을 확인한다. 영향: 실제 맞힘률 과대 추정 가능 · 심각도 낮음.
+
+## Drive PLAUD 폴더 이동에서 남긴 것 (2026-11-02)
+
+- **`test_deploy_tree_swap` 의 between_switch 두 건은 호출자 env 의 `PYTHONPYCACHEPREFIX` 를 지우지 않는다** — 그 변수가 잡힌 셸(에이전트 세션 등)에서 `local_ci.sh run` 을 돌리면 자식 python 이 `__pycache__` 를 모듈 옆에 만들지 않아 항상 실패한다(변수를 빼면 통과) → 시험이 자식 env 에서 `PYTHONPYCACHEPREFIX`·`PYTHONDONTWRITEBYTECODE` 를 빼고 부른다. 영향: 영수증 없이 local_ci 재실행 · 심각도 낮음.
+- **`test_recall_cancel::test_relay_ssh_child_dies_with_its_caller` 가 부하가 높을 때 이미 끝난 pid 를 읽다 `ProcessLookupError` 로 실패한다** — load 13 아래 전체 실행에서 1회 실패, 단독 5/5 통과 → 끝난 프로세스를 '죽었음'으로 읽도록 그 예외를 성공 신호로 다룬다. 영향: local_ci 일시 실패 · 심각도 낮음.
