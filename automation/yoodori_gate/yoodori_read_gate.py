@@ -70,7 +70,8 @@ _REPEATABLE = {"mail-compose": frozenset({"--cc", "--bcc", "--share-with", "--at
 _FLAGS = {
     "mail-compose": {"--to": "email", "--cc": "email", "--bcc": "email",
                      "--subject": "short", "--body": "body", "--in-reply-to": "id",
-                     "--forward": "id", "--forward-gmail": "short", "--attachment": "file",
+                     "--forward": "id", "--forward-gmail": "short", "--reply-gmail": "short",
+                     "--attachment": "file",
                      "--bcc-file": "file", "--bcc-column": "short",
                      "--drive-share": "file", "--share-with": "email", "--drive-folder": "short",
                      "--drive-name": "short"},
@@ -234,8 +235,8 @@ def _card(name: str, args: list[str]) -> tuple[str, list[str], Path]:
         if flag != decoded and kind not in {"body", "text", "short"}:
             raise Refused("encoding only supported for text")
         value = _value(_decode(raw) if flag != decoded else raw, kind)
-        if decoded == "--forward-gmail" and not _GMAIL_ID.fullmatch(value):
-            raise Refused("--forward-gmail needs a hex Gmail message id")
+        if decoded in ("--forward-gmail", "--reply-gmail") and not _GMAIL_ID.fullmatch(value):
+            raise Refused(f"{decoded} needs a hex Gmail message id")
         if decoded in values:
             repeats.append((decoded, value))
             continue
@@ -244,8 +245,13 @@ def _card(name: str, args: list[str]) -> tuple[str, list[str], Path]:
             len(values[decoded]) > 2000 or _SHELL.search(values[decoded])
         ):
             raise Refused("instruction exceeds 2000 characters or contains shell characters")
-    if any(flag not in values for flag in (*_REQUIRED[name], *_ORIGIN)):
+    # A Gmail reply goes to the original's sender under its subject (gws +reply), so no --to.
+    gmail_reply = name == "mail-compose" and "--reply-gmail" in values
+    required = ("--body",) if gmail_reply else _REQUIRED[name]
+    if any(flag not in values for flag in (*required, *_ORIGIN)):
         raise Refused("missing required request flag or owner message coordinates")
+    if gmail_reply and set(values) - {"--reply-gmail", "--body", "--cc", *_ORIGIN}:
+        raise Refused("--reply-gmail takes only --body and --cc (recipient and subject come from the original)")
     if name == "obsidian-request" and sum(flag in values for flag in ("--body", "--body-file")) != 1:
         raise Refused("choose exactly one of --body-file or --body-b64")
     if name == "mail-compose" and sum(f in values for f in ("--forward", "--forward-gmail", "--in-reply-to")) > 1:

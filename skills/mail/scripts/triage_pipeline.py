@@ -92,6 +92,30 @@ def compose_and_post(
     return draft
 
 
+def gmail_reply_and_post(
+    action: object, inherit: dict[str, str], *, post: bool,
+    origin_channel_id: str = "", origin_message_id: str = "",
+) -> dict:
+    """A Gmail ``+reply`` takes the existing Gmail draft and the same card, ✅ and watch."""
+    import gmail_approval_gate
+
+    draft = triage_gate.create_gmail_draft(
+        gmail_approval_gate.build_approval_snapshot(action),
+        origin_channel_id=origin_channel_id, origin_message_id=origin_message_id,
+        reply_inherit=inherit,
+    )
+    if not post:
+        print(triage_core.render_approvals_message(
+            draft, destination=triage_core.ApprovalRenderDestination.CONSOLE))
+        return draft
+    _post_draft_for_approval(draft)
+    draft = triage_gate.load_draft(draft["id"])
+    import triage_supersede
+
+    triage_supersede.supersede_older(draft)
+    return draft
+
+
 def _draft_and_post(
     detail: dict, cls, *, post: bool, instruction: str = "",
     attachments: tuple[str, ...] = (), evidence_pack: object | None = None,

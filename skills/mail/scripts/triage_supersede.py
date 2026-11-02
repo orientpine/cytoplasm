@@ -27,12 +27,17 @@ SHARE_MOVED_NOTICE = "⛔ 드라이브 공유 폴더가 바뀌어 닫은 카드 
 ARCHIVED_THREAD = 50083
 
 
+def _composed(record: dict) -> bool:
+    """A card someone wrote on request: a new mail or a Gmail reply (kind ``reply``, no digest)."""
+    return record.get("kind") == "compose" or isinstance(record.get("reply_inherit"), dict)
+
+
 def _same_request(old: dict, new: dict) -> bool:
     # A thread's first draft comes from the parent-channel message that opened the thread, and a
     # Discord thread's id is that message's id (2026-10-19: af9375 was never closed for this).
     thread = new.get("approval_thread_id")
     return (
-        old.get("id") != new.get("id") and old.get("kind") == "compose" and old.get("status") == "pending"
+        old.get("id") != new.get("id") and _composed(old) and old.get("status") == "pending"
         and bool(thread) and old.get("approval_thread_id") == thread
         and thread in (old.get("origin_channel_id"), old.get("origin_message_id"))
     )
@@ -40,7 +45,7 @@ def _same_request(old: dict, new: dict) -> bool:
 
 def supersede_older(draft: dict) -> list[str]:
     thread = draft.get("approval_thread_id")
-    if draft.get("kind") != "compose" or not thread or draft.get("origin_channel_id") != thread:
+    if not _composed(draft) or not thread or draft.get("origin_channel_id") != thread:
         return []
     closed = []
     for record in triage_gate.list_drafts():

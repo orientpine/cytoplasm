@@ -1,7 +1,7 @@
 ---
 name: mail
 description: "메일을 읽거나 찾거나 회신·작성·전달·발송하라고 할 때 사용. 기관메일(mailon.kr) 스킬. 메일 작성·발송 지시에서 수신자가 이메일 주소가 아니라 사람 이름이면(예: '홍길동 박사님께 메일') 반드시 먼저 resolve로 이름→이메일 해석(기관 웹메일 자동완성 기반, READ-ONLY) — 메일함 검색만으로 포기하거나 주소를 추측·유추하는 것은 금지. 읽기: list/get/classify/status/resolve 래퍼(W4-1, READ-ONLY). 파이프라인(W4-2): 수신메일 중요도·업무 분류(계정 모델 체인)→다이제스트(08:00 KST)→소유자 지시 기반 회신 초안(Codex OAuth)→현재 승인 표면의 소유자 게이트→mailon 발송→approvals.jsonl. 새 메일 작성(compose)도 동일 watch·해시 바인딩 게이트를 경유한다. 발송은 반드시 승인 게이트 경유 — 직접 send 금지. 회신은 승인 메시지 한 건에 전문과 sha256을 함께 표시한다. 승인 표면은 `approval_surface.py` 정책과 draft의 저장된 바인딩으로 결정되며, 폐지 표면의 미결정 초안은 승인 없이 만료된다. 회신·후속메일은 메일 클라이언트의 회신처럼 원문(헤더+본문)을 발송 본문 하단에 인용한다(draft 기본, --reply-all 로 전체회신, compose --in-reply-to <uid> 로 후속메일). 전달(FW·포워드·'Gmail로 보내줘')은 compose --forward <uid>(기관메일) / --forward-gmail <message-id>(Gmail) — 원문 인용 + 원 첨부 바이트 그대로, 같은 승인 카드."
-version: 1.22.1
+version: 1.23.0
 author: autophagy-agents
 license: MIT
 platforms: [linux]
@@ -423,6 +423,23 @@ MailOn 첨부파일은 Google Drive `<산출물 루트>/메일 첨부파일/<연
 - 답장은 원본 스레드 계정을 상속한다. Gmail 스레드는 Gmail으로, KIMM 스레드는 KIMM으로
   유지한다. 소유자가 명시한 계정만 이 상속보다 우선한다.
 - KIMM은 기존 MailOn argv를 그대로 사용한다. Gmail 전용 `gws` 경로와 혼용하지 않는다.
+
+### Gmail 답장 카드
+
+Gmail 로 온 메일에 Gmail 계정으로 답할 때는 그 메시지 id 로 답장 카드를 올린다. 받는 사람(원메일의
+Reply-To, 없으면 보낸 사람)과 제목(`Re: <원 제목>`)은 원메일에서 이어받으므로 `--to`·`--subject` 를 주지
+않는다. 참조만 `--cc` 로 더한다. 숨은참조·첨부·Drive 공유·전달은 이 길에서 받지 않는다.
+
+```bash
+python3 /srv/autophagy-skills/live/mail/scripts/triage_cli.py compose --reply-gmail <message-id> \
+  --body "<답장 본문>" [--cc <주소>] --origin-channel-id <형 글 채널> --origin-message-id <형 글>
+```
+
+- 카드: `📨 Gmail 답장 발송 승인 요청` 아래 받는 사람·제목·본문, 그리고 Gmail 이 원메일을 답장 아래에 붙여 같은
+  대화로 보낸다는 줄. 게시 성공 시 `COMPOSED`·`GMAIL-REPLY draft=<id> account=gmail`·`APPROVAL-THREAD …` 줄이
+  나오고, 답장에 그 링크를 싣는다.
+- 형 ✅ 뒤 같은 watch 가 동결된 `gws gmail +reply --message-id <id> --body …` 를 한 번 실행한다. ⛔·무응답은 보내지 않는다.
+- 원메일을 Gmail 에서 읽지 못하면 `GATE-REFUSED REPLY-REFUSED reason=gmail-read-failed|no-sender`(exit 2), 초안을 남기지 않는다.
 
 ### 소유자 전용 승인 형식
 

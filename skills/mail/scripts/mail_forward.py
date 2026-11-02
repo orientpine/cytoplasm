@@ -163,6 +163,51 @@ def from_gmail(message_id: str, *, runner: Runner = subprocess.run) -> ForwardSo
     )
 
 
+class ReplyRefused(triage_gate.GateError):
+    """The Gmail original of a reply cannot be read; nothing was drafted (exit 2)."""
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(f"REPLY-REFUSED reason={reason} — {detail}", 2)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyTarget:
+    """Who a Gmail ``+reply`` answers and under which subject, read from the original.
+
+    gws picks both itself at send time from the same message (Reply-To, else From;
+    ``Re: `` once), so these are what the owner reads on the card, not send inputs.
+    """
+
+    message_id: str
+    to: str
+    subject: str
+
+    def record(self) -> dict[str, str]:
+        return {"source": "gmail", "message_id": self.message_id, "to": self.to, "subject": self.subject}
+
+
+def gmail_reply_target(message_id: str, *, runner: Runner = subprocess.run) -> ReplyTarget:
+    """Read the original's headers (read-only) so a Gmail reply card can name its recipient."""
+    try:
+        message = _gws_json(runner, "messages", {"userId": "me", "id": message_id, "format": "metadata"})
+    except ForwardRefused as error:
+        raise ReplyRefused("gmail-read-failed", "원메일을 Gmail 에서 읽지 못했습니다") from error
+    payload = message.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    headers = _headers(payload)
+    reply_to = ", ".join(  # gws joins every Reply-To header (RFC 5322 allows several)
+        str(header.get("value") or "").strip() for header in payload.get("headers") or []
+        if isinstance(header, dict) and str(header.get("name") or "").lower() == "reply-to"
+        and str(header.get("value") or "").strip())
+    to = (reply_to or headers.get("from") or "").strip()
+    if not to:
+        raise ReplyRefused("no-sender", "원메일에 보낸 사람(From/Reply-To)이 없습니다")
+    subject = headers.get("subject", "").strip()
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}".rstrip()
+    return ReplyTarget(message_id, to, subject)
+
+
 def _attachment_rows(db: Path, uid: str) -> dict[str, dict[str, object]]:
     if not db.is_file():
         raise ForwardRefused("state-db-missing", "기관메일 상태 DB가 없습니다")

@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -282,8 +283,22 @@ def draft_sha256(record: dict) -> str:
         bound["provider"] = "gmail"
         bound["reply_target"] = record["reply_target"]
         bound["sender_account"] = record["sender_account"]
+    if "reply_inherit" in record:  # a Gmail +reply's recipient/subject read from the original
+        bound["reply_inherit"] = record["reply_inherit"]
     canonical = json.dumps(bound, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def shown(draft: Mapping[str, object], field: str) -> str:
+    """The ``to``/``subject`` a person reads for this draft.
+
+    A Gmail ``+reply`` leaves both out of its argv (gws takes them from the original), so
+    its record keeps them empty and carries what the original said in ``reply_inherit``.
+    """
+    inherit = draft.get("reply_inherit")
+    if isinstance(inherit, Mapping) and isinstance(inherit.get(field), str):
+        return str(inherit[field])
+    return str(draft.get(field) or "")
 
 
 def render_approvals_message(

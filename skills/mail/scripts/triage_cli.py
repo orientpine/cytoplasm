@@ -130,7 +130,44 @@ def _forward_source(args: argparse.Namespace) -> mail_forward.ForwardSource | No
     return None
 
 
+def _compose_gmail_reply(args: argparse.Namespace) -> int:
+    """A reply in a Gmail thread from the Gmail account: recipient and subject come from the original."""
+    import mail_gmail_send
+
+    if triage_mode.effective_mode() == "no-go":
+        raise triage_gate.GateError("mail-mode=no-go — W4-2 파이프라인 비활성(W4-1N 분기)", 3)
+    given = {"--to": args.to, "--subject": args.subject, "--bcc": args.bcc or args.bcc_file,
+             "--attachment": args.attachment, "--drive-share": args.drive_share,
+             "--with-evidence": args.with_evidence, "--format-test": args.format_test}
+    extra = [flag for flag, value in given.items() if value]
+    if extra:
+        raise triage_gate.GateError(
+            f"--reply-gmail 은 {', '.join(extra)} 와 함께 쓰지 않습니다 — 받는 사람·제목은 원메일에서 이어받고, "
+            "참조는 --cc 로 넣습니다", 2)
+    if not (args.body or "").strip():
+        raise triage_gate.GateError("Gmail 답장에는 --body 가 필요합니다", 2)
+    target = mail_forward.gmail_reply_target(args.reply_gmail)
+    cc = ", ".join(args.cc or ())
+    action = mail_gmail_send.build_action(mail_gmail_send.ReplyMailRequest(
+        options=mail_gmail_send.DeliveryOptions(account="gmail", cc=cc or None),
+        reply_to_account="gmail", reply_message_id=target.message_id, body=args.body,
+    ))
+    draft = triage_pipeline.gmail_reply_and_post(
+        action, target.record(), post=not args.no_post,
+        origin_channel_id=str(args.origin_channel_id or ""),
+        origin_message_id=str(args.origin_message_id or ""),
+    )
+    print(f"COMPOSED draft={draft['id']} posted={int(bool(draft.get('message_id')))}")
+    print(f"GMAIL-REPLY draft={draft['id']} account=gmail")
+    _print_thread_line(draft)
+    return 0
+
+
 def cmd_compose(args: argparse.Namespace) -> int:
+    if getattr(args, "reply_gmail", ""):
+        return _compose_gmail_reply(args)
+    if not args.to:
+        raise triage_gate.GateError("새 메일·전달에는 --to 가 필요합니다 (Gmail 답장은 --reply-gmail)", 2)
     if getattr(args, "bcc_file", None) is not None and not args.bcc_file:
         raise triage_gate.GateError("BCC 입력 1행: 파일 경로가 필요합니다", 2)
     if getattr(args, "bcc_column", None) is not None and not getattr(args, "bcc_file", None):
@@ -379,7 +416,7 @@ def _notify_sent(draft: dict, method: str) -> None:
     try:
         triage_confirm.notify_result(
             draft,
-            f"✉️ 발송 완료: {draft['subject']} → {draft['to']} (draft {draft['id']})\n"
+            f"✉️ 발송 완료: {triage_core.shown(draft, 'subject')} → {triage_core.shown(draft, 'to')} (draft {draft['id']})\n"
             "소유자 ✅ 승인으로 발송되었습니다.",
             outcome=triage_confirm.SENT_OUTCOME,
         )
@@ -416,7 +453,7 @@ def _notify_cancelled(draft: dict) -> None:
     try:
         triage_confirm.notify_result(
             draft,
-            f"⛔ 발송 취소: {draft['subject']} → {draft['to']} (draft {draft['id']})\n"
+            f"⛔ 발송 취소: {triage_core.shown(draft, 'subject')} → {triage_core.shown(draft, 'to')} (draft {draft['id']})\n"
             "소유자 ⛔ 리액션으로 취소되어 메일은 발송되지 않았습니다.",
             outcome=triage_confirm.CANCELLED_OUTCOME,
         )
@@ -704,7 +741,7 @@ def build_parser() -> argparse.ArgumentParser:
     compose = sub.add_parser(
         "compose", help="새 메일 작성 초안 — 소유자 확정 게이트 (같은 watch cron 재사용)"
     )
-    compose.add_argument("--to", required=True)
+    compose.add_argument("--to", default="", help="새 메일·전달은 필수 — Gmail 답장(--reply-gmail)은 원메일에서 이어받아 쓰지 않는다")
     compose.add_argument("--bcc", action="append", default=[], metavar="ADDR",
                          help="숨은참조 주소 (반복·쉼표 구분 가능)")
     compose.add_argument("--bcc-file", default=None, metavar="PATH",
@@ -744,6 +781,10 @@ def build_parser() -> argparse.ArgumentParser:
     origin_mail.add_argument(
         "--forward-gmail", default="", metavar="MESSAGE_ID",
         help="전달(FW) — 이 Gmail 메시지의 원문을 인용하고 원 첨부를 바이트 그대로 첨부",
+    )
+    origin_mail.add_argument(
+        "--reply-gmail", default="", metavar="MESSAGE_ID",
+        help="Gmail 답장 — 이 Gmail 메시지의 대화에 Gmail 계정으로 답한다(받는 사람·제목은 원메일, --body 필수)",
     )
     compose.add_argument(
         "--drive-share", default="", metavar="PATH",

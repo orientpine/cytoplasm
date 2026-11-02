@@ -17,6 +17,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+import triage_core
+
 #: Tries of one approved draft, the first one included. The waits below add up to
 #: about 5 hours, longer than the webmail outages measured so far (about 4 hours,
 #: 2026-10-12), so a send that recovers on its own still goes out.
@@ -67,7 +69,7 @@ def failure_text(draft: dict, reason: str) -> str:
     ``draft`` is the stored record after the failure; ``reason`` is the gate's safe
     one-line message, used when the record carries no structured error.
     """
-    lines = [f"⚠️ 발송 실패: {draft['subject']} → {draft['to']} (draft {draft['id']})"]
+    lines = [f"⚠️ 발송 실패: {triage_core.shown(draft, 'subject')} → {triage_core.shown(draft, 'to')} (draft {draft['id']})"]
     error = draft.get("last_error")
     delivery_unverified = False
     if draft.get("bcc"):

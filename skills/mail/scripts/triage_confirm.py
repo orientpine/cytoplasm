@@ -13,6 +13,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+import triage_core
 from triage_gate import GateError, write_json
 
 API = "https://discord.com/api/v10"
@@ -238,7 +239,7 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
     if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
         return str(origin_notice.deliver(
             api=_api, transport_factory=transport, record=draft,
-            thread_name=f"메일: {draft['subject']} (draft {draft['id']})",
+            thread_name=f"메일: {triage_core.shown(draft, 'subject')} (draft {draft['id']})",
             content=content, fallback=dm_owner,
             outcome=origin_notice.ThreadOutcome[outcome] if outcome else None,
             message=message, fallback_destination=None,
@@ -247,7 +248,7 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
         api=_api,
         transport_factory=transport,
         record=draft,
-        thread_name=f"메일: {draft['subject']} (draft {draft['id']})",
+        thread_name=f"메일: {triage_core.shown(draft, 'subject')} (draft {draft['id']})",
         content=content,
         fallback=dm_owner,
         outcome=origin_notice.ThreadOutcome[outcome] if outcome else None,
