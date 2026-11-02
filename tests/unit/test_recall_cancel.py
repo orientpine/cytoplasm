@@ -6,6 +6,7 @@ was gone, which only a real pipe and a real process group can show.
 from __future__ import annotations
 
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -101,35 +102,29 @@ def test_a_reader_that_leaves_after_the_answer_is_not_a_cancel() -> None:
     assert child.wait(timeout=10) == 0
 
 
-def test_relay_ssh_child_dies_with_its_caller(tmp_path: Path) -> None:
-    pidfile = tmp_path / "pid"
+def test_relay_ssh_child_dies_with_its_caller() -> None:
+    # The ssh stand-in prints its own pid on the caller's stdout, and the test holds a pidfd on it
+    # while the caller is still alive, so its exit is one event to wait for. Polling /proc/<pid>/stat
+    # raced the reaper under load: the pid passed kill(0), then vanished before the read (ESRCH).
     code = (
-        "import subprocess, sys; from automation.omo_relay import client; "
-        f"subprocess.Popen(['sh', '-c', 'echo $$ > {pidfile}; exec sleep 60'], preexec_fn=client._die_with_parent); "
-        "print('READY', flush=True); import time; time.sleep(60)"
+        "import subprocess, time; from automation.omo_relay import client; "
+        "subprocess.Popen(['sh', '-c', 'echo $$; exec sleep 60'], preexec_fn=client._die_with_parent); "
+        "time.sleep(60)"
     )
     caller = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, cwd=REPO,
                               env={**os.environ, "PYTHONPATH": str(REPO)})
     assert caller.stdout is not None
-    assert caller.stdout.readline() == b"READY\n"
-    grandchild = _pid(pidfile)
+    grandchild = int(caller.stdout.readline())
+    exited = os.pidfd_open(grandchild)  # the caller is alive, so this is still the ssh stand-in
+    try:
+        caller.send_signal(signal.SIGKILL)
+        caller.wait(timeout=5)
+        caller.stdout.close()
 
-    caller.send_signal(signal.SIGKILL)
-    caller.wait(timeout=5)
-    caller.stdout.close()
-
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            os.kill(grandchild, 0)
-        except ProcessLookupError:
-            break
-        status = Path(f"/proc/{grandchild}/stat").read_text().rsplit(")", 1)[1].split()[0]
-        if status == "Z":
-            break
-        time.sleep(0.05)
-    else:
-        raise AssertionError("relay ssh child outlived its caller")
+        ready, _, _ = select.select([exited], [], [], 10)
+    finally:
+        os.close(exited)
+    assert ready, "relay ssh child outlived its caller"
 
 
 def test_owner_card_is_the_card_section_only(tmp_path: Path) -> None:
