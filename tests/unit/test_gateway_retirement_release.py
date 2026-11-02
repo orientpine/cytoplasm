@@ -134,8 +134,8 @@ def test_release_host_passes_switch_only_when_selected(tmp_path: Path, selected:
         flag = tmp_path / ".hermes/release-flags/litellm"
         flag.parent.mkdir(parents=True)
         flag.write_bytes(b"retired")
-    result = _run(tmp_path, work, decisions="2 9")
-    assert result.returncode == 9, result.stdout + result.stderr
+    result = _run(tmp_path, work, decisions="2 7")
+    assert result.returncode == 1, result.stdout + result.stderr
     args = (tmp_path / "plan-args").read_text()
     assert ("--gateway-retirement retired" in args) == selected
 

@@ -49,7 +49,7 @@ def main() -> int:
     if command == "plan":
         print((skill_gate.GATE_DIR / "seed.json").read_text())
         return 0
-    if command == "request":
+    if command == "command":
         path = skill_gate.GATE_DIR / "pending/release.json"
         if path.exists():
             return 0 if json.loads(path.read_text())["head_sha"] == os.environ["TIP"] else 6

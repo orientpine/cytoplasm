@@ -7,6 +7,7 @@ is the artifact production consumes, so it must be observed, not stubbed.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -24,19 +25,10 @@ printf '%s\\n' "$cmd" >> "$CALLS"
 case "$cmd" in
   plan) printf '%s\\n' "$*" > "$PLAN_ARGS"; printf '{"version":"stub"}\\n' ;;
   retire) exit 0 ;;
-  request)
-    if [[ -f "$STALE_MARKER" ]]; then
-      printf 'REFUSED: approval request not posted outcome=deferred reason=binding-mismatch\\n' >&2
-      printf 'RELEASE-REQUEST-STALE: version=%s head=%s message_id=%s probe=%s\\n' \\
-        "$STALE_VERSION" "$STALE_HEAD" "$STALE_MESSAGE_ID" "$STALE_PROBE" >&2
-      exit 6
-    fi
-    printf '{"message_id":"123"}\\n'
-    ;;
-  abandon)
-    printf 'abandon %s\\n' "$*" >> "$CALLS"
-    (( ABANDON_UNBLOCKS == 1 )) && rm -f "$STALE_MARKER"
-    exit "$ABANDON_RC"
+  command)
+    cp "$2" "$COMMAND_PLAN"
+    (( COMMAND_RC == 0 )) || { printf 'RELEASE-COMMAND-REFUSED: stub refusal\\n' >&2; exit "$COMMAND_RC"; }
+    printf '{"message_id":"1500000000000000005"}\\n'
     ;;
   decision)
     n="$(cat "$COUNTER" 2>/dev/null || printf 0)"
@@ -55,9 +47,8 @@ case "$cmd" in
 esac
 """
 
-#: 2026-08-31 실측 사건의 모양 — origin/main 이 지나가 버린 pending 요청의 신원.
-_STALE_VERSION: Final = "v1.0.141"
-_STALE_MESSAGE_ID: Final = "1408000000000000141"
+#: 형이 릴리스를 시킨 글 — 모든 새 릴리스는 이 링크를 근거로 시작한다(형 2026-11-02 Q447).
+_OWNER_COMMAND: Final = "https://discord.com/channels/111/222/1500000000000000005"
 
 _DEPLOY_ALL_STUB: Final = """#!/usr/bin/env bash
 set -uo pipefail
@@ -172,14 +163,12 @@ def _run(
     work: Path,
     *,
     decisions: str,
-    deadline: str = "5",
     local_ci_rc: str = "0",
     deploy_all_rc: str = "0",
     arguments: tuple[str, ...] = (),
-    stale_head: str = "",
-    stale_probe: str = "bound_pending",
-    abandon_unblocks: str = "1",
-    abandon_rc: str = "0",
+    owner_command: str | None = _OWNER_COMMAND,
+    command_rc: str = "0",
+    inbox: Path | None = None,
     record_version: str = "",
     helper_probe: str = "pass",
     allow_helper_drift: str = "0",
@@ -189,11 +178,6 @@ def _run(
     rag_plan: str = "true",
     rehearsal: str | None = "ok",
 ) -> subprocess.CompletedProcess[str]:
-    # 낡은 pending 요청이 있는 세계는 stale_head 를 준 테스트에서만 존재한다 —
-    # marker 가 없으면 stub 의 request 는 예전 그대로 성공한다.
-    stale_marker = tmp_path / "stale-marker"
-    if stale_head:
-        _ = stale_marker.write_text("stale\n", encoding="utf-8")
     approval = tmp_path / "approval-stub"
     _ = approval.write_text(_APPROVAL_STUB, encoding="utf-8")
     approval.chmod(0o755)
@@ -228,6 +212,10 @@ def _run(
     if note is not None:
         _ = (tmp_path / "note.md").write_text(note, encoding="utf-8")
         arguments = (*arguments, "--notes-file", str(tmp_path / "note.md"))
+    if owner_command is not None:
+        arguments = (*arguments, "--owner-command", owner_command)
+    if inbox is not None:
+        arguments = (*arguments, "--owner-inbox", str(inbox))
     env = {
         **os.environ,
         "RELEASE_REPO_ROOT": str(work),
@@ -240,20 +228,13 @@ def _run(
         "PLAN_ARGS": str(tmp_path / "plan-args"),
         "HELPER_PROBE_MODE": helper_probe,
         "RELEASE_ALLOW_HELPER_DRIFT": allow_helper_drift,
-        "RELEASE_POLL_SECONDS": "0",
-        "RELEASE_DEADLINE_SECONDS": deadline,
         "UPDATE_TRUST_SIGNING_KEY": str(_signing_key(tmp_path)),
         "CALLS": str(tmp_path / "calls.log"),
         "COUNTER": str(tmp_path / "counter"),
         "DECISIONS": decisions,
         "DEPLOY_ALL_RC": deploy_all_rc,
-        "STALE_MARKER": str(stale_marker),
-        "STALE_VERSION": _STALE_VERSION,
-        "STALE_HEAD": stale_head,
-        "STALE_MESSAGE_ID": _STALE_MESSAGE_ID,
-        "STALE_PROBE": stale_probe,
-        "ABANDON_UNBLOCKS": abandon_unblocks,
-        "ABANDON_RC": abandon_rc,
+        "COMMAND_PLAN": str(tmp_path / "command-plan.json"),
+        "COMMAND_RC": command_rc,
         "RECORD_VERSION": record_version,
         "RELEASE_GH": str(gh),
         "RELEASE_NOTE_REPO": "example/repo",
@@ -288,12 +269,15 @@ def test_an_approved_release_cuts_the_signed_tag(tmp_path: Path) -> None:
     _origin, work = _origin_with_commits(tmp_path)
     head = _git(work, "rev-parse", "HEAD")
 
-    result = _run(tmp_path, work, decisions="2 7 0")
+    result = _run(tmp_path, work, decisions="2 0")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"{head}\trefs/tags/v1.0.0^{{}}" in _origin_tags(work)
-    approval_calls = [c for c in _calls(tmp_path) if c in {"decision", "plan", "request"}]
-    assert approval_calls[:3] == ["decision", "plan", "request"]
+    approval_calls = [c for c in _calls(tmp_path) if c in {"decision", "plan", "command", "request"}]
+    assert approval_calls == ["decision", "plan", "command", "decision"]
+    plan = json.loads((tmp_path / "command-plan.json").read_text(encoding="utf-8"))
+    assert plan["owner_command_url"] == _OWNER_COMMAND
+    assert "owner_command_transcript" not in plan
     # The tag cut no longer ends with a hint to run deploy_all by hand — release.sh
     # runs it itself and reports that completion.
     assert "receipt written by deploy_all" in result.stderr
@@ -418,52 +402,66 @@ def test_failed_deployment_keeps_the_signed_tag_and_exits_ten(tmp_path: Path) ->
     assert f"{head}\trefs/tags/v1.0.0^{{}}" in _origin_tags(work)
 
 
-def test_a_denied_release_exits_nine_and_cuts_no_tag(tmp_path: Path) -> None:
-    _origin, work = _origin_with_commits(tmp_path)
-
-    result = _run(tmp_path, work, decisions="2 9")
-
-    assert result.returncode == 9
-    assert "refs/tags/v" not in _origin_tags(work)
-
-
-def test_no_decision_times_out_without_a_tag_and_names_the_resume(tmp_path: Path) -> None:
-    _origin, work = _origin_with_commits(tmp_path)
-
-    result = _run(tmp_path, work, decisions="2 7", deadline="0")
-
-    assert result.returncode == 8
-    assert "refs/tags/v" not in _origin_tags(work)
-    assert "재실행" in result.stderr
-
-
-def test_transient_decision_failures_are_retried_until_a_real_answer(
+def test_a_new_release_without_an_owner_command_is_refused_before_any_plan(
     tmp_path: Path,
 ) -> None:
-    """rc=255(SSH 불통) 한 번이 무기한 대기를 죽이면 안 된다 — 2026-08-31 실측."""
+    """형 명령 없이는 릴리스하지 않는다 — 카드도 레코드도 태그도 없다."""
     _origin, work = _origin_with_commits(tmp_path)
-    head = _git(work, "rev-parse", "HEAD")
 
-    result = _run(tmp_path, work, decisions="2 7 255 7 0")
+    result = _run(tmp_path, work, decisions="2", owner_command=None)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert f"{head}\trefs/tags/v1.0.0^{{}}" in _origin_tags(work)
+    assert result.returncode == 4
+    assert "RELEASE-NO-OWNER-COMMAND" in result.stderr
+    assert [c for c in _calls(tmp_path) if c in {"plan", "command", "request"}] == []
+    assert "refs/tags/v" not in _origin_tags(work)
 
 
-def test_persistent_decision_failures_eventually_die(tmp_path: Path) -> None:
-    result_work = _origin_with_commits(tmp_path)[1]
+def test_a_refused_owner_command_cuts_no_tag(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
 
-    result = _run(tmp_path, result_work, decisions="2 " + "255 " * 11)
+    result = _run(tmp_path, work, decisions="2 0", command_rc="4")
+
+    assert result.returncode == 4
+    assert "RELEASE-COMMAND-REFUSED" in result.stderr
+    assert "refs/tags/v" not in _origin_tags(work)
+
+
+def test_an_unconfirmed_owner_command_record_cuts_no_tag(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
+
+    result = _run(tmp_path, work, decisions="2 7")
 
     assert result.returncode == 1
-    assert "refs/tags/v" not in _origin_tags(result_work)
+    assert "RELEASE-COMMAND-UNVERIFIED" in result.stderr
+    assert "refs/tags/v" not in _origin_tags(work)
 
 
-def test_default_owner_wait_has_no_deadline() -> None:
-    source = _COMMAND.read_text(encoding="utf-8")
+def test_a_malformed_owner_command_link_is_refused_before_the_node(tmp_path: Path) -> None:
+    _origin, work = _origin_with_commits(tmp_path)
 
-    assert 'deadline_seconds="${RELEASE_DEADLINE_SECONDS:-}"' in source
-    assert "${RELEASE_DEADLINE_SECONDS:-1800}" not in source
+    result = _run(tmp_path, work, decisions="2 0", owner_command="릴리스 내")
+
+    assert result.returncode == 4
+    assert "command" not in _calls(tmp_path)
+    assert "refs/tags/v" not in _origin_tags(work)
+
+
+def test_a_voice_command_carries_the_receiver_transcript_to_the_node(tmp_path: Path) -> None:
+    """형은 음성으로 시킨다 — 글 본문이 비어 있으니 수신기 전사를 계획에 실어 보낸다."""
+    _origin, work = _origin_with_commits(tmp_path)
+    inbox = tmp_path / "inbox.jsonl"
+    _ = inbox.write_text(
+        json.dumps({"id": "1", "transcript": "다른 글"}) + "\n"
+        + json.dumps({"id": "1500000000000000005", "content": "",
+                      "transcript": "릴리즈하고 배포까지 하는 걸로 하자."}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, work, decisions="2 0", inbox=inbox)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    plan = json.loads((tmp_path / "command-plan.json").read_text(encoding="utf-8"))
+    assert plan["owner_command_transcript"] == "릴리즈하고 배포까지 하는 걸로 하자."
 
 
 def test_an_already_approved_request_resumes_straight_to_the_tag(tmp_path: Path) -> None:
@@ -475,7 +473,7 @@ def test_an_already_approved_request_resumes_straight_to_the_tag(tmp_path: Path)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"{head}\trefs/tags/v1.0.0^{{}}" in _origin_tags(work)
-    assert "request" not in _calls(tmp_path)
+    assert "command" not in _calls(tmp_path)
 
 
 def test_a_rerun_after_the_tag_was_cut_resumes_the_deployment_under_the_same_version(
@@ -496,92 +494,6 @@ def test_a_rerun_after_the_tag_was_cut_resumes_the_deployment_under_the_same_ver
     assert f"{head}\trefs/tags/v1.0.0^{{}}" in tags
     assert "refs/tags/v1.0.1" not in tags
     assert _calls(tmp_path).count("deploy-all") == 2
-
-
-def _abandons(tmp_path: Path) -> list[str]:
-    """stub 이 실제 인자와 함께 기록한 abandon 호출 — 이름만 찍힌 줄은 세지 않는다."""
-    return [line for line in _call_lines(tmp_path) if line.startswith("abandon --")]
-
-
-def test_a_stale_pending_request_is_abandoned_once_and_the_request_retried(
-    tmp_path: Path,
-) -> None:
-    """origin/main 이 지나간 pending 요청은 사람 손 없이 감사와 함께 놓여난다 — 2026-08-31 v1.0.141 실측."""
-    _origin, work = _origin_with_commits(tmp_path)
-    head = _git(work, "rev-parse", "HEAD")
-    stale_head = _git(work, "rev-parse", "HEAD~1")  # 사건의 모양: 조상이지만 더는 tip 이 아니다
-
-    result = _run(tmp_path, work, decisions="2 7 0", stale_head=stale_head)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert f"{head}\trefs/tags/v1.0.0^{{}}" in _origin_tags(work)
-    assert "reason=binding-mismatch" in result.stderr  # 거절 stderr 는 계속 터미널에 닿는다
-    lines = _call_lines(tmp_path)
-    abandons = _abandons(tmp_path)
-    assert len(abandons) == 1
-    assert f"--version {_STALE_VERSION}" in abandons[0]
-    assert f"--head {stale_head}" in abandons[0]
-    assert f"--message-id {_STALE_MESSAGE_ID}" in abandons[0]
-    assert "--reason stale pending release superseded by origin/main advance" in abandons[0]
-    requested = [index for index, line in enumerate(lines) if line == "request"]
-    assert len(requested) == 2
-    assert requested[0] < lines.index(abandons[0]) < requested[1]
-
-
-def test_a_decided_pending_record_is_never_abandoned_by_the_recovery(tmp_path: Path) -> None:
-    """소유자가 결정한 요청은 자동 복구가 건드리지 않는다 — abandon 은 운영자의 것이다."""
-    _origin, work = _origin_with_commits(tmp_path)
-    stale_head = _git(work, "rev-parse", "HEAD~1")
-
-    result = _run(
-        tmp_path, work, decisions="2", stale_head=stale_head, stale_probe="cancelled"
-    )
-
-    assert result.returncode != 0
-    assert _abandons(tmp_path) == []
-    assert "refs/tags/v" not in _origin_tags(work)
-
-
-def test_a_pending_record_bound_to_the_current_tip_is_not_stale(tmp_path: Path) -> None:
-    """지금 tip 에 묶인 요청은 아직 릴리스될 수 있다 — 낡지 않았으므로 파괴하지 않는다."""
-    _origin, work = _origin_with_commits(tmp_path)
-    head = _git(work, "rev-parse", "HEAD")
-
-    result = _run(tmp_path, work, decisions="2", stale_head=head)
-
-    assert result.returncode != 0
-    assert _abandons(tmp_path) == []
-    assert "refs/tags/v" not in _origin_tags(work)
-
-
-def test_a_failed_abandon_keeps_the_original_refusal(tmp_path: Path) -> None:
-    _origin, work = _origin_with_commits(tmp_path)
-    stale_head = _git(work, "rev-parse", "HEAD~1")
-
-    result = _run(tmp_path, work, decisions="2", stale_head=stale_head, abandon_rc="1")
-
-    assert result.returncode != 0
-    assert len(_abandons(tmp_path)) == 1
-    assert [line for line in _call_lines(tmp_path) if line == "request"] == ["request"]
-    assert "refs/tags/v" not in _origin_tags(work)
-
-
-def test_a_still_refused_retry_dies_after_exactly_one_extra_request(tmp_path: Path) -> None:
-    """복구는 한 번만이다 — 다시 거절당해도 요청·폐기를 반복하지 않는다."""
-    _origin, work = _origin_with_commits(tmp_path)
-    stale_head = _git(work, "rev-parse", "HEAD~1")
-
-    result = _run(
-        tmp_path, work, decisions="2", stale_head=stale_head, abandon_unblocks="0"
-    )
-
-    assert result.returncode != 0
-    assert len(_abandons(tmp_path)) == 1
-    assert [line for line in _call_lines(tmp_path) if line == "request"] == [
-        "request",
-        "request",
-    ]
-    assert "refs/tags/v" not in _origin_tags(work)
 
 
 def test_a_dirty_tree_is_refused_before_any_approval_traffic(tmp_path: Path) -> None:
@@ -618,7 +530,7 @@ def test_a_missing_local_ci_receipt_is_refused(tmp_path: Path) -> None:
 
     assert result.returncode == 4
     assert "decision" not in _calls(tmp_path)
-    assert "request" not in _calls(tmp_path)
+    assert "command" not in _calls(tmp_path)
 
 
 def test_help_succeeds(tmp_path: Path) -> None:
@@ -627,7 +539,7 @@ def test_help_succeeds(tmp_path: Path) -> None:
     helped = _run(tmp_path, work, decisions="0", arguments=("--help",))
 
     assert helped.returncode == 0
-    assert "usage: release.sh [--no-deploy]" in helped.stdout
+    assert "usage: release.sh --owner-command <discord message link>" in helped.stdout
 
 
 def test_unknown_argument_is_a_usage_error(tmp_path: Path) -> None:
@@ -667,7 +579,7 @@ def test_a_drifted_node_helper_is_refused_before_any_approval_traffic(tmp_path: 
     assert "RELEASE-BLOCK" in result.stderr
     assert "provision-deploy-converge.sh" in result.stderr
     # 카드도 태그도 없다: 승인 표면은 한 번도 불리지 않았다.
-    assert [call for call in _calls(tmp_path) if call in {"plan", "request", "decision"}] == []
+    assert [call for call in _calls(tmp_path) if call in {"plan", "command", "decision"}] == []
     assert "refs/tags/" not in _origin_tags(work)
 
 
@@ -678,7 +590,7 @@ def test_an_unjudgeable_node_helper_warns_and_still_releases(tmp_path: Path) -> 
         case.mkdir()
         _origin, work = _origin_with_commits(case)
 
-        result = _run(case, work, decisions="2 7 0", helper_probe=mode)
+        result = _run(case, work, decisions="2 0", helper_probe=mode)
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "HELPER-DRIFT-UNKNOWN" in result.stderr
@@ -688,7 +600,7 @@ def test_an_unjudgeable_node_helper_warns_and_still_releases(tmp_path: Path) -> 
 def test_helper_drift_can_be_waived_for_a_deliberate_release(tmp_path: Path) -> None:
     _origin, work = _origin_with_commits(tmp_path)
 
-    result = _run(tmp_path, work, decisions="2 7 0", helper_probe="drift",
+    result = _run(tmp_path, work, decisions="2 0", helper_probe="drift",
                   allow_helper_drift="1")
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -734,11 +646,11 @@ def test_a_release_without_a_note_draft_is_refused_before_any_approval_traffic(
 ) -> None:
     _origin, work = _origin_with_commits(tmp_path)
 
-    result = _run(tmp_path, work, decisions="2 7 0", note=None)
+    result = _run(tmp_path, work, decisions="2 0", note=None)
 
     assert result.returncode == 4, result.stdout + result.stderr
     assert "no release note draft" in result.stderr
-    assert "request" not in _calls(tmp_path)
+    assert "command" not in _calls(tmp_path)
     assert "refs/tags/v" not in _origin_tags(work)
 
 
@@ -777,12 +689,12 @@ def test_a_previous_tag_without_a_release_note_blocks_the_next_release(
     _git(work, "tag", "-a", "v1.0.0", "-m", "release: v1.0.0", "HEAD~1")
     _git(work, "push", "origin", "v1.0.0")
 
-    result = _run(tmp_path, work, decisions="2 7 0")
+    result = _run(tmp_path, work, decisions="2 0")
 
     assert result.returncode == 4, result.stdout + result.stderr
     assert "RELEASE-NOTE-MISSING: v1.0.0" in result.stderr
     assert "automation/release-note.sh v1.0.0" in result.stderr
-    assert "request" not in _calls(tmp_path)
+    assert "command" not in _calls(tmp_path)
 
 
 def test_the_wrapper_plan_is_bound_into_the_release_plan(tmp_path: Path) -> None:

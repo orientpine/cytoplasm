@@ -59,7 +59,7 @@ ensure_release_note() { printf '%s\\n' "$2" >> "$GATE_DIR/notes"; }
         "GATE_DIR": str(gate), "TIP": "e" * 40, "BASE": "c" * 40,
         "BOUND": record["head_sha"],
         "RELEASE_REPO_ROOT": str(worktree), "RELEASE_TAG_LIB": str(library),
-        "RELEASE_LOCAL_CI": str(ci), "RELEASE_DEADLINE_SECONDS": "0",
+        "RELEASE_LOCAL_CI": str(ci),
         "DEPLOY_ALL_REHEARSAL_DIR": str(rehearsal),
         "RELEASE_APPROVAL_CMD": f"{sys.executable} {_ROOT / 'tests/unit/release_recovery_driver.py'}",
         "RELEASE_COMPLETE_WORKTREE": str(worktree),
@@ -82,7 +82,7 @@ def test_fake_git_rejects_unsupported_commands_when_invoked(
     assert result.returncode == 128
 
 
-@pytest.mark.parametrize("new_probe,expected_rc", [("bound-pending", 8), ("approved", 0)])
+@pytest.mark.parametrize("new_probe,expected_rc", [("bound-pending", 1), ("approved", 0)])
 def test_release_posts_once_when_approved_request_was_overtaken(
     environment: dict[str, str], new_probe: str, expected_rc: int,
 ) -> None:
@@ -90,15 +90,16 @@ def test_release_posts_once_when_approved_request_was_overtaken(
     env = {**environment, "NEW_PROBE": new_probe}
     gate = Path(env["GATE_DIR"])
     # When: the real release entry point runs.
-    result = subprocess.run(["bash", str(_ROOT / "automation/release.sh"), "--no-deploy"],
+    result = subprocess.run(["bash", str(_ROOT / "automation/release.sh"), "--no-deploy",
+                             "--owner-command", "https://discord.com/channels/111/222/333"],
                             env=env, text=True, capture_output=True, timeout=20, check=False)
-    # Then: recovery executes before the one new request, and only its approval can tag.
+    # Then: recovery executes before the one owner-command record, and only its approval can tag.
     assert result.returncode == expected_rc, result.stdout + result.stderr
     assert "RELEASE-ABANDONED" in result.stdout
     print(result.stdout + result.stderr)
     calls = (gate / "calls").read_text().splitlines()
-    assert calls.count("request") == 1
-    assert calls.index("retire") < calls.index("request")
+    assert calls.count("command") == 1
+    assert calls.index("retire") < calls.index("command")
     tags = gate / "tags"
     assert (tags.read_text().splitlines() if tags.exists() else []) == (
         [env["TIP"]] if new_probe == "approved" else []

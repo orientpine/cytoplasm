@@ -29,7 +29,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
-from automation import skill_gate, skill_gate_retire
+from automation import release_command, skill_gate, skill_gate_retire
 from automation.interop.approval_lifecycle import ApprovalRecordsError, ApprovalSurfaceError
 from automation.interop.approval_types import Probe
 from automation.release_released import correct_abandoned, is_released
@@ -202,9 +202,12 @@ def retire_previous(
     record = {str(name): str(value) for name, value in decoded.items()}
     try:
         spec = spec_from_record(record)
-        gate = gate_factory(spec)
-        outstanding = gate.outstanding("release")
-        decision = gate.probe(outstanding[0]) if outstanding else Probe.UNVERIFIABLE
+        if release_command.is_command(record):
+            decision = release_command.node_probe(record, spec)
+        else:
+            gate = gate_factory(spec)
+            outstanding = gate.outstanding("release")
+            decision = gate.probe(outstanding[0]) if outstanding else Probe.UNVERIFIABLE
     except (ReleaseSpecError, ApprovalRecordsError, ApprovalSurfaceError, OSError) as error:
         print(f"RELEASE-RETIRE-BLOCK: {error}", file=sys.stderr)
         return 4

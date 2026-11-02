@@ -712,22 +712,32 @@ def cmd_release_authorize(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return RELEASE_NOT_COVERED_EXIT
-    surface = skill_gate_approval.GateSurface(
-        _api,
-        GATE_DIR,
-        _owner_id,
-        lambda: skill_gate_surface.surface_for(ApprovalKind.RELEASE, _identity()),
-    )
-    gate = skill_gate_approval.SkillApprovalGate(surface, spec)
-    try:
-        outstanding = gate.outstanding("release")
-        decision = gate.probe(outstanding[0]) if outstanding else None
-    except (ApprovalRecordsError, LifecycleSurfaceError):
-        decision = None
+    from automation import release_command
+
+    commanded = release_command.is_command(record)
+    if commanded:
+        decision = release_command.node_probe(record, spec)
+    else:
+        surface = skill_gate_approval.GateSurface(
+            _api,
+            GATE_DIR,
+            _owner_id,
+            lambda: skill_gate_surface.surface_for(ApprovalKind.RELEASE, _identity()),
+        )
+        gate = skill_gate_approval.SkillApprovalGate(surface, spec)
+        try:
+            outstanding = gate.outstanding("release")
+            decision = gate.probe(outstanding[0]) if outstanding else None
+        except (ApprovalRecordsError, LifecycleSurfaceError):
+            decision = None
     if decision is Probe.APPROVED:
         from automation.peer_retired import retired
 
         mode = _peer_attest_mode(args)
+        if mode is not None and not retired(Path.home()) and commanded:
+            print("RELEASE-AUTHORIZE: an owner-command release carries no card for peer attestation",
+                  file=sys.stderr)
+            return 7
         if mode is not None and not retired(Path.home()):
             try:
                 attested = _release_attestation_present(

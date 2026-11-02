@@ -12,10 +12,10 @@ def test_rag_stack_unknown_observation_warns_and_proceeds_without_rag_action(tmp
     unavailable.write_text("#!/bin/sh\necho RUNTIME-PACKAGE-UNKNOWN >&2\nexit 4\n")
     unavailable.chmod(0o755)
 
-    result = _run(tmp_path, work, decisions="2 7 0", rag_plan=str(unavailable))
+    result = _run(tmp_path, work, decisions="2 0", rag_plan=str(unavailable))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "RAG-MCP-PLAN-UNKNOWN:" in result.stderr
     assert "--rag-mcp" not in (tmp_path / "plan-args").read_text()
-    assert _calls(tmp_path).count("request") == 1
+    assert _calls(tmp_path).count("command") == 1
     assert "refs/tags/v1.0.0" in _origin_tags(work)

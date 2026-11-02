@@ -44,12 +44,12 @@ fi
 # 쓰는 생산자가 둘 이상이라 전송로를 복사하지 않기 위한 유일한 이음매다.
 module="${RELEASE_APPROVAL_MODULE:-automation.release_approval}"
 prefix="set -a; . '$agent_home/.env.secrets'; set +a; cd '$stage'; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='$stage' python3 -m $module"
-if [[ "${1:-}" == "request" && "${2:-}" == "--plan-file" && -n "${3:-}" && $# == 3 ]]
+if [[ ( "${1:-}" == "request" || "${1:-}" == "command" ) && "${2:-}" == "--plan-file" && -n "${3:-}" && $# == 3 ]]
 then
   # Python reopening /dev/stdin after ssh→sudo crosses an fd owned by the
   # parent SSH process and can fail EACCES.  Let the agent read fd 0 once into
   # its own 0600 file, then give pathlib a normal agent-owned path.
-  remote "set -eu; umask 077; plan=\$(mktemp '$agent_home/.hermes/release-plan.XXXXXX'); trap 'rm -f \"\$plan\"' EXIT; cat > \"\$plan\"; $prefix request --plan-file \"\$plan\"" < "$3"
+  remote "set -eu; umask 077; plan=\$(mktemp '$agent_home/.hermes/release-plan.XXXXXX'); trap 'rm -f \"\$plan\"' EXIT; cat > \"\$plan\"; $prefix $1 --plan-file \"\$plan\"" < "$3"
   exit $?
 fi
 
