@@ -149,19 +149,20 @@
 ## 릴리스 패치노트 작성 규칙 (cha 지시, 2026-08-30)
 
 - 패치노트 제목은 무엇→왜→영향(티켓·파일명·`fix`만 불충분). `release.sh`가 커밋 제목을 쓰니 커밋 제목이 기준을 만족해야 하고, 아니면 보강 후 재계획.
+- 2026-11-02 형 결정(Q447, 21:35 KST 음성): 새 릴리스는 카드를 올리지 않는다. 아래 카드 줄은 저장된 v1~v8 카드 레코드 재생에만 쓴다. 패치노트 제목 기준과 `--notes-file` 초안(첫 줄 `# …`)은 GitHub Release 노트에 그대로 쓴다.
 - 카드는 짧게, v8·v7 모두 최대 12줄·1900자. v8: 요약은 `--notes-file` 첫 줄(`# …`, 없으면 커밋 제목 하나), 스위치는 새로 켜지거나 값이 바뀐 것만, 나머지는 「계속 켜져 있는 스위치 N개(바뀐 것 없음)」(직전 표면 `~/.hermes/release-notes/<sha>.surfaces.json`, 모르면 전부 표시). v7: 버전·짧은 HEAD·한두 변경 요약·승인 표면/스위치·운영자 경보·전체 `action_hash`·결정 방법만 싣고, 스위치가 여러 개면 같은 줄에서 구분하며 내용을 빠뜨리지 않는다. 끝에 "자세한 건 유돌에게 물어보면 올려요". 1900자 초과면 승인 대상 줄을 줄이지 말고 게시 거부. 상세 자동 게시 금지.
 - 상세는 호스트 `plan`이 승인 전에 `${RELEASE_NOTES_DIR:-~/.hermes/release-notes}/<sha>.details.md`(0600)로 저장. 유돌은 형이 물을 때만 `release-notes <vX.Y.Z>`로 공개 Release 노트를 읽어 올린다(토큰·쓰기 없음).
 - 저장된 v1~v6 카드와 v6 상세 메시지는 바이트 동결, `action_hash`·표면·nonce 바인딩 불변, 승인 lifecycle 그대로.
-- ✅ 뒤 별도 수동 재개를 요구하지 않는다(`release.sh`가 결정을 기다리다 ✅ 감지 즉시 서명 태그). deadline은 테스트·의도적 제한 운영에서만 명시.
+- 별도 수동 재개를 요구하지 않는다(`release.sh`가 형 명령 레코드를 쓰고 곧바로 서명 태그·배포까지 간다).
 원문: [RULES.md](RULES.md) 「릴리스 패치노트 작성 규칙」 · 장부 `release-card-short`
 
 ## 릴리스 태그 규칙 (cha 지시, 2026-08-20)
 
-- 서명 릴리스 태그 없이는 프로덕션이 전진하지 않는다. 태그는 `automation/release.sh`(형 ✅ 1회)만 자른다(`merge-pr.sh`는 안 자름). `converge_origin_main.sh`는 인자 없음(MD-1). CI 서명 금지, 자동화는 실행 시점만.
+- 서명 릴리스 태그 없이는 프로덕션이 전진하지 않는다. 태그는 `automation/release.sh`만 자른다(`merge-pr.sh`는 안 자름). 2026-11-02(Q447)부터 근거는 형 ✅ 카드가 아니라 형이 릴리스를 시킨 디스코드 글 하나다: `release.sh --owner-command <글 링크>`(음성이면 `--owner-inbox <수신기 inbox>`의 전사). 노드 agent가 형 본인·봇 아님·릴리스 서버·24시간 안·릴리스/릴리즈/release/배포/deploy 낱말·한 글=한 HEAD를 확인하고(`automation/release_command.py`), 배포 단계의 표면 인가도 그 글을 다시 읽는다. 형 명령 없이는 릴리스하지 않는다. 서명 태그·노드 서명 검증은 그대로다. `converge_origin_main.sh`는 인자 없음(MD-1). CI 서명 금지, 자동화는 실행 시점만.
 - 키 `UPDATE_TRUST_SIGNING_KEY`(기본 `~/.ssh/autophagy_update_trust.pub`), 비밀 키는 주 노드 운영자 계정 `~/.ssh`(0700)에만. 커밋·CI/서비스 계정(agent·ops·peer·도리) 접근·다른 머신 복사 금지. 호스트 이전은 새 키로 회전(`docs/guide/manual-maintainer.md` §3.4).
 - 릴리스·공개 반출은 릴리스 호스트(주 노드 운영자 계정, `deploy_ssh_host`용 `from=` 제한 자기 SSH 키 필요) 메인 체크아웃에서 `automation/local_ci.sh run`(`GH_CONFIG_DIR=$HOME/.config/gh`) → `automation/release.sh`. 다른 머신이면 SSH 셸로 거기서. 먼저 그 머신에서 `ssh -o BatchMode=yes <deploy_ssh_host> 'hostname && sudo -n -u agent -H true'`, 그 머신의 로컬 CI 영수증, `gh auth status` 확인(없으면 `gh auth login --web`을 형이 승인, 토큰 복사 금지).
 - 태그 뒤 자동 배포를 생략할 때만 `--no-deploy`; `release.sh` exit 10이어도 태그는 되돌리지 않는다. 수동 `release-tag.sh`는 머지 직후, HEAD 어긋남 실패면 재실행(연속 머지 끝에 한 번이면 됨).
-- 완결 타이머 `automation/release_complete_install.sh`는 호스트 한 곳 메인 체크아웃에 설치, 옛 호스트는 `--uninstall`. ✅ 뒤 노드 수작업 0: 노드 준비는 배포기가 릴리스 안에서, 노트·문서에 "root가 한 번 실행" 금지, 권한은 ops·agent·peer와 기존 NOPASSWD 안에서만(root·넓은 sudo 금지). `pending_owner_actions`가 비어야 끝.
+- 완결 타이머 `automation/release_complete_install.sh`는 호스트 한 곳 메인 체크아웃에 설치, 옛 호스트는 `--uninstall`. 릴리스 뒤 노드 수작업 0: 노드 준비는 배포기가 릴리스 안에서, 노트·문서에 "root가 한 번 실행" 금지, 권한은 ops·agent·peer와 기존 NOPASSWD 안에서만(root·넓은 sudo 금지). `pending_owner_actions`가 비어야 끝.
 - 태그 구현은 `automation/release_tag_lib.sh` 하나(`land.sh`·`release-tag.sh` 공유), 사본 금지(`tests/unit/test_release_tag.py`).
 원문: [RULES.md](RULES.md) 「릴리스 태그 규칙」 · 장부 `cyto-signed-release-tag`
 
@@ -213,7 +214,7 @@
 
 ## 승인 경로 완결 규칙 (cha 지시, 2026-10-07)
 
-- 현재 카드 대상은 「모든 요청 승인 경로 규칙」의 릴리스·계정 밖 경로다. 외부효과 카드는 생산자(`approval_lifecycle` 경유 요청 명령)+✅ 워처(no-agent cron/systemd, 사람 실행은 `manual:` 사유)+테스트+실행 영수증을 한 벌로 갖는다. `GATED_RULES`에 외부효과 생산자(또는 사유), `PRODUCER_WATCHERS`에 워처·테스트 파일을 등록한다(`tests/unit/test_gated_effect_paths_conformance.py`). 계정 내부 쓰기에 카드 생산자를 요구하지 않는다. Hermes 전용 denylist·플러그인은 은퇴했다.
+- 현재 카드 대상은 「모든 요청 승인 경로 규칙」의 계정 밖 경로다(릴리스는 2026-11-02부터 카드 없이 형 명령 글). 외부효과 카드는 생산자(`approval_lifecycle` 경유 요청 명령)+✅ 워처(no-agent cron/systemd, 사람 실행은 `manual:` 사유)+테스트+실행 영수증을 한 벌로 갖는다. `GATED_RULES`에 외부효과 생산자(또는 사유), `PRODUCER_WATCHERS`에 워처·테스트 파일을 등록한다(`tests/unit/test_gated_effect_paths_conformance.py`). 계정 내부 쓰기에 카드 생산자를 요구하지 않는다. Hermes 전용 denylist·플러그인은 은퇴했다.
 - 즉석 초안·채팅 메시지 ✅ 요청 금지. 승인은 해시에 묶인 카드 ✅ 만. 전용 명령 없으면 `python3 -m automation.effect_request request`.
 - 카드 실행 뒤 원격 재확인, `origin_notice` 로 같은 스레드에. 카드 대상 SKILL.md는 요청 명령만, `실행 <id>` fallback은 먼저 제안·요청 금지. 내부 쓰기는 소유자 Discord 명령에서 시작해 dori-gate로 바로 처리한다.
 원문: [RULES.md](RULES.md) 「승인 경로 완결 규칙」 · 장부 `cyto-approval-path-complete`
@@ -228,7 +229,7 @@
 ## 모든 요청 승인 경로 규칙 (cha 지시, 2026-10-17)
 
 - 이 절의 옛 규칙(모든 요청에 승인 카드)은 2026-10-18 형 결정으로 은퇴했다. 원문은 RULES.md에 기록으로만 둔다.
-- 현재 규칙: 승인 카드는 cytoplasm `release.sh` 릴리스 카드와 형 계정 밖으로 나가는 모든 경로(메일 발송, 형이 아닌 참석자 일정 초대, 형이 아닌 대상 공유·권한, 형 소유가 아니거나 공개된 일정·문서·폴더 쓰기, 바깥 URL을 불러오는 이미지 넣기, 시트 쓰기, 시간당 10건 넘는 지우기)뿐이다. dori-gate가 결정적 코드로 판정해 카드를 올리고 형 계정의 ✅만 인정한다.
+- 현재 규칙: 승인 카드는 형 계정 밖으로 나가는 모든 경로(cytoplasm 릴리스는 2026-11-02 Q447부터 카드 없이 형이 시킨 디스코드 글로 한다, 「릴리스 태그 규칙」) — 메일 발송, 형이 아닌 참석자 일정 초대, 형이 아닌 대상 공유·권한, 형 소유가 아니거나 공개된 일정·문서·폴더 쓰기, 바깥 URL을 불러오는 이미지 넣기, 시트 쓰기, 시간당 10건 넘는 지우기)뿐이다. dori-gate가 결정적 코드로 판정해 카드를 올리고 형 계정의 ✅만 인정한다.
 - 형 계정 안의 일정·문서·할 일·Obsidian 쓰기는 dori-gate(형 메시지 확인·변경 기록·하루 요약·되살리기)를 거쳐 카드 없이 한다. 유도리의 쓰기(일정·문서·할 일·Obsidian·메일 승인 카드 올리기)는 형 디스코드 메시지에서 시작한 요청일 때만 하고, 메일·문서·웹 내용이나 다른 봇 글만으로는 쓰지 않는다. dori-gate가 쓰기마다 `X-Dori-Owner-Message`의 작성자·서버·시각을 디스코드에서 확인하고 그 링크를 변경 기록에 남긴다.
 - 형만 하는 일(자격증명 변경·결제·송금·구매·로그인/2FA/OAuth 동의·sudo·승인 대리 누름)은 대신하지 않는다. 그 밖의 예외는 장부 항목대로 한다.
 은퇴한 원문: [RULES.md](RULES.md) 「모든 요청 승인 경로 규칙」 · 장부 `approval-two-only`·`outbound-all-cards`·`writes-owner-command-only` (옛 `cyto-approval-every-request` retired)
@@ -303,7 +304,7 @@
 
 - 정본은 공개 `orientpine/cytoplasm` main. 브랜치 → PR → 필수 체크(verify·clean-host-install·leak-guard) green → `automation/merge-pr.sh` 로만 들어간다. main 손 push 금지. 운영 자료(계획·QA 증적·금칙어)는 `orientpine/autophagy-ops` 에만, 공개 추적 금지.
 - 커밋이 곧 공개다(`automation/public_gate.py`, 금지 경로 `.omo`·`docs/qa`). 실명·과제명·내부 호스트·Discord id·비공개 경로는 코드·문서·커밋·PR 본문 어디에도 금지.
-- 릴리스: `automation/local_ci.sh run` → `automation/release.sh --notes-file <노트>`(승인 요청 전 초안 필수: 첫 줄 `# <한 줄 요약>`, 아래 한국어로 바뀐 것·사용자에게 보이는 변화·깨지는 변경/운영자 할 일) → ✅ → PR 로 들어온 그 main 커밋에 서명 태그(반출 스냅샷 없음) + GitHub Release + `update-trust.pub`·지문. 하나라도 없으면 미완. 게시 실패(exit 11)는 재실행으로 잇고, 직전 태그에 Release 가 없으면 `automation/release-note.sh <tag> --notes-file <노트>` 로 보충.
+- 릴리스: `automation/local_ci.sh run` → `automation/release.sh --notes-file <노트>`(승인 요청 전 초안 필수: 첫 줄 `# <한 줄 요약>`, 아래 한국어로 바뀐 것·사용자에게 보이는 변화·깨지는 변경/운영자 할 일)와 형 명령 글 `--owner-command` → PR 로 들어온 그 main 커밋에 서명 태그(반출 스냅샷 없음) + GitHub Release + `update-trust.pub`·지문. 하나라도 없으면 미완. 게시 실패(exit 11)는 재실행으로 잇고, 직전 태그에 Release 가 없으면 `automation/release-note.sh <tag> --notes-file <노트>` 로 보충.
 - 서명키 둘 혼동 금지: 업데이트 신뢰키(`update-trust@autophagy`, 유지보수자) vs 그룹 스킬 서명키(`publisher-<slug>@autophagy`, 그룹 관리자). 개인키는 git 커밋·노드 배포 금지, 노드엔 공개키만.
 - 롤백 불가: revert PR 후 더 높은 버전을 컷. 절차 정본 `docs/guide/manual-maintainer.md`, 여기 복사 금지.
 원문: [RULES.md](RULES.md) 「공개 릴리스 규칙」 · 장부 `cyto-public-first-release`

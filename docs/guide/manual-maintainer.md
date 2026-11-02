@@ -147,16 +147,19 @@ agent+peer 게이트웨이를 함께 재시동한다. 내장 USER.md·MEMORY.md�
    이 PC 에서는 `dori/pin.toml` 의 고정 커밋을 임시 폴더로 받아 SHA 를 확인하고 도리 설치기를
    `--dry-run` 으로 돌린다(`step=dori-pin`, 도리 고정 버전을 올린 릴리스의 설치·업데이트 경로).
    결과는 HEAD 별로 `~/.hermes/deploy-all/rehearsal/<sha>` 에 남고, `release.sh` 는 같은 HEAD 의
-   6시간 안 `REHEARSAL-OK` 가 없으면 새 카드를 올리지 않고 거부한다(`REHEARSAL-MISSING`·`-STALE`·
+   6시간 안 `REHEARSAL-OK` 가 없으면 새 릴리스를 열지 않고 거부한다(`REHEARSAL-MISSING`·`-STALE`·
    `-REFUSED`·`-INVALID`, 상한 `RELEASE_REHEARSAL_MAX_AGE_SECONDS`). 통과한 마지막 줄은 노트 초안 끝에
    `리허설: …` 로 자동으로 붙는다. 우회는 `--skip-rehearsal <이유>` 뿐이고 그 이유가 `리허설 생략: …` 로
    노트에 남는다.
-3. `automation/release.sh [--bump …] --notes-file <노트>` — 승인 카드가 올라가고, 소유자 ✅ 뒤 그 main 커밋에
-   update-trust 서명 태그가 잘린다. 노드는 2분 리컨실러로 그 태그에 수렴하고
+3. `automation/release.sh --owner-command <형이 릴리스를 시킨 디스코드 글 링크> [--owner-inbox <수신기 inbox.jsonl>]
+   [--bump …] --notes-file <노트>` — 카드는 올라가지 않는다(2026-11-02 형 결정 Q447). 노드 agent 계정이 그 글을
+   확인하고(형 본인·봇 아님·릴리스 서버·24시간 안·릴리스/릴리즈/release/배포/deploy 낱말, 음성 글은 inbox 의 전사,
+   한 글=한 HEAD) 승인 기록을 쓴 뒤 그 main 커밋에 update-trust 서명 태그가 잘린다. 링크가 없거나 확인에
+   실패하면 태그 없이 exit 4 다. 노드는 2분 리컨실러로 그 태그에 수렴하고
    `deploy_all.sh --apply` 까지 이어진다.
 4. 노트는 3의 같은 실행이 게시한다 — `release.sh --notes-file <노트>` 로 초안을 승인 요청 **전에**
    준다(§1.7). 태그 직후 GitHub Release(초안 + PR 목록 + 신뢰키 지문)와 `update-trust.pub` 자산이
-   생기고, 실패하면 exit 11 이다. 초안 없이는 승인 요청도 올라가지 않는다.
+   생기고, 실패하면 exit 11 이다. 초안 없이는 승인 기록도 쓰지 않는다.
 5. §1.8 로 확인한다.
 
 반출 스냅샷·fresh history·공개 원장 기록은 이 경로에 없다.
@@ -359,7 +362,7 @@ annotated 태그가 맞다. `^{}` 줄이 없으면 lightweight 태그이고, 그
 않는다.
 
 **현재 승인 범위를 확인한다.** Hermes 전용 규칙 파일·플러그인은 은퇴했다.
-릴리스·계정 밖 경로만 카드 대상이며 계정 내부 쓰기는 소유자 Discord 명령을
+계정 밖 경로만 카드 대상이며(릴리스는 2026-11-02부터 형 명령 글, §1.0) 계정 내부 쓰기는 소유자 Discord 명령을
 확인하는 dori-gate로 처리한다. 은퇴한 타이머·사본의 잔존은 선언된 제거
 파생물의 배포 관측으로 확인한다. 옛 규칙 파일을 다시 배포하지 않는다.
 상세는 [승인 경로 점검표](승인-경로-점검표.md)와
@@ -737,7 +740,7 @@ floor 이상인지 확인해야 하며, 잘못 전환한 뒤 태그 삭제나 �
 - [ ] 변경이 PR 로 `orientpine/cytoplasm` main 에 머지됐다
       (필수 체크 verify·clean-host-install·leak-guard green, `automation/merge-pr.sh`)
 - [ ] 키 보유 워크스테이션에 그 트리의 `automation/local_ci.sh run` 영수증이 있다
-- [ ] `automation/release.sh` → 소유자 ✅ → 그 커밋에 서명 태그
+- [ ] `automation/release.sh --owner-command <형 글 링크>` → 그 커밋에 서명 태그
 - [ ] GitHub Release 노트 게시 — `release.sh --notes-file` 이 태그와 같은 단계에서 한다
       (**지문 재게시** + MAJOR면 조치 안내, 제목에 한 줄 요약)
 - [ ] 그 릴리스에 `update-trust.pub` 자산이 붙었다 → `gh release view <version> --json assets`
