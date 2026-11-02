@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -177,6 +178,7 @@ def _run(
     wrapper_plan: str = "true",
     rag_plan: str = "true",
     rehearsal: str | None = "ok",
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     approval = tmp_path / "approval-stub"
     _ = approval.write_text(_APPROVAL_STUB, encoding="utf-8")
@@ -247,7 +249,7 @@ def _run(
     }
     return subprocess.run(
         ("bash", str(_COMMAND), *arguments),
-        capture_output=True, text=True, check=False, env=env,
+        capture_output=True, text=True, check=False, env=env, cwd=cwd,
     )
 
 
@@ -444,6 +446,23 @@ def test_a_malformed_owner_command_link_is_refused_before_the_node(tmp_path: Pat
     assert result.returncode == 4
     assert "command" not in _calls(tmp_path)
     assert "refs/tags/v" not in _origin_tags(work)
+
+
+def test_another_checkouts_automation_in_the_cwd_does_not_shadow_the_release_tree(
+    tmp_path: Path,
+) -> None:
+    """`python3 -m` puts the cwd first on sys.path; an older checkout there must not win."""
+    _origin, work = _origin_with_commits(tmp_path)
+    decoy = tmp_path / "older-checkout"
+    _ = shutil.copytree(_REPO / "automation", decoy / "automation",
+                        ignore=shutil.ignore_patterns("__pycache__", "release_command.py"))
+    (decoy / "configs").mkdir()
+    _ = shutil.copy2(_REPO / "configs" / "node.example.toml", decoy / "configs")
+
+    result = _run(tmp_path, work, decisions="2 0", cwd=decoy)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "owner_command_url" in (tmp_path / "command-plan.json").read_text(encoding="utf-8")
 
 
 def test_a_voice_command_carries_the_receiver_transcript_to_the_node(tmp_path: Path) -> None:

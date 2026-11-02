@@ -361,8 +361,10 @@ if (( decision_rc != 0 )); then
     --version "$version" --bump "$bump" "${wrapper_args[@]}" "${rag_args[@]}" "${dori_args[@]}" "${gateway_args[@]}" "${peer_args[@]}" "${product_args[@]}" "${retirement_args[@]}" "${chat_args[@]}" "${notice_args[@]}" "${auto_args[@]}" "${ledger_args[@]}" "${relay_args[@]}" "${legacy_args[@]}" "${owner_timer_args[@]}" "${mail_html_args[@]}" "${mail_closing_args[@]}" "${mail_all_day_args[@]}" "${calendar_color_args[@]}" "${document_ocr_args[@]}" > "$workdir/plan.json" \
     || die "release plan failed" 4
   attach_args=(attach --plan-file "$workdir/plan.json" --url "$owner_command")
-  [[ -z "$owner_inbox" ]] || attach_args+=(--inbox "$owner_inbox")
-  PYTHONPATH="$SCRIPT_DIR/.." python3 -B -m automation.release_command "${attach_args[@]}" \
+  [[ -z "$owner_inbox" ]] || attach_args+=(--inbox "$(realpath -m -- "$owner_inbox")")
+  # cd: `python3 -m` puts the cwd first on sys.path, so another checkout's older automation
+  # package would shadow this one (the same trap release_complete.sh guards against).
+  (cd "$SCRIPT_DIR/.." && PYTHONPATH="$SCRIPT_DIR/.." python3 -B -m automation.release_command "${attach_args[@]}") \
     || die "RELEASE-COMMAND-REFUSED: 형 명령 링크를 계획에 싣지 못했다" 4
   command_rc=0
   "${approval[@]}" command --plan-file "$workdir/plan.json" \
