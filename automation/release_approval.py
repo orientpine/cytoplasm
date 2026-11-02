@@ -22,10 +22,12 @@ from typing import Final
 
 from automation import (
     release_abandon,
+    release_command,
     release_notes,
     release_plan,
     skill_gate,
     skill_gate_request,
+    skill_gate_retire,
     skill_gate_surface,
 )
 from automation.interop.approval_lifecycle import (
@@ -311,6 +313,85 @@ def cmd_request(args: argparse.Namespace) -> int:
     return _emit_request(requested)
 
 
+def _release_guild() -> str:
+    channel_id = _bindings().new().channel_id
+    channel = skill_gate._api("GET", f"/channels/{channel_id}")  # noqa: SLF001
+    guild = channel.get("guild_id") if isinstance(channel, dict) else None
+    if not isinstance(guild, str) or not guild.isdigit():
+        raise release_command.CommandRefused("release server could not be resolved")
+    return guild
+
+
+def _supersede(record_path: Path, head: str, message_id: str) -> int:
+    """Retire a live record that this owner command replaces, audited like any abandon."""
+    try:
+        decoded = json.loads(record_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return 0
+    except (OSError, json.JSONDecodeError):
+        print("RELEASE-COMMAND-REFUSED: the live release record is unreadable", file=sys.stderr)
+        return 4
+    record = {str(name): str(value) for name, value in decoded.items()} if isinstance(decoded, dict) else {}
+    if (release_command.is_command(record) and record.get("head_sha") == head
+            and record.get("message_id") == message_id):
+        return 0
+    order = release_abandon.ReleaseAbandonOrder(
+        record.get("version", ""), record.get("head_sha", ""), record.get("message_id", ""),
+        "superseded by an owner release command", skill_gate_retire.actor(),
+    )
+    return release_abandon.emit(release_abandon.abandon(
+        skill_gate.GATE_DIR, order, skill_gate_retire.abandon_log(skill_gate.APPROVAL_LOG),
+    ))
+
+
+def cmd_command(args: argparse.Namespace) -> int:
+    """Write the release record from the owner's own message instead of posting a card.
+
+    Exit: 0 recorded (stdout ``{"message_id": ...}``) · 4 refused, nothing recorded ·
+    6 another release step holds the record.
+    """
+    payload = json.loads(Path(args.plan_file).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ReleaseSpecError("plan file is not a JSON object")
+    url = str(payload.get("owner_command_url", ""))
+    transcript = payload.get("owner_command_transcript")
+    spec = spec_from_plan(payload, secrets.token_hex(16))
+    try:
+        link = release_command.parse_link(url)
+        basis = release_command.verify(
+            url,
+            owner_id=skill_gate._owner_id(),  # noqa: SLF001
+            guild_id=_release_guild(),
+            token=skill_gate._token(),  # noqa: SLF001
+            transcript=transcript if isinstance(transcript, str) else None,
+            fetch=lambda path: skill_gate._api("GET", path),  # noqa: SLF001
+        )
+    except (release_command.CommandRefused, ApprovalSurfaceError, OSError) as error:
+        print(f"RELEASE-COMMAND-REFUSED: {error}", file=sys.stderr)
+        return 4
+    record_path = _record_path()
+    superseded = _supersede(record_path, spec.head_sha, link.message_id)
+    if superseded:
+        return superseded
+    with skill_gate_request.lease(skill_gate.GATE_DIR).hold("release") as owned:
+        if not owned:
+            print("RELEASE-COMMAND-REFUSED: another release step holds the record", file=sys.stderr)
+            return 6
+        if record_path.exists():
+            print(f"RELEASE-COMMAND: resuming {spec.version} at {spec.head_sha[:12]}", file=sys.stderr)
+        else:
+            try:
+                release_command.claim(skill_gate.GATE_DIR, link.message_id, spec.head_sha)
+            except release_command.CommandRefused as error:
+                print(f"RELEASE-COMMAND-REFUSED: {error}", file=sys.stderr)
+                return 4
+            release_command.write_record(record_path, release_command.new_record(spec, link, basis))
+    print(f"RELEASE-COMMAND: {spec.version} at {spec.head_sha[:12]} by the owner message {basis['owner_command_url']}",
+          file=sys.stderr)
+    print(json.dumps({"message_id": link.message_id}))
+    return 0
+
+
 def cmd_abandon(args: argparse.Namespace) -> int:
     """Delegate audited abandonment through the existing remote producer surface."""
     return release_abandon.command(args)
@@ -474,6 +555,9 @@ def main(argv: list[str] | None = None) -> int:
     request = commands.add_parser("request", help="release 승인 요청 게시(재실행=재사용)")
     request.add_argument("--plan-file", required=True)
     request.set_defaults(run=cmd_request)
+    command = commands.add_parser("command", help="형 명령 글로 release 레코드를 쓴다(카드 없음)")
+    command.add_argument("--plan-file", required=True)
+    command.set_defaults(run=cmd_command)
     abandon = commands.add_parser(
         "abandon", help="막고 있는 release 레코드를 감사와 함께 archive 로 놓아준다"
     )

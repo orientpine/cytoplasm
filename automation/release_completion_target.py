@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, assert_never
 
-from automation import skill_gate
+from automation import release_command, skill_gate
 from automation.interop.approval_lifecycle import ApprovalRecordsError, ApprovalSurfaceError, Probe
 from automation.release_applied_notice import release_tags
 from automation.release_spec import ReleaseSpec, ReleaseSpecError, spec_from_record
@@ -81,11 +81,15 @@ def approval_decision(
         print("RELEASE-DECISION: live request is bound to a different HEAD", file=sys.stderr)
         return DECISION_UNAVAILABLE
     try:
-        gate = gate_factory(spec_from_record(record))
-        outstanding = gate.outstanding("release")
-        if not outstanding:
-            return DECISION_UNAVAILABLE
-        probe = gate.probe(outstanding[0])
+        spec = spec_from_record(record)
+        if release_command.is_command(record):
+            probe = release_command.node_probe(record, spec)
+        else:
+            gate = gate_factory(spec)
+            outstanding = gate.outstanding("release")
+            if not outstanding:
+                return DECISION_UNAVAILABLE
+            probe = gate.probe(outstanding[0])
     except (ReleaseSpecError, ApprovalRecordsError, ApprovalSurfaceError, OSError) as error:
         print(f"RELEASE-DECISION: unverifiable ({type(error).__name__})", file=sys.stderr)
         return DECISION_UNAVAILABLE if mismatched else DECISION_PENDING

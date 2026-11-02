@@ -63,32 +63,13 @@ def verify_owner_origin(
     now: float | None = None, fetch: Fetch = _discord_get,
 ) -> Origin:
     """The origin must be the owner's own (non-bot) message from the last 24 hours."""
-    if not token:
-        raise JobRefused("origin check needs the node Discord credential")
-    sent = ((int(message_id) >> 22) + DISCORD_EPOCH_MS) / 1000
-    if (now if now is not None else time.time()) - sent > ORIGIN_MAX_AGE_S:
-        raise JobRefused("origin message is older than 24 hours; ask the owner again")
-    try:
-        message = fetch(f"/channels/{channel_id}/messages/{message_id}", token)
-        channel = fetch(f"/channels/{channel_id}", token)
-    except (OSError, ValueError, urllib.error.URLError):
-        raise JobRefused("origin message could not be read; nothing was run") from None
-    author = message.get("author")
-    if (not isinstance(author, dict) or str(author.get("id")) != owner_id
-            or author.get("bot") or str(message.get("id")) != message_id):
-        raise JobRefused("origin message is not the owner's own message")
-    guild = channel.get("guild_id")
-    from automation.interop.owner_message import discord_link
+    from automation.owner_origin import OriginRefused, verify_owner_origin as verify
 
-    if channel.get("type") == 1 and not guild:
-        link = discord_link(space="dm", channel_id=channel_id, message_id=message_id)
-    elif isinstance(guild, str) and guild.isdigit():
-        link = discord_link(space="guild", guild_id=guild, channel_id=channel_id, message_id=message_id)
-    else:
-        raise JobRefused("origin channel could not be placed")
-    if not link.url:
-        raise JobRefused("origin message link could not be built")
-    return Origin(channel_id, message_id, link.url)
+    try:
+        found = verify(channel_id, message_id, owner_id, token, now=now, fetch=fetch)
+    except OriginRefused as error:
+        raise JobRefused(str(error)) from None
+    return Origin(found.channel_id, found.message_id, found.link)
 
 
 def jobs_root(home: Path) -> Path:

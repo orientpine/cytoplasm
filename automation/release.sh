@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# automation/release.sh — 릴리스 버전 하나를 소유자 ✅ 로 인가받아 서명 태그를 자른다 (VA-1).
+# automation/release.sh — 소유자가 릴리스를 시킨 디스코드 글을 근거로 서명 태그를 자르고 배포한다 (VA-1).
 #
 # 머지는 축적이고 배포는 릴리스다(§10-1). 이 명령은 clean HEAD == origin/main 에서
 # 직전 릴리스 태그..HEAD 의 표면별 변경을 계획하고(release_plan — RC-3 과 같은 선언
-# 파서 재사용, 사본 0), 승인 요청을 게시한 뒤 소유자 결정을 계속 기다린다.
-#   ✅ → 기존 release_tag_lib 로 서명 태그 컷(리컨실러가 ~2분 내 수렴) → 같은 단계에서
+# 파서 재사용, 사본 0), 승인 카드 대신 형이 릴리스를 시킨 글(--owner-command <디스코드 링크>)로
+# 승인 레코드를 쓴다(형 2026-11-02 21:35 KST 음성, Q447 — 릴리스는 형 ✅ 카드 없이 형 명령으로).
+#   노드 agent 계정이 그 글을 확인한다: 형 본인·봇 아님, 릴리스 서버, 24시간 안, 릴리스·배포를
+#   말함(음성이면 --owner-inbox 수신기 전사로), 다른 HEAD 에 쓴 적 없음. 아니면 태그 없음, exit 4.
+#   통과 → 기존 release_tag_lib 로 서명 태그 컷(리컨실러가 ~2분 내 수렴) → 같은 단계에서
 #        GitHub Release 노트 게시(ensure_release_note). 릴리스 = 태그 + 노트다.
-#   ⛔ → 태그 없음, prod 불변, exit 9
-#   기본 무응답 → 계속 대기. RELEASE_DEADLINE_SECONDS 를 명시한 운영만 exit 8.
-#   프로세스가 죽어도 재실행은 살아 있는 요청을 재사용하고 ✅ 뒤 곧장 태그로 간다.
+#   형 명령 링크가 없으면 새 릴리스는 시작하지 않는다(exit 4). 이미 기록된 같은 HEAD 의 승인은
+#   재실행이 그대로 재개한다(곧장 태그로).
 #
 # 워크스테이션 전용이다: 서명키가 여기에만 있고(「릴리스 태그 규칙」), CI·노드로 옮기면
 # MD-1 이 막은 escalation 이 부활한다. 태그 이후 release.sh 자체가 리컨실러(①)의
@@ -19,7 +21,7 @@
 # 체크아웃 밖 `~/.hermes/release-notes/<sha>.md` 에 둔다 — 초안이 없으면 승인을 쓰지 않고
 # 멈추고(exit 4), ✅ 뒤 완결 타이머도 같은 초안으로 노트를 게시한다.
 #
-# Exit: 0 태그+노트 · 2 usage · 4 전제 미충족 · 8 결정 대기 초과 · 9 소유자 취소 · 10 태그 뒤 전량 반영 미완 · 11 태그 뒤 릴리스 노트 게시 실패 · 1 그 외
+# Exit: 0 태그+노트 · 2 usage · 4 전제 미충족(형 명령 없음·거절 포함) · 10 태그 뒤 전량 반영 미완 · 11 태그 뒤 릴리스 노트 게시 실패 · 1 그 외
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,14 +30,24 @@ REPO_ROOT="${RELEASE_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 log() { printf '[release] %s\n' "$*" >&2; }
 die() { log "RELEASE-BLOCK: $1"; exit "${2:-1}"; }
 
-usage="usage: release.sh [--no-deploy] [--bump {major,minor,patch}] [--notes-file <note.md>] [--skip-rehearsal <reason>]"
+usage="usage: release.sh --owner-command <discord message link> [--owner-inbox <inbox.jsonl>] [--no-deploy] [--bump {major,minor,patch}] [--notes-file <note.md>] [--skip-rehearsal <reason>]"
 no_deploy=0
+owner_command=""
+owner_inbox="${RELEASE_OWNER_INBOX:-}"
 skip_rehearsal=""
 bump=patch
 notes_file=""
 while (( $# )); do
   case "$1" in
     --no-deploy) no_deploy=1; shift ;;
+    --owner-command)
+      (( $# >= 2 )) && [[ -n "$2" ]] || { echo "$usage" >&2; exit 2; }
+      owner_command="$2"; shift 2
+      ;;
+    --owner-inbox)
+      (( $# >= 2 )) && [[ -n "$2" ]] || { echo "$usage" >&2; exit 2; }
+      owner_inbox="$2"; shift 2
+      ;;
     --notes-file)
       (( $# >= 2 )) || { echo "$usage" >&2; exit 2; }
       notes_file="$2"; shift 2
@@ -295,14 +307,6 @@ poll_decision() { # poll_decision → 전역 rc·레코드 버전으로 소유�
   done < "$workdir/decision.stderr"
 }
 
-post_request() { # post_request → 요청을 게시한다. stderr 는 붙잡되 언제나 그대로 되울린다.
-  "${approval[@]}" request --plan-file "$workdir/plan.json" \
-    > "$workdir/record.json" 2> "$workdir/request.stderr"
-  local rc=$?
-  cat "$workdir/request.stderr" >&2   # 소유자 안내 줄은 성공·실패 모두 터미널에 닿아야 한다
-  return "$rc"
-}
-
 # 세션이 죽은 뒤의 재실행: 살아 있는 요청의 버전은 새 bump 계산보다 먼저 재사용한다.
 poll_decision
 if (( decision_rc == 0 || decision_rc == 7 )) && [[ -n "$decision_version" ]]; then
@@ -319,7 +323,9 @@ if [[ -z "$base" ]]; then
 fi
 
 if (( decision_rc != 0 )); then
-  # 소유자 결정을 기다리는 카드(rc 7)는 이미 올라가 있다 — 새 카드를 올릴 때만 리허설을 요구한다.
+  [[ -n "$owner_command" ]] \
+    || die "RELEASE-NO-OWNER-COMMAND: 형이 릴리스를 시킨 디스코드 글 링크를 --owner-command 로 준다 — 형 명령 없이는 릴리스하지 않는다" 4
+  # 소유자 결정을 기다리는 옛 카드(rc 7)는 이미 리허설을 지났다 — 그 밖에는 리허설을 요구한다.
   if (( decision_rc != 7 )); then
     rehearsal_gate
     note_rehearsal "$note_draft" || die "cannot record the rehearsal line in $note_draft" 4
@@ -354,74 +360,22 @@ if (( decision_rc != 0 )); then
   "${plan_approval[@]}" plan --repo "$REPO_ROOT" --base "$base" --head "$head" \
     --version "$version" --bump "$bump" "${wrapper_args[@]}" "${rag_args[@]}" "${dori_args[@]}" "${gateway_args[@]}" "${peer_args[@]}" "${product_args[@]}" "${retirement_args[@]}" "${chat_args[@]}" "${notice_args[@]}" "${auto_args[@]}" "${ledger_args[@]}" "${relay_args[@]}" "${legacy_args[@]}" "${owner_timer_args[@]}" "${mail_html_args[@]}" "${mail_closing_args[@]}" "${mail_all_day_args[@]}" "${calendar_color_args[@]}" "${document_ocr_args[@]}" > "$workdir/plan.json" \
     || die "release plan failed" 4
-  request_refusal="approval request was refused — 살아 있는 다른 요청은 파괴하지 않는다 (⛔ 로 막혔다면 노드 agent 계정에서: python3 -m automation.release_abandon --version <v> --head <sha> --message-id <id> --reason <why>)"
-  if ! post_request; then
-    # 낡은 pending 요청의 자동 복구. 두 세션이 번갈아 릴리스하면, 소유자 결정을 아직
-    # 기다리는(bound_pending) 요청이 이미 지나간 커밋에 묶인 채 남아 이후 모든 요청을
-    # binding-mismatch 로 죽인다(2026-08-31 v1.0.141@6a03321f 실측 — 사람이 노드에서
-    # release_abandon 을 돌려야 풀렸다).
-    #
-    # 후속 과제 항목은 staleness 를 'head 가 origin/main 의 조상이 아님'으로 적었지만,
-    # 사건의 head 6a03321f 는 origin/main 의 조상이었다. 다시 릴리스될 수 있는 것은
-    # 지금의 origin/main tip 하나뿐이므로(전제 ② + main 은 ff-only), tip 불일치가
-    # 충실한 조건이다 — 조상 여부는 낡은 요청을 낡지 않았다고 잘못 말한다.
-    stale_version=""; stale_head=""; stale_message_id=""; stale_probe=""
-    if grep -q 'reason=binding-mismatch' "$workdir/request.stderr"; then
-      stale_line="$(grep -m1 '^RELEASE-REQUEST-STALE: ' "$workdir/request.stderr" || true)"
-      if [[ -n "$stale_line" ]]; then
-        read -r -a stale_fields <<< "${stale_line#RELEASE-REQUEST-STALE: }"
-        for stale_field in "${stale_fields[@]}"; do
-          case "$stale_field" in
-            version=*) stale_version="${stale_field#version=}" ;;
-            head=*) stale_head="${stale_field#head=}" ;;
-            message_id=*) stale_message_id="${stale_field#message_id=}" ;;
-            probe=*) stale_probe="${stale_field#probe=}" ;;
-          esac
-        done
-      fi
-    fi
-    recovered=0
-    if [[ "$stale_probe" == "bound_pending" && -n "$stale_version" && -n "$stale_head" \
-          && -n "$stale_message_id" && "$stale_head" != "$main" ]]; then
-      if "${approval[@]}" abandon --version "$stale_version" --head "$stale_head" \
-        --message-id "$stale_message_id" \
-        --reason "stale pending release superseded by origin/main advance (release.sh auto-recovery)"; then
-        log "abandoned stale pending release $stale_version at ${stale_head:0:12} — 요청을 한 번만 다시 게시한다"
-        post_request && recovered=1   # 재시도는 정확히 한 번이다 — 루프는 없다
-      fi
-    fi
-    (( recovered == 1 )) || die "$request_refusal" 1
-  fi
-  log "approval requested: $version at ${head:0:12}"
-
-  deadline_seconds="${RELEASE_DEADLINE_SECONDS:-}"
-  [[ -z "$deadline_seconds" || "$deadline_seconds" =~ ^[0-9]+$ ]] \
-    || die "RELEASE_DEADLINE_SECONDS must be an unsigned integer" 2
-  deadline=0
-  [[ -z "$deadline_seconds" ]] || deadline=$(( SECONDS + deadline_seconds ))
-  transient_failures=0
-  while :; do
-    poll_decision
-    case "$decision_rc" in
-      0) break ;;
-      9) die "owner cancelled $version — 태그 없음, prod 불변" 9 ;;
-      7) transient_failures=0 ;;
-      2) die "release request disappeared or was rebound (rc=2)" 1 ;;
-      *)
-        # rc=255 등은 SSH 불통 같은 일시 실패일 수 있다 — 한 번에 죽지 않고
-        # 연속 10회까지 재시도한다(2026-08-31 실측: 일시 255 가 대기를 죽였다).
-        transient_failures=$(( transient_failures + 1 ))
-        (( transient_failures < 10 )) \
-          || die "release request is no longer decidable (rc=$decision_rc, ${transient_failures}회 연속)" 1
-        log "decision poll failed (rc=$decision_rc); retrying (${transient_failures}/10)"
-        ;;
-    esac
-    if [[ -n "$deadline_seconds" ]] && (( SECONDS >= deadline )); then
-      log "no owner decision within the window — 요청은 살아 있고, 재실행이 곧 재개다"
-      exit 8
-    fi
-    sleep "${RELEASE_POLL_SECONDS:-15}"
-  done
+  attach_args=(attach --plan-file "$workdir/plan.json" --url "$owner_command")
+  [[ -z "$owner_inbox" ]] || attach_args+=(--inbox "$(realpath -m -- "$owner_inbox")")
+  # cd: `python3 -m` puts the cwd first on sys.path, so another checkout's older automation
+  # package would shadow this one (the same trap release_complete.sh guards against).
+  (cd "$SCRIPT_DIR/.." && PYTHONPATH="$SCRIPT_DIR/.." python3 -B -m automation.release_command "${attach_args[@]}") \
+    || die "RELEASE-COMMAND-REFUSED: 형 명령 링크를 계획에 싣지 못했다" 4
+  command_rc=0
+  "${approval[@]}" command --plan-file "$workdir/plan.json" \
+    > "$workdir/record.json" 2> "$workdir/command.stderr" || command_rc=$?
+  cat "$workdir/command.stderr" >&2
+  (( command_rc == 0 )) \
+    || die "RELEASE-COMMAND-REFUSED: 형 명령 글로 승인 레코드를 쓰지 못했다(rc=$command_rc) — 태그 없음, prod 불변" 4
+  poll_decision
+  (( decision_rc == 0 )) \
+    || die "RELEASE-COMMAND-UNVERIFIED: 형 명령 레코드를 다시 확인하지 못했다(rc=$decision_rc) — 태그 없음" 1
+  log "owner command accepted: $version at ${head:0:12} — $owner_command"
 else
   log "approved release request already live for ${head:0:12} — resuming to the tag cut"
 fi
