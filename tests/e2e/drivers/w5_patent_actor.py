@@ -37,6 +37,9 @@ def main() -> int:
         env = {
             "AUTOPHAGY_DEMO_SECRET": "DUMMY-w5-patent",
             "PATH": "/usr/bin:/bin",
+            # The skill CLI refuses to run outside the live mount (STALE-SKILL-COPY-BLOCK, exit 3) on a node
+            # that has one; declare this tree's skills as the live root like the other w4/w5 actors.
+            "AUTOPHAGY_SKILL_LIVE_ROOT": str(root / "skills"),
             "PATENT_DRAFT_ROOT": str(drafts),
             "PATENT_STATUS_ROOT": str(work / "status"),
             "PATENT_LLM_LOG_ROOT": str(work / "logs"),
