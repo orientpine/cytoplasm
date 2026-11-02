@@ -147,6 +147,11 @@ class ProposalStore:
         with self._locked():
             return self._read().get(request_id)
 
+    def card_of(self, request_id: str) -> tuple[str, str] | None:
+        """Read the atomically replaced state without creating a directory or lock file for a gate GET."""
+        record = self._read().get(request_id)
+        return (record.channel_id, record.message_id) if record and record.channel_id and record.message_id else None
+
     def live_for_source(self, kind: str, source_id: str, subject: str = "") -> ProposalRecord | None:
         """An undecided card for this conversation, or any proposal already made from this very mail."""
         key = approval_key(kind, conversation_of(kind, source_id, subject))

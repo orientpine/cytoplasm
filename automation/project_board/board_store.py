@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Final
@@ -336,6 +336,19 @@ class BoardStore:
         with self._connect() as db:
             row = db.execute("SELECT * FROM todos WHERE todo_id = ?", (todo_id,)).fetchone()
         return None if row is None else _todo(row)
+
+    def todo_evidence(self, todo_id: str) -> tuple[TodoRow, str] | None:
+        """Read one todo and its applied card binding without creating or migrating the board."""
+        if not self.path.exists():
+            return None
+        with closing(sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=30)) as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute(
+                "SELECT todos.*, COALESCE(sources.message_id, '') AS card_message FROM todos"
+                " LEFT JOIN sources ON sources.proposal_id = todos.proposal_id WHERE todos.todo_id = ?",
+                (todo_id,),
+            ).fetchone()
+        return None if row is None else (_todo(row), str(row["card_message"]))
 
     def open_todo_lines(self, limit: int = 40) -> tuple[str, ...]:
         with self._connect() as db:

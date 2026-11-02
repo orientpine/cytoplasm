@@ -17,7 +17,7 @@ import hashlib
 import re
 import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,6 +69,12 @@ CREATE TABLE IF NOT EXISTS order_events (
   kind   TEXT NOT NULL,
   detail TEXT NOT NULL,
   actor  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS todo_uses (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  todo_id TEXT NOT NULL,
+  at      TEXT NOT NULL,
+  actor   TEXT NOT NULL
 );
 """
 _CONTROL: Final = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
@@ -297,6 +303,22 @@ class OrderStore:
             ).fetchall()
         return _order(row, events)
 
+    def todo_usage(self, todo_id: str) -> tuple[int, str]:
+        """A lookup never creates orders.db or upgrades an older orders schema."""
+        if not self.path.exists():
+            return 0, ""
+        with closing(sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=30)) as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'todo_uses'").fetchone() is None:
+                return 0, ""
+            return _todo_usage(db, todo_id)
+
+    def record_todo_use(self, todo_id: str, *, now: datetime | None = None) -> tuple[int, str]:
+        """Record one gate use after the server has checked that the todo exists on the board."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("INSERT INTO todo_uses (todo_id, at, actor) VALUES (?, ?, ?)", (todo_id, _stamp(now), "gate"))
+            return _todo_usage(db, todo_id)
+
     def all(self, *, limit: int = 200) -> tuple[Order, ...]:
         """Newest first, each with its history (read-only when the file does not exist yet)."""
         if not self.path.exists():
@@ -308,6 +330,15 @@ class OrderStore:
         for event in events:
             by_number.setdefault(int(event["number"]), []).append(event)
         return tuple(_order(row, by_number.get(int(row["number"]), [])) for row in rows)
+
+
+def _todo_usage(db: sqlite3.Connection, todo_id: str) -> tuple[int, str]:
+    row = db.execute(
+        "SELECT COUNT(*), COALESCE((SELECT at FROM todo_uses WHERE todo_id = ? ORDER BY id LIMIT 1), '')"
+        " FROM todo_uses WHERE todo_id = ?",
+        (todo_id, todo_id),
+    ).fetchone()
+    return int(row[0]), str(row[1])
 
 
 def _order(row: sqlite3.Row, events: list[sqlite3.Row]) -> Order:
