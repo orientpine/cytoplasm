@@ -214,6 +214,8 @@ class _Handler(BaseHTTPRequestHandler):
             "todo_id": todo.todo_id, "proposal_id": todo.proposal_id, "project": todo.project,
             "status": todo.status, "approved_at": todo.approved_at, "auto_applied": not message_id,
             "card": card, "title_sha256": hashlib.sha256(todo.title.encode("utf-8")).hexdigest(),
+            # what the todo came from (a mail uid or a minutes file), so the node gate reads only that
+            "source": {"kind": todo.source_kind, "id": todo.source_id},
             "uses": uses, "first_used_at": first_used_at,
         }, ensure_ascii=False)
         self._send(200, body.encode("utf-8"), "application/json; charset=utf-8")

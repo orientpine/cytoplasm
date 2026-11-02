@@ -82,7 +82,8 @@ def test_card_approved_todo_exposes_only_gate_evidence(served) -> None:
         "todo_id": TODO, "proposal_id": PROPOSAL, "project": "예시 프로젝트", "status": "열림",
         "approved_at": "2026-11-02T21:09:00Z", "auto_applied": False,
         "card": {"channel_id": "test-channel", "message_id": "test-card"},
-        "title_sha256": hashlib.sha256(TITLE.encode("utf-8")).hexdigest(), "uses": 0, "first_used_at": "",
+        "title_sha256": hashlib.sha256(TITLE.encode("utf-8")).hexdigest(),
+        "source": {"kind": "mail", "id": "test-mail"}, "uses": 0, "first_used_at": "",
     }
     assert (board.path.read_bytes(), board.path.stat().st_mtime_ns) == before
     assert not orders.path.exists()
