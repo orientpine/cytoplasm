@@ -64,7 +64,10 @@ for yaml in "${scenarios[@]}"; do
   live_retry="$(sed -n 's/^live_retry:[[:space:]]*//p' "$yaml" | head -1)"
   # A scenario whose subject was retired by a release switch is reported, not run (2026-10-19:
   # report-hub, peer coordination and Hermes memory). Removing the switch file brings it back.
-  retired_when="$(sed -n 's/^retired_when:[[:space:]]*//p' "$yaml" | head -1)"
+  # The value ends at a YAML inline comment: the shipped scenarios explain the switch with one
+  # ("peer-retired=retired  # retired by ..."), and keeping it made the switch never match, so the
+  # retired scenarios ran and failed every week (2026-11-02).
+  retired_when="$(sed -n 's/^retired_when:[[:space:]]*//p' "$yaml" | head -1 | sed 's/[[:space:]]*#.*$//')"
   if [[ "$retired_when" == ?*=?* ]]; then
     flag_file="${BANK_RELEASE_FLAGS_DIR:-$HOME/.hermes/release-flags}/${retired_when%%=*}"
     if [[ -f "$flag_file" && ! -L "$flag_file" && "$(cat -- "$flag_file"; printf x)" == "${retired_when#*=}x" ]]; then

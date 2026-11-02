@@ -44,6 +44,9 @@ def main() -> int:
             # refuses without one; keep it inside the throwaway world like the other w5 actors.
             "HOME": str(work),
             "PATH": f"{bin_dir}:/usr/bin:/bin",
+            # The skill CLI refuses to run outside the live mount (STALE-SKILL-COPY-BLOCK, exit 3) on a node
+            # that has one; declare this tree's skills as the live root like the other w4/w5 actors.
+            "AUTOPHAGY_SKILL_LIVE_ROOT": str(root / "skills"),
             "PROPOSAL_WORKSPACE_ROOT": str(workspace),
             "PROPOSAL_STATUS_ROOT": str(status_root),
             "PROPOSAL_LLM_LOG_ROOT": str(work / "logs"),

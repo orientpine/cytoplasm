@@ -68,6 +68,9 @@ def main() -> int:
             "PROCURE_SESSION_DIR": str(work / "sess"),
             "PROCURE_AUDIT_LOG": str(audit),
             "PROCURE_WORKDIR": str(work),
+            # The skill CLI refuses to run outside the live mount (STALE-SKILL-COPY-BLOCK, exit 3) on a node
+            # that has one; declare this tree's skills as the live root like the other w4/w5 actors.
+            "AUTOPHAGY_SKILL_LIVE_ROOT": str(root / "skills"),
         }
         subprocess.run(  # noqa: S603
             [sys.executable, str(scripts / "make_fixtures.py"), str(work / "fx"),
