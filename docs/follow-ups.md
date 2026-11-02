@@ -479,6 +479,10 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 - **낮음 · 같은 파일의 runner 시험 둘은 아직 pid 파일·프로세스 묶음을 짧게 폴링한다**: `test_recall_cancel.py` 의 `_pid`·`_gone` 이 5초 상한으로 0.05초마다 본다. 2026-11-02 부하(40개 바쁜 프로세스, 부하 30~42)에서 각각 200회 0 실패라 지금은 흔들리지 않는다 → 흔들리면 중계 ssh 자식 시험처럼 살아 있을 때 연 pidfd 로 종료를 기다린다. 영향: 없음(관측) · 심각도 낮음.
 - **recall 품질 숫자가 같은 10문항으로 고치고 다시 잰 값이다** — 형 카드 순서 고침(q08)은 그 10문항에서 찾은 결함이라 맞춤 위험이 있다 → 형 기억에서 새로 뽑은 봉인 질문 세트로 한 번 재서 일반 성능을 확인한다. 영향: 실제 맞힘률 과대 추정 가능 · 심각도 낮음.
 
+## 유돌 Gmail 답장에서 남긴 것 (2026-11-02)
+
+- **Gmail 답장 카드는 첨부를 받지 않는다** — `compose --reply-gmail`·게이트 `mail-compose --reply-gmail` 은 `--attachment` 를 거부한다. gws 0.22.5 가 현재 폴더 밖 `-a` 를 거절해(위 「메일 첨부 한글 이름」 묶음) ✅ 뒤 발송이 깨질 수 있어서다 → 그 cwd 문제를 고친 뒤 `DeliveryOptions(attachments=…)` 로 열고 카드에 첨부 줄을 보인다. 영향: Gmail 답장에 파일을 붙이려면 기관메일이나 새 메일로 돌아가야 함 · 심각도 낮음.
+
 ## Drive PLAUD 폴더 이동에서 남긴 것 (2026-11-02)
 
 - **`test_deploy_tree_swap` 의 between_switch 두 건은 호출자 env 의 `PYTHONPYCACHEPREFIX` 를 지우지 않는다** — 그 변수가 잡힌 셸(에이전트 세션 등)에서 `local_ci.sh run` 을 돌리면 자식 python 이 `__pycache__` 를 모듈 옆에 만들지 않아 항상 실패한다(변수를 빼면 통과) → 시험이 자식 env 에서 `PYTHONPYCACHEPREFIX`·`PYTHONDONTWRITEBYTECODE` 를 빼고 부른다. 영향: 영수증 없이 local_ci 재실행 · 심각도 낮음.
