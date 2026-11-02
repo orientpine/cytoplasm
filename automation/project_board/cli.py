@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from automation.interop.approval_lifecycle import Outcome
 from automation.project_board.proposal_gate import discord_runtime, owner_id_from_config, request_approval
 
-from . import minutes, sources
+from . import agent_read, minutes, sources
 from .config import load_config
 from .llm import describe, provider_from_config
 from .models import GRADES, STATUSES, ProjectBoardError
@@ -178,6 +178,20 @@ def cmd_orders(args: argparse.Namespace) -> int:
     for order in orders:
         print(f"ORDER #{order.number} status={order.status} dori={order.dori or '-'} "
               f"delivered={order.delivered_to or '-'} created={order.created_at}")
+    return 0
+
+
+def cmd_agent_list(args: argparse.Namespace) -> int:
+    root = Board.default().root
+    if args.command == "todo-list":
+        items, line = agent_read.todo_items(root, open_only=args.open), agent_read.todo_line
+    else:
+        items, line = agent_read.order_items(root, open_only=args.open), agent_read.order_line
+    if args.json:
+        print(json.dumps(items, ensure_ascii=False))
+    else:
+        for item in items:
+            print(line(item))
     return 0
 
 
@@ -385,6 +399,12 @@ def build_parser() -> argparse.ArgumentParser:
     orders.add_argument("--undelivered", action="store_true", help="only orders the relay has not handed on")
     orders.add_argument("--json", action="store_true")
     orders.set_defaults(handler=cmd_orders)
+
+    for name, what in (("todo-list", "approved todos"), ("order-list", "dashboard orders")):
+        listing = commands.add_parser(name, help=f"read-only bounded list of {what} for YooDori's gate")
+        listing.add_argument("--open", action="store_true", help="only open ones")
+        listing.add_argument("--json", action="store_true")
+        listing.set_defaults(handler=cmd_agent_list)
 
     update = commands.add_parser("order-update", help="write back who took a dashboard order and how far it got")
     update.add_argument("number", type=int)

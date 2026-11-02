@@ -305,6 +305,89 @@ def test_the_yoodori_gate_logs_the_todo_id_but_never_the_note(tmp_path: Path, mo
     assert f" todo-done id={TODO_ID} rc=0 " in line and "비밀" not in line
 
 
+def test_the_yoodori_gate_lists_dashboard_todos_and_orders_read_only() -> None:
+    for name in ("todo-list", "order-list"):
+        assert gate.build([name, "--open", "--json"]) == (
+            name, ["/usr/bin/python3", "-m", "automation.project_board", name, "--open", "--json"], gate.RELEASE)
+        assert gate.build([name])[1][-1] == name
+        for words in ([name, "--all"], [name, "--open", "--open"], [name, "--json", "x"], [name, "--by", "형"]):
+            with pytest.raises(gate.Refused):
+                gate.build(words)
+
+
+def test_todo_and_order_lists_are_bounded_masked_and_never_touch_the_board(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli.Board, "default", classmethod(lambda cls: cls(tmp_path)))
+    assert cli.main(["todo-list", "--json"]) == 0 and cli.main(["order-list", "--open"]) == 0
+    assert capsys.readouterr().out == "[]\n" and not list(tmp_path.iterdir())
+    store = _store(tmp_path)
+    store.apply_proposal("pb-2", proposal_from_dict({
+        "project": "프로젝트A", "summary": "요약", "todos": [{"title": "끝난 일"}],
+        "source": {"kind": "mail", "source_id": "u-2", "subject": "회신 x@example.org " + "제" * 200,
+                   "sender": "보낸이 <y@example.org>"},
+    }), message_id="m2")
+    store.record_progress("pb-2-1", status="완료", progress=None, note="길" * 300, by="형")
+    orders = OrderStore(tmp_path / "orders.db")
+    orders.add("지" * 900, receiver="유돌", by=OWNER, via="owner-device", todo_id="pb-1-1", device_ip="192.0.2.23")
+    orders.update(orders.add("끝난 지시", receiver="유돌", by=OWNER, via="tailnet").number, status="끝", by="유돌")
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    assert cli.main(["todo-list", "--json"]) == 0
+    todos = {t["todo_id"]: t for t in json.loads(capsys.readouterr().out)}
+    assert set(todos) == {"pb-1-1", "pb-2-1"} and todos["pb-1-1"]["source_kind"] == "mail"
+    assert todos["pb-2-1"]["source_subject"].startswith("회신 [주소] 제") and len(todos["pb-2-1"]["source_subject"]) == 120
+    assert len(str(todos["pb-2-1"]["note"])) == 200 and todos["pb-2-1"]["note_truncated"] is True
+    assert cli.main(["todo-list", "--open", "--json"]) == 0
+    assert [t["todo_id"] for t in json.loads(capsys.readouterr().out)] == ["pb-1-1"]
+    assert cli.main(["order-list", "--json"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert [(o["number"], o["status"], o["owner_device"]) for o in listed] == [(1, "받음", True), (2, "끝", False)]
+    assert len(str(listed[0]["body"])) == 500 and listed[0]["body_truncated"] is True
+    assert cli.main(["order-list", "--open"]) == 0 and cli.main(["todo-list"]) == 0
+    printed = capsys.readouterr().out
+    assert printed.startswith("ORDER #1 status=받음 via=owner-device todo=pb-1-1 ") and "ORDER #2" not in printed
+    everything = json.dumps(todos, ensure_ascii=False) + json.dumps(listed, ensure_ascii=False) + printed
+    for secret in ("x@example.org", "y@example.org", "보낸이", OWNER, "192.0.2.23"):
+        assert secret not in everything
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+
+def test_todo_list_json_keeps_the_backlog_loop_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from automation.project_board.models import STATUSES
+
+    monkeypatch.setattr(cli.Board, "default", classmethod(lambda cls: cls(tmp_path)))
+    store = BoardStore(tmp_path / "board.db")
+    store.apply_proposal("pb-9e9899a8a04b", proposal_from_dict({
+        "project": "프로젝트A", "summary": "요약", "todos": [{"title": "보고서", "due": "2026-11-05"}, {"title": "끝"}],
+        "source": {"kind": "meeting", "source_id": "2026-11-01.md", "subject": "회의"},
+    }), message_id="m1")
+    store.record_progress("pb-9e9899a8a04b-2", status="완료", progress=None, note=None, by="형")
+    store.apply_proposal("pb-0123456789ab", proposal_from_dict({
+        "project": "프로젝트A", "summary": "요약", "todos": [{"title": "자동", "due": "2026-11-04"}],
+        "source": {"kind": "mail", "source_id": "u-3", "subject": "자동 반영"},
+    }), message_id="")
+    assert cli.main(["todo-list", "--json"]) == 0
+    by_id = {t["todo_id"]: t for t in json.loads(capsys.readouterr().out)}
+    assert (by_id["pb-0123456789ab-1"]["auto_applied"], by_id["pb-0123456789ab-1"]["card_approved_at"]) == (True, None)
+    card = by_id["pb-9e9899a8a04b-1"]
+    assert card["auto_applied"] is False and card["card_approved_at"] == card["approved_at"]
+    assert cli.main(["todo-list"]) == 0
+    assert " by=auto " in capsys.readouterr().out
+    for flags, ids in (([], ["pb-0123456789ab-1", "pb-9e9899a8a04b-1", "pb-9e9899a8a04b-2"]),
+                       (["--open"], ["pb-0123456789ab-1", "pb-9e9899a8a04b-1"])):
+        assert cli.main(["todo-list", "--json", *flags]) == 0
+        listed = json.loads(capsys.readouterr().out)
+        assert isinstance(listed, list) and [t["todo_id"] for t in listed] == ids
+        for todo in listed:
+            assert gate._TODO_ID.fullmatch(todo["todo_id"]) and todo["title"] and todo["status"] in STATUSES
+            assert {"project", "due", "source_kind", "source_subject", "approved_at", "auto_applied",
+                    "card_approved_at"} <= set(todo)
+            assert todo["source_kind"] in {"mail", "meeting"} and len(todo["source_subject"]) <= 120
+    assert {t["status"] for t in listed} == {"열림"}
+
+
 def test_progress_marks_done_as_the_named_writer_and_leaves_a_done_todo_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:

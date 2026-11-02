@@ -160,6 +160,8 @@ USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          " [--dori <name>] [--post-url <https link>] [--note <text>].\n"
          "Dashboard todo done: todo-done <pb-<12 hex>-<n>> [--note <text, 1-200>] (completion only;\n"
          "  already done = no change, prints ALREADY; recorded as 유돌).\n"
+         "Dashboard reads: todo-list [--open] [--json], order-list [--open] [--json] (read-only; no mail\n"
+         "  sender, body or address, no order author login or device; long text is cut).\n"
          "Private upload: stage <name> [--name <display name>] (file bytes on SSH stdin, at most 64 MiB;\n"
          "  <name> is plain ASCII, --name is the Korean name a mail attachment shows, same extension).\n"
          "Received attachment: mail-attachment <uid> <file name as mail-get shows it> + origin\n"
@@ -611,6 +613,10 @@ def build(words: list[str]) -> tuple[str, list[str], Path]:
         return name, order_status(args), RELEASE
     if name == "todo-done":
         return name, todo_done(args), RELEASE
+    if name in {"todo-list", "order-list"}:
+        if len(set(args)) != len(args) or any(word not in {"--open", "--json"} for word in args):
+            raise Refused(f"{name} takes only [--open] [--json]")
+        return name, ["/usr/bin/python3", "-m", "automation.project_board", name, *args], RELEASE
     if name == "card-withdraw":
         return name, card_withdraw(args), RELEASE
     if name == "release-notes":
