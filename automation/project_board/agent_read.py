@@ -43,8 +43,9 @@ def todo_items(root: Path, *, open_only: bool) -> list[dict[str, object]]:
     statuses = sorted(OPEN_STATUSES) if open_only else list(STATUSES)
     rows = _rows(
         root / "board.db",
-        "SELECT todos.*, COALESCE(tasks.grade, ?) AS grade FROM todos"
-        " LEFT JOIN tasks ON tasks.task_key = todos.task_key"
+        "SELECT todos.*, COALESCE(tasks.grade, ?) AS grade, COALESCE(sources.message_id, '') AS card_message"
+        " FROM todos LEFT JOIN tasks ON tasks.task_key = todos.task_key"
+        " LEFT JOIN sources ON sources.proposal_id = todos.proposal_id"
         f" WHERE todos.status IN ({','.join('?' * len(statuses))})"
         " ORDER BY due IS NULL, due, todos.project, todo_id LIMIT ?",
         (DEFAULT_GRADE, *statuses, LIST_LIMIT),
@@ -52,13 +53,16 @@ def todo_items(root: Path, *, open_only: bool) -> list[dict[str, object]]:
     items = []
     for row in rows:
         note, cut = _clip(str(row["note"]), TODO_NOTE_LIMIT)
+        # service._auto_apply stores message_id=""; proposal_watch stores the approved card's message id.
+        auto = not str(row["card_message"])
         items.append({
             "todo_id": str(row["todo_id"]), "project": str(row["project"]), "title": str(row["title"]),
             "owner": str(row["owner"]), "due": row["due"], "status": str(row["status"]),
             "progress": int(row["progress"]), "source_kind": str(row["source_kind"]),
             "source_id": str(row["source_id"]),
             "source_subject": _clip(_ADDRESS.sub("[주소]", str(row["source_subject"])), SUBJECT_LIMIT)[0],
-            "approved_at": str(row["approved_at"]),
+            "approved_at": str(row["approved_at"]), "auto_applied": auto,
+            "card_approved_at": None if auto else str(row["approved_at"]),
             "updated_at": str(row["updated_at"]), "grade": str(row["grade"]),
             "note": note, "note_truncated": cut,
         })
@@ -87,7 +91,8 @@ def order_items(root: Path, *, open_only: bool) -> list[dict[str, object]]:
 
 def todo_line(item: dict[str, object]) -> str:
     return (f"TODO {item['todo_id']} status={item['status']} progress={item['progress']} due={item['due'] or '미정'} "
-            f"source={item['source_kind']} approved={item['approved_at']} project={item['project']} "
+            f"source={item['source_kind']} approved={item['approved_at']} "
+            f"by={'auto' if item['auto_applied'] else 'card'} project={item['project']} "
             f"title={item['title']}")
 
 

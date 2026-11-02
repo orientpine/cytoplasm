@@ -364,15 +364,28 @@ def test_todo_list_json_keeps_the_backlog_loop_contract(
         "source": {"kind": "meeting", "source_id": "2026-11-01.md", "subject": "회의"},
     }), message_id="m1")
     store.record_progress("pb-9e9899a8a04b-2", status="완료", progress=None, note=None, by="형")
-    for flags, ids in (([], ["pb-9e9899a8a04b-1", "pb-9e9899a8a04b-2"]), (["--open"], ["pb-9e9899a8a04b-1"])):
+    store.apply_proposal("pb-0123456789ab", proposal_from_dict({
+        "project": "프로젝트A", "summary": "요약", "todos": [{"title": "자동", "due": "2026-11-04"}],
+        "source": {"kind": "mail", "source_id": "u-3", "subject": "자동 반영"},
+    }), message_id="")
+    assert cli.main(["todo-list", "--json"]) == 0
+    by_id = {t["todo_id"]: t for t in json.loads(capsys.readouterr().out)}
+    assert (by_id["pb-0123456789ab-1"]["auto_applied"], by_id["pb-0123456789ab-1"]["card_approved_at"]) == (True, None)
+    card = by_id["pb-9e9899a8a04b-1"]
+    assert card["auto_applied"] is False and card["card_approved_at"] == card["approved_at"]
+    assert cli.main(["todo-list"]) == 0
+    assert " by=auto " in capsys.readouterr().out
+    for flags, ids in (([], ["pb-0123456789ab-1", "pb-9e9899a8a04b-1", "pb-9e9899a8a04b-2"]),
+                       (["--open"], ["pb-0123456789ab-1", "pb-9e9899a8a04b-1"])):
         assert cli.main(["todo-list", "--json", *flags]) == 0
         listed = json.loads(capsys.readouterr().out)
         assert isinstance(listed, list) and [t["todo_id"] for t in listed] == ids
         for todo in listed:
             assert gate._TODO_ID.fullmatch(todo["todo_id"]) and todo["title"] and todo["status"] in STATUSES
-            assert {"project", "due", "source_kind", "source_subject", "approved_at"} <= set(todo)
+            assert {"project", "due", "source_kind", "source_subject", "approved_at", "auto_applied",
+                    "card_approved_at"} <= set(todo)
             assert todo["source_kind"] in {"mail", "meeting"} and len(todo["source_subject"]) <= 120
-    assert [t["status"] for t in listed] == ["열림"]
+    assert {t["status"] for t in listed} == {"열림"}
 
 
 def test_progress_marks_done_as_the_named_writer_and_leaves_a_done_todo_alone(
