@@ -28,7 +28,9 @@ def _bank(tmp_path: Path) -> tuple[Path, Path]:
     driver = root / "tests/e2e/drivers/fake.sh"
     driver.write_text(f"#!/bin/bash\ntouch {ran}\nexit 1\n")
     (root / "tests/e2e/scenarios/w3-report-hub.yaml").write_text(
-        "id: w3-report-hub\ndriver: tests/e2e/drivers/fake.sh\nretired_when: report-hub-off=off\n")
+        "id: w3-report-hub\ndriver: tests/e2e/drivers/fake.sh\n"
+        # Same shape as the shipped scenario: the switch is followed by an inline comment.
+        "retired_when: report-hub-off=off  # retired by this release switch\n")
     return root, ran
 
 
