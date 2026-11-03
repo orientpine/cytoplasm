@@ -209,6 +209,29 @@ def test_compose_cli_accepts_repeated_cc() -> None:
     assert args.cc == ["cc1@example.test", "cc2@example.test"]
 
 
+def test_compose_puts_every_repeated_to_on_the_card(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given: five recipients, each its own --to, and one of them repeated in other case
+    _compose_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
+    tos = [f"to{i}@example.test" for i in range(5)]
+    args = triage_cli.build_parser().parse_args([
+        "compose", *(word for to in tos for word in ("--to", to)), "--to", tos[0].upper(),
+        "--subject", COMPOSE_SUBJECT, "--body", COMPOSE_BODY, "--no-post",
+    ])
+    # When
+    assert triage_cli.cmd_compose(args) == 0
+    # Then: one To value with all five in order (the repeat once), frozen in argv and hash, on the card
+    [draft] = triage_gate.list_drafts()
+    joined = ", ".join(tos)
+    assert draft["to"] == joined
+    assert draft["argv"].count("--to") == 1
+    assert draft["argv"][draft["argv"].index("--to") + 1] == joined
+    assert f"`{joined}`" in triage_core.render_approvals_message(draft)
+    assert triage_core.draft_sha256({**draft, "to": tos[0]}) != draft["sha256"]
+
+
 def test_compose_post_targets_dm_channel_with_reaction_order(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

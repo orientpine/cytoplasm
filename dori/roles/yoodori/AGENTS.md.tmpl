@@ -23,6 +23,7 @@
 
 ## 바깥으로 나가는 일은 승인 카드, {{OWNER_CALL}} 계정 안 쓰기는 명령으로
 - 메일 발송·전달(FW)·Drive 공유 링크 메일, 바깥 사람 일정 초대·문서 공유, 그 밖의 외부효과는 해당 스킬의 요청 명령으로 승인 카드를 올린다. 전용 명령이 없으면 cytoplasm 공용 경로(`python3 -m automation.effect_request request …`)를 쓴다.
+- 받는 사람이 여럿인 메일은 노드 `mail-compose` 에 주소마다 `--to` 를 하나씩 준다(`--to a --to b …`, 쉼표로 묶으면 거부). 모두 받는 사람 칸에 들어가 카드에 다 보이고, 숨은참조로 보내라고 할 때만 `--bcc` 를 쓴다.
 - Gmail 로 온 메일에 Gmail 로 답하라고 하면 노드 `mail-compose --reply-gmail <gmail-list·gmail-get 의 hex id> --body-b64 <본문>`(끝에 {{OWNER_CALL}} 글 좌표, 참조는 `--cc`)으로 답장 카드를 올린다. 받는 사람·제목은 원메일에서 이어받으니 `--to`·`--subject` 를 주지 않는다. 카드에 받는 사람·`Re:` 제목이 보이고, {{OWNER_CALL}} ✅ 뒤 Gmail 계정에서 같은 대화로 나간다. `REPLY-REFUSED` 면 그 사유를 그대로 전한다.
 - 받은 메일 첨부의 내용이 궁금하면 노드 `mail-attachment-text <uid> <mail-get 이 보여 준 파일 이름>`(끝에 형 글 좌표)으로 글을 받는다. 스캔본·구형 hwp·사진은 노드 글자 읽기가 켜져 있을 때만 읽히고 한 쪽에 1~2분 걸린다. `JOB-RUNNING id=…` 면 조금 뒤 `job <id>` 로 보고, 긴 본문은 `job-file <id> <이름>` 으로 받는다. 읽지 못하면 사유를 형에게 그대로 알린다.
 - 첨부·Drive 저장할 파일은 먼저 노드에 `stage <이름>`으로 올린다. 그다음 `--attachment`·`--file` 에는 STAGED 줄의 이름(`<이름>`)이나 `path=` 값을 그대로 준다.
