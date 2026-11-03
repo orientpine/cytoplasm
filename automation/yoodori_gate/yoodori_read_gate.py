@@ -14,7 +14,7 @@ import sys
 import time
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 # sshd runs this file with -I: only its own declared helper directory is added.
@@ -129,7 +129,7 @@ DENIED_FLAGS = frozenset({
     "--out", "--outputs-root", "--notes-root", "--recorded", "--meeting-recorded",
     "--recorded-response", "--response-file", "--injection-file", "--dm-target",
     "--write-body", "--forge-signature", "--user-id", "--notify-channel", "--notify-message-id",
-    "--origin-channel-id", "--origin-message-id", "--allow-plaintext",
+    "--origin-channel-id", "--origin-message-id", "--origin-todo", "--allow-plaintext",
 })
 _FLAG = re.compile(r"--[a-z][a-z0-9-]{0,40}")
 _OUT_NAME = re.compile(r"(?!\.)[A-Za-z0-9._-]{1,120}")
@@ -141,6 +141,10 @@ _ORDER_FLAGS = {"--dori": 20, "--post-url": 300, "--note": 300}
 # Dashboard todos (owner 2026-10-31 "처리되면 네가 대시보드에서 알아서 완료로 처리해줘"): completion only.
 _TODO_ID = re.compile(r"pb-[0-9a-f]{12}-[1-9][0-9]{0,3}")
 _TODO_NOTE_LIMIT = 200
+# A card-approved dashboard todo as the owner's basis (owner 2026-11-03 06:09 KST Q2 "고친다: 카드 승인 할 일도 근거로
+# 받음 (따로 PR, 추천)"): only to read that todo's own source mail's attachments and save them to his Drive.
+# Outbound steps (mail, sharing) keep their ✅ card and never take a todo.
+TODO_ORIGIN_COMMANDS = ("mail-attachment", "mail-attachment-text", "drive-save")
 _NOTE_SHELL = re.compile(r"[;&|`$<>\\(){}*?!'\"]")
 
 USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
@@ -179,6 +183,9 @@ USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          "  mail-attachment-text <uid> <file name as mail-get shows it> (that attachment as text; scans,\n"
          "  old hwp and photos only when the node's OCR release switch is on);\n"
          "  each ends with --origin-channel-id N --origin-message-id N. Files: staged paths only;\n"
+         "  a card-approved todo instead: mail-attachment, mail-attachment-text and drive-save (switch on)\n"
+         "  may end with --origin-todo <pb-<12 hex>-<n>> for that todo's own source mail and its staged\n"
+         "  attachments only (dashboard and card checked each time, approval at most 24 hours old);\n"
          "  --<flag>-b64 for multi-line text; --out-name <name> for an output file.\n"
          "  job <id> (status/output), job-file <id> <name> (bytes on stdout).\n")
 
@@ -318,6 +325,8 @@ class Job:
     kind: str = "yoodori"
     marker: str = ""
     needs_origin: bool = True
+    todo_id: str = ""
+    todo_link: str = ""
 
 
 # Q233 (2026-10-18 17:40 KST "6개 다 카드 없이 바로 + 하루 요약에 남기기"): with that producer's
@@ -411,6 +420,53 @@ def cardless_job(name: str, argv: list[str]) -> Job:
         argv = [*argv[:3], "save-now", *argv[5:]]
         label = f"Drive 저장 {values.get('--summary', '')}"
     return Job(name, argv, True, label[:160], 600, channel, message, CARDLESS[name], WRITTEN)
+
+
+def todo_origin(words: list[str]) -> tuple[list[str], str]:
+    """A trailing ``--origin-todo <id>`` in place of the owner message: (words without it, the id), or (words, "")."""
+    if len(words) < 3 or words[-2] != "--origin-todo":
+        return words, ""
+    if words[0] not in TODO_ORIGIN_COMMANDS:
+        raise Refused("--origin-todo is accepted only for " + ", ".join(TODO_ORIGIN_COMMANDS))
+    if not _TODO_ID.fullmatch(words[-1]):
+        raise Refused("--origin-todo needs <pb-<12 hex>-<n>>")
+    if any(word in _ORIGIN for word in words[1:-2]):
+        raise Refused("give either --origin-todo or the origin channel/message ids, not both")
+    return words[:-2], words[-1]
+
+
+def todo_basis(todo_id: str):
+    """The dashboard and the card checked now (no use recorded yet)."""
+    _, notice_bot = _release_modules()
+    token = notice_bot.resolve_token(environ=job_env(HOME, RELEASE, ENV))
+    return yoodori_jobs.verify_owner_todo(todo_id, _owner_id(), token)
+
+
+def todo_target(name: str, argv: list[str], uid: str) -> None:
+    """The command reads only the todo's own source mail: its uid, or a staged attachment of that mail.
+
+    A staged ``mail-<uid>-<n>`` file is copied again from the mailbox before it is used, so an upload under
+    that name (``stage``) cannot pass off other bytes as the source mail's attachment.
+    """
+    if name == "mail-attachment":
+        target = argv[0]
+    elif name == "mail-attachment-text":
+        target = argv[3]
+    else:
+        path = Path(argv[argv.index("--file") + 1])
+        match = re.fullmatch(r"mail-([0-9]{1,20})-[1-9][0-9]{0,3}(?:\.[A-Za-z][A-Za-z0-9]{0,9})?", path.name)
+        received = original_name(STAGING, str(path))
+        if match is None or match[1] != uid or path.parent != STAGING or not received:
+            raise Refused("with --origin-todo, drive-save takes only a staged attachment of the todo's source mail")
+        try:
+            again, _digest, _size = stage_mail_attachment(HOME, STAGING, uid, received)
+        except OSError:
+            raise Refused("staging file unreadable") from None
+        if again != path:
+            raise Refused("with --origin-todo, drive-save takes only a staged attachment of the todo's source mail")
+        return
+    if target != uid:
+        raise Refused("with --origin-todo, only the todo's own source mail can be read")
 
 
 def _origin(args: list[str]) -> tuple[list[str], str, str]:
@@ -775,8 +831,9 @@ def _switched(kind: str) -> bool:
 
 def run_job(job: Job) -> int:
     env = job_env(HOME, RELEASE, ENV)
-    link = ""
-    if job.name in ORIGIN_READ_JOBS:
+    # A todo basis was checked (dashboard, card, target) and its use recorded before the job was built.
+    link = job.todo_link
+    if job.name in ORIGIN_READ_JOBS and not job.todo_id:
         _, notice_bot = _release_modules()
         link = yoodori_jobs.verify_owner_origin(
             job.channel_id, job.message_id, _owner_id(), notice_bot.resolve_token(environ=env)).link
@@ -788,13 +845,14 @@ def run_job(job: Job) -> int:
             switched_on = False
         if not switched_on:
             raise Refused(f"owner-command writes are off on this node (release switch auto-write-{job.kind})")
-        if job.needs_origin:
+        if job.needs_origin and not job.todo_id:
             token = notice_bot.resolve_token(environ=env)
             link = yoodori_jobs.verify_owner_origin(job.channel_id, job.message_id, _owner_id(), token).link
     path = yoodori_jobs.new_job(HOME, {
         "name": job.name, "argv": job.argv, "write": job.write, "label": job.label,
         "timeout": job.timeout, "kind": job.kind, "marker": job.marker,
-        "origin": {"channel_id": job.channel_id, "message_id": job.message_id, "link": link},
+        "origin": {"channel_id": job.channel_id, "message_id": job.message_id, "link": link,
+                   **({"todo_id": job.todo_id} if job.todo_id else {})},
     })
     yoodori_jobs.launch(path, env)
     finished = yoodori_jobs.wait(path, JOB_WAIT)
@@ -827,6 +885,13 @@ def main() -> int:
             raise Refused(f"cannot parse: {exc}") from None
         if words and words[0] not in (*CARD_COMMANDS, *JOB_COMMANDS, "order-status") and len(raw) > 600:
             raise Refused("read command too long")
+        words, todo = todo_origin(words)
+        basis = None
+        if todo:
+            basis = todo_basis(todo)
+            if basis.source_kind != "mail":
+                raise Refused("with --origin-todo, only a todo that came from a mail can be read")
+            words = [*words, "--origin-channel-id", basis.channel_id, "--origin-message-id", basis.message_id]
         job = build_job(words) if words and words[0] in JOB_COMMANDS else None
         if job is not None:
             name, argv, cwd = job.name, job.argv, HOME
@@ -848,6 +913,14 @@ def main() -> int:
                 if name == "obsidian-request":
                     argv = stage_body(argv, STAGING)
                 job = cardless_job(name, argv)
+        if basis is not None:
+            if name == "drive-save" and job is None:
+                raise Refused("with --origin-todo, drive-save runs only when the node's drive-save owner-command "
+                              "switch is on (no card is raised for a todo)")
+            todo_target(name, job.argv if job is not None else argv, basis.source_id)
+            yoodori_jobs.record_todo_use(basis.todo_id)
+            if job is not None:
+                job = replace(job, todo_id=basis.todo_id, todo_link=basis.link)
     except (Refused, yoodori_jobs.JobRefused) as exc:
         sys.stderr.write(f"YOODORI-GATE-REFUSED {exc}\n{USAGE}")
         _log("refused", 2, started)
@@ -884,9 +957,10 @@ def main() -> int:
                   + (f" display={original_name(STAGING, str(path))}" if shown is not None else ""))
             rc = 0
         elif name == "mail-attachment":
-            _, notice_bot = _release_modules()
-            token = notice_bot.resolve_token(environ=job_env(HOME, RELEASE, ENV))
-            yoodori_jobs.verify_owner_origin(argv[2], argv[3], _owner_id(), token)
+            if basis is None:
+                _, notice_bot = _release_modules()
+                token = notice_bot.resolve_token(environ=job_env(HOME, RELEASE, ENV))
+                yoodori_jobs.verify_owner_origin(argv[2], argv[3], _owner_id(), token)
             path, digest, size = stage_mail_attachment(HOME, STAGING, argv[0], argv[1])
             print(f"STAGED {path.name} sha256={digest} bytes={size} path={path} original={argv[1]}")
             rc = 0

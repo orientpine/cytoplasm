@@ -1,17 +1,20 @@
 """The owner's own recent Discord message as the basis for an action taken without a card.
 
 One implementation for the YooDori gate's owner-command jobs and the cardless release (owner
-2026-11-02 Q447). It imports nothing from automation at module level, so the deploy gate can
-stage it alone and the gate's standalone libexec copy can import it lazily.
+2026-11-02 Q447), and for the card-approved dashboard todo the gate also takes as the owner's basis.
+It imports nothing from automation at module level, so the deploy gate can stage it alone and the gate's standalone libexec copy can import it lazily.
 """
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+from urllib.parse import quote
 
 DISCORD_EPOCH_MS = 1420070400000
 ORIGIN_MAX_AGE_S = 24 * 3600
@@ -62,6 +65,11 @@ def verify_owner_origin(
     if (not isinstance(author, dict) or str(author.get("id")) != owner_id
             or author.get("bot") or str(message.get("id")) != message_id):
         raise OriginRefused("origin message is not the owner's own message")
+    return Origin(channel_id, message_id, _place(channel_id, message_id, channel, "origin"))
+
+
+def _place(channel_id: str, message_id: str, channel: dict, what: str) -> str:
+    """The message's link in its server (or the DM), or a refusal when it cannot be placed."""
     guild = channel.get("guild_id")
     from automation.interop.owner_message import discord_link
 
@@ -70,7 +78,109 @@ def verify_owner_origin(
     elif isinstance(guild, str) and guild.isdigit():
         link = discord_link(space="guild", guild_id=guild, channel_id=channel_id, message_id=message_id)
     else:
-        raise OriginRefused("origin channel could not be placed")
+        raise OriginRefused(f"{what} channel could not be placed")
     if not link.url:
-        raise OriginRefused("origin message link could not be built")
-    return Origin(channel_id, message_id, link.url)
+        raise OriginRefused(f"{what} message link could not be built")
+    return link.url
+
+
+# A dashboard todo the owner approved by its card is his basis too (owner 2026-11-03 06:09 KST Q2 "고친다: 카드 승인
+# 할 일도 근거로 받음 (따로 PR, 추천)", after Q454/Q455: a card-approved todo goes at once, one the board took in
+# without a card asks first). Same strength as the egress gate's X-Dori-Owner-Todo: the dashboard is asked on every
+# use, nothing is cached.
+TODO_OPEN_STATUSES = ("열림", "진행")
+_DIGITS = re.compile(r"[0-9]{1,20}")
+
+
+@dataclass(frozen=True, slots=True)
+class TodoBasis:
+    todo_id: str
+    source_kind: str
+    source_id: str
+    channel_id: str
+    message_id: str
+    link: str
+
+
+Ask = Callable[[str, str], object]
+FetchAny = Callable[[str, str], object]
+
+
+def _approved_age(value: object, now: float) -> float | None:
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return None if stamp.tzinfo is None else now - stamp.timestamp()
+
+
+def _owner_reacted(users: object, owner_id: str) -> bool:
+    if not isinstance(users, list):
+        raise ValueError("unexpected reaction list")
+    return any(isinstance(user, dict) and str(user.get("id")) == owner_id and not user.get("bot") for user in users)
+
+
+def verify_owner_todo(
+    todo_id: str, owner_id: str, token: str, *, ask: Ask, fetch: FetchAny, now: float | None = None,
+) -> TodoBasis:
+    """The todo must have come in through the owner's ✅ on its card, be open and approved in the last 24 hours.
+
+    ``ask(method, path)`` reads the dashboard's gate API (``/api/todos/<id>``): the todo id must match,
+    ``auto_applied`` must be exactly false with the card's channel and message, status 열림/진행, approval
+    0-24 hours old, and a source to bind the use to. Then the card itself is read on Discord: it must be this
+    node bot's own message, the owner's own account (not a bot) reacted ✅ and not ⛔. Nothing is recorded here;
+    the caller checks its target against the source and then calls ``record_todo_use``.
+    """
+    if not token:
+        raise OriginRefused("todo check needs the node Discord credential")
+    try:
+        data = ask("GET", f"/api/todos/{quote(todo_id, safe='')}")
+    except (OSError, ValueError, urllib.error.URLError):
+        raise OriginRefused("the dashboard could not be asked about the todo; nothing was run") from None
+    if not isinstance(data, dict) or data.get("todo_id") != todo_id:
+        raise OriginRefused("no such todo on the dashboard")
+    card = data.get("card")
+    channel_id = str(card.get("channel_id", "")) if isinstance(card, dict) else ""
+    message_id = str(card.get("message_id", "")) if isinstance(card, dict) else ""
+    if data.get("auto_applied") is not False or not _DIGITS.fullmatch(channel_id) or not _DIGITS.fullmatch(message_id):
+        raise OriginRefused("the todo was not approved on the owner's card; ask the owner")
+    if data.get("status") not in TODO_OPEN_STATUSES:
+        raise OriginRefused("the todo is not open (done or on hold)")
+    age = _approved_age(data.get("approved_at"), now if now is not None else time.time())
+    if age is None or not 0 <= age <= ORIGIN_MAX_AGE_S:
+        raise OriginRefused("the todo's card approval is older than 24 hours; ask the owner")
+    source = data.get("source")
+    kind = str(source.get("kind", "")) if isinstance(source, dict) else ""
+    source_id = str(source.get("id", "")) if isinstance(source, dict) else ""
+    if not kind or not source_id:
+        raise OriginRefused("the todo names no source to read")
+    card_path = f"/channels/{channel_id}/messages/{message_id}"
+    try:
+        me = fetch("/users/@me", token)
+        message = fetch(card_path, token)
+        channel = fetch(f"/channels/{channel_id}", token)
+        approved = _owner_reacted(fetch(f"{card_path}/reactions/{quote('✅')}?limit=100", token), owner_id)
+        cancelled = _owner_reacted(fetch(f"{card_path}/reactions/{quote('⛔')}?limit=100", token), owner_id)
+    except (OSError, ValueError, urllib.error.URLError):
+        raise OriginRefused("the todo's card could not be read; nothing was run") from None
+    author = message.get("author") if isinstance(message, dict) else None
+    if (not isinstance(me, dict) or not isinstance(author, dict) or not author.get("bot")
+            or str(author.get("id")) != str(me.get("id")) or str(message.get("id")) != message_id):
+        raise OriginRefused("the todo's card is not this node's own card")
+    if cancelled or not approved:
+        raise OriginRefused("the owner's ✅ (without ⛔) is not on the todo's card")
+    if not isinstance(channel, dict):
+        raise OriginRefused("todo card channel could not be placed")
+    return TodoBasis(todo_id, kind, source_id, channel_id, message_id, _place(channel_id, message_id, channel, "todo card"))
+
+
+def record_todo_use(todo_id: str, *, ask: Ask) -> int:
+    """Record one use on the dashboard (``POST /api/todos/<id>/use``); a failure refuses the action."""
+    try:
+        data = ask("POST", f"/api/todos/{quote(todo_id, safe='')}/use")
+    except (OSError, ValueError, urllib.error.URLError):
+        raise OriginRefused("the todo's use could not be recorded on the dashboard; nothing was run") from None
+    uses = data.get("uses") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("todo_id") != todo_id or not isinstance(uses, int) or uses < 1:
+        raise OriginRefused("the todo's use could not be recorded on the dashboard; nothing was run")
+    return uses

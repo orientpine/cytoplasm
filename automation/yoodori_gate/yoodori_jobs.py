@@ -72,6 +72,61 @@ def verify_owner_origin(
     return Origin(found.channel_id, found.message_id, found.link)
 
 
+def _discord_json(path: str, token: str) -> object:
+    """Any Discord JSON value (a reaction list is an array)."""
+    request = urllib.request.Request(
+        f"https://discord.com/api/v10{path}",
+        headers={"Authorization": f"Bot {token}", "User-Agent": "yoodori-gate (cytoplasm)"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def dashboard_address() -> tuple[str, str]:
+    """The node's dashboard on loopback and the gate key it keeps in its private root (``orders-gate.token``)."""
+    from automation.project_board.config import load_config, state_root
+    from automation.project_board.models import ProjectBoardError
+
+    try:
+        port = load_config().port
+    except ProjectBoardError as error:
+        raise ValueError(str(error)) from None
+    return f"http://127.0.0.1:{port}", (state_root() / "orders-gate.token").read_text(encoding="utf-8").strip()
+
+
+def dashboard_ask(method: str, path: str) -> object:
+    """One gate API call to the dashboard, never through a proxy; any failure is an OSError or ValueError."""
+    base, key = dashboard_address()
+    if not key:
+        raise ValueError("dashboard gate key is empty")
+    request = urllib.request.Request(
+        base + path, method=method, data=b"" if method == "POST" else None,
+        headers={"X-PB-Gate-Token": key, "Accept": "application/json"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def verify_owner_todo(todo_id: str, owner_id: str, token: str, *, now: float | None = None):
+    """A card-approved dashboard todo as the owner's basis (``automation.owner_origin.verify_owner_todo``)."""
+    from automation.owner_origin import OriginRefused, verify_owner_todo as verify
+
+    try:
+        return verify(todo_id, owner_id, token, ask=dashboard_ask, fetch=_discord_json, now=now)
+    except OriginRefused as error:
+        raise JobRefused(str(error)) from None
+
+
+def record_todo_use(todo_id: str) -> int:
+    from automation.owner_origin import OriginRefused, record_todo_use as record
+
+    try:
+        return record(todo_id, ask=dashboard_ask)
+    except OriginRefused as error:
+        raise JobRefused(str(error)) from None
+
+
 def jobs_root(home: Path) -> Path:
     return home / ".local/state/yoodori-jobs"
 
