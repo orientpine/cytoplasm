@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from automation.notice_bot import fault_surface
+from automation.notice_bot import fault_surface, release_surface
 
 
 def fault_switch(home: Path) -> str:
@@ -20,6 +20,16 @@ def fault_switch(home: Path) -> str:
     except FileNotFoundError:
         return "off"
     fault_surface(value)
+    return value
+
+
+def release_channel_switch(home: Path) -> str:
+    """The release-applied destination flag; like the fault flag, only its id reaches the node."""
+    try:
+        value = (home / ".hermes/release-flags/release-notice-channel").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "off"
+    release_surface(value)
     return value
 
 
@@ -58,7 +68,7 @@ def switch_digest(home: Path) -> str:
 
 
 def deploy(repo: Path, host: str, runtime: str, head: str, digest: str, channel: str,
-           fault: str = "off", *, peer_retired: bool = False) -> int:
+           fault: str = "off", release: str = "off", *, peer_retired: bool = False) -> int:
     """Authorize before every node write; send captured bytes only on SSH stdin."""
     if digest != "off" and (re.fullmatch(r"[0-9a-f]{64}", digest) is None
                             or re.fullmatch(r"[1-9][0-9]{16,19}", channel) is None):
@@ -67,6 +77,10 @@ def deploy(repo: Path, host: str, runtime: str, head: str, digest: str, channel:
         fault_surface(fault)
         if digest == "off":
             raise ValueError("fault channel requires YooDori notice bot")
+    if release != "off":
+        release_surface(release)
+        if digest == "off":
+            raise ValueError("release notice channel requires YooDori notice bot")
     payload = ""
     if digest != "off":
         token = source_token(Path.home())
@@ -89,6 +103,15 @@ def deploy(repo: Path, host: str, runtime: str, head: str, digest: str, channel:
                 print("FAULT-CHANNEL-UNAUTHORIZED", file=sys.stderr)
                 return 4
             record["fault_channel_id"] = fault
+        if release != "off":
+            authorized = subprocess.run(
+                [str(repo / "automation/release_approval_remote.sh"), "authorize-release-notice-channel",
+                 "--channel-id", release, "--head", head], check=False,
+            )
+            if authorized.returncode:
+                print("RELEASE-NOTICE-CHANNEL-UNAUTHORIZED", file=sys.stderr)
+                return 4
+            record["release_channel_id"] = release
         payload = json.dumps(record)
     from automation.node_config import load_node_config
 
@@ -98,7 +121,8 @@ def deploy(repo: Path, host: str, runtime: str, head: str, digest: str, channel:
             continue
         command = shlex.join(("sudo", "-n", "-u", account, "-H", "env", f"PYTHONPATH={runtime}",
                               "python3", "-B", "-m", "automation.notice_bot", "install",
-                              "--digest", digest, "--channel", channel, "--fault-channel", fault))
+                              "--digest", digest, "--channel", channel, "--fault-channel", fault,
+                              "--release-channel", release))
         result = subprocess.run(["ssh", host, command], input=payload, text=True,
                                 capture_output=True, check=False, timeout=60)
         # Remote errors can echo stdin: never relay either stream.
@@ -108,7 +132,7 @@ def deploy(repo: Path, host: str, runtime: str, head: str, digest: str, channel:
     return 0
 
 
-def observe(runtime: Path, digest: str, channel: str, fault: str = "off", *,
+def observe(runtime: Path, digest: str, channel: str, fault: str = "off", release: str = "off", *,
             peer_retired: bool = False) -> dict[str, str]:
     """Read-back all accounts before a clean receipt; no secret bytes are returned."""
     from automation.node_config import load_node_config
@@ -121,7 +145,8 @@ def observe(runtime: Path, digest: str, channel: str, fault: str = "off", *,
         result = subprocess.run(
             ("sudo", "-n", "-u", account, "-H", "env", f"PYTHONPATH={runtime}",
              "python3", "-B", "-m", "automation.notice_bot", "installed",
-             "--digest", digest, "--channel", channel, "--fault-channel", fault),
+             "--digest", digest, "--channel", channel, "--fault-channel", fault,
+             "--release-channel", release),
             capture_output=True, text=True, check=False, timeout=30,
         )
         states[account] = "ok" if result.returncode == 0 and result.stdout.strip() == "NOTICE-BOT installed=yes" else "drift"
@@ -133,11 +158,13 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("digest")
     commands.add_parser("fault-channel")
+    commands.add_parser("release-channel")
     apply = commands.add_parser("apply")
     for name in ("repo", "host", "runtime", "head", "digest", "channel"):
         apply.add_argument(f"--{name}", required=True)
     apply.add_argument("--peer-retired", action="store_true")
     apply.add_argument("--fault-channel", default="off")
+    apply.add_argument("--release-channel", default="off")
     args = parser.parse_args(argv)
     try:
         if args.command == "digest":
@@ -146,8 +173,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "fault-channel":
             print(fault_switch(Path.home()))
             return 0
+        if args.command == "release-channel":
+            print(release_channel_switch(Path.home()))
+            return 0
         return deploy(Path(args.repo), args.host, args.runtime, args.head, args.digest, args.channel,
-                      args.fault_channel, peer_retired=args.peer_retired)
+                      args.fault_channel, args.release_channel, peer_retired=args.peer_retired)
     except (OSError, ValueError, subprocess.SubprocessError):
         print("NOTICE-BOT-REFUSED reason=source-or-transport", file=sys.stderr)
         return 4

@@ -202,7 +202,7 @@ def approval_surface_lines(spec: ReleaseView) -> list[str]:
         LEGACY_SERVICE_LINES as LEGACY_LINES, legacy_service_surface as legacy_surface,
         WRAPPER_SURFACE_PREFIX, YOODORI_CHANNEL_PREFIX,
     )
-    from automation.notice_bot import CARD_LINE, SURFACE, FAULT_CARD_LINE, FAULT_PREFIX
+    from automation.notice_bot import CARD_LINE, SURFACE, FAULT_CARD_LINE, FAULT_PREFIX, RELEASE_CARD_LINE, RELEASE_PREFIX
     from automation.auto_write_policy import CARD_LINES, SURFACE_PREFIX
     from automation.ledger_policy import CARD_LINE as LEDGER_LINE, SURFACE as LEDGER_SURFACE
     from automation.mail_html_reply import CARD_LINE as HTML_REPLY_LINE, SURFACE as HTML_REPLY_SURFACE
@@ -249,6 +249,8 @@ def approval_surface_lines(spec: ReleaseView) -> list[str]:
         *([CARD_LINE] if any(name == SURFACE for name, _digest in spec.surface_digests) else []),
         *([FAULT_CARD_LINE] if any(name.startswith(FAULT_PREFIX)
                                   for name, _digest in spec.surface_digests) else []),
+        *([RELEASE_CARD_LINE] if any(name.startswith(RELEASE_PREFIX)
+                                    for name, _digest in spec.surface_digests) else []),
         *[CARD_LINES[name.removeprefix(SURFACE_PREFIX)]
           for name, _digest in spec.surface_digests
           if name.startswith(SURFACE_PREFIX)],
