@@ -182,16 +182,16 @@
 
 ## 요청별 승인 스레드 규칙 (cha 지시, 2026-09-01)
 
-- 형 전용 승인은 요청 하나에 스레드 하나: 카드·리마인더·결과가 거기서 끝나고 종결 시 `✅ 완료 ·`/`⛔ 취소 ·`/`⌛ 만료 ·` 접두어 뒤 아카이브. `승인-<kind>`는 레거시 `request=None`만, 범위 내 생산자는 금지.
+- 형 전용 승인은 요청 하나에 스레드 하나: 카드·리마인더·결과가 거기서 끝난다. 메일 새 판·취소/만료 뒤 재초안도 같은 메일의 첫 스레드를 재사용한다. 📄 전문은 그날 다이제스트 카드 답글이다. 미결 카드는 🔔, 정산된 다이제스트는 ✅(지난 날짜만 아카이브). 종결은 ✅/⛔/💤, 실패는 ❗로 열어 둔다.
 - `resolve_new_binding(kind, directory, owner, request=RequestThread(title=…, origin_channel_id=…, origin_message_id=…))` 필수. 지시가 이미 스레드 안일 때만 그 스레드에. 안내 문구는 `request_thread_notice`만. 제목은 마스킹 값만: mail=제목, todo=할 일 제목, coordination=조율 라벨, calendar·patent-prep·repair=id, obsidian=노트 파일명(확장자 포함, 디렉터리·본문 제외).
 - `binding.channel_id`를 `approval_thread_id`로 승인 해시 밖에 저장하고 결과 통지 dict에 싣는다. 자체 스레드 생성·PATCH 금지, 종결은 `origin_notice.close_thread`. 강제 `tests/unit/test_request_thread_adoption_conformance.py`(`request=` 없는 호출 금지), 예외는 공급망 표면 `skill_gate_surface.SupplyChainSurface.new`만 `_KIND_THREAD_EXEMPT`에 사유와. 런타임 먼저 배포.
 원문: [RULES.md](RULES.md) 「요청별 승인 스레드 규칙」 · 장부 `request-thread`
 
 ## 스레드 제목 규칙 (cha 지시, 2026-10-16)
 
-- 오토파지가 여는 모든 스레드는 이름이 종류 이모지로 시작하고, 첫 메시지 맨 위에 `## <이모지> <무엇·날짜·건수>` 제목 한 줄을 승인 카드와 따로 올린다. 카드 본문·해시·참조 줄·파서 형식은 바꾸지 않는다(`render_version` append-only).
+- 모든 스레드 이름은 상태표시 정확히 하나 + 종류 이모지 + 무엇인지 순서다(Q474, 2026-11-03). 🔄 작업·🔔 형 답 필요·✅ 완료·⛔ 취소·💤 대체/철회/만료·❗ 실패(열어 둠)·📌 상시, ⏸️는 폐기. 바꾸기 전 모든 연속 상태표시와 옛 완료·취소·만료·실패 접두어를 벗긴다. 종류가 말하는 라벨·RE:/FW:/Fwd: 반복은 이름에서 빼고, 첫 메시지 큰 제목과 승인 카드 바이트는 유지한다.
 - 단일 정의: 승인 `approval_surface.KIND_ICONS`·`request_thread_title`, 결과 `origin_notice.thread_icon`·`resolve_thread_id`. 새 승인 종류는 `KIND_ICONS`에 이모지, 새 결과 스레드는 `_THREAD_ICONS`에 앞말(`tests/unit/test_thread_titles.py`). 스레드 직접 여는 코드 금지.
-- ✅·⛔·⌛는 제목 이모지 금지. 제목 실패는 `THREAD-TITLE-FAIL`, 승인·통지를 막지 않는다.
+- 상태표시는 종류 이모지와 별개다. 옛 단어 접두어는 읽기 호환만 유지한다. 제목 실패는 `THREAD-TITLE-FAIL`, 승인·통지를 막지 않는다.
 원문: [RULES.md](RULES.md) 「스레드 제목 규칙」 · 장부 `cyto-thread-title`
 
 ## 소유자 메시지 계약 규칙 (cha 지시, 2026-09-09)

@@ -94,7 +94,7 @@ def test_locality_when_thread_resolution_succeeds(monkeypatch, record):
     assert "discord.com" not in surface.posts[0]
     assert result == "501"
     assert surface.calls[-1] == (
-        "PATCH", "/channels/222", {"archived": True, "name": "✅ 완료 · request"},
+        "PATCH", "/channels/222", {"archived": True, "name": "✅ request"},
     )
 
 

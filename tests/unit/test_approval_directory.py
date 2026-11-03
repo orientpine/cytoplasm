@@ -560,7 +560,7 @@ def test_request_thread_anchors_on_an_agent_chat_instruction_message(interop_con
     assert thread_id == "thread-anchored"
     assert fake.calls == [(
         "POST", "/channels/chan-1/messages/msg-1/threads",
-        {"name": "✉️ 메일 발신 · 세미나 안내", "auto_archive_duration": 10080},
+        {"name": "🔔 ✉️ 세미나 안내", "auto_archive_duration": 10080},
     ), (
         # The owner's message is the thread's starter, so the title goes in first.
         "POST", "/channels/thread-anchored/messages", {"content": "## ✉️ 메일 발신 · 세미나 안내"},
@@ -639,7 +639,7 @@ def test_request_thread_creates_a_channel_thread_without_an_origin(interop_confi
     assert thread_id == "thread-new"
     assert fake.calls[-1] == (
         "POST", "/channels/chan-1/messages/msg-new/threads",
-        {"name": "🛠️ 수리 · t_abc", "auto_archive_duration": 10080},
+        {"name": "🔔 🛠️ t_abc", "auto_archive_duration": 10080},
     )
     assert ("POST", "/channels/chan-1/threads") not in [
         (method, path) for method, path, _payload in fake.calls

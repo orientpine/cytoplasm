@@ -72,7 +72,8 @@ def test_own_pending_card_is_withdrawn_marked_and_never_sent(card) -> None:
     # Then: the thread gets the ⛔ notice and keeps its name (no thread PATCH).
     notices = [p for m, path, p in writes if m == "POST" and path == f"/channels/{THREAD}/messages"]
     assert len(notices) == 1 and "⛔ 발송 취소" in str(notices[0]["content"])
-    assert not [path for m, path, _ in writes if m == "PATCH" and path == f"/channels/{THREAD}"]
+    patches = [payload for m, path, payload in writes if m == "PATCH" and path == f"/channels/{THREAD}"]
+    assert patches == [{"archived": True, "name": "💤 점심 메일"}]
     # When: the owner presses ✅ on the withdrawn card later; Then: nothing can load it to send.
     fake.approved.add(stored["message_id"])
     with pytest.raises(mail.triage_gate.GateError):

@@ -143,6 +143,24 @@ def _request_binding(
     DM 은 재사용 대상이 아니다(표면 모듈이 판정한다).
     """
     owner_id = triage_confirm.owner_id()
+    # A mail keeps its first thread even after its previous card became terminal.
+    # The approval key (kind + uid), not its subject or shared digest, is its identity.
+    previous = sorted(
+        (record for record in triage_gate.list_drafts()
+         if draft.get("uid") and record.get("id") != draft.get("id")
+         and record.get("approval_thread_id") and record.get("uid") == draft["uid"]
+         and draft_kind(record) == draft_kind(draft)),
+        key=lambda record: str(record.get("created") or ""),
+    )
+    if previous:
+        record = previous[0]
+        return surface_module.validate_stored_binding(
+            surface_module.ApprovalBinding(
+                kind, surface_module.ApprovalSurface(record["surface"]),
+                str(record["approval_thread_id"]), int(record["policy_version"]),
+                record.get("approval_guild_id"),
+            ), directory, owner_id,
+        )
     reused = surface_module.reuse_request_thread(kind, outstanding, directory, owner_id)
     if reused is not None:
         return reused

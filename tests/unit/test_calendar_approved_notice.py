@@ -89,7 +89,7 @@ def test_approved_thread_bytes_and_done_archive(
         "되돌리기: 해당 없음"
     )
     assert api.call_args.args == (
-        "PATCH", "/channels/222", {"archived": True, "name": "✅ 완료 · 캘린더 · abc123"},
+        "PATCH", "/channels/222", {"archived": True, "name": "✅ 캘린더 · abc123"},
     )
     assert approved.discord.sent_messages == []
 

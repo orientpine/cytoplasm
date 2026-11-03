@@ -14,7 +14,7 @@ file per KST day, written once under a file lock and read by both. Requests that
 not come from the digest never look here and keep their own threads.
 
 The thread's mark follows its cards (`settle`): undecided cards -> the bell mark; no
-undecided card and a newer digest exists -> closed as done and archived.
+undecided card -> done. Only a previous day's settled thread is archived.
 """
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ KEEP_DAYS: Final = 7
 PENDING_MARK: Final = "🔔 "
 MARK_PENDING: Final = "pending"
 MARK_DONE: Final = "done"
+MARK_SETTLED: Final = "settled"
 MARK_NONE: Final = ""
 #: Reminders reaching one digest thread within this window share one message (Q187):
 #: mail and calendar remind from different crons, so the second one edits the first.
@@ -80,7 +81,7 @@ def _parse(data: object) -> DigestThread | None:
     if not (isinstance(day, str) and isinstance(channel, str) and channel.isdigit()
             and isinstance(surface, str) and type(version) is int
             and (guild is None or isinstance(guild, str)) and isinstance(name, str)
-            and mark in {MARK_NONE, MARK_PENDING, MARK_DONE}):
+            and mark in {MARK_NONE, MARK_PENDING, MARK_DONE, MARK_SETTLED}):
         return None
     return DigestThread(day, channel, surface, version, guild, name, str(mark))
 
@@ -204,7 +205,7 @@ def _write_json(path: Path, data: Mapping[str, object]) -> None:
 def wanted_mark(thread: DigestThread, *, pending: int, latest: bool) -> str:
     if pending > 0:
         return MARK_PENDING
-    return MARK_NONE if latest else MARK_DONE
+    return MARK_SETTLED if latest else MARK_DONE
 
 
 def settle(
@@ -233,12 +234,13 @@ def settle(
         mark = wanted_mark(thread, pending=counts[thread.channel_id], latest=thread.day == latest)
         if mark == thread.mark:
             continue
-        if mark == MARK_DONE:
+        if mark == MARK_DONE and thread.day < latest:
             changed = origin_notice.close_thread(
                 api, thread.channel_id, origin_notice.ThreadOutcome.DONE, record_id=f"digest:{thread.day}",
                 base_name=thread.name)
         else:
-            name = f"{PENDING_MARK}{thread.name}" if mark == MARK_PENDING else thread.name
+            name = origin_notice.state_thread_name(
+                thread.name, PENDING_MARK.strip() if mark == MARK_PENDING else "✅")
             changed = origin_notice.rename_thread(api, thread.channel_id, name, record_id=f"digest:{thread.day}")
         if not changed:
             continue

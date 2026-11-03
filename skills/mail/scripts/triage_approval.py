@@ -154,6 +154,7 @@ def confirm_intent(draft: dict) -> ApprovalIntent:
         approval_thread_id=triage_binding.approval_thread_id(binding),
         approval_guild_id=binding.guild_id,
     )
+    draft["approval_thread_id"] = triage_binding.approval_thread_id(binding)
     return lifecycle().ApprovalIntent(
         key=approval_key(draft), action_hash=_approval_action_hash(draft), channel_id=str(binding.channel_id)
     )
