@@ -52,8 +52,8 @@ class Tools:
     ttyd_version: str
     ttyd: Mapping[str, Asset]
     web_port: int
-    ttyd_port: int
-    state_port: int
+    ttyd_offset: int
+    state_offset: int
 
 
 def load_tools(root: Path) -> Tools:
@@ -62,7 +62,7 @@ def load_tools(root: Path) -> Tools:
         return {key: Asset(v["url"], v["sha256"]) for key, v in table.items()}
     web = data["web"]
     return Tools(data["herdr"]["version"], assets(data["herdr"]["assets"]), data["ttyd"]["version"],
-                 assets(data["ttyd"]["assets"]), int(web["port"]), int(web["ttyd_port"]), int(web["state_port"]))
+                 assets(data["ttyd"]["assets"]), int(web["port"]), int(web["ttyd_offset"]), int(web["state_offset"]))
 
 
 def platform_key(system: str | None = None, machine: str | None = None) -> str:
@@ -106,7 +106,7 @@ def plan(layout: Layout, tools: Tools, key: str) -> list[tuple[str, str]]:
         ("herdr-bin", f"{layout.herdr} herdr {tools.herdr_version} ({key}{', sha256 ' + herdr.sha256[:12] if herdr else ' — 받을 바이너리 없음, 건너뜀'}), {layout.herdr_link} -> 포크 herdr-guard"),
         ("herdr-ttyd", f"{layout.ttyd} ttyd {tools.ttyd_version} ({key}{', sha256 ' + ttyd.sha256[:12] if ttyd else ' — 받을 바이너리 없음, 웹 건너뜀'})"),
         ("herdr-server", f"{layout.units / _SERVER_UNIT} 를 켠다(systemctl --user, 이미 있으면 그대로)"),
-        ("herdr-web", f"herdr-web@{layout.web_port} — {layout.web_env}(0600, 없을 때만) · 포트를 다른 프로그램이 쓰면 켜지 않음"),
+        ("herdr-web", f"herdr-web@{layout.web_port} (ttyd {layout.web_port + tools.ttyd_offset}, 상태 {layout.web_port + tools.state_offset}) — {layout.web_env}(0600, 없을 때만) · 포트를 다른 프로그램이 쓰면 켜지 않음"),
         ("herdr-lead", "새로 복사한 config 이면 리드를 herdr pane 에 띄우고 leadPane 에 적는다"),
     ]
 
@@ -169,14 +169,20 @@ def port_free(port: int) -> bool:
 
 def _web_env(layout: Layout, tools: Tools, origin: str) -> str:
     lines = [
-        f"HERDR_TTYD_PORT={tools.ttyd_port}",
+        f"HERDR_TTYD_PORT={layout.web_port + tools.ttyd_offset}",
         f"HERDR_WEB_ORIGIN={origin}",
-        f"HERDR_STATE_PORT={tools.state_port}",
+        f"HERDR_STATE_PORT={layout.web_port + tools.state_offset}",
         f"HERDR_STATE_SECRET={secrets.token_hex(32)}",
     ]
     if not layout.aoe_serve_env.exists():
         lines.append(f"HERDR_WEB_PASSPHRASE={secrets.token_hex(16)}")
     return "\n".join(lines) + "\n"
+
+
+def _env_ports(layout: Layout) -> list[int]:
+    # the ports this account's web units will bind, read back from its env file (it may predate this installer)
+    values = dict(line.split("=", 1) for line in layout.web_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    return [layout.web_port, *(int(values[k]) for k in ("HERDR_TTYD_PORT", "HERDR_STATE_PORT") if values.get(k, "").isdigit())]
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -294,8 +300,9 @@ def install(layout: Layout, tools: Tools, key: str, *, origin: str, config: Path
         print(f"DORI-HERDR-WEB-SKIP {key}: ttyd 바이너리가 없다")
     elif _systemctl(capture, "is-active", web)[0] == 0:
         print(f"DORI-HERDR-WEB {web} 이미 켜짐")
-    elif not port_free(layout.web_port):
-        print(f"DORI-HERDR-WEB-PORT-BUSY {layout.web_port}: 다른 프로그램(옛 aoe 웹 등)이 쓴다 — 그것을 멈춘 뒤 systemctl --user enable --now {web} (docs/guide/herdr-전환.md)")
+    elif busy := [p for p in _env_ports(layout) if not port_free(p)]:
+        print(f"DORI-HERDR-WEB-PORT-BUSY {' '.join(map(str, busy))}: 다른 프로그램(옛 aoe 웹, 다른 도리 계정의 웹 등)이 쓴다 — "
+              f"그것을 멈추거나 --web-port 로 다른 포트를 골라 {web} 를 켠다 (docs/guide/herdr-전환.md)")
     else:
         code, out = _systemctl(capture, "enable", "--now", web)
         print(f"DORI-HERDR-WEB {web} {'active' if code == 0 else 'FAIL ' + out.strip()[:200]} — {origin}")

@@ -28,7 +28,7 @@ def _asset(name: str, body: bytes) -> dori_herdr.Asset:
     return dori_herdr.Asset(f"https://example.invalid/{name}", hashlib.sha256(body).hexdigest())
 
 
-_TOOLS = dori_herdr.Tools("0.9.5", {_KEY: _asset("herdr", _HERDR)}, "1.7.7", {_KEY: _asset("ttyd", _TTYD)}, 8181, 9281, 9381)
+_TOOLS = dori_herdr.Tools("0.9.5", {_KEY: _asset("herdr", _HERDR)}, "1.7.7", {_KEY: _asset("ttyd", _TTYD)}, 8181, 1100, 1200)
 
 
 def _fork(tmp_path: Path) -> DoriPin:
@@ -174,6 +174,40 @@ def test_an_aoe_install_rerun_gets_herdr_ready_but_keeps_its_config_web_port_and
     assert world.active == {"dori-herdr.service"}
     assert world.ran("workspace", "create") == [] and world.ran("pane", "run") == []
     assert "DORI-LEAD-KEEP" in out
+
+
+def test_an_aoe_config_still_at_its_placeholder_lead_gets_no_herdr_lead(home: Path) -> None:
+    config = home / ".dori" / "config.json"
+    config.parent.mkdir(parents=True)
+    _ = config.write_text('{"backend": "aoe", "leadPane": "<tmux>"}\n', encoding="utf-8")
+    world = _World()
+
+    assert _install(home, world) == 0
+
+    assert config.read_text(encoding="utf-8") == '{"backend": "aoe", "leadPane": "<tmux>"}\n'
+    assert world.ran("workspace", "create") == []
+
+
+def test_a_second_account_on_another_web_port_gets_its_own_ttyd_and_state_ports(home: Path) -> None:
+    world = _World()
+
+    assert _install(home, world, "--web-port", "8282") == 0
+
+    keys = dict(line.split("=", 1) for line in (home / ".config" / "herdr" / "web-8282.env").read_text(encoding="utf-8").splitlines())
+    assert (keys["HERDR_TTYD_PORT"], keys["HERDR_STATE_PORT"]) == ("9382", "9482")
+    assert "herdr-web@8282.service" in world.active
+
+
+def test_a_ttyd_port_held_by_another_account_keeps_the_web_off(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(dori_herdr, "port_free", lambda port: port != 9281)
+    world = _World()
+
+    assert _install(home, world) == 0
+
+    assert "DORI-HERDR-WEB-PORT-BUSY 9281" in capsys.readouterr().out
+    assert world.active == {"dori-herdr.service"}
 
 
 def test_a_second_run_writes_nothing_new_and_starts_no_second_lead(home: Path, capsys: pytest.CaptureFixture[str]) -> None:

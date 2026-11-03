@@ -22,8 +22,9 @@ version = "1.7.7"
 linux-x86_64 = { url = "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64", sha256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55" }
 linux-aarch64 = { url = "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.aarch64", sha256 = "b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165" }
 
-# 새 설치의 기본 루프백 포트. 웹 앞문(--web-port 로 바꿈), 그 뒤의 ttyd, 탭 상태 도우미.
+# 새 설치의 기본 루프백 웹 앞문 포트(--web-port 로 바꿈). 그 뒤의 ttyd 와 탭 상태 도우미는 앞문 포트 + 차이로 정해
+# 한 호스트의 여러 도리 계정이 서로의 ttyd 에 붙지 않는다(8181 -> 9281·9381, 8182 -> 9282·9382).
 [web]
 port = 8181
-ttyd_port = 9281
-state_port = 9381
+ttyd_offset = 1100
+state_offset = 1200

@@ -78,7 +78,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     fake = {k: dori.dori_herdr.Asset(f"https://example.invalid/{k}", hashlib.sha256(f"https://example.invalid/{k}".encode()).hexdigest())
             for k in ("linux-x86_64",)}
     monkeypatch.setattr(dori.dori_herdr, "load_tools", lambda _root: dori.dori_herdr.Tools(
-        real.herdr_version, fake, real.ttyd_version, fake, real.web_port, real.ttyd_port, real.state_port))
+        real.herdr_version, fake, real.ttyd_version, fake, real.web_port, real.ttyd_offset, real.state_offset))
     monkeypatch.setattr(dori.dori_herdr, "platform_key", lambda: "linux-x86_64")
     return path
 
