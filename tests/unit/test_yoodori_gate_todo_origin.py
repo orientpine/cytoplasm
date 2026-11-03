@@ -3,7 +3,8 @@
 YooDori's todo lane could not take its own source mail's attachments: every owner-command job ended with the
 owner's Discord message ids. These cases run the gate's main() against the real dashboard server (loopback,
 gate key) and a fake Discord, and check that only that todo's source mail can be read, and only while the
-todo is open, card-approved by the owner within 24 hours, with each use recorded on the dashboard.
+todo is open and card-approved by the owner, with each use recorded on the dashboard. Since the owner's
+2026-11-03 10:53 KST answer the basis holds while the todo is open, not 24 hours from the card.
 """
 from __future__ import annotations
 
@@ -173,6 +174,8 @@ def _weaken(node: Node, how: str) -> None:
         node.proposals.create(replace(record, message_id="999"), node.proposals.frozen(record))
     elif how in {"완료", "보류"}:
         node.todo(f"UPDATE todos SET status = '{how}' WHERE todo_id = '{TODO}'")
+    elif how == "deleted":
+        node.todo(f"DELETE FROM todos WHERE todo_id = '{TODO}'")
     elif how == "owner-cancelled":
         node.discord[f"{card}/reactions/{quote('⛔')}?limit=100"] = _reactions({"id": OWNER})
     elif how == "no-owner-approval":
@@ -194,7 +197,7 @@ def _weaken(node: Node, how: str) -> None:
 
 
 @pytest.mark.parametrize("how", [
-    "auto-applied", "card-record-mismatch", "완료", "보류", "owner-cancelled", "no-owner-approval",
+    "auto-applied", "card-record-mismatch", "완료", "보류", "deleted", "owner-cancelled", "no-owner-approval",
     "someone-else-approved", "owner-id-as-bot", "card-by-another-bot", "card-unreadable", "dashboard-down",
     "use-fails",
 ])
@@ -216,12 +219,36 @@ def test_a_weaker_todo_basis_is_refused_before_anything_is_read(
     assert _staged() == [] and node.uses() == 0
 
 
+@pytest.mark.parametrize("node", [25, 24 * 30], indirect=True)
+def test_an_open_todo_stays_the_basis_past_24_hours(
+    node: Node, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Owner 2026-11-03 10:53 KST "그래 열려있는동안 해": while the todo is open, not 24 hours from the card.
+    assert _gate(monkeypatch, "mail-attachment", UID, NAME, "--origin-todo", TODO) == 0
+    assert capsys.readouterr().out.startswith(f"STAGED mail-{UID}-1.hwp ")
+    assert node.uses() == 1
+
+
 @pytest.mark.parametrize("node", [25], indirect=True)
-def test_an_approval_older_than_24_hours_is_refused(
+@pytest.mark.parametrize("how", ["완료", "보류", "deleted", "owner-cancelled", "other-mail"])
+def test_past_24_hours_only_the_open_todo_window_counts(
+    node: Node, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], how: str,
+) -> None:
+    if how == "other-mail":
+        rc = _gate(monkeypatch, "mail-attachment", OTHER_UID, "남의.pdf", "--origin-todo", TODO)
+    else:
+        _weaken(node, how)
+        rc = _gate(monkeypatch, "mail-attachment", UID, NAME, "--origin-todo", TODO)
+    assert rc == 2 and "YOODORI-GATE-REFUSED" in capsys.readouterr().err
+    assert _staged() == [] and node.uses() == 0
+
+
+@pytest.mark.parametrize("node", [-2], indirect=True)
+def test_an_approval_time_in_the_future_is_refused(
     node: Node, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert _gate(monkeypatch, "mail-attachment", UID, NAME, "--origin-todo", TODO) == 2
-    assert "older than 24 hours" in capsys.readouterr().err
+    assert "in the future" in capsys.readouterr().err
     assert _staged() == [] and node.uses() == 0
 
 
