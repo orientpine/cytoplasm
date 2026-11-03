@@ -49,11 +49,23 @@ class _Runner:
         return 0
 
 
+def _fake_fetch(url: str, dest: Path) -> None:
+    _ = dest.write_bytes(url.encode())
+
+
+def _no_systemd(argv: tuple[str, ...]) -> tuple[int, str]:
+    # no user manager here: the herdr steps stop after the binaries (dori_herdr's own tests drive the units)
+    return (1, "") if argv[:3] == ("systemctl", "--user", "show-environment") else (0, "")
+
+
+_FAKES = {"capture": _no_systemd, "fetch": _fake_fetch, "sleep": lambda _s: None}
+
+
 def _run(home: Path, *extra: str, runner: _Runner | None = None) -> int:
     return dori.main(
         ("--src", str(home / ".dori" / "src"), "--skills", str(home / ".agents" / "skills"),
          "--workroot", str(home / "Documents"), *extra),
-        runner=runner or _Runner(), which=lambda tool: f"/usr/bin/{tool}",
+        runner=runner or _Runner(), which=lambda tool: f"/usr/bin/{tool}", **_FAKES,
     )
 
 
@@ -62,6 +74,12 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "home"
     path.mkdir()
     monkeypatch.setenv("HOME", str(path))
+    real = dori.dori_herdr.load_tools(Path(dori.REPO_ROOT))
+    fake = {k: dori.dori_herdr.Asset(f"https://example.invalid/{k}", hashlib.sha256(f"https://example.invalid/{k}".encode()).hexdigest())
+            for k in ("linux-x86_64",)}
+    monkeypatch.setattr(dori.dori_herdr, "load_tools", lambda _root: dori.dori_herdr.Tools(
+        real.herdr_version, fake, real.ttyd_version, fake, real.web_port, real.ttyd_offset, real.state_offset))
+    monkeypatch.setattr(dori.dori_herdr, "platform_key", lambda: "linux-x86_64")
     return path
 
 
@@ -129,7 +147,9 @@ def test_apply_installs_the_pinned_fork_and_the_default_roles(
     assert head == pin.commit
     assert (home / ".agents" / "skills" / "dori-mode").resolve() == (src / "skills" / "dori-mode").resolve()
     assert [argv for argv, _ in runner.calls] == [("bun", "install", "--silent"), ("bun", "link", "--silent")]
-    assert (home / ".dori" / "config.json").read_text(encoding="utf-8") == '{"backend": "aoe"}\n'
+    assert (home / ".dori" / "config.json").read_text(encoding="utf-8") == '{"backend": "herdr"}\n'
+    assert (home / ".local" / "lib" / "herdr" / "herdr").is_file()
+    assert (home / ".local" / "bin" / "ttyd").is_file()
     assert (home / "Documents" / "zzangdori" / "AGENTS.md").is_file()
     assert (home / "Documents" / "yoodori" / "avatar.md").is_file()
     assert not (home / "Documents" / "okdori").exists()
@@ -194,7 +214,7 @@ def test_default_install_preserves_existing_node_and_dori_state(
     monkeypatch.setattr(dori, "load_pin", lambda: pin)
     runner = _Runner()
     monkeypatch.setattr(
-        dori, "main", partial(dori.main, runner=runner, which=lambda tool: f"/usr/bin/{tool}"),
+        dori, "main", partial(dori.main, runner=runner, which=lambda tool: f"/usr/bin/{tool}", **_FAKES),
     )
     existing = {
         ".hermes/cron/jobs.json": '{"jobs": [{"id": "old-job", "state": "paused"}]}\n',

@@ -313,12 +313,28 @@ python3 -m automation.install.dori --role okdori --role moodori --owner-call 형
 | `dori-fork` | `dori/pin.toml` 의 커밋 하나만 `~/.dori/src` 에 받고 `git rev-parse HEAD` 가 같은지 확인한다. 받을 수 없으면 `DORI-PIN-FETCH-FAIL`(exit 3)이고 아무것도 남지 않는다. 이미 있는 체크아웃이 다른 커밋이면 `DORI-PIN-SRC-DIFFERS`(exit 2)로 전부 멈춘다 |
 | `dori-skill-link` | `~/.agents/skills/dori-mode` → 포크 스킬 링크(링크가 아닌 폴더가 있으면 그대로 둔다) |
 | `dori-cli` | 포크 `scripts` 에서 `bun install`·`bun link` — `dori` 명령이 생긴다 |
-| `dori-config` | `~/.dori/config.json` 이 없을 때만 포크 예시(`--backend aoe` 기본)를 복사한다 |
+| `dori-config` | `~/.dori/config.json` 이 없을 때만 포크 예시를 복사한다(기본 `--backend herdr`, aoe/tmux 로 쓰려면 `--backend aoe`) |
 | `dori-role-<역할>` | `~/Documents/<도리>/AGENTS.md`·`avatar.md` 를 `dori/roles/` 템플릿에서 쓴다. 기본은 리드(`zzangdori`)·비서(`yoodori`), `--role okdori`(카톡)·`--role moodori`(회사 업무·긴 문서, 안 고르면 긴 문서는 유도리)·`--role gongdori`(연구) 는 선택. 이미 있으면 덮지 않고 다르면 차이만 보인다(`DORI-ROLE-KEEP`) |
+
+기본 `--backend herdr` 는 위 단계 뒤에 herdr 도리까지 깐다. 받는 바이너리와 sha256 은 `dori/herdr.toml` 한 곳이
+정하고, sha256 이 다르면 아무것도 바꾸지 않고 멈춘다(`DORI-HERDR-SHA-MISMATCH`, exit 5). root 는 필요 없다.
+
+| 단계 | 하는 일 |
+|---|---|
+| `dori-herdr-bin` | herdr 0.9.5 를 `~/.local/lib/herdr/herdr` 에 두고 `~/.local/bin/herdr` 를 포크의 herdr-guard 로 링크한다(pane 안에서 서버를 멈추는 명령을 막는다). 다른 herdr 가 이미 있으면 그대로 둔다(`kept`) |
+| `dori-herdr-ttyd` | 웹 터미널 ttyd 1.7.7 을 `~/.local/bin/ttyd` 에(Linux) |
+| `dori-herdr-server` | 포크 유닛 `dori-herdr.service` 를 `~/.config/systemd/user/` 에 복사해 켠다. 유닛이 이미 있으면 덮지 않는다 |
+| `dori-herdr-web` | `herdr-web@<포트>`(기본 8181, `--web-port`)를 켠다. `~/.config/herdr/web-<포트>.env`(0600)는 없을 때만 쓰고, 옛 aoe 웹 비밀번호(`~/.config/agent-of-empires/serve.env`)가 없으면 새 비밀번호 `HERDR_WEB_PASSPHRASE` 를 만든다. 주소는 `--web-origin`(기본 `http://127.0.0.1:<포트>`). 다른 프로그램이 그 포트를 쓰면 켜지 않는다(`DORI-HERDR-WEB-PORT-BUSY`) |
+| `dori-herdr-lead` | config 를 이번에 새로 복사했을 때만 리드 폴더에 herdr workspace 를 열어 `omo --session-id <새 id>` 를 띄우고 `leadPane`·`defaultCwd` 를 적는다. omo 입력창이 뜨면 `DORI-LEAD-STARTED`, 아니면 화면 끝 줄과 함께 `DORI-LEAD-NOT-READY` |
+
+`systemctl --user` 를 쓸 수 없는 곳(macOS 등)은 바이너리만 깔고 유닛·리드는 건너뛴다(`DORI-HERDR-NO-SYSTEMD`).
+이미 aoe 로 쓰던 계정에서 다시 돌리면 config·웹 포트·비밀번호를 그대로 두고 herdr 만 준비한다 — 옮기는 순서는
+[aoe·tmux 도리를 herdr로 옮기기](herdr-전환.md).
 
 `--dry-run` 은 쓰기도 네트워크도 없다(git·bun 이 없어도 계획은 나온다). 실제 설치에는 git 과
 bun 이 PATH 에 있어야 한다(`DORI-INSTALL-BLOCK`). 설치 뒤 `~/.dori/dori.env`(0600)에 봇 토큰·
-채널·소유자 id 를 넣고, 리드 작업 폴더에서 에이전트를 열어 "Dori mode" 라고 한다.
+채널·소유자 id 를 넣고, 웹(또는 `herdr`)에서 리드 탭을 열어 "Dori mode" 라고 한다(`--backend aoe` 면 리드 작업
+폴더의 aoe 세션에서 에이전트를 연다).
 
 ### 선택 컴포넌트
 

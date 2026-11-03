@@ -344,7 +344,7 @@ flowchart TD
 ## 함께 쓰면 좋은 것 — Dori
 
 [**Dori 모드**](https://github.com/orientpine/omo-dori-mode-experimental) 는 코딩 에이전트를 상시
-메신저 비서로 바꾸는 스킬이에요. 메신저로 지시를 받으면 aoe/tmux 세션(lane)을 열어 실제 작업을
+메신저 비서로 바꾸는 스킬이에요. 메신저로 지시를 받으면 herdr 탭(lane)을 열어 실제 작업을
 다른 코딩 에이전트에게 맡기고, 끝날 때까지 추적해 작업별 스레드로 보고합니다. Discord 질문 카드,
 스레드 상태 이모지, "끝났다"는 주장을 5분 안에 실제 상태로 검증하는 규칙, iPhone 단축어 음성
 지시까지 들어 있어요.
