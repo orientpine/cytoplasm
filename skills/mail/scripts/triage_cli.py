@@ -450,7 +450,8 @@ def _notify_failed(draft: dict, error: triage_gate.GateError) -> None:
             stored = draft
     try:
         triage_confirm.notify_result(
-            stored, mail_send_retry.failure_text(stored, triage_core.redact(str(error))[:200]))
+            stored, mail_send_retry.failure_text(stored, triage_core.redact(str(error))[:200]),
+            outcome="FAILED")
     except Exception as notify_error:  # noqa: BLE001 — notification must never break the tick
         print(f"NOTIFY-FAIL draft={draft['id']} "
               f"err={triage_core.redact(str(notify_error))[:120]}", file=sys.stderr)

@@ -657,11 +657,11 @@ def test_request_thread_name_labels_and_truncates() -> None:
     )
 
     # Then: label + separator + a 40-char title, never beyond Discord's 100-char limit
-    assert name == "✉️ 메일 발신 · " + "가" * 40
+    assert name == "🔔 ✉️ " + "가" * 40
     assert len(name) <= 100
     assert module.request_thread_name(
         ApprovalKind.CALENDAR, module.RequestThread(title="draft-42"),
-    ) == "🗓️ 캘린더 · draft-42"
+    ) == "🔔 🗓️ draft-42"
 
 
 @pytest.mark.parametrize("title", ["2026-09-08 라이프로그 회의 준비.md", "가" * 57 + ".md"])
@@ -672,9 +672,9 @@ def test_obsidian_request_thread_name_preserves_the_bounded_note_filename(title:
         ApprovalKind.OBSIDIAN_WRITE, module.RequestThread(title=title),
     )
 
-    label, separator, filename = name.partition(" · ")
-    assert label == f"{module.KIND_ICONS[ApprovalKind.OBSIDIAN_WRITE]} {module.KIND_LABELS[ApprovalKind.OBSIDIAN_WRITE]}"
-    assert separator == " · "
+    state, icon, filename = name.split(" ", maxsplit=2)
+    assert state == "🔔"
+    assert icon == module.KIND_ICONS[ApprovalKind.OBSIDIAN_WRITE]
     assert filename == title[:module.REQUEST_TITLE_LIMIT]
     assert len(name) <= module.THREAD_NAME_LIMIT == 100
 
@@ -689,7 +689,7 @@ def test_request_thread_name_covers_every_kind() -> None:
     }
 
     # Then: each kind has a non-empty label and the title survives
-    assert all(name.endswith(" · id-1") and len(name) > len(" · id-1") for name in names.values())
+    assert all(name.startswith("🔔 ") and name.endswith(" id-1") for name in names.values())
     assert len(set(names.values())) == len(ApprovalKind)
 
 

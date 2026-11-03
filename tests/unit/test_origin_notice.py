@@ -82,7 +82,7 @@ def test_resolve_creates_message_anchored_thread() -> None:
         (
             "POST",
             f"/channels/{ORIGIN_CHANNEL}/messages/{ORIGIN_MESSAGE}/threads",
-            {"name": "🧵 스레드 이름"},
+            {"name": "🔄 🧵 스레드 이름"},
         ),
         # The new thread opens with its big title line (owner 2026-10-16).
         ("POST", f"/channels/{THREAD_ID}/messages", {"content": "## 🧵 스레드 이름"}),
@@ -123,7 +123,7 @@ def test_resolve_creates_channel_thread_without_message() -> None:
     assert thread == THREAD_ID
     [(method, path, payload), title] = calls
     assert (method, path) == ("POST", f"/channels/{ORIGIN_CHANNEL}/threads")
-    assert payload is not None and payload["name"] == "🧵 이름" and payload["type"] == 11
+    assert payload is not None and payload["name"] == "🔄 🧵 이름" and payload["type"] == 11
     assert title == ("POST", f"/channels/{THREAD_ID}/messages", {"content": "## 🧵 이름"})
 
 
@@ -269,7 +269,7 @@ def test_deliver_posts_into_the_approval_thread_and_closes_it() -> None:
     assert not [call for call in api.calls if call[1].endswith("/threads")]
     assert api.calls[-1] == (
         "PATCH", f"/channels/{APPROVAL_THREAD}",
-        {"name": "✅ 완료 · 메일 발신 · 세미나 안내", "archived": True},
+        {"name": "✅ 메일 발신 · 세미나 안내", "archived": True},
     )
 
 
@@ -288,7 +288,7 @@ def test_close_replaces_an_earlier_status_prefix_and_respects_the_limit() -> Non
     payload = api.calls[-1][2]
     assert payload is not None
     assert payload["archived"] is True
-    assert payload["name"].startswith("⌛ 만료 · 가")
+    assert payload["name"].startswith("💤 가")
     assert "⛔" not in payload["name"]
     assert len(payload["name"]) <= 100
 
@@ -345,4 +345,4 @@ def test_deliver_without_any_thread_never_closes() -> None:
 def test_thread_outcome_prefixes_are_the_owner_facing_status_words() -> None:
     from automation.interop.origin_notice import ThreadOutcome
 
-    assert {outcome.value for outcome in ThreadOutcome} == {"✅ 완료", "⛔ 취소", "⌛ 만료"}
+    assert {outcome.value for outcome in ThreadOutcome} == {"✅", "⛔", "💤", "❗"}

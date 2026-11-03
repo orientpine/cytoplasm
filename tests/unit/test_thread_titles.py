@@ -23,7 +23,7 @@ def test_every_kind_has_an_icon_that_is_not_a_decision_emoji(kind: ApprovalKind)
     icon = KIND_ICONS[kind]
 
     assert icon and icon not in {"✅", "⛔", "⌛"}
-    assert request_thread_name(kind, RequestThread(title="x")).startswith(f"{icon} {KIND_LABELS[kind]} · ")
+    assert request_thread_name(kind, RequestThread(title="x")) == f"🔔 {icon} x"
 
 
 @pytest.mark.parametrize("kind", list(ApprovalKind))
@@ -40,7 +40,7 @@ def test_the_request_announcement_opens_with_the_big_title(kind: ApprovalKind) -
 def test_the_calendar_digest_thread_is_titled_like_the_mail_digest() -> None:
     request = RequestThread(title="다이제스트 2026-10-16")
 
-    assert request_thread_name(ApprovalKind.CALENDAR, request) == "🗓️ 캘린더 · 다이제스트 2026-10-16"
+    assert request_thread_name(ApprovalKind.CALENDAR, request) == "🔔 🗓️ 다이제스트 2026-10-16"
     assert request_thread_notice(ApprovalKind.CALENDAR, request).splitlines()[0] == (
         "## 🗓️ 캘린더 · 다이제스트 2026-10-16"
     )
@@ -61,7 +61,7 @@ def test_result_threads_open_with_an_icon_and_a_title(name: str, icon: str) -> N
 
     assert thread == "9"
     assert calls == [
-        ("POST", "/channels/1/messages/2/threads", {"name": f"{icon} {name}"}),
+        ("POST", "/channels/1/messages/2/threads", {"name": f"🔄 {icon} {name}"}),
         ("POST", "/channels/9/messages", {"content": f"## {icon} {name}"}),
     ]
 

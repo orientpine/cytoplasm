@@ -137,6 +137,7 @@ def test_the_watch_tick_tells_the_owner_and_fails(
     # Then: the tick fails, the owner's thread hears why, and the other draft still sends
     assert rc == 6
     assert sent == [working["id"]]
+    assert next(outcome for draft_id, _, outcome in notices if draft_id == failing["id"]) == "FAILED"
     failure = next(content for draft_id, content, _ in notices if draft_id == failing["id"])
     assert failure.startswith("⚠️ 발송 실패")
     assert "compose_open" in failure and "compose_not_ready" in failure and "eval" in failure

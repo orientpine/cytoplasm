@@ -68,7 +68,7 @@ def test_compose_restores_in_progress_name_when_reusing_terminal_thread(
     card_index = next(i for i, call in enumerate(api.calls) if call[:2] == ("POST", f"/channels/{THREAD}/messages"))
     rename_index = next(i for i, call in enumerate(api.calls) if call[0] == "PATCH")
     assert card_index < rename_index
-    assert api.calls[rename_index][2] == {"name": NAME, "archived": False}
+    assert api.calls[rename_index][2] == {"name": "🔔 ✉️ request", "archived": False}
     draft, = triage_gate.list_drafts()
     assert draft["sha256"] == triage_core.draft_sha256(draft)
     assert api.calls[card_index][2] == {"content": triage_approval._approval_content(draft, "")}

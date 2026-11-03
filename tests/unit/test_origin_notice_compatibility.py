@@ -63,7 +63,7 @@ def test_content_bytes_and_receipt_when_using_legacy_delivery(monkeypatch, capsy
     if route == "thread":
         assert result == "501"
         assert surface.calls[-1] == (
-            "PATCH", "/channels/222", {"archived": True, "name": "✅ 완료 · request"},
+            "PATCH", "/channels/222", {"archived": True, "name": "✅ request"},
         )
     else:
         assert result is surface.receipt

@@ -281,7 +281,7 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
         ):
             return {"id": REQUEST_THREAD_ID}
         if path == f"/channels/{REQUEST_THREAD_ID}":
-            return {"id": REQUEST_THREAD_ID, "name": f"🗓️ 캘린더 · {draft['id']}",
+            return {"id": REQUEST_THREAD_ID, "name": f"🔔 🗓️ {draft['id']}",
                     "parent_id": AGENT_CHAT_CHANNEL_ID, "type": 11}
         if path == f"/channels/{REQUEST_THREAD_ID}/messages":
             return {"id": "msg-1"}
@@ -313,7 +313,7 @@ def test_post_confirm_posts_reactions_and_records_bound_pending_entry(tmp_path: 
             "content": request_thread_notice(ApprovalKind.CALENDAR, RequestThread(draft['id'])),
         }),
         ("POST", f"/channels/{AGENT_CHAT_CHANNEL_ID}/messages/{REQUEST_NOTICE_MESSAGE_ID}/threads", {
-            "name": f"🗓️ 캘린더 · {draft['id']}", "auto_archive_duration": 10080,
+            "name": f"🔔 🗓️ {draft['id']}", "auto_archive_duration": 10080,
         }),
     ]
     assert [call for call in calls if call[0] == "PUT"] == [
@@ -676,7 +676,7 @@ def test_origin_bound_approval_posts_masked_result_to_the_origin_thread(
     assert [entry.draft_id for entry in result.commands.confirmed] == ["abc123"]
     assert result.discord.sent_messages == []
     assert result.dm_notices == []
-    assert result.thread_names == ["🗓️ 캘린더 확정 (draft abc123)"]
+    assert result.thread_names == ["🔄 🗓️ 캘린더 확정 (draft abc123)"]
     assert [channel for channel, _content in result.thread_posts] == [THREAD_ID]
     content = result.thread_posts[0][1]
     assert "캘린더 등록 실행 완료" in content
@@ -711,7 +711,7 @@ def test_origin_bound_cancellation_posts_masked_result_to_the_origin_thread(
 # ------------------------------------------- per-request approval thread closing
 
 APPROVAL_THREAD = "300000000000000091"
-APPROVAL_THREAD_NAME = "🗓️ 캘린더 · abc123"
+APPROVAL_THREAD_NAME = "🗓️ abc123"
 
 
 def _run_approval_thread(
@@ -785,7 +785,7 @@ def test_execution_result_closes_the_request_thread_it_was_approved_in(
     assert "캘린더 등록 실행 완료" in result.thread_posts[0][1]
     _assert_calendar_content_masked(result.thread_posts[0][1])
     assert result.patches == [
-        {"archived": True, "name": f"✅ 완료 · {APPROVAL_THREAD_NAME}"}
+        {"archived": True, "name": f"✅ {APPROVAL_THREAD_NAME}"}
     ]
     assert result.dm_notices == []
 
@@ -807,7 +807,7 @@ def test_cancellation_result_closes_the_request_thread_as_cancelled(
     assert "캘린더 삭제 취소" in result.thread_posts[0][1]
     _assert_calendar_content_masked(result.thread_posts[0][1])
     assert result.patches == [
-        {"archived": True, "name": f"⛔ 취소 · {APPROVAL_THREAD_NAME}"}
+        {"archived": True, "name": f"⛔ {APPROVAL_THREAD_NAME}"}
     ]
 
 
@@ -828,7 +828,7 @@ def test_expiry_result_closes_the_request_thread_as_expired(
     assert [channel for channel, _content in result.thread_posts] == [APPROVAL_THREAD]
     assert "캘린더 등록 만료 취소" in result.thread_posts[0][1]
     assert result.patches == [
-        {"archived": True, "name": f"⌛ 만료 · {APPROVAL_THREAD_NAME}"}
+        {"archived": True, "name": f"💤 {APPROVAL_THREAD_NAME}"}
     ]
 
 

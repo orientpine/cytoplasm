@@ -221,9 +221,9 @@ def test_the_thread_mark_follows_its_undecided_cards() -> None:
 
     patches = {path: payload for method, path, payload in calls if method == "PATCH"}
     assert patches["/channels/1529000000000000031"]["archived"] is True  # done, a newer digest exists
-    assert patches["/channels/1529000000000000031"]["name"].startswith("✅ 완료 · ")
+    assert patches["/channels/1529000000000000031"]["name"].startswith("✅ ")
     assert patches["/channels/1529000000000000032"]["name"].startswith(digest_thread.PENDING_MARK)
-    assert "/channels/1529000000000000033" not in patches  # latest with nothing waiting: unchanged
+    assert patches["/channels/1529000000000000033"]["name"].startswith("✅ ")
 
     calls.clear()
     digest_thread.settle(counts, api)

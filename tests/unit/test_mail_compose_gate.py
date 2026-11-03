@@ -109,7 +109,7 @@ def _dm_post_api(requests: list[tuple[str, str]]):
             }
         if method == "POST":
             return {"id": MESSAGE_ID}
-        if method == "PUT":
+        if method in {"PUT", "PATCH"}:
             return None
         raise AssertionError(f"unexpected Discord call: {method} {path}")
 
@@ -249,6 +249,8 @@ def test_compose_post_targets_dm_channel_with_reaction_order(
         ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages/{NOTICE_MESSAGE_ID}/threads"),
         ("GET", f"/channels/{AGENT_CHAT_THREAD}"),
         ("POST", f"/channels/{AGENT_CHAT_THREAD}/messages"),
+        ("GET", f"/channels/{AGENT_CHAT_THREAD}"),
+        ("PATCH", f"/channels/{AGENT_CHAT_THREAD}"),
         ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9C%85/@me"),
         ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9B%94/@me"),
     ]

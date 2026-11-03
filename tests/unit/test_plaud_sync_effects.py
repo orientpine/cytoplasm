@@ -215,7 +215,7 @@ def test_post_approval_titles_the_request_thread_with_the_note_filename(
     assert effects.post_approval(record) == ("msg-9", "9")
     assert specs == [RequestThread(title=filename)]
     name = request_thread_name(ApprovalKind.OBSIDIAN_WRITE, specs[0])
-    assert name.partition(" · ")[2] == filename[:40]
+    assert name.split(" ", maxsplit=2)[2] == filename[:40]
     assert len(name) <= 100
     persisted = load_state(tmp_path / "plaud.json").records[record.recording_id]
     assert persisted.approval_thread_id == "9"
@@ -239,7 +239,7 @@ def test_notify_posts_the_result_into_the_request_thread_and_closes_it(
     # active threads stays exactly the list of open requests.
     (patch,) = [call for call in transport.calls if call[0] == "PATCH"]
     assert patch[1] == "/channels/thread-1"
-    assert patch[2] == {"archived": True, "name": "✅ 완료 · rec-001"}
+    assert patch[2] == {"archived": True, "name": "✅ rec-001"}
 
 
 def test_notify_closes_a_cancelled_request_with_the_cancel_prefix(
@@ -253,7 +253,7 @@ def test_notify_closes_a_cancelled_request_with_the_cancel_prefix(
 
     # Then: the thread carries the cancel status, not the done one.
     (patch,) = [call for call in transport.calls if call[0] == "PATCH"]
-    assert patch[2] == {"archived": True, "name": "⛔ 취소 · rec-001"}
+    assert patch[2] == {"archived": True, "name": "⛔ rec-001"}
 
 
 def test_notify_leaves_the_thread_open_for_a_non_terminal_acknowledgement(

@@ -410,7 +410,7 @@ def test_completion_result_closes_the_request_thread_it_was_approved_in(
     # Then: the completion lands in the approval thread, which then closes as done
     assert exit_code == 0
     assert [channel for channel, _content in spy.posts] == [APPROVAL_THREAD]
-    assert patches == [{"archived": True, "name": f"✅ 완료 · {APPROVAL_THREAD_NAME}"}]
+    assert patches == [{"archived": True, "name": f"✅ {APPROVAL_THREAD_NAME}"}]
     assert dm_notices == []
     # …and the #team notice is unchanged by the thread closing
     assert [channel for channel, _content in team_posts] == ["team-chan"]
@@ -461,7 +461,7 @@ def test_watcher_cancel_closes_the_request_thread_as_cancelled(
     assert commands.discarded == ["abc123"]
     assert discord.sent_messages == []
     assert [channel for channel, _content in spy.posts] == [APPROVAL_THREAD]
-    assert patches == [{"archived": True, "name": f"⛔ 취소 · {APPROVAL_THREAD_NAME}"}]
+    assert patches == [{"archived": True, "name": f"⛔ {APPROVAL_THREAD_NAME}"}]
 
 
 def test_watcher_expiry_closes_the_request_thread_as_expired(
@@ -476,7 +476,7 @@ def test_watcher_expiry_closes_the_request_thread_as_expired(
     assert commands.discarded == ["abc123"]
     assert discord.sent_messages == []
     assert [channel for channel, _content in spy.posts] == [APPROVAL_THREAD]
-    assert patches == [{"archived": True, "name": f"⌛ 만료 · {APPROVAL_THREAD_NAME}"}]
+    assert patches == [{"archived": True, "name": f"💤 {APPROVAL_THREAD_NAME}"}]
 
 
 def test_notify_result_falls_back_to_caller_when_helper_is_unavailable(monkeypatch, capsys):

@@ -144,7 +144,7 @@ class MailApprovalGate:
             card = _digest_card(self.draft, intent.channel_id)
             reply = {"reply_to": card} if card else {}
             message_id = triage_confirm.post_approval_request(content, intent.channel_id, **reply)
-        if self.draft.get("origin_channel_id") == intent.channel_id:
+        if self.draft.get("approval_thread_id") == intent.channel_id:
             try:
                 triage_confirm._origin_notice().resume_thread(triage_confirm._api, intent.channel_id)
             except Exception as error:  # noqa: BLE001 — an older interop runtime must not cost the card its reactions

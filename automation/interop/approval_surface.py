@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+import re
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias, assert_never
@@ -127,11 +128,41 @@ KIND_ICONS: Final[Mapping[ApprovalKind, str]] = MappingProxyType({
 
 REQUEST_TITLE_LIMIT: Final = 40
 THREAD_NAME_LIMIT: Final = 100  # Discord channel/thread name limit
+THREAD_STATE_PREFIXES: Final = (
+    "✅ 완료 · ", "⛔ 취소 · ", "⌛ 만료 · ", "❗ 실패 · ",
+    "✅", "⛔", "💤", "❗", "🔔", "🔄", "📌", "⏸️", "⏸", "⌛",
+)
+
+
+def strip_state_marks(name: str) -> str:
+    """Remove all leading states, including stacked legacy word prefixes (Q474)."""
+    name = name.strip()
+    while True:
+        prefix = next((prefix for prefix in THREAD_STATE_PREFIXES if name.startswith(prefix)), "")
+        if not prefix:
+            return name
+        name = name[len(prefix):].lstrip()
+        name = re.sub(r"^(?:완료|취소|만료|실패)\s*·\s*", "", name).lstrip("· ")
+
+
+def state_thread_name(name: str, mark: str) -> str:
+    """One state followed by the untouched kind icon and subject."""
+    base = strip_state_marks(name)
+    icon, space, subject = base.partition(" ")
+    labels = [KIND_LABELS[kind] for kind in KIND_ICONS if KIND_ICONS[kind] == icon]
+    if icon == "📬":
+        labels.append("기관메일")
+    for label in labels:
+        subject = subject.removeprefix(f"{label} · ")
+    subject = re.sub(r"^(?:(?:re|fw|fwd)\s*:\s*)+", "", subject, flags=re.IGNORECASE)
+    return f"{mark} {icon}{space}{subject}".rstrip()[:THREAD_NAME_LIMIT]
 
 
 def _request_title(request: RequestThread) -> str:
     """The producer-masked title, whitespace-folded and clipped to the shared limit."""
-    return " ".join(request.title.split())[:REQUEST_TITLE_LIMIT] or "요청"
+    title = strip_state_marks(" ".join(request.title.split()))
+    title = re.sub(r"^(?:(?:re|fw|fwd)\s*:\s*)+", "", title, flags=re.IGNORECASE)
+    return title[:REQUEST_TITLE_LIMIT] or "요청"
 
 
 def _label(kind: ApprovalKind, request: RequestThread) -> str:
@@ -143,8 +174,8 @@ def _icon(kind: ApprovalKind, request: RequestThread) -> str:
 
 
 def request_thread_name(kind: ApprovalKind, request: RequestThread) -> str:
-    """``<icon> <kind label> · <title≤40>`` clipped to Discord's 100-char thread name."""
-    return f"{_icon(kind, request)} {_label(kind, request)} · {_request_title(request)}"[:THREAD_NAME_LIMIT]
+    """One pending state, the kind icon, then the subject without a redundant label."""
+    return state_thread_name(f"{_icon(kind, request)} {_request_title(request)}", "🔔")
 
 
 def thread_title(icon: str, text: str) -> str:
