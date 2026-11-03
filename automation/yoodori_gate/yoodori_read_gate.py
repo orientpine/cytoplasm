@@ -66,7 +66,8 @@ REFUSED_WORDS = frozenset({
     "python", "python3", "perl", "ruby", "node", "bun", "env",
 }) | GMAIL_WRITE_WORDS
 _ORIGIN = {"--origin-channel-id": "id", "--origin-message-id": "id"}
-_REPEATABLE = {"mail-compose": frozenset({"--cc", "--bcc", "--share-with", "--attachment"})}
+# --to repeats like --cc/--bcc, one checked address each (owner 2026-11-03: five people in To).
+_REPEATABLE = {"mail-compose": frozenset({"--to", "--cc", "--bcc", "--share-with", "--attachment"})}
 _FLAGS = {
     "mail-compose": {"--to": "email", "--cc": "email", "--bcc": "email",
                      "--subject": "short", "--body": "body", "--in-reply-to": "id",

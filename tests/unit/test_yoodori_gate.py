@@ -103,6 +103,8 @@ def test_all_card_commands_build_real_request_cli_argv(staged: Path, monkeypatch
     ["--to", "a@b.invalid", "--subject", "s", "--body", "b"],
     ["--to", "not-an-email", "--subject", "s", "--body", "b", *ORIGIN],
     ["--to", "a@b.invalid,c@d.invalid", "--subject", "s", "--body", "b", *ORIGIN],
+    ["--to", "a@b.invalid", "--to", "not-an-email", "--subject", "s", "--body", "b", *ORIGIN],
+    ["--to", "a@b.invalid", "--to", "c@d.invalid,e@f.invalid", "--subject", "s", "--body", "b", *ORIGIN],
     ["--to", "a@b.invalid", "--subject", "s" * 241, "--body", "b", *ORIGIN],
     ["--to", "a@b.invalid", "--subject", "s", "--body-b64", "!", *ORIGIN],
     ["--to", "a@b.invalid", "--subject", "s", "--body-b64", b64("\x00"), *ORIGIN],
@@ -117,6 +119,22 @@ def test_invalid_mail_values_are_refused(args: list[str]) -> None:
     # Given / When / Then
     with pytest.raises(gate.Refused):
         gate.build(["mail-compose", *args])
+
+
+def test_mail_compose_takes_every_to_like_bcc() -> None:
+    # Given: a mail to five people (owner 2026-11-03), one address per --to, as --bcc takes them.
+    tos = [f"reader{i}@example.invalid" for i in range(5)]
+    args = [*(word for to in tos for word in ("--to", to)), "--subject", "안내", "--body", "본문", *ORIGIN]
+    # When
+    _name, argv, _cwd = gate.build(["mail-compose", *args])
+    # Then: every --to reaches compose in order, and compose's own parser keeps all five.
+    assert [argv[i + 1] for i, word in enumerate(argv) if word == "--to"] == tos
+    script = ("import sys, json; sys.path.insert(0, sys.argv[1]); import triage_cli; "
+              "print(json.dumps(triage_cli.build_parser().parse_args(sys.argv[2:]).to))")
+    parsed = subprocess.run([sys.executable, "-c", script, str(REPO / "skills/mail/scripts"), *argv[2:]],
+                            cwd=REPO, capture_output=True, text=True, check=False)
+    assert parsed.returncode == 0, parsed.stderr
+    assert json.loads(parsed.stdout) == tos
 
 
 @pytest.mark.parametrize("command", [

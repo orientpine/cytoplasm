@@ -163,7 +163,20 @@ def _compose_gmail_reply(args: argparse.Namespace) -> int:
     return 0
 
 
+def _joined_to(values: str | list[str]) -> str:
+    """Every --to in order as the one To value mailon and the card read ("a, b"); a repeat once."""
+    if isinstance(values, str):
+        return values
+    kept: dict[str, str] = {}
+    for value in values:
+        if value.strip():
+            kept.setdefault(value.strip().casefold(), value.strip())
+    return ", ".join(kept.values())
+
+
 def cmd_compose(args: argparse.Namespace) -> int:
+    # Owner 2026-11-03: a mail to five people names each in To; before, only the last --to was kept.
+    args.to = _joined_to(args.to)
     if getattr(args, "reply_gmail", ""):
         return _compose_gmail_reply(args)
     if not args.to:
@@ -741,7 +754,9 @@ def build_parser() -> argparse.ArgumentParser:
     compose = sub.add_parser(
         "compose", help="새 메일 작성 초안 — 소유자 확정 게이트 (같은 watch cron 재사용)"
     )
-    compose.add_argument("--to", default="", help="새 메일·전달은 필수 — Gmail 답장(--reply-gmail)은 원메일에서 이어받아 쓰지 않는다")
+    compose.add_argument("--to", action="append", default=[], metavar="ADDR",
+                         help="받는 사람 주소 (여러 번 지정 가능, 같은 주소는 한 번) — 새 메일·전달은 필수, "
+                              "Gmail 답장(--reply-gmail)은 원메일에서 이어받아 쓰지 않는다")
     compose.add_argument("--bcc", action="append", default=[], metavar="ADDR",
                          help="숨은참조 주소 (반복·쉼표 구분 가능)")
     compose.add_argument("--bcc-file", default=None, metavar="PATH",
