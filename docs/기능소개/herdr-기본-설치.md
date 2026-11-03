@@ -30,6 +30,6 @@ aoe 를 기본으로 깔고 herdr 는 손으로 깔아야 했고, 형의 사이�
 
 - 코드: `automation/install/dori_herdr.py`, `automation/install/dori.py`, 고정판 `dori/herdr.toml`, 포크 고정 `dori/pin.toml`
 - 시험: `tests/unit/test_install_dori_herdr.py`, `test_install_dori.py`, `test_install_default_dori.py`
-- 포크: herdr 백엔드(#287·#288·#290), herdr 웹(#291), 자기 비밀번호(#298), 교대 전 옛 감시 끝내기(#292)
+- 포크: herdr 백엔드(#287·#288·#290), herdr 웹(#291), 자기 비밀번호(#298), 교대 전 옛 감시 끝내기(#292), 웹 탭 상태 막대(#293)
 - 승인·게이트: 없음(계정 안 설치. root·외부 발송 없음)
 - 릴리스 노트 절: `docs/releases/herdr-default.md`
