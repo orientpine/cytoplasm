@@ -238,6 +238,9 @@ def sweep_env(
     tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Path:
     """스윕이 노드에도 디스코드에도 닿지 않도록 두 이음매를 스텁으로 갈아 끼운다."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))  # 릴리스 호스트의 실제 스위치·노트를 읽지 않는다
     state = tmp_path / "state"
     (state / "completed").mkdir(parents=True)
     probe = _stub(tmp_path / "probe-stub", _PROBE_STUB)
@@ -701,6 +704,90 @@ def test_a_failed_send_leaves_no_marker_and_the_next_tick_completes(
     assert [json.loads(row) for row in _lines(sent_log)] == ["✅ v1.2.4 적용됨"]
     assert len(_lines(inbox)) == 1
     assert (sweep_env / "notified" / head).exists()
+
+
+class TestRelay:
+    """릴리스 호스트 스위치 `release-notice-relay` — 형 한 줄을 노드 봇 대신 다른 발신자에게."""
+
+    def _switch(self, value: bytes) -> None:
+        flag = Path(os.environ["HOME"]) / ".hermes/release-flags/release-notice-relay"
+        flag.parent.mkdir(parents=True)
+        _ = flag.write_bytes(value)
+
+    def test_a_on_asks_the_node_to_skip_the_line_and_hands_it_over(
+        self, sweep_env: Path, repo: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        head = _head(repo)
+        _complete(sweep_env, head)
+        self._switch(b"on")
+
+        assert _sweep(sweep_env, repo) == 0
+
+        output = capsys.readouterr().out
+        assert _lines(Path(os.environ["SEND_CALLS"])) == [
+            f"automation.release_applied_notice|send --version v1.2.4 --head {head} --relay"
+        ]
+        relayed = sweep_env / "relay" / head
+        assert relayed.read_text(encoding="utf-8") == "✅ v1.2.4 적용됨\n"
+        assert relayed.stat().st_mode & 0o777 == 0o600
+        assert f"RELEASE-APPLIED-RELAYED v1.2.4 {head[:12]}" in output
+        assert (sweep_env / "notified" / head).exists()
+
+    def test_b_absent_switch_keeps_the_node_line_and_writes_nothing(self, sweep_env: Path, repo: Path) -> None:
+        head = _head(repo)
+        _complete(sweep_env, head)
+
+        assert _sweep(sweep_env, repo) == 0
+
+        assert not _lines(Path(os.environ["SEND_CALLS"]))[0].endswith("--relay")
+        assert not (sweep_env / "relay").exists()
+
+    def test_c_a_malformed_switch_sends_nothing_and_retries(
+        self, sweep_env: Path, repo: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        head = _head(repo)
+        _complete(sweep_env, head)
+        self._switch(b"on\n")
+
+        assert _sweep(sweep_env, repo) == 0
+
+        assert "RELEASE-APPLIED-SWEEP-FAIL ValueError" in capsys.readouterr().out
+        assert _lines(Path(os.environ["SEND_CALLS"])) == []
+        assert not (sweep_env / "notified" / head).exists()
+
+    def test_d_failed_node_send_hands_nothing_over(self, sweep_env: Path, repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        head = _head(repo)
+        _complete(sweep_env, head)
+        self._switch(b"on")
+        monkeypatch.setenv("SEND_RC", "3")
+
+        assert _sweep(sweep_env, repo) == 0
+
+        assert not (sweep_env / "relay").exists()
+        assert not (sweep_env / "notified" / head).exists()
+
+    def test_e_the_node_skips_only_the_owner_line(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        store = tmp_path / "releases" / _SHA
+        store.mkdir(parents=True)
+        (tmp_path / "current").symlink_to(store)
+        monkeypatch.setenv("NODE_RELEASE_CURRENT", str(tmp_path / "current"))
+        sent: list[tuple[str, bool]] = []
+        monkeypatch.setattr(
+            owner_notice, "notify_owner",
+            lambda notice, *, message=None, fault=False, release=False: sent.append((notice, fault)) or True,
+        )
+        closed: list[str] = []
+        from automation import release_thread_notice
+        monkeypatch.setattr(release_thread_notice, "finish", lambda version, outcome: closed.append(version))
+
+        exit_code = release_applied_notice.main([
+            "send", "--version", "v1.2.4", "--head", _SHA, "--relay",
+            "--pending", json.dumps(["남은 소유자 조치:", "헬스체크 허용 목록 갱신"]),
+        ])
+
+        assert exit_code == 0
+        assert [fault for _, fault in sent] == [True]  # 운영자 조각만, 형 한 줄 없음
+        assert closed == ["v1.2.4"]
 
 
 class TestSendAtTheNode:

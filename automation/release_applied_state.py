@@ -16,6 +16,31 @@ from pathlib import Path
 from typing import Final, assert_never
 
 MODULE: Final = "automation.release_applied_notice"
+#: 릴리스 호스트 스위치 — 정확히 `on` 이면 형 한 줄을 노드 봇이 아니라 `<state>/relay/<sha>` 로 넘긴다.
+RELAY_FLAG: Final = ".hermes/release-flags/release-notice-relay"
+
+
+def relay_switch(home: Path | None = None) -> bool:
+    """없으면 꺼짐(예전 그대로 노드가 보낸다), `on` 이 아니면 fail-closed 로 이 틱을 멈춘다."""
+    try:
+        value = ((home or Path.home()) / RELAY_FLAG).read_bytes()
+    except FileNotFoundError:
+        return False
+    if value != b"on":
+        raise ValueError("invalid release-notice-relay switch")
+    return True
+
+
+def write_relay(state: Path, sha: str, line: str) -> Path:
+    """다른 발신자가 읽어 한 번 올릴 형 한 줄 — 원자적으로 쓰고 0600."""
+    directory = state / "relay"
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / sha
+    staged = directory / f".{sha}.tmp"
+    _ = staged.write_text(f"{line}\n", encoding="utf-8")
+    staged.chmod(0o600)
+    _ = staged.replace(target)
+    return target
 
 
 def log(message: str) -> None:
@@ -141,19 +166,24 @@ class Sweep:
         return is_ancestor(self.repo, sha, self.pointer_sha)
 
     def _notify(self, sha: str, version: str) -> None:
-        from automation.release_applied_notice import release_summary
+        from automation.release_applied_notice import owner_text, release_summary
 
+        relay = relay_switch()
         owner = ("--owner-pending", json.dumps(list(self.owner_pending))) if self.owner_pending else ()
         summary = release_summary(sha)
         said = ("--summary", summary) if summary else ()
+        relayed = ("--relay",) if relay else ()
         completed = subprocess.run(
-            (*send_command(self.repo), "send", "--version", version, "--head", sha, *owner, *said),
+            (*send_command(self.repo), "send", "--version", version, "--head", sha, *owner, *said, *relayed),
             env={**os.environ, "RELEASE_APPROVAL_MODULE": MODULE},
             check=False,
         )
         if completed.returncode != 0:
             log(f"RELEASE-APPLIED-SEND-FAIL rc={completed.returncode} {sha[:12]}")
             return
+        if relay:
+            _ = write_relay(self.state, sha, owner_text(version, summary, owner[1] if owner else ""))
+            log(f"RELEASE-APPLIED-RELAYED {version} {sha[:12]}")
         stamp = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         mark(self.state, "notified", sha, f"{version} {stamp}")
         record_ops(version, sha, self.pending)
