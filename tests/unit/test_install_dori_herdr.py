@@ -58,10 +58,12 @@ def _fork(tmp_path: Path) -> DoriPin:
 class _World:
     """systemctl --user and herdr as one account sees them: records every call, answers like the real tools."""
 
-    def __init__(self, *, active: set[str] | None = None) -> None:
+    def __init__(self, *, active: set[str] | None = None, agent_screen: str = "────\n❯ \n────\n") -> None:
         self.calls: list[tuple[str, ...]] = []
         self.active = active or set()
         self.fetched: list[str] = []
+        self.agent_screen = agent_screen
+        self.agent_ran = False
 
     def capture(self, argv: tuple[str, ...]) -> tuple[int, str]:
         self.calls.append(argv)
@@ -73,8 +75,10 @@ class _World:
             return 0, ""
         if argv[1:3] == ("workspace", "create"):
             return 0, json.dumps(_CREATED)
+        if argv[1:3] == ("pane", "run"):
+            self.agent_ran = True
         if argv[1:3] == ("pane", "read"):
-            return 0, "$ \n"
+            return 0, self.agent_screen if self.agent_ran else "$ \n"
         return 0, ""
 
     def fetch(self, url: str, dest: Path) -> None:
@@ -136,6 +140,16 @@ def test_a_fresh_install_gets_herdr_ttyd_the_server_the_web_and_the_lead_in_a_he
     assert started[3] == "w1:p1" and started[4].startswith("omo --session-id ")
     assert "DORI-LEAD-STARTED pane=w1:p1" in out and "backend=herdr" in out
     assert keys["HERDR_WEB_PASSPHRASE"] not in out
+
+
+def test_a_lead_agent_that_does_not_come_up_is_reported_not_started(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    world = _World(agent_screen="$ omo --session-id x\nSyntaxError: Unexpected token 'with'\n$ \n")
+
+    assert _install(home, world) == 0
+
+    out = capsys.readouterr().out
+    assert "DORI-LEAD-NOT-READY pane=w1:p1" in out and "SyntaxError" in out
+    assert "DORI-LEAD-STARTED" not in out
 
 
 def test_an_aoe_install_rerun_gets_herdr_ready_but_keeps_its_config_web_port_and_passphrase(

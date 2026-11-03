@@ -28,6 +28,7 @@ _FORK_SETUPS: Final = Path("skills") / "dori-mode" / "setups"
 _SERVER_UNIT: Final = "dori-herdr.service"
 _EXAMPLE_CWD: Final = "~/code/my-project"
 _READY_TRIES: Final = 50
+_AGENT_TRIES: Final = 60
 
 Capture = Callable[[tuple[str, ...]], tuple[int, str]]
 Fetch = Callable[[str, Path], None]
@@ -220,7 +221,24 @@ def open_lead(layout: Layout, config: Path, lead_dir: Path, label: str, capture:
     if code != 0:
         print(f"DORI-LEAD-FAIL herdr pane run {pane}: {out.strip()[:200]}")
         return
-    print(f"DORI-LEAD-STARTED pane={pane} session={session} cwd={lead_dir}")
+    screen = ""
+    for _ in range(_AGENT_TRIES):
+        screen = capture((herdr, "pane", "read", pane, "--source", "visible"))[1]
+        if _omo_input_box(screen):
+            print(f"DORI-LEAD-STARTED pane={pane} session={session} cwd={lead_dir}")
+            return
+        sleep(1.0)
+    tail = " | ".join(line.strip() for line in screen.strip().splitlines()[-3:])
+    print(f"DORI-LEAD-NOT-READY pane={pane}: {agent} 입력창이 {_AGENT_TRIES}초 안에 뜨지 않았다(화면 끝: {tail[:200]}) — "
+          f"고친 뒤 herdr pane run {pane} '{agent} --session-id {session}'")
+
+
+def _omo_input_box(screen: str) -> bool:
+    # omo's own input box: a ❯ line with the box's ─ border right above it (a shell prompt drawn as ❯ has no box);
+    # the same rule the fork's reviveHerdr waits on
+    lines = screen.split("\n")
+    return any(line.lstrip().startswith("❯") and any(up.lstrip().startswith("─") for up in lines[max(0, i - 2):i])
+               for i, line in enumerate(lines))
 
 
 def install(layout: Layout, tools: Tools, key: str, *, origin: str, config: Path, lead_dir: Path, lead_label: str,
