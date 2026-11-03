@@ -15,7 +15,9 @@ sha 를 가리킬 때만 "적용되었습니다"가 참이다.
 절반은 워크스테이션(`sweep`, 완결 타이머가 매 틱 호출)에서, 절반은 노드(`send`,
 `release_approval_remote.sh` 가 agent 자격으로 실행)에서 돈다.
 
-**목적지는 이 모듈이 정하지 않는다.** 2026-09-10 소유자 지시로 DM 전용
+**목적지는 이 모듈이 정하지 않는다.** 형 한 줄은 release 가 정한 적용 안내 채널
+(`notice-bot.json` 의 `release_channel_id`, 릴리스 호스트 플래그 `release-notice-channel`)이 있으면
+그리로, 없으면 아래 통지 채널로 간다(소유자 지시 2026-11-03). 2026-09-10 소유자 지시로 DM 전용
 (`notify_owner_dm`)에서 `owner_notice.notify_owner` 로 옮겼다 — 파사드가
 `owner_notice_channel_id`(#notifications)를 존중하고, 그 키가 없는 설치만 소유자 DM 으로
 되돌린다(ON-1). 어느 쪽이든 DM 오픈은 파사드 안에서만 일어난다(ON-2/ON-3).
@@ -232,7 +234,10 @@ def _deliver(version: str, head: str, fact: str, *, render: str, fault: bool = F
     from automation.release_applied_message import applied_message
 
     message = applied_message(version, head, fact, render_version=render)
-    extra = {"fault": True} if fault else {}
+    # 적용 안내 한 줄만 release 가 정한 채널로 — 미설정 설치는 예전 호출 그대로다.
+    from automation.notice_bot import release_channel
+
+    extra = {"fault": True} if fault else ({"release": True} if release_channel() else {})
     if message is not None and getattr(owner_notice, "ACCEPTS_OWNER_MESSAGE", False):
         return owner_notice.notify_owner(fact, message=message, **extra)
     return owner_notice.notify_owner(fact, **extra)

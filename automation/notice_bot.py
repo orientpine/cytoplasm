@@ -23,6 +23,9 @@ SURFACE: Final = "notice-bot:yoodori"
 CARD_LINE: Final = "발신 봇 바꾸기: 노드 알림·승인 카드를 유돌 봇으로 보냄(Agent·Peer·Ops 봇은 아무것도 보내지 않음)"
 FAULT_PREFIX: Final = "fault-channel:"
 FAULT_CARD_LINE: Final = "고장 알림은 #dori-pair 로(유돌 먼저)"
+RELEASE_PREFIX: Final = "release-notice-channel:"
+RELEASE_CARD_LINE: Final = "릴리스 적용 안내는 설치가 정한 채널로(다른 알림은 그대로)"
+_OPTIONAL: Final = frozenset({"fault_channel_id", "release_channel_id"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +33,7 @@ class Override:
     token: str = field(repr=False)
     channel_id: str
     fault_channel_id: str | None = None
+    release_channel_id: str | None = None
 
     @property
     def digest(self) -> str:
@@ -48,8 +52,8 @@ def override_path(home: Path | None = None, config: NodeConfig | None = None) ->
 
 def parse_override(text: str) -> Override:
     raw = json.loads(text)
-    if (not isinstance(raw, dict)
-            or set(raw) not in ({"token", "channel_id"}, {"token", "channel_id", "fault_channel_id"})):
+    if (not isinstance(raw, dict) or not {"token", "channel_id"} <= set(raw)
+            or not set(raw) - {"token", "channel_id"} <= _OPTIONAL):
         raise ValueError("invalid override shape")
     token, channel = raw["token"], raw["channel_id"]
     if (not isinstance(token, str) or not token or len(token) > 4096
@@ -59,7 +63,10 @@ def parse_override(text: str) -> Override:
     fault = raw.get("fault_channel_id")
     if "fault_channel_id" in raw:
         fault_surface(fault)
-    return Override(token, channel, fault)
+    release = raw.get("release_channel_id")
+    if "release_channel_id" in raw:
+        release_surface(release)
+    return Override(token, channel, fault, release)
 
 
 def read_override(home: Path | None = None) -> Override | None:
@@ -119,29 +126,44 @@ def fault_surface(channel: str) -> tuple[str, str]:
     return FAULT_PREFIX + channel, hashlib.sha256(channel.encode()).hexdigest()
 
 
+def release_surface(channel: str) -> tuple[str, str]:
+    """The installation-specific release-applied destination is an approved release effect too."""
+    if not isinstance(channel, str) or re.fullmatch(r"[1-9][0-9]{16,19}", channel) is None:
+        raise ValueError("invalid release notice channel")
+    return RELEASE_PREFIX + channel, hashlib.sha256(channel.encode()).hexdigest()
+
+
+def release_channel(home: Path | None = None) -> str | None:
+    """Where only the release-applied owner line goes; absence keeps the ordinary notice channel."""
+    override = read_override(home)
+    return override.release_channel_id if override is not None else None
+
+
 def fault_channel(home: Path | None = None) -> str | None:
     """One fault resolver for all senders; absence preserves each legacy destination."""
     override = read_override(home)
     return override.fault_channel_id if override is not None else None
 
 
-def installed(digest: str, channel: str, fault: str = "off") -> bool:
+def installed(digest: str, channel: str, fault: str = "off", release: str = "off") -> bool:
     path = override_path()
     if digest == "off":
         return not path.exists() and not path.is_symlink()
     override = read_override()
     return override is not None and (
-        override.digest, override.channel_id, override.fault_channel_id or "off"
-    ) == (digest, channel, fault)
+        override.digest, override.channel_id, override.fault_channel_id or "off",
+        override.release_channel_id or "off",
+    ) == (digest, channel, fault, release)
 
 
-def install(digest: str, channel: str, fault: str = "off") -> None:
+def install(digest: str, channel: str, fault: str = "off", release: str = "off") -> None:
     path = override_path()
     if digest == "off":
         path.unlink(missing_ok=True)
         return
     value = parse_override(sys.stdin.read(8193))
-    if (value.digest, value.channel_id, value.fault_channel_id or "off") != (digest, channel, fault):
+    if (value.digest, value.channel_id, value.fault_channel_id or "off",
+            value.release_channel_id or "off") != (digest, channel, fault, release):
         raise ValueError("stdin differs from approved identity")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".notice-bot-", dir=path.parent)
@@ -150,13 +172,15 @@ def install(digest: str, channel: str, fault: str = "off") -> None:
             payload = {"token": value.token, "channel_id": value.channel_id}
             if value.fault_channel_id is not None:
                 payload["fault_channel_id"] = value.fault_channel_id
+            if value.release_channel_id is not None:
+                payload["release_channel_id"] = value.release_channel_id
             stream.write(json.dumps(payload))
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(name, path)
     finally:
         Path(name).unlink(missing_ok=True)
-    if not installed(digest, channel, fault):
+    if not installed(digest, channel, fault, release):
         raise ValueError("override readback differs")
 
 
@@ -203,6 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         mode.add_argument("--digest", required=True)
         mode.add_argument("--channel", required=True)
         mode.add_argument("--fault-channel", default="off")
+        mode.add_argument("--release-channel", default="off")
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
@@ -214,8 +239,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.digest != "off" and re.fullmatch(r"[0-9a-f]{64}", args.digest) is None:
             raise ValueError("invalid digest")
         if args.command == "install":
-            install(args.digest, args.channel, args.fault_channel)
-        ok = installed(args.digest, args.channel, args.fault_channel)
+            install(args.digest, args.channel, args.fault_channel, args.release_channel)
+        ok = installed(args.digest, args.channel, args.fault_channel, args.release_channel)
         print(f"NOTICE-BOT installed={'yes' if ok else 'no'}")
         return 0 if ok else 1
     except (OSError, ValueError, UnicodeError, NodeConfigError):

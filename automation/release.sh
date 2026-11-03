@@ -110,6 +110,12 @@ if [[ "$fault_channel" != off ]]; then
   [[ "$notice_digest" != off ]] || die "FAULT-CHANNEL-REFUSED: notice-bot required" 4
   notice_args+=(--fault-channel "$fault_channel")
 fi
+release_channel="$(PYTHONPATH="$SCRIPT_DIR/.." python3 -B -m automation.notice_bot_release release-channel)" \
+  || die "RELEASE-NOTICE-CHANNEL-REFUSED: invalid release-host switch" 4
+if [[ "$release_channel" != off ]]; then
+  [[ "$notice_digest" != off ]] || die "RELEASE-NOTICE-CHANNEL-REFUSED: notice-bot required" 4
+  notice_args+=(--release-notice-channel "$release_channel")
+fi
 auto_kinds="$(PYTHONPATH="$SCRIPT_DIR/.." python3 -B -m automation.auto_write_release switches)" \
   || die "AUTO-WRITE-REFUSED: invalid release-host switch" 4
 auto_args=()

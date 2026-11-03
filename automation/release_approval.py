@@ -176,6 +176,17 @@ def cmd_plan(args: argparse.Namespace) -> int:
         except ValueError as error:
             print(f"RELEASE-PLAN-BLOCK: {error}", file=sys.stderr)
             return 4
+    release_channel = getattr(args, "release_notice_channel", None)
+    if release_channel is not None:
+        from automation.notice_bot import release_surface
+
+        try:
+            if notice_digest is None:
+                raise ValueError("release-notice-channel requires notice-bot")
+            surfaces.append(release_surface(release_channel))
+        except ValueError as error:
+            print(f"RELEASE-PLAN-BLOCK: {error}", file=sys.stderr)
+            return 4
     if notice_digest is not None:
         if (_SHA256.fullmatch(notice_digest) is None
                 or getattr(args, "hermes_gateways", None) != "stopped"
@@ -525,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--yoodori-channel", metavar="CHANNEL_ID", help="릴리스가 선택한 대화·알림 채널")
     plan.add_argument("--notice-bot", metavar="DIGEST", help="발신 자격증명 SHA-256만 승인에 바인딩")
     plan.add_argument("--fault-channel", metavar="CHANNEL_ID", help="고장 알림을 유돌·리드 페어 채널로")
+    plan.add_argument("--release-notice-channel", metavar="CHANNEL_ID", help="릴리스 적용 안내 한 줄만 이 채널로")
     plan.add_argument("--auto-write", action="append", help="카드 없이 쓰는 생산자 종류")
     plan.add_argument("--ledger", choices=("on",), help="Hermes 카드를 검증 후 작은 장부로 이관")
     plan.add_argument("--mail-html-reply", choices=("on",), help="기관메일 회신 새 서식 켜기")
@@ -626,6 +638,20 @@ def main(argv: list[str] | None = None) -> int:
             skill=None, surface=name, hash=digest, head=args.head, peer_attest_mode="",
         ))
     fault.set_defaults(run=authorize_fault)
+    applied = commands.add_parser("authorize-release-notice-channel")
+    applied.add_argument("--channel-id", required=True)
+    applied.add_argument("--head", required=True)
+    def authorize_release_notice(args: argparse.Namespace) -> int:
+        from automation.notice_bot import release_surface
+
+        try:
+            name, digest = release_surface(args.channel_id)
+        except ValueError:
+            return 4
+        return skill_gate.cmd_release_authorize(argparse.Namespace(
+            skill=None, surface=name, hash=digest, head=args.head, peer_attest_mode="",
+        ))
+    applied.set_defaults(run=authorize_release_notice)
     rag = commands.add_parser("authorize-rag-mcp", help="authorize the release-bound MCP-only rebuild")
     rag.add_argument("--hash", required=True)
     rag.add_argument("--head", required=True)
