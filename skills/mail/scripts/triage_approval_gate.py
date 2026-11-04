@@ -1,7 +1,11 @@
 """Mail lifecycle adapter, retaining facade injection seams."""
 from __future__ import annotations
+import calendar
 import sys
+import time
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.error import HTTPError
 from urllib.request import Request
@@ -144,22 +148,27 @@ class MailApprovalGate:
             card = _digest_card(self.draft, intent.channel_id)
             reply = {"reply_to": card} if card else {}
             message_id = triage_confirm.post_approval_request(content, intent.channel_id, **reply)
+        self._bind(intent, message_id)
+        _add_reactions(message_id, intent.channel_id)
         if self.draft.get("approval_thread_id") == intent.channel_id:
-            try:
-                triage_confirm._origin_notice().resume_thread(triage_confirm._api, intent.channel_id)
-            except Exception as error:  # noqa: BLE001 — an older interop runtime must not cost the card its reactions
-                print(f"THREAD-RENAME-FAIL thread={intent.channel_id} err={type(error).__name__}", file=sys.stderr)
-        for emoji in (triage_confirm.APPROVE_EMOJI, triage_confirm.CANCEL_EMOJI):
-            try:
-                triage_confirm.add_reaction(message_id, emoji, intent.channel_id)
-            except HTTPError as error:
-                reason = getattr(error, "code", None) or str(error)
-                print(
-                    f"APPROVAL-REACTION-FAIL {emoji} message={message_id} "
-                    f"reason={type(error).__name__}:{reason}",
-                    file=sys.stderr,
-                )
+            resume_pending_mark(intent.channel_id)
         return approval.lifecycle().PostedApproval(message_id=message_id, channel_id=intent.channel_id)
+
+    def _bind(self, intent: ApprovalIntent, message_id: str) -> None:
+        """Bind the posted card before anything else can hang, as the other producers do.
+
+        2026-11-04: compose died at the node gate's 150 s after the POST, so the draft kept no
+        message id and the reserved posting journal wedged the key (posting-journal-stale).
+        The lifecycle's later ``commit`` writes the same id again, which ``set_message_id`` allows.
+        """
+        approval = import_module("triage_approval")
+        journal = approval.posting_journal()
+        reservation = journal.outstanding(intent.key) or {}
+        triage_gate.set_message_id(
+            self.draft, message_id, intent.channel_id,
+            approval_created_at=reservation.get("at", ""),
+        )
+        journal.clear(intent.key)
 
     def commit(self, intent: ApprovalIntent, posted: PostedApproval, created_at: str) -> None:
         """The ONLY writer of the Discord ``message_id`` and its timer anchor."""
@@ -169,6 +178,137 @@ class MailApprovalGate:
             intent.channel_id,
             approval_created_at=created_at,
         )
+
+
+THREAD_MARKS_DIRNAME = "thread-marks"
+_DISCORD_EPOCH_MS = 1420070400000
+_ADOPT_WINDOW_MS = 60_000
+
+
+def _add_reactions(message_id: str, channel_id: str, present: frozenset[str] = frozenset()) -> None:
+    for emoji in (triage_confirm.APPROVE_EMOJI, triage_confirm.CANCEL_EMOJI):
+        if emoji in present:
+            continue
+        try:
+            triage_confirm.add_reaction(message_id, emoji, channel_id)
+        except HTTPError as error:
+            reason = getattr(error, "code", None) or str(error)
+            print(
+                f"APPROVAL-REACTION-FAIL {emoji} message={message_id} "
+                f"reason={type(error).__name__}:{reason}",
+                file=sys.stderr,
+            )
+
+
+def _thread_marks() -> Path:
+    return triage_gate.gate_dir() / THREAD_MARKS_DIRNAME
+
+
+def resume_pending_mark(thread_id: str) -> bool:
+    """Give a reused thread 🔔 with one rename attempt; remember the thread when it fails.
+
+    Discord allows two name edits per ten minutes, so a withdrawn card's 💤 followed by the
+    new card's 🔔 may be refused with 429. The card never waits for that (2026-11-04: the
+    wait killed compose); ``retry_thread_marks`` sets the mark on a later watch tick.
+    """
+    if not thread_id.isdigit():
+        return False
+    try:
+        with triage_confirm.no_rate_limit_wait():
+            done = triage_confirm._origin_notice().resume_thread(triage_confirm._api, thread_id)
+    except Exception as error:  # noqa: BLE001 — an older interop runtime must not cost the card its reactions
+        print(f"THREAD-RENAME-FAIL thread={thread_id} err={type(error).__name__}", file=sys.stderr)
+        done = False
+    mark = _thread_marks() / thread_id
+    if done:
+        mark.unlink(missing_ok=True)
+    else:
+        mark.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        mark.write_text("", encoding="utf-8")
+    return bool(done)
+
+
+def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]]) -> None:
+    """Watch tick: 🔔 for a remembered thread whose card still waits, else forget the thread.
+
+    A decided card's own result notice sets its end mark, so the tick never renames it back.
+    """
+    root = _thread_marks()
+    if not root.is_dir():
+        return
+    waiting = {
+        str(draft.get("channel_id")) for draft in drafts
+        if draft.get("status") == "pending" and draft.get("message_id")
+        and draft.get("approval_thread_id") == draft.get("channel_id")
+    }
+    for path in sorted(root.iterdir()):
+        if path.name in waiting:
+            resume_pending_mark(path.name)
+        else:
+            path.unlink(missing_ok=True)
+
+
+def _snowflake_before(stamp: str) -> int | None:
+    try:
+        posted_ms = calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")) * 1000
+    except (TypeError, ValueError):
+        return None
+    return max(posted_ms - _ADOPT_WINDOW_MS - _DISCORD_EPOCH_MS, 0) << 22
+
+
+def adopt_unrecorded_post(draft: dict[str, JsonValue], notice: str = "") -> bool:
+    """Bind a card whose compose died between its POST and its binding.
+
+    The posting journal then holds a reservation without a message id, which the lifecycle
+    refuses for good (posting-journal-stale; 2026-11-04 draft 36b605: card in the thread, no
+    reactions, every watch tick failed). One read of the thread's messages after the
+    reservation finds the bot message with exactly this card's bytes; it is bound, its
+    missing reactions are added and the journal is cleared. Anything else (no match, two
+    matches, a changed card, an unreadable thread) leaves the refusal as it was.
+    """
+    if draft.get("message_id"):
+        return False
+    approval = import_module("triage_approval")
+    key = approval.approval_key(draft)
+    journal = approval.posting_journal()
+    reservation = journal.outstanding(key)
+    if reservation is None or reservation.get("message_id"):
+        return False
+    channel = str(draft.get("channel_id") or draft.get("approval_thread_id") or "")
+    after = _snowflake_before(reservation.get("at", ""))
+    if not channel.isdigit() or after is None:
+        return False
+    with approval.confirm_lease().hold(key) as owned:
+        if not owned or journal.outstanding(key) != reservation:
+            return False
+        intent, gate = prepare_request(draft, notice)
+        if intent.action_hash != reservation.get("action_hash"):
+            return False
+        try:
+            messages = triage_confirm._api("GET", f"/channels/{channel}/messages?after={after}&limit=50")
+        except (HTTPError, OSError, ValueError, triage_gate.GateError) as error:
+            print(f"APPROVAL-ADOPT-FAIL draft={draft.get('id')} err={type(error).__name__}", file=sys.stderr)
+            return False
+        found = [
+            message for message in (messages if isinstance(messages, list) else ())
+            if isinstance(message, dict) and (message.get("author") or {}).get("bot") is True
+            and message.get("content") == gate.content and mail_approval_attachment.matches(gate.draft, message)
+        ]
+        if len(found) != 1:
+            print(f"APPROVAL-ADOPT-MISS draft={draft.get('id')} found={len(found)}", file=sys.stderr)
+            return False
+        message_id = str(found[0]["id"])
+        triage_gate.set_message_id(gate.draft, message_id, channel, approval_created_at=reservation.get("at", ""))
+        journal.clear(key)
+        present = frozenset(
+            str((reaction.get("emoji") or {}).get("name")) for reaction in found[0].get("reactions") or ()
+            if isinstance(reaction, dict) and reaction.get("me")
+        )
+        _add_reactions(message_id, channel, present)
+        print(f"APPROVAL-ADOPTED draft={draft.get('id')} message={message_id}")
+    if draft.get("approval_thread_id") == channel:
+        resume_pending_mark(channel)
+    return True
 
 
 def _digest_card(draft: dict[str, JsonValue], channel_id: str) -> str:

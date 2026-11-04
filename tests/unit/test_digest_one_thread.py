@@ -106,6 +106,7 @@ def test_a_draft_reaction_puts_the_reply_card_in_the_digest_thread_under_its_mai
     posted: list[tuple[str, str, dict]] = []
     monkeypatch.setattr(triage_confirm, "_api", lambda m, p, payload=None: posted.append((m, p, payload)) or {"id": "c-9"})
     monkeypatch.setattr(triage_confirm, "add_reaction", lambda *_a: None)
+    monkeypatch.setattr(triage_approval_gate.MailApprovalGate, "_bind", lambda *_a: None)
     gate = triage_approval_gate.MailApprovalGate({**draft, "approval_format": None}, "", "card body")
     gate.post(SimpleNamespace(channel_id=THREAD, key="mail:reply:u-1"))
     assert posted[0][1] == f"/channels/{THREAD}/messages"

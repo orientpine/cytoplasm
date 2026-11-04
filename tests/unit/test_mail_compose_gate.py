@@ -243,16 +243,17 @@ def test_compose_post_targets_dm_channel_with_reaction_order(
     # When: the compose pipeline posts the confirmation request
     triage_pipeline.compose_and_post(COMPOSE_TO, COMPOSE_SUBJECT, COMPOSE_BODY, post=True)
     # Then: an agent-chat announcement anchors the thread before its approval card
-    # is posted, then ✅ and ⛔ are pre-added in that order.
+    # is posted, then ✅ and ⛔ are pre-added in that order, and only then the thread's
+    # 🔔 rename is tried (a rate-limited rename must never cost the card its reactions).
     expected = [
         ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages"),
         ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages/{NOTICE_MESSAGE_ID}/threads"),
         ("GET", f"/channels/{AGENT_CHAT_THREAD}"),
         ("POST", f"/channels/{AGENT_CHAT_THREAD}/messages"),
-        ("GET", f"/channels/{AGENT_CHAT_THREAD}"),
-        ("PATCH", f"/channels/{AGENT_CHAT_THREAD}"),
         ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9C%85/@me"),
         ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9B%94/@me"),
+        ("GET", f"/channels/{AGENT_CHAT_THREAD}"),
+        ("PATCH", f"/channels/{AGENT_CHAT_THREAD}"),
     ]
     assert requests == expected
 

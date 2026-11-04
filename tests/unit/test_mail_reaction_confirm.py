@@ -270,11 +270,14 @@ def test_post_survives_reaction_http_error(monkeypatch: pytest.MonkeyPatch, caps
         raise HTTPError("https://discord.invalid", 503, "Service Unavailable", {}, None)
 
     monkeypatch.setattr(triage_confirm, "add_reaction", fail_reaction)
+    bound: list[str] = []
+    monkeypatch.setattr(triage_approval.MailApprovalGate, "_bind", lambda _self, _intent, message_id: bound.append(message_id))
 
     posted = triage_approval.MailApprovalGate(draft).post(
-        SimpleNamespace(channel_id=APPROVALS_CHANNEL)
+        SimpleNamespace(channel_id=APPROVALS_CHANNEL, key="mail:reply:x")
     )
 
+    assert bound == [MESSAGE_ID]
     assert posted.message_id == MESSAGE_ID
     assert posted.channel_id == APPROVALS_CHANNEL
     assert "APPROVAL-REACTION-FAIL" in capsys.readouterr().err

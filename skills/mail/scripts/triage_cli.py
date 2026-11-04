@@ -561,6 +561,7 @@ def cmd_watch(_args: argparse.Namespace) -> int:
                       f"err={triage_core.redact(str(error))[:120]}", file=sys.stderr)
     finally:
         _REMINDER_BATCH.reset(batch)
+    triage_approval.triage_approval_gate.retry_thread_marks(pending_drafts)
     if reminders:
         def reminder_failed(request, error):
             if not isinstance(error, OSError):
