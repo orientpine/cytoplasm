@@ -50,9 +50,10 @@ def test_request_thread_reuse_keeps_one_post_when_message_already_has_thread(con
     directory = DiscordChannelDirectory("identity-a", "333", api, configured)
     # When: the instruction message anchors this approval.
     thread = directory.agent_chat_request_thread(ApprovalKind.TODO, RequestThread("request", "222", "444"))
-    # Then: the message remains the thread, with no fallback GET.
+    # Then: the message remains the thread; the one read of it (for its guild and name)
+    # fails here and changes nothing else.
     assert thread == "444"
-    assert len(api.calls) == 1
+    assert [(method, path) for method, path, _ in api.calls] == [("POST", path), ("GET", "/channels/444")]
 
 
 def test_stored_binding_is_unchanged_when_description_has_guild(configured: Path) -> None:
@@ -116,9 +117,9 @@ def test_guild_cache_is_account_bound_when_reusing_400_thread(configured: Path, 
     })
     # When: a new directory instance reuses the anchored thread.
     binding = resolve_new_binding(ApprovalKind.TODO, DiscordChannelDirectory(token, "333", api, configured), "333", request=RequestThread("request", "222", "444"))
-    # Then: only the same account may recover the coordinate, without a parent GET.
+    # Then: a thread that names no guild leaves only the same account's cache, without a parent GET.
     assert getattr(binding, "guild_id", None) == expected
-    assert len(api.calls) == 2
+    assert not [call for call in api.calls if call[1] == "/channels/222"]
 
 
 def test_guild_is_preserved_when_reusing_prior_record_without_cached_metadata(configured: Path) -> None:

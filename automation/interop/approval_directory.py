@@ -34,6 +34,7 @@ from automation.interop.approval_surface import (
     ApprovalSurfaceError,
     ChannelFacts,
     RequestThread,
+    joined_thread_name,
     kind_thread_name,
     request_thread_name,
     request_thread_notice,
@@ -258,7 +259,7 @@ class DiscordChannelDirectory:
             )
         except ApprovalSurfaceError as error:
             if _http_status(error) == 400:
-                object.__setattr__(self, "_approval_guild_id", self._cached_guild())
+                self._join_thread(anchor, kind, request)
                 return anchor
             raise
         body = _json_object(created, "request thread")
@@ -267,6 +268,30 @@ class DiscordChannelDirectory:
         if on_instruction:
             self._post_title(thread_id, kind, request)
         return thread_id
+
+    def _join_thread(self, thread_id: str, kind: ApprovalKind, request: RequestThread) -> None:
+        """Adopt the thread the anchor message already carries (Discord answered 400).
+
+        2026-11-04: an agent opened that thread before the card, so the name kept no kind
+        icon and, with no guild cache yet, the reply line said ``url=unavailable``. The
+        thread itself names its guild, so the link comes from it; the name gets one pending
+        state and the kind icon with its title kept, unless it already has that shape.
+        Both are best-effort: the card is posted into the thread either way.
+        """
+        try:
+            facts = self.describe(thread_id, resolve_guild=True)
+        except ApprovalSurfaceError as error:
+            print(f"THREAD-TITLE-FAIL thread={thread_id} err={type(error).__name__}", file=sys.stderr)
+            object.__setattr__(self, "_approval_guild_id", self._cached_guild())
+            return
+        self._remember_guild(facts.guild_id or self._cached_guild())
+        wanted = joined_thread_name(kind, request, facts.name)
+        if wanted == facts.name:
+            return
+        try:  # Discord renames an archived thread only together with unarchiving it
+            self._request("PATCH", f"/channels/{thread_id}", {"name": wanted, "archived": False})
+        except ApprovalSurfaceError as error:
+            print(f"THREAD-RENAME-FAIL thread={thread_id} err={type(error).__name__}", file=sys.stderr)
 
     def _owner_thread(self, origin_channel_id: str, channel_id: str) -> str | None:
         """The thread the owner's request was written in, when it hangs under agent-chat.

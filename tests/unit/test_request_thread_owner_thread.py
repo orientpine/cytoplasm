@@ -37,13 +37,16 @@ def test_owner_message_inside_a_thread_posts_the_card_there(configured: Path) ->
 def test_owner_message_with_its_own_thread_reuses_it(configured: Path) -> None:
     # Given: a thread already hangs on the owner's channel message.
     path = "/channels/222/messages/888/threads"
-    api = FakeApi("identity-a", {("POST", path): HTTPError("https://discord.test", 400, "exists", Message(), None)})
+    api = FakeApi("identity-a", {
+        ("POST", path): HTTPError("https://discord.test", 400, "exists", Message(), None),
+        ("GET", "/channels/888"): {"type": 11, "name": "🔔 ✉️ 점심", "parent_id": "222", "guild_id": "111"},
+    })
     directory = DiscordChannelDirectory("identity-a", "333", api, configured)
     # When: a card for that message asks for its request thread.
     thread = directory.agent_chat_request_thread(ApprovalKind.MAIL_COMPOSE, RequestThread("점심", "222", "888"))
-    # Then: thread id == message id, and only the one POST was made.
+    # Then: thread id == message id; one read of that thread (its name already in shape), no second thread.
     assert thread == "888"
-    assert [(method, p) for method, p, _ in api.calls] == [("POST", path)]
+    assert [(method, p) for method, p, _ in api.calls] == [("POST", path), ("GET", "/channels/888")]
 
 
 def test_owner_message_without_a_thread_opens_one_on_that_message(configured: Path) -> None:

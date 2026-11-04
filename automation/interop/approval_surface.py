@@ -178,6 +178,32 @@ def request_thread_name(kind: ApprovalKind, request: RequestThread) -> str:
     return state_thread_name(f"{_icon(kind, request)} {_request_title(request)}", "🔔")
 
 
+#: Kind icons a joined thread may already show: every approval kind, the institution-mail
+#: digest, and the egress gate's own cards.
+_KNOWN_KIND_ICONS: Final = frozenset({*KIND_ICONS.values(), "📬", "🔐"})
+#: The current state marks (Q474); a name led by exactly one of them is already in shape.
+_CURRENT_MARKS: Final = ("✅", "⛔", "💤", "❗", "🔔", "🔄", "📌")
+
+
+def joined_thread_name(kind: ApprovalKind, request: RequestThread, current: str) -> str:
+    """The name a card gives an existing thread it joins: one pending state and a kind icon.
+
+    An agent may open the thread on the owner's message before the card (2026-11-04: a
+    thread named with a state and a title only). Its title stays; a missing kind icon is
+    added, and a name already in that shape (any one current mark, then a kind icon) comes
+    back unchanged.
+    """
+    base = strip_state_marks(current)
+    if not base:
+        return request_thread_name(kind, request)
+    mark, _, rest = current.partition(" ")
+    if mark in _CURRENT_MARKS and rest == base and base.partition(" ")[0] in _KNOWN_KIND_ICONS:
+        return current
+    if base.partition(" ")[0] not in _KNOWN_KIND_ICONS:
+        base = f"{_icon(kind, request)} {base}"
+    return state_thread_name(base, "🔔")
+
+
 def thread_title(icon: str, text: str) -> str:
     """The big first line of a bot-opened thread: ``## <icon> <what>`` on one line."""
     return f"## {icon} {' '.join(text.split())}"
