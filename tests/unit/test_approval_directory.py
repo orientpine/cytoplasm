@@ -629,6 +629,10 @@ def test_request_thread_reuses_the_message_thread_on_400(interop_config: Path) -
     ("⏸️ ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
     ("📌 📬 기관메일", "📌 📬 기관메일"),
     ("🔄 ✉️ 세미나 문의 답장", "🔄 ✉️ 세미나 문의 답장"),
+    ("💤 ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("✅ ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("⛔ ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("❗ ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
     ("", "🔔 ✉️ 세미나 안내"),
 ])
 def test_a_joined_thread_name_gets_one_mark_and_a_kind_icon_once(current: str, wanted: str) -> None:

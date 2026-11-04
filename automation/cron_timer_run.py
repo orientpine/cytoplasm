@@ -212,7 +212,7 @@ def alert_text(job: Job, found: Trouble | None, state: dict[str, object], now: d
     fail = found.kind.startswith("fail")
     if state.get("kind") != found.kind or not state.get("sent_at"):
         head = f"⚠️ {name}가 {'실패했어요' if fail else '경고를 남겼어요'}: {found.reason}."
-        tail = ("다음 실행에서 다시 시도하고, 유돌이 살펴봐요(안 되면 짱돌에게 넘겨요). "
+        tail = ("다음 실행에서 다시 시도하고, 유돌이 살펴봐요(안 되면 수돌에게 넘겨요). "
                 f"같은 {'실패' if fail else '경고'}는 정상이 될 때까지 6시간마다 한 번만 알려요.")
         return f"{head}\n{tail}"
     if now - _when(state.get("sent_at"), now) < REALERT:

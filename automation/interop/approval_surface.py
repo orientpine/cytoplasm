@@ -181,8 +181,9 @@ def request_thread_name(kind: ApprovalKind, request: RequestThread) -> str:
 #: Kind icons a joined thread may already show: every approval kind, the institution-mail
 #: digest, and the egress gate's own cards.
 _KNOWN_KIND_ICONS: Final = frozenset({*KIND_ICONS.values(), "📬", "🔐"})
-#: The current state marks (Q474); a name led by exactly one of them is already in shape.
-_CURRENT_MARKS: Final = ("✅", "⛔", "💤", "❗", "🔔", "🔄", "📌")
+#: The marks a joining card keeps (Q474): pending, working and standing. An end mark
+#: (✅ ⛔ 💤 ❗) is replaced, because the new card waits for the owner again (2026-11-04).
+_KEPT_MARKS: Final = ("🔔", "🔄", "📌")
 
 
 def joined_thread_name(kind: ApprovalKind, request: RequestThread, current: str) -> str:
@@ -190,14 +191,15 @@ def joined_thread_name(kind: ApprovalKind, request: RequestThread, current: str)
 
     An agent may open the thread on the owner's message before the card (2026-11-04: a
     thread named with a state and a title only). Its title stays; a missing kind icon is
-    added, and a name already in that shape (any one current mark, then a kind icon) comes
-    back unchanged.
+    added, and a name already in that shape (one pending, working or standing mark, then a
+    kind icon) comes back unchanged. A thread a withdrawn or finished card left with an end
+    mark gets 🔔 again, since its new card waits for the owner.
     """
     base = strip_state_marks(current)
     if not base:
         return request_thread_name(kind, request)
     mark, _, rest = current.partition(" ")
-    if mark in _CURRENT_MARKS and rest == base and base.partition(" ")[0] in _KNOWN_KIND_ICONS:
+    if mark in _KEPT_MARKS and rest == base and base.partition(" ")[0] in _KNOWN_KIND_ICONS:
         return current
     if base.partition(" ")[0] not in _KNOWN_KIND_ICONS:
         base = f"{_icon(kind, request)} {base}"

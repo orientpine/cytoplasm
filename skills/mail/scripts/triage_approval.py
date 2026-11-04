@@ -240,6 +240,7 @@ def _prepare_request(draft: dict[str, JsonValue], notice: str) -> tuple[Approval
 
 def request_approval(draft: dict, *, notice: str = "") -> Verdict:
     """Resolve existing bindings under the lease before any card preparation."""
+    triage_approval_gate.adopt_unrecorded_post(draft, notice)
     facade = lifecycle()
     key = approval_key(draft)
     live = _live_requests(draft)
