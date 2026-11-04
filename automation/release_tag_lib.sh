@@ -192,6 +192,11 @@ ensure_release_note() { # ensure_release_note <repo_root> <tag> <sha> [draft]
     return 1
   fi
   title="$(head -n 1 -- "$draft" | sed -E 's/^#[[:space:]]+//')"
+  # The Release name is "$tag — $title"; a draft that already starts with the tag shows it once
+  # (2026-11-04: v2.7.25 was published as "v2.7.25 — v2.7.25 — …").
+  local bare
+  bare="$(printf '%s' "$title" | sed -E "s/^${tag//./[.]}([[:space:]]*(—|–|:|-)[[:space:]]*|[[:space:]]+)//")"
+  [[ -z "$bare" ]] || title="$bare"
   latest="$(git -C "$root" ls-remote --tags --refs origin 'refs/tags/v*' 2>/dev/null \
     | awk '{ sub("refs/tags/", "", $2); if ($2 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/) print $2 }' | sort -V | tail -n 1)"
   local gh_rc=0
