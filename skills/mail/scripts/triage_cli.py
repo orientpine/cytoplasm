@@ -562,6 +562,9 @@ def cmd_watch(_args: argparse.Namespace) -> int:
     finally:
         _REMINDER_BATCH.reset(batch)
     triage_approval.triage_approval_gate.retry_thread_marks(pending_drafts)
+    # A card without ✅⛔ has no buttons for the owner: a reaction that still fails fails the tick.
+    if triage_approval.triage_approval_gate.fill_missing_reactions(triage_gate.list_drafts()):
+        failed_rc = max(failed_rc, 1)
     if reminders:
         def reminder_failed(request, error):
             if not isinstance(error, OSError):

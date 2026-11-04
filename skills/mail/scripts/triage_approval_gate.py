@@ -185,19 +185,102 @@ _DISCORD_EPOCH_MS = 1420070400000
 _ADOPT_WINDOW_MS = 60_000
 
 
-def _add_reactions(message_id: str, channel_id: str, present: frozenset[str] = frozenset()) -> None:
+def _add_reactions(message_id: str, channel_id: str, present: frozenset[str] = frozenset()) -> frozenset[str]:
+    """Add the card's missing ✅⛔ and return the ones still missing.
+
+    Discord refuses a reaction inside an archived thread (400, code 50083; 2026-11-04 draft 36b605
+    was adopted into a thread its withdrawn sibling had archived). The thread is then reopened on
+    its own - ``archived: false`` without a name, so the two-renames-per-ten-minutes limit never
+    applies, and without waiting on a 429 - and the reaction is tried again.
+    """
+    missing: set[str] = set()
     for emoji in (triage_confirm.APPROVE_EMOJI, triage_confirm.CANCEL_EMOJI):
         if emoji in present:
             continue
         try:
-            triage_confirm.add_reaction(message_id, emoji, channel_id)
-        except HTTPError as error:
+            try:
+                triage_confirm.add_reaction(message_id, emoji, channel_id)
+            except HTTPError as error:
+                if not _archived_refusal(error):
+                    raise
+                with triage_confirm.no_rate_limit_wait():
+                    triage_confirm._api("PATCH", f"/channels/{channel_id}", {"archived": False})
+                triage_confirm.add_reaction(message_id, emoji, channel_id)
+        except (HTTPError, OSError) as error:
+            missing.add(emoji)
             reason = getattr(error, "code", None) or str(error)
             print(
                 f"APPROVAL-REACTION-FAIL {emoji} message={message_id} "
                 f"reason={type(error).__name__}:{reason}",
                 file=sys.stderr,
             )
+    return frozenset(missing)
+
+
+def _archived_refusal(error: HTTPError) -> bool:
+    triage_supersede = import_module("triage_supersede")
+    return error.code == 400 and triage_supersede._discord_code(error) == triage_supersede.ARCHIVED_THREAD
+
+
+def _own_reactions(message: Mapping[str, JsonValue]) -> frozenset[str]:
+    return frozenset(
+        str((reaction.get("emoji") or {}).get("name")) for reaction in message.get("reactions") or ()
+        if isinstance(reaction, dict) and reaction.get("me")
+    )
+
+
+def fill_missing_reactions(drafts: Iterable[Mapping[str, JsonValue]]) -> int:
+    """Watch tick: give the one decidable card of each channel the ✅⛔ it lacks; count failures.
+
+    Only a pending, bound card that is the newest card of its channel and whose message still
+    holds exactly its card bytes is touched. A superseded, withdrawn or decided card, an older
+    card under a newer one (36b605 under c995a3, 2026-11-04) or a card whose text was replaced
+    never gets buttons back, so the owner cannot approve the same mail twice.
+    """
+    drafts = tuple(drafts)
+    newest: dict[str, int] = {}
+    for draft in drafts:
+        message, channel = str(draft.get("message_id") or ""), str(draft.get("channel_id") or "")
+        if message.isdigit() and channel:
+            newest[channel] = max(newest.get(channel, 0), int(message))
+    approval = import_module("triage_approval")
+    failed = 0
+    for draft in drafts:
+        message_id, channel = str(draft.get("message_id") or ""), str(draft.get("channel_id") or "")
+        if draft.get("status") != "pending" or not message_id.isdigit() or newest.get(channel) != int(message_id):
+            continue
+        with approval.confirm_lease().hold(approval.approval_key(draft)) as owned:
+            if not owned:
+                continue
+            try:
+                current = triage_gate.load_draft(str(draft["id"]))
+            except triage_gate.GateError:
+                continue
+            if current.get("message_id") != message_id or str(current.get("channel_id")) != channel:
+                continue
+            try:
+                message = triage_confirm._api("GET", f"/channels/{channel}/messages/{message_id}")
+            except (HTTPError, OSError, ValueError) as error:
+                failed += 1
+                print(f"APPROVAL-REACTIONS-MISSING draft={current['id']} message={message_id} "
+                      f"err={type(error).__name__}", file=sys.stderr)
+                continue
+            if not (
+                isinstance(message, dict) and (message.get("author") or {}).get("bot") is True
+                and mail_approval_attachment.matches(current, message)
+                and mail_card_compact.references(
+                    current, str(message.get("content", "")), approval._approval_action_hash(current))
+            ):
+                continue
+            present = _own_reactions(message)
+            if {triage_confirm.APPROVE_EMOJI, triage_confirm.CANCEL_EMOJI} <= present:
+                continue
+            if _add_reactions(message_id, channel, present):
+                failed += 1
+                print(f"APPROVAL-REACTIONS-MISSING draft={current['id']} message={message_id}", file=sys.stderr)
+            else:
+                print(f"APPROVAL-REACTIONS-FILLED draft={current['id']} message={message_id}")
+    return failed
 
 
 def _thread_marks() -> Path:
@@ -300,11 +383,7 @@ def adopt_unrecorded_post(draft: dict[str, JsonValue], notice: str = "") -> bool
         message_id = str(found[0]["id"])
         triage_gate.set_message_id(gate.draft, message_id, channel, approval_created_at=reservation.get("at", ""))
         journal.clear(key)
-        present = frozenset(
-            str((reaction.get("emoji") or {}).get("name")) for reaction in found[0].get("reactions") or ()
-            if isinstance(reaction, dict) and reaction.get("me")
-        )
-        _add_reactions(message_id, channel, present)
+        _add_reactions(message_id, channel, _own_reactions(found[0]))
         print(f"APPROVAL-ADOPTED draft={draft.get('id')} message={message_id}")
     if draft.get("approval_thread_id") == channel:
         resume_pending_mark(channel)
