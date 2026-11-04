@@ -42,7 +42,8 @@ _INT = re.compile(r"[0-9]{1,3}")
 _UID = re.compile(r"[0-9]{1,20}")
 _REPLY_KEY = re.compile(r"[0-9]{4}-[0-9]{4}-[0-9]{1,3}")
 _DRAFT_ID = re.compile(r"[0-9a-f]{6}")
-_CARD_CALL = re.compile(r"(\S+) (?:mail-compose|mail-draft) rc=0 s=([0-9.]+)")
+#: rc=124 is this gate's own timeout kill: the child ran and may have posted its card (36b605, 2026-11-04).
+_CARD_CALL = re.compile(r"(\S+) (?:mail-compose|mail-draft) rc=(?:0|124) s=([0-9.]+)")
 _STAMP = "%Y-%m-%dT%H:%M:%SZ"
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _SHELL = re.compile(r"[;&|`$<>\\]")
@@ -593,7 +594,7 @@ def _glossary_kind(args: list[str]) -> tuple[str, list[str]]:
 
 
 def posted_by_gate(draft_id: str) -> bool:
-    """True iff the draft was created during a mail-compose/mail-draft call this gate logged rc=0.
+    """True iff the draft was created during a mail-compose/mail-draft call this gate logged rc=0 or 124.
 
     Owner Q367: YooDori withdraws only its own cards. The gate log is written by this forced
     command alone, so a card raised another way (another Dori, a digest reaction, a release) has
