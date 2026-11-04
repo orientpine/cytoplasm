@@ -44,7 +44,7 @@ def test_binding_proceeds_with_unknown_guild_when_cache_fails(configured: Path, 
     api = FakeApi("identity-a", {
         ("POST", "/channels/222/messages"): {"id": "666"},
         ("POST", path): HTTPError("https://discord.test", 400, "exists", Message(), None) if reuse else {"id": "444", "guild_id": "111"},
-        ("GET", "/channels/444"): {"type": 11, "name": "request", "parent_id": "222", "guild_id": "999"},
+        ("GET", "/channels/444"): {"type": 11, "name": "🔔 📋 request", "parent_id": "222", "guild_id": "999"},
     })
     directory = DiscordChannelDirectory("identity-a", "333", api, configured)
     request = RequestThread("request", "222", "444") if reuse else RequestThread("request")
@@ -63,30 +63,32 @@ def test_binding_proceeds_with_unknown_guild_when_cache_fails(configured: Path, 
     # When: request binding uses the actual directory and surface validator.
     with refusal:
         binding = resolve_new_binding(ApprovalKind.TODO, directory, "333", request=request)
-    # Then: the approval remains usable, without adopting validation GET metadata.
+    # Then: the approval remains usable; a broken cache leaves the guild unknown on both paths (a
+    # reused thread reads itself once more, before the validation read).
     assert (binding.channel_id, binding.guild_id) == ("444", None)
     assert [(method, endpoint) for method, endpoint, _ in api.calls] == (
         ([] if reuse else [("POST", "/channels/222/messages")])
-        + [("POST", path), ("GET", "/channels/444")]
+        + [("POST", path)] + [("GET", "/channels/444")] * (2 if reuse else 1)
     )
 
 
 @pytest.mark.parametrize("cached", [False, True])
-def test_400_guild_comes_only_from_cache_when_validation_get_disagrees(configured: Path, cached: bool) -> None:
-    # Given: validation GET disagrees with the only permitted guild source.
+def test_400_guild_comes_from_the_reused_thread_over_the_cache(configured: Path, cached: bool) -> None:
+    # Given: the reused thread names its guild, and a cache may hold another one.
     if cached:
         configured.parent.mkdir()
         configured.write_text(json.dumps({"token_fingerprint": _fingerprint("identity-a"), "approval_guild_id": "111"}), encoding="utf-8")
     path = "/channels/222/messages/444/threads"
     api = FakeApi("identity-a", {
         ("POST", path): HTTPError("https://discord.test", 400, "exists", Message(), None),
-        ("GET", "/channels/444"): {"type": 11, "name": "request", "parent_id": "222", "guild_id": "999"},
+        ("GET", "/channels/444"): {"type": 11, "name": "🔔 📋 request", "parent_id": "222", "guild_id": "999"},
     })
     # When: Discord reports an existing anchored thread without a response body.
     binding = resolve_new_binding(ApprovalKind.TODO, DiscordChannelDirectory("identity-a", "333", api, configured), "333", request=RequestThread("request", "222", "444"))
-    # Then: cached metadata or unknown wins, never the validation GET.
-    assert binding.guild_id == ("111" if cached else None)
-    assert len(api.calls) == 2
+    # Then: the thread's own guild wins (2026-11-04: an empty cache gave url=unavailable), read once
+    # before the validation read.
+    assert binding.guild_id == "999"
+    assert [(method, endpoint) for method, endpoint, _ in api.calls] == [("POST", path), ("GET", "/channels/444"), ("GET", "/channels/444")]
 
 
 def test_cache_parent_becomes_private_when_existing_directory_is_wide(configured: Path) -> None:
