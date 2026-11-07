@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
-from automation.dori_pin import REPO_ROOT, DoriPin, PinError, checkout_head, fetch_at, load_pin
+from automation.dori_pin import REPO_ROOT, DoriPin, PinError, checkout_head, fetch_at, load_pin, move_to
 from automation.install import dori_herdr
 
 ROLES_RELPATH: Final = Path("dori") / "roles"
@@ -141,16 +141,39 @@ def _diff(entry: RoleFile, limit: int = DIFF_LINE_LIMIT) -> str:
     return shown
 
 
+def _is_junction(path: Path) -> bool:
+    return bool(getattr(path, "is_junction", lambda: False)())
+
+
+def _link_skill(link: Path, target: Path) -> None:
+    # native Windows: a directory junction, which needs no administrator or developer mode (a symlink does)
+    if link.exists() and not link.is_symlink() and not _is_junction(link):
+        print(f"DORI-SKILL-KEEP {link} 은 링크가 아니라 그대로 둔다")
+        return
+    if _is_junction(link):
+        link.rmdir()
+    elif link.is_symlink():
+        link.unlink()
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target)
+
+
 def _default_runner(argv: tuple[str, ...], cwd: Path) -> int:
     return subprocess.run(argv, cwd=cwd, check=False).returncode
 
 
-def _fork_state(pin: DoriPin, src: Path) -> tuple[str, str]:
+def _fork_state(pin: DoriPin, src: Path, update: bool = False) -> tuple[str, str]:
     if not src.exists():
         return "fetch", f"{src} 에 {pin.commit[:12]} 을 받고 SHA 를 확인한다"
     head = checkout_head(src)
     if head == pin.commit:
         return "keep", f"{src} 이미 고정 커밋 {pin.commit[:12]}"
+    if update and head is not None:
+        return "move", f"{src} 를 {head[:12]} 에서 새 고정 커밋 {pin.commit[:12]} 로 옮긴다(설치기가 받은 깨끗한 체크아웃만)"
     return "block", (
         f"DORI-PIN-SRC-DIFFERS: {src} is at {head or 'no git checkout'}, pin is {pin.commit} "
         "— leaving it alone; move it aside or pass --src <빈 경로>"
@@ -176,6 +199,8 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
     _ = parser.add_argument("--web-port", type=int, default=None, help="herdr 웹 앞문 루프백 포트(기본 dori/herdr.toml)")
     _ = parser.add_argument("--web-origin", default=None,
                             help="브라우저가 여는 주소(기본 http://127.0.0.1:<포트>, 테일넷이면 https://<호스트>[:포트])")
+    _ = parser.add_argument("--update", action="store_true",
+                            help="이미 받은 포크(설치기가 받은 깨끗한 체크아웃)를 새 고정 커밋으로 옮긴다")
     _ = parser.add_argument("--src", type=Path, default=home / ".dori" / "src")
     _ = parser.add_argument("--skills", type=Path, default=home / ".agents" / "skills")
     _ = parser.add_argument("--workroot", type=Path, default=home / "Documents")
@@ -196,7 +221,7 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
     missing = [tool for tool in ("git", "bun") if which(tool) is None]
     for tool in ("git", "bun"):
         print(f"  [{'필요' if tool in missing else '통과'}] {tool}")
-    fork_action, fork_detail = _fork_state(pin, options.src)
+    fork_action, fork_detail = _fork_state(pin, options.src, args.update)
     config = options.home / ".dori" / "config.json"
     link = options.skills / "dori-mode"
     steps = [
@@ -235,13 +260,15 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
             print(error)
             return 3
         print(f"DORI-PIN-OK {options.src} {pin.commit}")
+    elif fork_action == "move":
+        try:
+            old = move_to(pin, options.src)
+        except PinError as error:
+            print(error)
+            return 3
+        print(f"DORI-PIN-MOVED {options.src} {old[:12]} -> {pin.commit}")
     link.parent.mkdir(parents=True, exist_ok=True)
-    if link.exists() and not link.is_symlink():
-        print(f"DORI-SKILL-KEEP {link} 은 링크가 아니라 그대로 둔다")
-    else:
-        if link.is_symlink():
-            link.unlink()
-        link.symlink_to(options.src / "skills" / "dori-mode")
+    _link_skill(link, options.src / "skills" / "dori-mode")
     scripts = options.src / "skills" / "dori-mode" / "scripts"
     for command in (("bun", "install", "--silent"), ("bun", "link", "--silent")):
         if runner(command, scripts) != 0:
@@ -262,12 +289,15 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
         code = dori_herdr.install(
             layout, tools, key, origin=args.web_origin or f"http://127.0.0.1:{web_port}", config=config,
             lead_dir=options.workroot / lead.dir, lead_label=lead.nick, capture=capture, fetch=fetch, which=which,
-            sleep=sleep,
+            sleep=sleep, restart=args.update,
         )
         if code != 0:
             return code
     print(f"DORI-INSTALLED pin={pin.commit[:12]} roles={','.join(r.key for r in roles)} kept={kept} backend={options.backend}")
-    if options.backend == "herdr":
+    if options.backend == "herdr" and layout.windows:
+        print("다음: %USERPROFILE%\\.dori\\dori.env 에 봇 토큰·채널·소유자 id 를 넣고, `herdr` 를 열어 리드 탭에서 \"Dori mode\" 라고 한다."
+              f" 도리 상시 루프는 작업 스케줄러 '{dori_herdr.SERVE_TASK}' 가 로그온마다 켭니다(토큰을 넣으면 다음 재시도 때 연결).")
+    elif options.backend == "herdr":
         print("다음: ~/.dori/dori.env 에 봇 토큰·채널·소유자 id 를 넣고(0600), 웹(또는 `herdr`)에서 리드 탭을 열어 \"Dori mode\" 라고 한다."
               f" 웹 비밀번호는 {layout.web_env} 의 HERDR_WEB_PASSPHRASE(옛 aoe 웹을 쓰던 계정은 그 비밀번호).")
     else:

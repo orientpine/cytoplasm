@@ -13,8 +13,10 @@ linux-x86_64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9
 linux-aarch64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-aarch64", sha256 = "17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c" }
 macos-x86_64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-x86_64", sha256 = "5fb0a908ec7f6745e3e245738b06bfad56c46391c391ab3c0955fbead01f1369" }
 macos-aarch64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-aarch64", sha256 = "fb77c2232a05a8035421382c894392f4174e4e38a18e48af3dd0290157c3a7e2" }
+# 네이티브 윈도우: herdr.exe 와 ConPTY 런타임을 담은 zip. sha256 은 zip 의 값이고, 푼 폴더에 .zip-sha256 으로 남긴다.
+windows-x86_64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-windows-x86_64.zip", sha256 = "d2c6c9c971c43a0bfdde8c692a9a1a7a45c3e4807cd01ae45662b4734fac1cbf" }
 
-# 웹 터미널(herdr 웹). macOS 릴리스 바이너리가 없어 macOS 는 웹을 건너뛴다.
+# 웹 터미널(herdr 웹). macOS 릴리스 바이너리가 없어 macOS 는 웹을 건너뛴다. 윈도우는 웹 유닛이 systemd 라 웹을 건너뛴다.
 [ttyd]
 version = "1.7.7"
 
