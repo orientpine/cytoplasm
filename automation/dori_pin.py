@@ -106,6 +106,35 @@ def fetch_at(pin: DoriPin, dest: Path) -> None:
         raise
 
 
+def move_to(pin: DoriPin, src: Path) -> str:
+    """Moves a checkout this installer made (detached, no local edits) to the pinned commit; returns its old HEAD.
+
+    Only an installer-made checkout moves: `fetch_at` always leaves it detached, so a checkout on a branch is one
+    somebody works in and is refused, as is one with tracked edits. The commit is fetched from the pin's own repo.
+    """
+    old = checkout_head(src)
+    if old is None:
+        raise PinError(f"DORI-PIN-UPDATE-REFUSED: {src} is not a git checkout")
+    if old == pin.commit:
+        return old
+    branch = subprocess.run(
+        ("git", "-C", str(src), "symbolic-ref", "--quiet", "--short", "HEAD"), capture_output=True, text=True, check=False
+    ).stdout.strip()
+    if branch:
+        raise PinError(f"DORI-PIN-UPDATE-REFUSED: {src} is on branch {branch}, not an installer checkout — leaving it alone")
+    edits = subprocess.run(
+        ("git", "-C", str(src), "status", "--porcelain", "--untracked-files=no"), capture_output=True, text=True, check=False
+    )
+    if edits.returncode != 0 or edits.stdout.strip():
+        raise PinError(f"DORI-PIN-UPDATE-REFUSED: {src} has local changes — leaving it alone")
+    _git(src, "fetch", "--quiet", "--depth", "1", pin.repo, pin.commit)
+    _git(src, "checkout", "--quiet", "--detach", "FETCH_HEAD")
+    head = checkout_head(src)
+    if head != pin.commit:
+        raise PinError(f"DORI-PIN-MISMATCH: want {pin.commit} got {head}")
+    return old
+
+
 def _rehearse(pin: DoriPin) -> int:
     """The release's install and update path for a new pin, writing nothing outside a temp folder."""
     with tempfile.TemporaryDirectory(prefix="dori-pin-rehearse-") as folder:
