@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -157,6 +158,81 @@ def test_origin_must_be_the_owners_recent_message() -> None:
         jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=_now(), fetch=broken)
     with pytest.raises(jobs.JobRefused):
         jobs.verify_owner_origin("123456789", "987654321", OWNER, "", now=_now(), fetch=_fetch(owner))
+
+
+CARD_TEXT = "✅ **Q13** 착수회의가 두 개 있어. 하나 지울까?\n→ **오늘 생긴 메모 없는 걸 휴지통으로**\n-# 버튼 · 11. 7. 13:47"
+
+
+def _iso(seconds: float) -> str:
+    return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
+
+
+def _card_fetch(tapped: float, **fields: object):
+    """YooDori's (444) tapped question card as Discord returns it (the shape of the real Q13 card, 2026-11-07)."""
+    message = {"id": "987654321", "channel_id": "123456789", "author": {"id": "444", "bot": True}, "content": "",
+               "flags": 32768, "edited_timestamp": _iso(tapped),
+               "components": [{"type": 17, "components": [{"type": 10, "content": CARD_TEXT}]}], **fields}
+
+    def fetch(path: str, _token: str) -> dict:
+        if path == "/users/@me":
+            return {"id": "444", "bot": True}
+        if path.endswith("/messages/987654321"):
+            return message
+        return {"type": 0, "guild_id": "222"}
+    return fetch
+
+
+def test_the_owners_tap_on_a_question_card_is_a_job_origin() -> None:
+    # Owner 2026-11-06 17:04 KST "카드 버튼 답을 노드가 근거로 받게 바꿔.": the 24 hours run from the tap.
+    later = _now() + 2 * 86400
+    origin = jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=later,
+                                      fetch=_card_fetch(later - 60))
+    assert origin.link == "https://discord.com/channels/222/123456789/987654321"
+
+
+def _container(*texts: str) -> list[dict]:
+    return [{"type": 17, "components": [{"type": 10, "content": text} for text in texts]}]
+
+
+@pytest.mark.parametrize("fields", [
+    {"author": {"id": "333"}},
+    {"author": {"id": "555", "bot": True}},
+    {"author": {"id": "444"}},
+    {"webhook_id": "444"},
+    {"components": [{"type": 17, "components": [
+        {"type": 10, "content": "<@111111111111111111> **Q13** 하나 지울까?"},
+        {"type": 9, "components": [{"type": 10, "content": "**1.** 오늘 생긴 메모 없는 걸 휴지통으로"}],
+         "accessory": {"type": 2, "style": 1, "label": "1번 (추천)", "custom_id": "q:Q13:0"}}]}]},
+    {"components": _container(CARD_TEXT.replace("오늘 생긴 메모 없는 걸 휴지통으로", " "))},
+    {"components": _container(CARD_TEXT.replace("버튼", "답글"))},
+    {"components": _container(CARD_TEXT.replace("버튼", "직접 씀"))},
+    {"components": _container(CARD_TEXT.replace("**Q13** ", ""))},
+    {"components": _container(CARD_TEXT, "덧붙인 글")},
+    {"components": _container(CARD_TEXT) * 2},
+    {"flags": 0},
+    {"components": [], "content": CARD_TEXT},
+    {"edited_timestamp": None},
+    {"id": "987654322"},
+    {"channel_id": "123456780"},
+], ids=["another person", "another bot", "the bot unmarked as a bot", "a webhook", "an open card",
+        "an empty answer", "a reply", "a typed answer", "no question id", "a second text", "two containers",
+        "outside components v2", "plain content", "never tapped", "other coordinates", "another channel"])
+def test_a_forged_or_unanswered_question_card_is_no_origin(fields: dict) -> None:
+    with pytest.raises(jobs.JobRefused):
+        jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=_now(), fetch=_card_fetch(_now() - 60, **fields))
+
+
+def test_a_tap_older_than_24_hours_is_no_origin() -> None:
+    with pytest.raises(jobs.JobRefused, match="24 hours"):
+        jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=_now(),
+                                 fetch=_card_fetch(_now() - 25 * 3600))
+
+
+def test_the_release_command_still_takes_only_the_owners_own_message() -> None:
+    from automation.owner_origin import OriginRefused, verify_owner_origin
+
+    with pytest.raises(OriginRefused):
+        verify_owner_origin("123456789", "987654321", OWNER, "t", now=_now(), fetch=_card_fetch(_now() - 60))
 
 
 def test_write_job_needs_the_release_switch(staged: Path, monkeypatch: pytest.MonkeyPatch) -> None:
