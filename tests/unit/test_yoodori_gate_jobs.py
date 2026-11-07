@@ -183,11 +183,17 @@ def _card_fetch(tapped: float, **fields: object):
 
 
 def test_the_owners_tap_on_a_question_card_is_a_job_origin() -> None:
-    # Owner 2026-11-06 17:04 KST "카드 버튼 답을 노드가 근거로 받게 바꿔.": the 24 hours run from the tap.
-    later = _now() + 2 * 86400
-    origin = jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=later,
-                                      fetch=_card_fetch(later - 60))
+    # Owner 2026-11-06 17:04 KST "카드 버튼 답을 노드가 근거로 받게 바꿔.".
+    origin = jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=_now(), fetch=_card_fetch(_now() - 30))
     assert origin.link == "https://discord.com/channels/222/123456789/987654321"
+
+
+def test_a_card_answer_counts_24_hours_from_the_cards_posting_whatever_its_edits() -> None:
+    # Egress gate review 3 (#370): a later edit of the bot's own card moves edited_timestamp; the message id's time
+    # (the card's posting) does not, so a card posted more than 24 hours ago is no origin even when edited just now.
+    later = _now() + 25 * 3600
+    with pytest.raises(jobs.JobRefused, match="24 hours"):
+        jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=later, fetch=_card_fetch(later - 60))
 
 
 def _container(*texts: str) -> list[dict]:
@@ -220,12 +226,6 @@ def _container(*texts: str) -> list[dict]:
 def test_a_forged_or_unanswered_question_card_is_no_origin(fields: dict) -> None:
     with pytest.raises(jobs.JobRefused):
         jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=_now(), fetch=_card_fetch(_now() - 60, **fields))
-
-
-def test_a_tap_older_than_24_hours_is_no_origin() -> None:
-    with pytest.raises(jobs.JobRefused, match="24 hours"):
-        jobs.verify_owner_origin("123456789", "987654321", OWNER, "t", now=_now(),
-                                 fetch=_card_fetch(_now() - 25 * 3600))
 
 
 def test_the_release_command_still_takes_only_the_owners_own_message() -> None:
