@@ -21,6 +21,14 @@ python3 -m automation.install.wizard
 선택 역할은 마법사 `--dori-role okdori|moodori|gongdori`, 직접 설치기 `--role okdori|moodori|gongdori`다.
 단계와 제한은 [설치 가이드](install.md#도리-기본-설치-p6)가 소유한다.
 
+윈도우(WSL 없이)는 PowerShell 에 한 줄이면 된다. 같은 줄이 업데이트도 한다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/orientpine/cytoplasm/main/install.ps1 | iex"
+```
+
+깔리는 것·제한은 [설치 가이드 「윈도우」](install.md#윈도우네이티브-wsl-없음).
+
 **이하 §1–§8은 명시적 레거시 Hermes 프로필용 안내**다.
 기존 노드를 P6로 업데이트할 때는 설치기를 재실행하지 않고
 [업그레이드·복구 절차](install.md#p6-기존-노드-업그레이드와-복구)를 따른다.

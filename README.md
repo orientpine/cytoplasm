@@ -7,7 +7,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](#필요한-것)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%2B%20systemd-FCC624?logo=linux&logoColor=black)](#필요한-것)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-FCC624?logo=linux&logoColor=black)](#필요한-것)
 [![Latest tag](https://img.shields.io/github/v/tag/orientpine/cytoplasm?label=latest&color=success)](https://github.com/orientpine/cytoplasm/tags)
 [![Releases](https://img.shields.io/badge/releases-SSH%20signed-success)](#업데이트는-서명된-것만-설치됩니다)
 [![External effects](https://img.shields.io/badge/external%20effects-owner%20approved-critical)](#승인-게이트가-실제로-막는-것)
@@ -144,7 +144,23 @@ python3 -m automation.install.wizard
 먼저 읽으세요. 이미 전환된 노드는 설치기를 재실행하지 않고 기존 서명 릴리스로 업데이트하며,
 멈춘 Hermes 잡·계정·유닛을 지우지 않습니다.
 
+### 윈도우 (WSL 없이)
+
+PowerShell 에 한 줄을 붙여 넣습니다. 관리자 권한은 필요 없습니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/orientpine/cytoplasm/main/install.ps1 | iex"
+```
+
+git·Python·Bun·PowerShell 7 이 없으면 winget 으로 깔고, 서명된 최신 릴리스를 확인한 뒤
+도리를 설치합니다. 로그온 때 도는 작업 스케줄러 항목 두 개(「Dori herdr server」, 「Dori serve」)가
+systemd 대신 루프를 살려 둡니다. 새 릴리스가 나오면 **같은 줄을 다시 실행**하면 업데이트됩니다.
+Linux·macOS 에서는 체크아웃에서 `python3 -m automation.install.update` 가 같은 일을 합니다.
+자세한 내용은 [설치 가이드 「윈도우」](docs/guide/install.md#윈도우네이티브-wsl-없음)에 있습니다.
+
 ### 필요한 것
+
+도리 기본 설치는 Linux·macOS·윈도우(네이티브)에서 돕니다. 아래 표는 레거시 노드용입니다.
 
 아래 절차는 기존 노드 유지보수를 위해 `--profile core|rag|report-hub|full`을
 명시한 경우에만 적용됩니다. 기본 도리 경로의 전제가 아닙니다.
@@ -471,8 +487,13 @@ logs/           # 로그 (git 미추적, 디렉토리만 유지)
 <details>
 <summary><b>Windows 나 macOS 에서도 되나요?</b></summary>
 
-아니요. Linux + systemd 전용이에요. 리컨실러와 워처가 systemd 타이머라서, systemd 없는
-환경에서는 계획 확인(dry-run)까지만 의미가 있습니다.
+윈도우는 도리 기본 설치라면 됩니다. WSL 없이 PowerShell 한 줄로 설치하고, 같은 줄로
+업데이트해요. 상시 실행은 작업 스케줄러 두 항목이 맡습니다. 레거시 `--profile` 노드 인프라,
+herdr 웹, 레인 체크포인트, 분리 인수인계, `dori heavy`, 송신 게이트, 음성 설정은 Linux 전용으로 남아요.
+
+macOS 에서는 도리 설치기가 포크·역할·herdr 까지 깔지만 systemd 가 없어 herdr 서버·웹 유닛은
+건너뜁니다. 그래서 재부팅 뒤 루프를 살려 두는 장치가 없어요. 직접 띄워야 합니다.
+Linux·macOS 업데이트는 `python3 -m automation.install.update` 입니다.
 
 </details>
 
