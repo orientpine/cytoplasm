@@ -27,6 +27,7 @@ CARD_ANSWER = re.compile(r"(?:✅|\[[^\]\n]+\]) \*\*Q[1-9][0-9]*\*\* (?s:.+?)\n�
                          r"-# (?P<by>[^\n·]+?) · [^\n]+")
 CARD_ANSWER_WORDS = frozenset({"button", "버튼"})
 COMPONENTS_V2 = 1 << 15
+CARD_TEXT_MAX = 4000  # Discord's card text limit; longer text is no card and is never matched
 
 
 class OriginRefused(Exception):
@@ -62,7 +63,8 @@ def verify_owner_origin(
     """The origin must be the owner's own (non-bot) message from the last 24 hours.
 
     With ``card_answers`` (the YooDori gate's jobs, not the release) the owner's tap on a question card counts too:
-    see ``_card_answered_at``. Its 24 hours run from the tap, not from the card's post.
+    see ``_card_answered``. Its 24 hours run from the card's posting (the message id's time), which no later edit of
+    the bot's own message can move, as on the egress gate (fork #370).
     """
     if not token:
         raise OriginRefused("origin check needs the node Discord credential")
@@ -79,8 +81,8 @@ def verify_owner_origin(
     if (isinstance(author, dict) and str(author.get("id")) == owner_id
             and not author.get("bot") and str(message.get("id")) == message_id):
         when = sent
-    elif card_answers and (tapped := _card_answered_at(message, channel_id, message_id, token, fetch)) is not None:
-        when = tapped
+    elif card_answers and _card_answered(message, channel_id, message_id, token, fetch):
+        when = sent
     else:
         raise OriginRefused("origin message is not the owner's own message")
     if not 0 <= moment - when <= ORIGIN_MAX_AGE_S:
@@ -88,8 +90,8 @@ def verify_owner_origin(
     return Origin(channel_id, message_id, _place(channel_id, message_id, channel, "origin"))
 
 
-def _card_answered_at(message: dict, channel_id: str, message_id: str, token: str, fetch: Fetch) -> float | None:
-    """When the owner tapped the question card at these coordinates, or None when it is no tapped card.
+def _card_answered(message: dict, channel_id: str, message_id: str, token: str, fetch: Fetch) -> bool:
+    """Whether the message at these coordinates is a question card the owner's tap folded into a button answer.
 
     The message must be this node bot's own post (``/users/@me``; the node's notice bot is YooDori's, which posts
     the cards), not a webhook, a components-v2 card that is one container holding one text, folded by an edit into
@@ -106,19 +108,18 @@ def _card_answered_at(message: dict, channel_id: str, message_id: str, token: st
             or not isinstance(message.get("flags"), int) or not message["flags"] & COMPONENTS_V2
             or not isinstance(inner, list) or len(inner) != 1 or not isinstance(inner[0], dict)
             or inner[0].get("type") != 10):
-        return None
-    answered = CARD_ANSWER.fullmatch(str(inner[0].get("content", "")))
-    tapped = _epoch(message.get("edited_timestamp"))
+        return False
+    content = str(inner[0].get("content", ""))
+    answered = CARD_ANSWER.fullmatch(content) if len(content) <= CARD_TEXT_MAX else None
+    # The edit only shows the card was folded; its time is not the clock (any later edit would move it).
     if not answered or not answered["answer"].strip() or answered["by"].casefold() not in CARD_ANSWER_WORDS \
-            or tapped is None:
-        return None
+            or _epoch(message.get("edited_timestamp")) is None:
+        return False
     try:
         me = fetch("/users/@me", token)
     except (OSError, ValueError, urllib.error.URLError):
         raise OriginRefused("origin message could not be read; nothing was run") from None
-    if not isinstance(me, dict) or str(author.get("id")) != str(me.get("id")):
-        return None
-    return tapped
+    return isinstance(me, dict) and str(author.get("id")) == str(me.get("id"))
 
 
 def _epoch(value: object) -> float | None:
