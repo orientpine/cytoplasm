@@ -555,6 +555,8 @@ Linux·macOS 업데이트는 `python3 -m automation.install.update` 입니다.
 적합하다고 판단했어요. `skills/mail/vendor/` 의 vendored 소스와 그 출처·의존성 정보는
 [`skills/mail/vendor/NOTICE`](skills/mail/vendor/NOTICE) 에 기록되어 있습니다.
 
+설치되는 도리 포크에는 원본 dori-superagent에서 온 Sustainable Use License 1.0(SUL-1.0) 부분이 들어 있거나 앞으로 들어옵니다(어느 부분인지는 포크의 [NOTICE](https://github.com/orientpine/omo-dori-mode-experimental/blob/main/NOTICE)). 그래서 사이토플라즘·도리 기본 설치는 비상업 목적으로, 무료일 때만 남에게 나눠 줄 수 있습니다. 사이토플라즘 자체 코드의 라이선스(Apache-2.0)는 그대로입니다.
+
 <div align="center">
 <br>
 
