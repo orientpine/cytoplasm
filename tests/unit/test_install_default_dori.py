@@ -39,6 +39,7 @@ def test_default_entrypoints_plan_only_dori_without_writing(
     assert kinds == {
         "dori-fork", "dori-skill-link", "dori-cli", "dori-config",
         "dori-role-lead", "dori-role-yoodori",
+        "dori-herdr-bin", "dori-herdr-ttyd", "dori-herdr-server", "dori-herdr-web", "dori-herdr-lead",
     }
     assert list(home.iterdir()) == []
 

@@ -42,7 +42,8 @@ _INT = re.compile(r"[0-9]{1,3}")
 _UID = re.compile(r"[0-9]{1,20}")
 _REPLY_KEY = re.compile(r"[0-9]{4}-[0-9]{4}-[0-9]{1,3}")
 _DRAFT_ID = re.compile(r"[0-9a-f]{6}")
-_CARD_CALL = re.compile(r"(\S+) (?:mail-compose|mail-draft) rc=0 s=([0-9.]+)")
+#: rc=124 is this gate's own timeout kill: the child ran and may have posted its card (36b605, 2026-11-04).
+_CARD_CALL = re.compile(r"(\S+) (?:mail-compose|mail-draft) rc=(?:0|124) s=([0-9.]+)")
 _STAMP = "%Y-%m-%dT%H:%M:%SZ"
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _SHELL = re.compile(r"[;&|`$<>\\]")
@@ -66,7 +67,8 @@ REFUSED_WORDS = frozenset({
     "python", "python3", "perl", "ruby", "node", "bun", "env",
 }) | GMAIL_WRITE_WORDS
 _ORIGIN = {"--origin-channel-id": "id", "--origin-message-id": "id"}
-_REPEATABLE = {"mail-compose": frozenset({"--cc", "--bcc", "--share-with", "--attachment"})}
+# --to repeats like --cc/--bcc, one checked address each (owner 2026-11-03: five people in To).
+_REPEATABLE = {"mail-compose": frozenset({"--to", "--cc", "--bcc", "--share-with", "--attachment"})}
 _FLAGS = {
     "mail-compose": {"--to": "email", "--cc": "email", "--bcc": "email",
                      "--subject": "short", "--body": "body", "--in-reply-to": "id",
@@ -173,7 +175,7 @@ USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          "Card requests (origin channel/message ids required): " + ", ".join(CARD_COMMANDS) + "\n"
          "  calendar-request --card: post the event card even for the owner's own message\n"
          "  (without --card his own event is written at once when the node switch is on).\n"
-         "Owner-command jobs (origin = the owner's own message, checked on the node):\n"
+         "Owner-command jobs (origin = the owner's own message or his tap on a question card, checked on the node):\n"
          "  doc <" + "|".join(k for k in TOOLS if k not in {"patent", "stt", "meeting"}) + "> <sub> [args],\n"
          "  patent <create|checklist|draft|status|export> [args], stt <transcribe|ingest|polish> [args],\n"
          "  meeting <ingest|evidence> [args],\n"
@@ -592,7 +594,7 @@ def _glossary_kind(args: list[str]) -> tuple[str, list[str]]:
 
 
 def posted_by_gate(draft_id: str) -> bool:
-    """True iff the draft was created during a mail-compose/mail-draft call this gate logged rc=0.
+    """True iff the draft was created during a mail-compose/mail-draft call this gate logged rc=0 or 124.
 
     Owner Q367: YooDori withdraws only its own cards. The gate log is written by this forced
     command alone, so a card raised another way (another Dori, a digest reaction, a release) has

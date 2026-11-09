@@ -77,7 +77,9 @@ def test_a_card_in_an_archived_thread_is_still_marked_withdrawn(closed) -> None:
     content = fake.contents[stored["message_id"]]
     assert content.startswith("⛔") and "유돌" in content and REASON in content
     thread_patches = [p for m, path, p in writes if m == "PATCH" and path == f"/channels/{THREAD}"]
-    assert thread_patches == [{"archived": False}]
+    assert thread_patches == [
+        {"archived": False}, {"archived": True, "name": "💤 점심 메일"},
+    ]
 
 
 def test_another_refusal_does_not_reopen_and_names_the_discord_code(closed, capsys) -> None:

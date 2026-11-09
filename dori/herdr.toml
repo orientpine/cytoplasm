@@ -1,0 +1,32 @@
+# 도리 herdr 백엔드 도구 고정판 — 설치기(python3 -m automation.install.dori, 기본 --backend herdr)가 받는 바이너리.
+#
+# 설치기는 이 표의 주소에서 받고 sha256 이 같을 때만 설치한다. 다르면 아무것도 바꾸지 않고 멈춘다.
+# 올릴 때는 이 파일을 바꾸는 PR 하나와 릴리스 노트 한 줄로 한다(pin.toml 과 같은 규칙).
+# herdr 정본: https://herdr.dev/latest.json  ttyd 정본: https://github.com/tsl0922/ttyd/releases/tag/1.7.7 의 SHA256SUMS
+schema = 1
+
+[herdr]
+version = "0.9.5"
+
+[herdr.assets]
+linux-x86_64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64", sha256 = "14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d" }
+linux-aarch64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-aarch64", sha256 = "17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c" }
+macos-x86_64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-x86_64", sha256 = "5fb0a908ec7f6745e3e245738b06bfad56c46391c391ab3c0955fbead01f1369" }
+macos-aarch64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-aarch64", sha256 = "fb77c2232a05a8035421382c894392f4174e4e38a18e48af3dd0290157c3a7e2" }
+# 네이티브 윈도우: herdr.exe 와 ConPTY 런타임을 담은 zip. sha256 은 zip 의 값이고, 푼 폴더에 .zip-sha256 으로 남긴다.
+windows-x86_64 = { url = "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-windows-x86_64.zip", sha256 = "d2c6c9c971c43a0bfdde8c692a9a1a7a45c3e4807cd01ae45662b4734fac1cbf" }
+
+# 웹 터미널(herdr 웹). macOS 릴리스 바이너리가 없어 macOS 는 웹을 건너뛴다. 윈도우는 웹 유닛이 systemd 라 웹을 건너뛴다.
+[ttyd]
+version = "1.7.7"
+
+[ttyd.assets]
+linux-x86_64 = { url = "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64", sha256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55" }
+linux-aarch64 = { url = "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.aarch64", sha256 = "b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165" }
+
+# 새 설치의 기본 루프백 웹 앞문 포트(--web-port 로 바꿈). 그 뒤의 ttyd 와 탭 상태 도우미는 앞문 포트 + 차이로 정해
+# 한 호스트의 여러 도리 계정이 서로의 ttyd 에 붙지 않는다(8181 -> 9281·9381, 8182 -> 9282·9382).
+[web]
+port = 8181
+ttyd_offset = 1100
+state_offset = 1200

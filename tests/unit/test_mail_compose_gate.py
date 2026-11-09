@@ -109,7 +109,7 @@ def _dm_post_api(requests: list[tuple[str, str]]):
             }
         if method == "POST":
             return {"id": MESSAGE_ID}
-        if method == "PUT":
+        if method in {"PUT", "PATCH"}:
             return None
         raise AssertionError(f"unexpected Discord call: {method} {path}")
 
@@ -209,6 +209,29 @@ def test_compose_cli_accepts_repeated_cc() -> None:
     assert args.cc == ["cc1@example.test", "cc2@example.test"]
 
 
+def test_compose_puts_every_repeated_to_on_the_card(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given: five recipients, each its own --to, and one of them repeated in other case
+    _compose_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
+    tos = [f"to{i}@example.test" for i in range(5)]
+    args = triage_cli.build_parser().parse_args([
+        "compose", *(word for to in tos for word in ("--to", to)), "--to", tos[0].upper(),
+        "--subject", COMPOSE_SUBJECT, "--body", COMPOSE_BODY, "--no-post",
+    ])
+    # When
+    assert triage_cli.cmd_compose(args) == 0
+    # Then: one To value with all five in order (the repeat once), frozen in argv and hash, on the card
+    [draft] = triage_gate.list_drafts()
+    joined = ", ".join(tos)
+    assert draft["to"] == joined
+    assert draft["argv"].count("--to") == 1
+    assert draft["argv"][draft["argv"].index("--to") + 1] == joined
+    assert f"`{joined}`" in triage_core.render_approvals_message(draft)
+    assert triage_core.draft_sha256({**draft, "to": tos[0]}) != draft["sha256"]
+
+
 def test_compose_post_targets_dm_channel_with_reaction_order(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -220,7 +243,8 @@ def test_compose_post_targets_dm_channel_with_reaction_order(
     # When: the compose pipeline posts the confirmation request
     triage_pipeline.compose_and_post(COMPOSE_TO, COMPOSE_SUBJECT, COMPOSE_BODY, post=True)
     # Then: an agent-chat announcement anchors the thread before its approval card
-    # is posted, then ✅ and ⛔ are pre-added in that order.
+    # is posted, then ✅ and ⛔ are pre-added in that order, and only then the thread's
+    # 🔔 rename is tried (a rate-limited rename must never cost the card its reactions).
     expected = [
         ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages"),
         ("POST", f"/channels/{AGENT_CHAT_CHANNEL}/messages/{NOTICE_MESSAGE_ID}/threads"),
@@ -228,6 +252,8 @@ def test_compose_post_targets_dm_channel_with_reaction_order(
         ("POST", f"/channels/{AGENT_CHAT_THREAD}/messages"),
         ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9C%85/@me"),
         ("PUT", f"/channels/{AGENT_CHAT_THREAD}/messages/{MESSAGE_ID}/reactions/%E2%9B%94/@me"),
+        ("GET", f"/channels/{AGENT_CHAT_THREAD}"),
+        ("PATCH", f"/channels/{AGENT_CHAT_THREAD}"),
     ]
     assert requests == expected
 

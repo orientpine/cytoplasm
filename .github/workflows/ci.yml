@@ -131,6 +131,32 @@ jobs:
           fi
           python3 -m automation.public_gate range origin/main HEAD --text-env PR_TEXT
 
+  # 네이티브 윈도우(WSL 없음) 설치·상시 실행·업데이트를 깨끗한 windows-latest 에서 실제로 돌린다. README 의
+  # 한 줄(install.ps1 을 iex 로)로 설치하고, 작업 스케줄러 두 항목(herdr 서버·dori serve)이 로그온 트리거로
+  # 등록돼 지금 돌고 있는지, 서명 안 된 새 태그는 안 받는지, 서명된 새 판(새 포크 고정 커밋)으로 업데이트되고
+  # 상시 루프가 새 코드로 다시 뜨는지까지 본다. 릴리스 채널은 이 잡이 만든 키로 서명한 로컬 저장소다(형의
+  # 자격 증명·채널 없음). 시나리오 정본은 tests/windows/install-update.ps1 이다.
+  windows-install:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      # 전체 이력: 시험이 이 커밋을 로컬 릴리스 저장소로 push 하는데, 얕은 클론에서는 push 가 거절된다.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install, always-on tasks and update on native Windows
+        shell: pwsh
+        run: ./tests/windows/install-update.ps1 -Evidence "$env:RUNNER_TEMP/cyto-windows-evidence"
+
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-install-evidence
+          path: ${{ runner.temp }}/cyto-windows-evidence
+          if-no-files-found: warn
+
   # 설치기 진입점은 제3자가 **아무것도 설치하기 전에** 처음 실행하는 명령이라,
   # 모듈 스코프에서 import하는 것이 그대로 미문서화 전제가 된다. 실제로 한 번
   # 깨졌다 — dcddaa21 이후 roster import가 모듈 스코프로 올라가 순수 dry-run이

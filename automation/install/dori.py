@@ -1,9 +1,10 @@
 """도리 프로필 설치 — 고정된 도리 포크와 기본 도리 구성(리드·비서, 선택 역할)을 깐다.
 
-Hermes 경로(`python3 -m automation.install`)와 따로 선다: root·systemd·업데이트 신뢰키가 필요
-없고 노드의 서비스 계정을 만들지 않는다. 하는 일은 다섯 가지뿐이다 — `dori/pin.toml` 의 커밋으로
-포크를 받아 SHA 를 확인하고, 포크 스킬을 링크하고, `dori` CLI 를 `bun link` 하고, 포크의 예시
-설정을 한 번만 복사하고, `dori/roles/` 템플릿을 작업 폴더에 렌더한다.
+Hermes 경로(`python3 -m automation.install`)와 따로 선다: root·업데이트 신뢰키가 필요 없고 노드의
+서비스 계정을 만들지 않는다. `dori/pin.toml` 의 커밋으로 포크를 받아 SHA 를 확인하고, 포크 스킬을
+링크하고, `dori` CLI 를 `bun link` 하고, 포크의 예시 설정을 한 번만 복사하고, `dori/roles/` 템플릿을
+작업 폴더에 렌더한다. 기본 backend herdr 는 그 뒤 `dori_herdr` 로 herdr·ttyd·서버/웹 사용자 유닛을 깔고
+리드를 herdr pane 에 띄운다. `--backend aoe` 는 예전처럼 aoe 예시 설정만 복사한다.
 
 이미 있는 파일은 덮지 않는다. 같으면 넘어가고, 다르면 차이만 보여 주고 그대로 둔다 — 소유자가
 고쳐 쓴 지침이 재설치로 사라지면 안 된다. 이미 있는 포크 체크아웃이 고정 커밋이 아니면 아무것도
@@ -18,13 +19,15 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
-from automation.dori_pin import REPO_ROOT, DoriPin, PinError, checkout_head, fetch_at, load_pin
+from automation.dori_pin import REPO_ROOT, DoriPin, PinError, checkout_head, fetch_at, load_pin, move_to
+from automation.install import dori_herdr
 
 ROLES_RELPATH: Final = Path("dori") / "roles"
 TEMPLATE_NAME: Final = "AGENTS.md.tmpl"
@@ -138,16 +141,39 @@ def _diff(entry: RoleFile, limit: int = DIFF_LINE_LIMIT) -> str:
     return shown
 
 
+def _is_junction(path: Path) -> bool:
+    return bool(getattr(path, "is_junction", lambda: False)())
+
+
+def _link_skill(link: Path, target: Path) -> None:
+    # native Windows: a directory junction, which needs no administrator or developer mode (a symlink does)
+    if link.exists() and not link.is_symlink() and not _is_junction(link):
+        print(f"DORI-SKILL-KEEP {link} 은 링크가 아니라 그대로 둔다")
+        return
+    if _is_junction(link):
+        link.rmdir()
+    elif link.is_symlink():
+        link.unlink()
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target)
+
+
 def _default_runner(argv: tuple[str, ...], cwd: Path) -> int:
     return subprocess.run(argv, cwd=cwd, check=False).returncode
 
 
-def _fork_state(pin: DoriPin, src: Path) -> tuple[str, str]:
+def _fork_state(pin: DoriPin, src: Path, update: bool = False) -> tuple[str, str]:
     if not src.exists():
         return "fetch", f"{src} 에 {pin.commit[:12]} 을 받고 SHA 를 확인한다"
     head = checkout_head(src)
     if head == pin.commit:
         return "keep", f"{src} 이미 고정 커밋 {pin.commit[:12]}"
+    if update and head is not None:
+        return "move", f"{src} 를 {head[:12]} 에서 새 고정 커밋 {pin.commit[:12]} 로 옮긴다(설치기가 받은 깨끗한 체크아웃만)"
     return "block", (
         f"DORI-PIN-SRC-DIFFERS: {src} is at {head or 'no git checkout'}, pin is {pin.commit} "
         "— leaving it alone; move it aside or pass --src <빈 경로>"
@@ -155,7 +181,10 @@ def _fork_state(pin: DoriPin, src: Path) -> tuple[str, str]:
 
 
 def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
-         which: Callable[[str], str | None] = shutil.which) -> int:
+         which: Callable[[str], str | None] = shutil.which,
+         capture: dori_herdr.Capture = dori_herdr.default_capture,
+         fetch: dori_herdr.Fetch = dori_herdr.default_fetch,
+         sleep: Callable[[float], None] = time.sleep) -> int:
     home = Path(os.environ.get("HOME", str(Path.home())))
     parser = argparse.ArgumentParser(
         prog="python3 -m automation.install",
@@ -165,13 +194,20 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
     _ = parser.add_argument("--role", action="append", default=[], metavar="KEY",
                             help="선택 역할을 더한다(okdori, moodori, gongdori). lead·yoodori 는 기본")
     _ = parser.add_argument("--owner-call", default="소유자", help="도리가 소유자를 부르는 말(예: 형)")
-    _ = parser.add_argument("--backend", choices=sorted(_CONFIG_EXAMPLES), default="aoe")
+    _ = parser.add_argument("--backend", choices=sorted(_CONFIG_EXAMPLES), default="herdr",
+                            help="herdr(기본: herdr·ttyd·웹까지 깔고 리드를 herdr pane 에) 또는 aoe(aoe/tmux, 예시 설정만)")
+    _ = parser.add_argument("--web-port", type=int, default=None, help="herdr 웹 앞문 루프백 포트(기본 dori/herdr.toml)")
+    _ = parser.add_argument("--web-origin", default=None,
+                            help="브라우저가 여는 주소(기본 http://127.0.0.1:<포트>, 테일넷이면 https://<호스트>[:포트])")
+    _ = parser.add_argument("--update", action="store_true",
+                            help="이미 받은 포크(설치기가 받은 깨끗한 체크아웃)를 새 고정 커밋으로 옮긴다")
     _ = parser.add_argument("--src", type=Path, default=home / ".dori" / "src")
     _ = parser.add_argument("--skills", type=Path, default=home / ".agents" / "skills")
     _ = parser.add_argument("--workroot", type=Path, default=home / "Documents")
     args = parser.parse_args(argv)
     try:
         pin = load_pin()
+        tools = dori_herdr.load_tools(REPO_ROOT)
         options = Options(args.src, args.skills, args.workroot, home,
                           _validate_owner_call(args.owner_call), args.backend, tuple(args.role), args.dry_run)
         roles = select_roles(load_roles(), options.roles)
@@ -185,7 +221,7 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
     missing = [tool for tool in ("git", "bun") if which(tool) is None]
     for tool in ("git", "bun"):
         print(f"  [{'필요' if tool in missing else '통과'}] {tool}")
-    fork_action, fork_detail = _fork_state(pin, options.src)
+    fork_action, fork_detail = _fork_state(pin, options.src, args.update)
     config = options.home / ".dori" / "config.json"
     link = options.skills / "dori-mode"
     steps = [
@@ -195,6 +231,11 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
         ("dori-config", f"{config} {'유지(이미 있음)' if config.exists() else '포크 예시 복사 ' + _CONFIG_EXAMPLES[options.backend]}"),
         *((f"dori-role-{e.role.key}", f"{e.path} {({'new': '새로 씀', 'same': '같음 — 넘어감', 'differs': '다름 — 그대로 두고 차이만 보임'})[e.state]}") for e in files),
     ]
+    web_port = args.web_port or tools.web_port
+    layout = dori_herdr.Layout(options.home, options.src, web_port)
+    key = dori_herdr.platform_key()
+    if options.backend == "herdr":
+        steps += [(f"dori-{kind}", detail) for kind, detail in dori_herdr.plan(layout, tools, key)]
     for index, (kind, detail) in enumerate(steps, 1):
         print(f"{index}. {kind} {detail}")
     for entry in files:
@@ -219,13 +260,15 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
             print(error)
             return 3
         print(f"DORI-PIN-OK {options.src} {pin.commit}")
+    elif fork_action == "move":
+        try:
+            old = move_to(pin, options.src)
+        except PinError as error:
+            print(error)
+            return 3
+        print(f"DORI-PIN-MOVED {options.src} {old[:12]} -> {pin.commit}")
     link.parent.mkdir(parents=True, exist_ok=True)
-    if link.exists() and not link.is_symlink():
-        print(f"DORI-SKILL-KEEP {link} 은 링크가 아니라 그대로 둔다")
-    else:
-        if link.is_symlink():
-            link.unlink()
-        link.symlink_to(options.src / "skills" / "dori-mode")
+    _link_skill(link, options.src / "skills" / "dori-mode")
     scripts = options.src / "skills" / "dori-mode" / "scripts"
     for command in (("bun", "install", "--silent"), ("bun", "link", "--silent")):
         if runner(command, scripts) != 0:
@@ -241,8 +284,24 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
             entry.path.parent.mkdir(parents=True, exist_ok=True)
             _ = entry.path.write_text(entry.content, encoding="utf-8")
     kept = sum(1 for e in files if e.state == "differs")
-    print(f"DORI-INSTALLED pin={pin.commit[:12]} roles={','.join(r.key for r in roles)} kept={kept}")
-    print("다음: ~/.dori/dori.env 에 봇 토큰·채널·소유자 id 를 넣고(0600), 리드 작업 폴더에서 에이전트를 열어 \"Dori mode\" 라고 한다.")
+    if options.backend == "herdr":
+        lead = next(r for r in roles if r.key == "lead")
+        code = dori_herdr.install(
+            layout, tools, key, origin=args.web_origin or f"http://127.0.0.1:{web_port}", config=config,
+            lead_dir=options.workroot / lead.dir, lead_label=lead.nick, capture=capture, fetch=fetch, which=which,
+            sleep=sleep, restart=args.update,
+        )
+        if code != 0:
+            return code
+    print(f"DORI-INSTALLED pin={pin.commit[:12]} roles={','.join(r.key for r in roles)} kept={kept} backend={options.backend}")
+    if options.backend == "herdr" and layout.windows:
+        print("다음: %USERPROFILE%\\.dori\\dori.env 에 봇 토큰·채널·소유자 id 를 넣고, `herdr` 를 열어 리드 탭에서 \"Dori mode\" 라고 한다."
+              f" 도리 상시 루프는 작업 스케줄러 '{dori_herdr.SERVE_TASK}' 가 로그온마다 켭니다(토큰을 넣으면 다음 재시도 때 연결).")
+    elif options.backend == "herdr":
+        print("다음: ~/.dori/dori.env 에 봇 토큰·채널·소유자 id 를 넣고(0600), 웹(또는 `herdr`)에서 리드 탭을 열어 \"Dori mode\" 라고 한다."
+              f" 웹 비밀번호는 {layout.web_env} 의 HERDR_WEB_PASSPHRASE(옛 aoe 웹을 쓰던 계정은 그 비밀번호).")
+    else:
+        print("다음: ~/.dori/dori.env 에 봇 토큰·채널·소유자 id 를 넣고(0600), 리드 작업 폴더에서 에이전트를 열어 \"Dori mode\" 라고 한다.")
     return 0
 
 

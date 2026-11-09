@@ -36,7 +36,7 @@ THREAD_ID = "300000000000000001"
 APPROVAL_CHANNEL = "1526487936065952385"
 #: 요청별 승인 스레드 — 승인 카드가 여기 있었고 결과도 여기서 끝난다.
 REQUEST_THREAD = "400000000000000001"
-REQUEST_THREAD_NAME = "📋 할 일 · 장보기"
+REQUEST_THREAD_NAME = "📋 장보기"
 NOW = datetime(2026, 8, 23, 12, tzinfo=UTC)
 
 
@@ -420,7 +420,7 @@ def test_notify_result_closes_the_request_thread_on_a_terminal_outcome() -> None
     ]
     assert transport.payloads == [(
         f"/channels/{REQUEST_THREAD}",
-        {"archived": True, "name": f"✅ 완료 · {REQUEST_THREAD_NAME}"},
+        {"archived": True, "name": f"✅ {REQUEST_THREAD_NAME}"},
     )]
     assert transport.posts == []
 
@@ -459,6 +459,6 @@ def test_watch_cancel_notice_closes_the_request_thread_as_cancelled(tmp_path: Pa
     assert "할일 등록 취소" in posts[0][1]
     assert transport.payloads == [(
         f"/channels/{REQUEST_THREAD}",
-        {"archived": True, "name": f"⛔ 취소 · {REQUEST_THREAD_NAME}"},
+        {"archived": True, "name": f"⛔ {REQUEST_THREAD_NAME}"},
     )]
     assert transport.posts == []

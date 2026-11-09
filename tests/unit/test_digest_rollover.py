@@ -59,7 +59,7 @@ def test_mail_opening_next_day_archives_previous_as_done(opened):
     # When: the next mail digest opens.
     triage_digest_thread.open_for(_KST + timedelta(days=1))
     # Then: the previous mail thread is closed and its mark persisted.
-    assert opened[first.channel_id] == {"name": f"✅ 완료 · {name}", "archived": True}
+    assert opened[first.channel_id] == {"name": name, "archived": True}
     assert digest_thread.load(first.day).mark == digest_thread.MARK_DONE
 
 
@@ -81,7 +81,7 @@ def test_standalone_calendar_opening_next_day_uses_shared_settle(opened, monkeyp
     calendar_digest.daily_binding({"digest_day": "2026-10-18"})
     # Then: only the previous calendar digest is closed, using the common policy.
     assert calls
-    assert opened[first.channel_id] == {"name": f"✅ 완료 · {name}", "archived": True}
+    assert opened[first.channel_id] == {"name": name, "archived": True}
     assert opened[mail.channel_id]["archived"] is False
 
 

@@ -224,6 +224,11 @@ def _owner_items(encoded: str) -> tuple[str, ...]:
     return tuple(deploy_receipt.one_line(item) for item in items if item.strip())
 
 
+def owner_text(version: str, summary: str = "", owner: str = "") -> str:
+    """노드 `send` 와 릴리스 호스트 중계가 함께 쓰는 형 한 줄 — `owner` 는 `--owner-pending` JSON."""
+    return owner_line(version, summary, _owner_items(owner))
+
+
 def owner_line(version: str, summary: str = "", owner: Sequence[str] = ()) -> str:
     """형 채널의 한 줄 — 적용 사실·무엇이 바뀌었는지·형이 직접 할 일만."""
     line = f"✅ {version} 적용됨" + (f" — {summary}" if summary else "")
@@ -245,12 +250,16 @@ def _deliver(version: str, head: str, fact: str, *, render: str, fault: bool = F
 
 def send(
     version: str, head: str, models: str = "", pending: str = "", owner: str = "", summary: str = "",
+    *, relay: bool = False,
 ) -> int:
     """노드에서 도는 절반 — 포인터를 다시 확인하고 목적지는 파사드에 맡긴다.
 
     형 채널에는 한 줄(v5, 봉투는 기록에만)만 간다. 운영자가 고칠 기술 항목은 릴리스가 정한 페어
     채널(`fault=True`)로 먼저 보낸다 — 형 줄이 나간 뒤 페어가 실패해 다음 틱에 형 줄이 다시 가는
     일을 막는다(소유자 지시 2026-10-19 "릴리스 안내 간략하게 만들어").
+
+    `relay` 면 형 한 줄만 보내지 않는다 — 릴리스 호스트가 같은 줄을 설치가 정한 다른 발신자에게
+    넘긴다(`release_applied_state.relay_switch`). 포인터 확인·운영자 조각·스레드 정리는 그대로다.
     """
     del models  # Older workstation senders may still pass the retired Hermes summary.
     current = os.environ.get("NODE_RELEASE_CURRENT", "").strip() or _DEFAULT_RELEASE_CURRENT
@@ -271,8 +280,7 @@ def send(
         fact = f"{title}\n{piece}" if index == 0 else piece
         if not _deliver(version, head, fact, render="owner-ko-v2", fault=True):
             return 3  # 첫 실패 조각에서 멈춘다 — 다음 틱이 전부 다시 보낸다(at-least-once)
-    line = owner_line(version, summary, _owner_items(owner))
-    if not _deliver(version, head, line, render="owner-ko-v5"):
+    if not relay and not _deliver(version, head, owner_text(version, summary, owner), render="owner-ko-v5"):
         return 3
     from automation.interop.origin_notice import ThreadOutcome
     from automation.release_thread_notice import finish
@@ -294,11 +302,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     _ = sender.add_argument("--pending", default="", help="운영자가 고칠 남은 조치 줄(JSON 목록) — 페어 채널")
     _ = sender.add_argument("--owner-pending", default="", help="형만 할 수 있는 조치(JSON 목록) — 형 한 줄")
     _ = sender.add_argument("--summary", default="", help="릴리스 노트 첫 줄(무엇이 바뀌었는지)")
+    _ = sender.add_argument(
+        "--relay", action="store_true", help="형 한 줄은 보내지 않는다 — 릴리스 호스트가 다른 발신자에게 넘긴다",
+    )
     arguments = parser.parse_args(argv)
     if arguments.command == "send":
         return send(
             str(arguments.version), str(arguments.head), str(arguments.models), str(arguments.pending),
-            str(arguments.owner_pending), str(arguments.summary),
+            str(arguments.owner_pending), str(arguments.summary), relay=bool(arguments.relay),
         )
     try:
         sweep(Path(str(arguments.state)), Path(str(arguments.repo)))

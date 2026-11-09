@@ -163,7 +163,20 @@ def _compose_gmail_reply(args: argparse.Namespace) -> int:
     return 0
 
 
+def _joined_to(values: str | list[str]) -> str:
+    """Every --to in order as the one To value mailon and the card read ("a, b"); a repeat once."""
+    if isinstance(values, str):
+        return values
+    kept: dict[str, str] = {}
+    for value in values:
+        if value.strip():
+            kept.setdefault(value.strip().casefold(), value.strip())
+    return ", ".join(kept.values())
+
+
 def cmd_compose(args: argparse.Namespace) -> int:
+    # Owner 2026-11-03: a mail to five people names each in To; before, only the last --to was kept.
+    args.to = _joined_to(args.to)
     if getattr(args, "reply_gmail", ""):
         return _compose_gmail_reply(args)
     if not args.to:
@@ -437,7 +450,8 @@ def _notify_failed(draft: dict, error: triage_gate.GateError) -> None:
             stored = draft
     try:
         triage_confirm.notify_result(
-            stored, mail_send_retry.failure_text(stored, triage_core.redact(str(error))[:200]))
+            stored, mail_send_retry.failure_text(stored, triage_core.redact(str(error))[:200]),
+            outcome="FAILED")
     except Exception as notify_error:  # noqa: BLE001 — notification must never break the tick
         print(f"NOTIFY-FAIL draft={draft['id']} "
               f"err={triage_core.redact(str(notify_error))[:120]}", file=sys.stderr)
@@ -547,6 +561,10 @@ def cmd_watch(_args: argparse.Namespace) -> int:
                       f"err={triage_core.redact(str(error))[:120]}", file=sys.stderr)
     finally:
         _REMINDER_BATCH.reset(batch)
+    triage_approval.triage_approval_gate.retry_thread_marks(pending_drafts)
+    # A card without ✅⛔ has no buttons for the owner: a reaction that still fails fails the tick.
+    if triage_approval.triage_approval_gate.fill_missing_reactions(triage_gate.list_drafts()):
+        failed_rc = max(failed_rc, 1)
     if reminders:
         def reminder_failed(request, error):
             if not isinstance(error, OSError):
@@ -741,7 +759,9 @@ def build_parser() -> argparse.ArgumentParser:
     compose = sub.add_parser(
         "compose", help="새 메일 작성 초안 — 소유자 확정 게이트 (같은 watch cron 재사용)"
     )
-    compose.add_argument("--to", default="", help="새 메일·전달은 필수 — Gmail 답장(--reply-gmail)은 원메일에서 이어받아 쓰지 않는다")
+    compose.add_argument("--to", action="append", default=[], metavar="ADDR",
+                         help="받는 사람 주소 (여러 번 지정 가능, 같은 주소는 한 번) — 새 메일·전달은 필수, "
+                              "Gmail 답장(--reply-gmail)은 원메일에서 이어받아 쓰지 않는다")
     compose.add_argument("--bcc", action="append", default=[], metavar="ADDR",
                          help="숨은참조 주소 (반복·쉼표 구분 가능)")
     compose.add_argument("--bcc-file", default=None, metavar="PATH",

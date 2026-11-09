@@ -136,13 +136,14 @@ def withdraw(draft_id: str, reason: str, by: str) -> dict:
 
 
 def _notify_withdrawn(record: dict, by: str, reason: str) -> None:
-    """The owner's ⛔ notice text, posted without closing or renaming the reused thread."""
+    """Post the withdrawal result, marking its thread dormant rather than cancelled."""
     confirm = import_module("triage_confirm")
     try:
         confirm.notify_result(
             record,
             f"⛔ 발송 취소: {record['subject']} → {record['to']} (draft {record['id']})\n"
             f"요청한 {by} 거둠(사유: {reason}). 메일은 발송되지 않았습니다.",
+            outcome=confirm.EXPIRED_OUTCOME,
         )
     except Exception as error:  # noqa: BLE001 — the withdrawal is already committed
         print(f"NOTIFY-FAIL draft={record.get('id')} err={type(error).__name__}", file=sys.stderr)

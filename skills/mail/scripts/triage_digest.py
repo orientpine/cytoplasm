@@ -617,5 +617,8 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
         store_item["channel_id"] = card_channel
         _attach_reactions(card_channel, str(message_id or ""))
     run_id = triage_store.record_digest_run(db, triage_core.utc_now(), store_items)
+    import triage_digest_thread
+
+    triage_digest_thread.settle()
     print(f"DIGEST run={run_id} items={len(dm_items)}")
     return 0

@@ -62,11 +62,12 @@ def verify_owner_origin(
     channel_id: str, message_id: str, owner_id: str, token: str, *,
     now: float | None = None, fetch: Fetch = _discord_get,
 ) -> Origin:
-    """The origin must be the owner's own (non-bot) message from the last 24 hours."""
+    """The origin must be the owner's own (non-bot) message, or his tap on a question card, from the last 24 hours
+    (owner 2026-11-06 17:04 KST "카드 버튼 답을 노드가 근거로 받게 바꿔.")."""
     from automation.owner_origin import OriginRefused, verify_owner_origin as verify
 
     try:
-        found = verify(channel_id, message_id, owner_id, token, now=now, fetch=fetch)
+        found = verify(channel_id, message_id, owner_id, token, now=now, fetch=fetch, card_answers=True)
     except OriginRefused as error:
         raise JobRefused(str(error)) from None
     return Origin(found.channel_id, found.message_id, found.link)

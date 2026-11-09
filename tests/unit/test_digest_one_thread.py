@@ -106,6 +106,7 @@ def test_a_draft_reaction_puts_the_reply_card_in_the_digest_thread_under_its_mai
     posted: list[tuple[str, str, dict]] = []
     monkeypatch.setattr(triage_confirm, "_api", lambda m, p, payload=None: posted.append((m, p, payload)) or {"id": "c-9"})
     monkeypatch.setattr(triage_confirm, "add_reaction", lambda *_a: None)
+    monkeypatch.setattr(triage_approval_gate.MailApprovalGate, "_bind", lambda *_a: None)
     gate = triage_approval_gate.MailApprovalGate({**draft, "approval_format": None}, "", "card body")
     gate.post(SimpleNamespace(channel_id=THREAD, key="mail:reply:u-1"))
     assert posted[0][1] == f"/channels/{THREAD}/messages"
@@ -221,9 +222,9 @@ def test_the_thread_mark_follows_its_undecided_cards() -> None:
 
     patches = {path: payload for method, path, payload in calls if method == "PATCH"}
     assert patches["/channels/1529000000000000031"]["archived"] is True  # done, a newer digest exists
-    assert patches["/channels/1529000000000000031"]["name"].startswith("✅ 완료 · ")
+    assert patches["/channels/1529000000000000031"]["name"].startswith("✅ ")
     assert patches["/channels/1529000000000000032"]["name"].startswith(digest_thread.PENDING_MARK)
-    assert "/channels/1529000000000000033" not in patches  # latest with nothing waiting: unchanged
+    assert patches["/channels/1529000000000000033"]["name"].startswith("✅ ")
 
     calls.clear()
     digest_thread.settle(counts, api)

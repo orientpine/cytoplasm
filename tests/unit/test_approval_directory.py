@@ -12,6 +12,7 @@ from automation.interop.approval_directory import DiscordChannelDirectory, JsonV
 from automation.interop.approval_surface import (
     ApprovalKind, ApprovalSurfaceError, ChannelFacts, resolve_new_binding,
 )
+from automation.interop.thread_pointer import approval_thread_line
 
 RequestKey = tuple[str, str]
 RecordedCall = tuple[str, str, dict[str, JsonValue] | None]
@@ -560,7 +561,7 @@ def test_request_thread_anchors_on_an_agent_chat_instruction_message(interop_con
     assert thread_id == "thread-anchored"
     assert fake.calls == [(
         "POST", "/channels/chan-1/messages/msg-1/threads",
-        {"name": "✉️ 메일 발신 · 세미나 안내", "auto_archive_duration": 10080},
+        {"name": "🔔 ✉️ 세미나 안내", "auto_archive_duration": 10080},
     ), (
         # The owner's message is the thread's starter, so the title goes in first.
         "POST", "/channels/thread-anchored/messages", {"content": "## ✉️ 메일 발신 · 세미나 안내"},
@@ -584,21 +585,76 @@ def test_request_thread_title_failure_never_blocks_the_approval(interop_config: 
     ) == "thread-anchored"
 
 
-def test_request_thread_reuses_the_message_thread_on_400(interop_config: Path) -> None:
-    # Given: the instruction message already carries a thread (result notice opened it).
-    _agent_chat_config(interop_config, "chan-1")
-    fake = FakeApi("bot-a", {
-        ("POST", "/channels/chan-1/messages/msg-1/threads"): HTTPError(
+def _existing_thread(name: str) -> dict[RequestKey, ApiResponse]:
+    """The instruction message already carries a thread another bot opened (named ``name``)."""
+    return {
+        ("POST", "/channels/100/messages/200/threads"): HTTPError(
             f"https://discord.test/{SECRET_CANARY}", 400, "exists", None, None,
         ),
-    })
-    directory = _directory(fake)
+        ("GET", "/channels/200"): {
+            "id": "200", "type": 11, "parent_id": "100", "guild_id": "900", "name": name,
+        },
+        ("PATCH", "/channels/200"): {"id": "200"},
+    }
 
-    # When / Then: the message id doubles as the thread id — no second thread.
-    assert directory.agent_chat_request_thread(
-        ApprovalKind.MAIL_COMPOSE,
-        _request_thread(origin_channel_id="chan-1", origin_message_id="msg-1"),
-    ) == "msg-1"
+
+def test_request_thread_reuses_the_message_thread_on_400(interop_config: Path) -> None:
+    # Given: an agent opened a thread on the owner's message before the card (no kind icon in it),
+    # and no guild cache exists yet.
+    _agent_chat_config(interop_config, "100")
+    fake = FakeApi("bot-a", _existing_thread("🔔 세미나 문의 답장"))
+    directory = _directory(fake)
+    request = _request_thread(origin_channel_id="100", origin_message_id="200")
+
+    # When: the card's binding is resolved.
+    binding = resolve_new_binding(ApprovalKind.MAIL_COMPOSE, directory, "owner", request=request)
+
+    # Then: the message id doubles as the thread id, the thread gets one mark and the kind
+    # with the agent's title kept, and the binding carries the live guild for a real link.
+    assert (binding.channel_id, binding.guild_id) == ("200", "900")
+    assert ("POST", "/channels/100/messages/200/threads",
+            {"name": "🔔 ✉️ 세미나 안내", "auto_archive_duration": 10080}) in fake.calls
+    assert ("PATCH", "/channels/200", {"name": "🔔 ✉️ 세미나 문의 답장", "archived": False}) in fake.calls
+    line = approval_thread_line("draft", "d1", {
+        "approval_thread_id": binding.channel_id, "approval_guild_id": binding.guild_id,
+    })
+    assert "https://discord.com/channels/900/200" in line and "unavailable" not in line
+
+
+@pytest.mark.parametrize("current,wanted", [
+    ("🔔 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("🔔 🔄 ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("⏸️ ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("📌 📬 기관메일", "📌 📬 기관메일"),
+    ("🔄 ✉️ 세미나 문의 답장", "🔄 ✉️ 세미나 문의 답장"),
+    ("💤 ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("✅ ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("⛔ ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("❗ ✉️ 세미나 문의 답장", "🔔 ✉️ 세미나 문의 답장"),
+    ("", "🔔 ✉️ 세미나 안내"),
+])
+def test_a_joined_thread_name_gets_one_mark_and_a_kind_icon_once(current: str, wanted: str) -> None:
+    from automation.interop.approval_surface import joined_thread_name
+
+    assert joined_thread_name(ApprovalKind.MAIL_COMPOSE, _request_thread(), current) == wanted
+
+
+def test_request_thread_on_400_keeps_a_name_already_in_shape(interop_config: Path) -> None:
+    # Given: the existing thread already shows one pending mark and a kind icon.
+    _agent_chat_config(interop_config, "100")
+    fake = FakeApi("bot-a", _existing_thread("🔔 ✉️ 세미나 문의 답장"))
+
+    # When: the card's binding is resolved.
+    binding = resolve_new_binding(
+        ApprovalKind.MAIL_COMPOSE, _directory(fake), "owner",
+        request=_request_thread(origin_channel_id="100", origin_message_id="200"),
+    )
+
+    # Then: nothing renames it, and the link still resolves.
+    assert binding.guild_id == "900"
+    assert not [call for call in fake.calls if call[0] == "PATCH"]
 
 
 def test_request_thread_other_http_errors_fail_closed_without_leaking(interop_config: Path) -> None:
@@ -639,7 +695,7 @@ def test_request_thread_creates_a_channel_thread_without_an_origin(interop_confi
     assert thread_id == "thread-new"
     assert fake.calls[-1] == (
         "POST", "/channels/chan-1/messages/msg-new/threads",
-        {"name": "🛠️ 수리 · t_abc", "auto_archive_duration": 10080},
+        {"name": "🔔 🛠️ t_abc", "auto_archive_duration": 10080},
     )
     assert ("POST", "/channels/chan-1/threads") not in [
         (method, path) for method, path, _payload in fake.calls

@@ -72,10 +72,9 @@ DRAFT_ACK: Final = (
     "✍️ 회신 초안을 쓰고 있습니다 — 1분쯤 걸려요. 다 쓰면 이 카드 아래에 미리보기와 승인 카드 링크를 올립니다."
 )
 _ACTION_LABEL: Final = {"body": "📄 전문", "draft": "✍️ 회신 초안"}
-#: The full-text thread's name word; ``origin_notice`` gives names starting with it 📄.
+#: Label for links to a full-text delivery, including older separate-thread records.
 BODY_THREAD_LABEL: Final = "전문"
 _SUBJECT_LIMIT: Final = 60
-_THREAD_TYPES: Final = (10, 11, 12)
 
 
 def attach(channel_id: str, message_id: str) -> None:
@@ -160,23 +159,10 @@ def body_parts(mail: dict, subject: str) -> list[str]:
 
 
 def _open_body_thread(card: dict, subject: str) -> dict[str, str]:
-    """A new thread for this card's full text, beside the digest thread.
-
-    Discord does not nest threads, and the card already sits inside the digest thread,
-    so the full-text thread opens in that thread's parent channel through the shared
-    ``origin_notice.resolve_thread_id`` (name ``📄 전문 · <subject>``, big title first).
-    """
+    """Full text belongs to the mail card's digest thread, never a sibling thread."""
     channel = triage_confirm.fetch_channel(str(card["channel_id"]))
-    is_thread = isinstance(channel, dict) and channel.get("type") in _THREAD_TYPES
-    parent = str(channel.get("parent_id") or "") if is_thread else ""
-    origin_notice = triage_confirm._origin_notice()  # noqa: SLF001 — interop runtime import
-    label = f"{BODY_THREAD_LABEL} · {' '.join(subject.split())[:_SUBJECT_LIMIT]}"
-    thread_id = origin_notice.resolve_thread_id(
-        triage_confirm._api,  # noqa: SLF001 — shared rate-limited Discord client
-        origin_notice.OriginRef(channel_id=parent or str(card["channel_id"])), label,
-    )
     guild = str(channel.get("guild_id") or "") if isinstance(channel, dict) else ""
-    return {"thread_id": str(thread_id), "guild_id": guild, "stage": "opened"}
+    return {"thread_id": str(card["channel_id"]), "guild_id": guild, "stage": "linked"}
 
 
 def body_link_line(thread: dict[str, str], subject: str) -> str:
@@ -192,14 +178,13 @@ def body_link_line(thread: dict[str, str], subject: str) -> str:
                            guild_id=thread["guild_id"] or None).url
     where = (masked_discord_link(url, BODY_THREAD_LABEL) if url
              else f"스레드 「📄 {BODY_THREAD_LABEL} · {' '.join(subject.split())[:_SUBJECT_LIMIT]}」")
-    return _inert(f"📄 전문은 별도 스레드에 있습니다: {where}")
+    return _inert(f"📄 전문을 확인하세요: {where}")
 
 
 def _show_body(card: dict) -> str:
-    """📄: open the card's own thread, point at it under the card, then post the text there.
+    """📄: reply with full text in the card's digest thread.
 
-    Each step is recorded before the next (``digest_body_threads.stage``), so a retry
-    after a failure resumes where it stopped and never opens a second thread.
+    Existing delivery stages remain replayable, so a retry never duplicates posted text.
     """
     db = triage_gate.db_path()
     message_id = str(card["message_id"])
@@ -220,7 +205,8 @@ def _show_body(card: dict) -> str:
     posted = 0
     try:
         for part in parts:
-            triage_confirm.post_in(thread["thread_id"], part)
+            triage_confirm.post_in(thread["thread_id"], part, reply_to=message_id
+                                   if thread["thread_id"] == str(card["channel_id"]) else "")
             posted += 1
     except Exception:
         if not posted:

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 from urllib.error import HTTPError
+from .approval_surface import THREAD_STATE_PREFIXES, state_thread_name, strip_state_marks
 
 if TYPE_CHECKING:
     from .owner_message import OwnerMessage, Ref
@@ -61,14 +62,15 @@ class _SendsChunks(Protocol):
 
 
 class ThreadOutcome(StrEnum):
-    """Terminal status words prefixed to the request thread name on close."""
+    """Bare outcome marks; failure stays open for the owner's next turn."""
 
-    DONE = "✅ 완료"
-    CANCELLED = "⛔ 취소"
-    EXPIRED = "⌛ 만료"
+    DONE = "✅"
+    CANCELLED = "⛔"
+    EXPIRED = "💤"
+    FAILED = "❗"
 
 
-_STATUS_PREFIXES = (*tuple(f"{outcome.value} · " for outcome in ThreadOutcome), "❗ 실패 · ")
+_STATUS_PREFIXES = THREAD_STATE_PREFIXES
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,14 +122,14 @@ def approval_location(
 def resolve_thread_id(api: ApiCall, origin: OriginRef, name: str) -> str:
     """The approval thread as-is; else anchor on the instruction message (400 = exists).
 
-    A thread opened here is named ``<icon> <name>`` and starts with the big title line;
+    A thread opened here is named ``🔄 <icon> <name>`` and starts with the big title line;
     an existing thread is reused untouched.
     """
     if origin.thread_id:
         return origin.thread_id
-    label = " ".join(name.split())
+    label = strip_state_marks(" ".join(name.split()))
     icon = thread_icon(label)
-    titled = f"{icon} {label}"[:_THREAD_NAME_LIMIT]
+    titled = state_thread_name(f"{icon} {label}", "🔄")
     if origin.message_id:
         try:
             thread = api(
@@ -179,10 +181,9 @@ def close_thread(
         else:
             current = api("GET", f"/channels/{thread_id}")
             name = str(current.get("name") or "") if isinstance(current, dict) else ""
-        name = next((name[len(prefix):] for prefix in _STATUS_PREFIXES if name.startswith(prefix)), name)
-        payload: dict[str, object] = {"archived": True}
+        payload: dict[str, object] = {"archived": outcome is not ThreadOutcome.FAILED}
         if name:
-            payload["name"] = f"{outcome.value} · {name}"[:_THREAD_NAME_LIMIT]
+            payload["name"] = state_thread_name(name, outcome.value)
         api("PATCH", f"/channels/{thread_id}", payload)
     except Exception as error:  # noqa: BLE001 — 종결 표시는 결과 통지를 깨지 않는다
         if isinstance(error, HTTPError) and error.code == 404:
@@ -200,7 +201,11 @@ def rename_thread(
 ) -> bool:
     """Rename a thread and keep it open (best-effort, same contract as ``close_thread``)."""
     try:
-        api("PATCH", f"/channels/{thread_id}", {"name": name[:_THREAD_NAME_LIMIT], "archived": False})
+        mark = next((prefix for prefix in _STATUS_PREFIXES if name.startswith(prefix)), "🔔")
+        mark = {"⌛": "💤", "⏸️": "🔔", "⏸": "🔔"}.get(mark.split()[0], mark.split()[0])
+        api("PATCH", f"/channels/{thread_id}", {
+            "name": state_thread_name(name, mark), "archived": False,
+        })
     except Exception as error:  # noqa: BLE001 — a mark never breaks the tick that set it
         if isinstance(error, HTTPError) and error.code == 404 and not report_missing:
             return False
@@ -213,17 +218,14 @@ def rename_thread(
 
 
 def resume_thread(api: ApiCall, thread_id: str) -> bool:
-    """Remove a terminal prefix AFTER a new approval card reopens the reused thread."""
+    """Set one pending mark AFTER a new approval card reopens the reused thread."""
     try:
         current = api("GET", f"/channels/{thread_id}")
         name = str(current.get("name") or "") if isinstance(current, dict) else ""
     except Exception as error:  # noqa: BLE001 — optional REST metadata never blocks a posted card
         print(f"THREAD-RENAME-FAIL thread={thread_id} err={type(error).__name__}", file=sys.stderr)
         return False
-    for prefix in _STATUS_PREFIXES:
-        if name.startswith(prefix):
-            return rename_thread(api, thread_id, name[len(prefix):], report_missing=True)
-    return True
+    return rename_thread(api, thread_id, state_thread_name(name, "🔔"), report_missing=True)
 
 
 def deliver(

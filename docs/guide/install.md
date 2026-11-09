@@ -32,11 +32,86 @@ Python 3.11 이상으로 계획을 볼 수 있고, 실제 설치에는 git·Bun�
 그런 기존 노드 인프라의 유지보수는 아래 레거시 절차, 이미 도리로 전환된 노드의
 업데이트는 [P6 업그레이드 절차](#p6-기존-노드-업그레이드와-복구)를 따른다.
 
+라이선스: 설치되는 도리 포크에는 원본 dori-superagent에서 온 SUL-1.0 부분이 들어 있거나 앞으로 들어온다(목록은 포크의 [NOTICE](https://github.com/orientpine/omo-dori-mode-experimental/blob/main/NOTICE)). 그래서 사이토플라즘·도리 기본 설치는 비상업 목적으로, 무료일 때만 남에게 나눠 줄 수 있다. 사이토플라즘 자체 라이선스(Apache-2.0)는 바뀌지 않는다.
+
 설치 단계와 재실행 때 기존 지침을 보존하는 규칙은 [도리 프로필](#도리-프로필)에 있다.
 Hermes·cron·게이트웨이·플러그인·호환 패치는 기본 경로에 들어오지 않는다.
 노드 옵션(`--config`, `--update-trust-key`, `--with-component`)을 그대로 붙여
 구형 설치로 돌아가는 자동 폴백도 없다. 레거시 유지보수라면 `--profile core`,
 `rag`, `report-hub`, `full` 중 하나를 명시한다.
+
+### 업데이트
+
+도리 기본 설치는 OS 와 상관없이 체크아웃에서 이 명령으로 올린다(윈도우는 아래 한 줄이 대신 부른다).
+
+```bash
+python -m automation.install.update
+# 처음 한 번만:
+python -m automation.install.update --trust-key <릴리스의 update-trust.pub> --expect-fingerprint <README 지문>
+```
+
+신뢰키는 `~/.cytoplasm/update-allowed-signers`, 되돌림 하한은 `~/.cytoplasm/release-floor.json` 에 남는다.
+서명 없는 태그, 하한보다 낮은 태그, 손댄 체크아웃은 거부한다. 포크는 설치기가 만든 detached·clean
+체크아웃일 때만 새 고정 커밋으로 옮기고, 아니면 `DORI-PIN-UPDATE-REFUSED` 로 멈춘다.
+
+---
+
+## 윈도우(네이티브, WSL 없음)
+
+PowerShell 에서:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/orientpine/cytoplasm/main/install.ps1 | iex"
+```
+
+같은 줄을 다시 실행하면 업데이트다. 옵션은 줄 앞에 환경변수로 준다. `CYTO_ROLES`(쉼표 목록
+`okdori,moodori,gongdori`), `CYTO_OWNER_CALL`, `CYTO_HOME`(기본 `%USERPROFILE%\.cytoplasm`).
+내려받은 파일로는 `-File install.ps1 -Role ... -OwnerCall ...` 도 된다.
+
+**무엇이 어디에 깔리나**
+
+- git, Python 3.11+, bun, PowerShell 7.3+(`pwsh`, herdr pane 이 pwsh 로 돈다)를 찾고 없으면 winget 으로 계정 단위 설치. cytoplasm 자체는 관리자 권한이 필요 없다(Git 은 winget 이 머신 설치를 물을 수 있다).
+- cytoplasm 은 `%USERPROFILE%\.cytoplasm\src`, 신뢰 파일은 `%USERPROFILE%\.cytoplasm\update-allowed-signers`·`release-floor.json`.
+- 포크는 `dori/pin.toml` 커밋으로 `%USERPROFILE%\.dori\src`, 스킬 `dori-mode` 는 `%USERPROFILE%\.agents\skills` 의 디렉터리 정션(관리자·개발자 모드 불필요), `bun link` 로 `dori` 명령(`%USERPROFILE%\.bun\bin`).
+- config `%USERPROFILE%\.dori\config.json`(한 번만 복사), 역할 템플릿 `%USERPROFILE%\Documents\<역할>`.
+- herdr 0.9.5 고정 윈도우 zip(sha256 확인)을 `%USERPROFILE%\.local\lib\herdr` 에 풀고 계정 PATH 에 더한다.
+
+**상시 실행: 작업 스케줄러 두 항목** (현재 사용자 로그온 트리거, 권한 상승 없음, 시간 제한 없음, 배터리에서도 실행)
+
+| 항목 | 하는 일 |
+|---|---|
+| Dori herdr server | `herdr server` 를 숨은 창으로 |
+| Dori serve | 포크의 `dori serve --install-task`. watch·freshness·dead-panes·state-git·inbound(Discord)·session-watch 루프를 재시작 백오프로 돌리고 `%USERPROFILE%\.dori\state\serve.log` 에 기록 |
+
+설치기가 둘 다 바로 띄우고 로그온마다 다시 뜬다. 업데이트 때 「Dori serve」 는 새 코드로 재시작하지만
+herdr 서버는 리드 pane 을 들고 있어서 재시작하지 않는다. 두 작업 모두 창을 숨겨 띄우므로 로그온 뒤 콘솔 창이
+남지 않는다.
+
+설치 뒤 `%USERPROFILE%\.dori\dori.env` 에 봇 토큰·채널·소유자 id 를 채우고, `herdr` 를 열어 리드 탭에서
+"Dori mode" 라고 말한다. omo 는 Linux 와 같이 따로 설치한다.
+
+**신뢰.** 첫 실행은 최신 릴리스의 `update-trust.pub` 를 받아 SHA256 지문을 README 에 공개된 값
+(`install.ps1` 에도 같은 값이 있다)과 비교한다. 다르면 클론에서 아무것도 실행하기 전에
+`CYTO-WINDOWS-FINGERPRINT-MISMATCH` 로 멈춘다. 그 뒤 최신 `vX.Y.Z` 태그 서명을 `git verify-tag` 로 확인해
+체크아웃하고, `python -m automation.install.update` 가 노드 리컨실러와 같은 코드(`automation/update_trust.py`,
+되돌림 하한)로 다시 확인한다.
+
+**윈도우에 없는 것** (Linux 동작은 그대로)
+
+| 기능 | 이유 |
+|---|---|
+| 레거시 `--profile core\|rag\|report-hub\|full` | root·systemd 타이머(deploy-reconcile, supply-chain-watch, smoke) |
+| herdr 웹 | ttyd + systemd 사용자 유닛 |
+| herdr-guard, 포크 호스트 가드 루프 | bash 래퍼·Linux 전용 |
+| 레인 체크포인트 | `dori checkpoint` 가 윈도우에서 거부 |
+| 분리 인수인계(리드 자기 인수인계, 자동 롤오버) | Linux 전용 |
+| `dori heavy` | systemd scope |
+| nft 송신 게이트, 음성 설정(whisper/asr) | Linux 전용 |
+
+**문제 해결**
+
+- 실행 정책 오류: 위 줄은 이미 `-ExecutionPolicy Bypass` 다. 줄을 바꾸지 말고 그대로 붙인다.
+- winget 이 없다(회사 PC 등): git, Python 3.11+, PowerShell 7 을 직접 깔고 같은 줄을 다시 실행한다.
 
 ## P6 기존 노드 업그레이드와 복구
 
@@ -313,12 +388,28 @@ python3 -m automation.install.dori --role okdori --role moodori --owner-call 형
 | `dori-fork` | `dori/pin.toml` 의 커밋 하나만 `~/.dori/src` 에 받고 `git rev-parse HEAD` 가 같은지 확인한다. 받을 수 없으면 `DORI-PIN-FETCH-FAIL`(exit 3)이고 아무것도 남지 않는다. 이미 있는 체크아웃이 다른 커밋이면 `DORI-PIN-SRC-DIFFERS`(exit 2)로 전부 멈춘다 |
 | `dori-skill-link` | `~/.agents/skills/dori-mode` → 포크 스킬 링크(링크가 아닌 폴더가 있으면 그대로 둔다) |
 | `dori-cli` | 포크 `scripts` 에서 `bun install`·`bun link` — `dori` 명령이 생긴다 |
-| `dori-config` | `~/.dori/config.json` 이 없을 때만 포크 예시(`--backend aoe` 기본)를 복사한다 |
+| `dori-config` | `~/.dori/config.json` 이 없을 때만 포크 예시를 복사한다(기본 `--backend herdr`, aoe/tmux 로 쓰려면 `--backend aoe`) |
 | `dori-role-<역할>` | `~/Documents/<도리>/AGENTS.md`·`avatar.md` 를 `dori/roles/` 템플릿에서 쓴다. 기본은 리드(`zzangdori`)·비서(`yoodori`), `--role okdori`(카톡)·`--role moodori`(회사 업무·긴 문서, 안 고르면 긴 문서는 유도리)·`--role gongdori`(연구) 는 선택. 이미 있으면 덮지 않고 다르면 차이만 보인다(`DORI-ROLE-KEEP`) |
+
+기본 `--backend herdr` 는 위 단계 뒤에 herdr 도리까지 깐다. 받는 바이너리와 sha256 은 `dori/herdr.toml` 한 곳이
+정하고, sha256 이 다르면 아무것도 바꾸지 않고 멈춘다(`DORI-HERDR-SHA-MISMATCH`, exit 5). root 는 필요 없다.
+
+| 단계 | 하는 일 |
+|---|---|
+| `dori-herdr-bin` | herdr 0.9.5 를 `~/.local/lib/herdr/herdr` 에 두고 `~/.local/bin/herdr` 를 포크의 herdr-guard 로 링크한다(pane 안에서 서버를 멈추는 명령을 막는다). 다른 herdr 가 이미 있으면 그대로 둔다(`kept`) |
+| `dori-herdr-ttyd` | 웹 터미널 ttyd 1.7.7 을 `~/.local/bin/ttyd` 에(Linux) |
+| `dori-herdr-server` | 포크 유닛 `dori-herdr.service` 를 `~/.config/systemd/user/` 에 복사해 켠다. 유닛이 이미 있으면 덮지 않는다 |
+| `dori-herdr-web` | `herdr-web@<포트>`(기본 8181, `--web-port`)를 켠다. `~/.config/herdr/web-<포트>.env`(0600)는 없을 때만 쓰고, 옛 aoe 웹 비밀번호(`~/.config/agent-of-empires/serve.env`)가 없으면 새 비밀번호 `HERDR_WEB_PASSPHRASE` 를 만든다. 주소는 `--web-origin`(기본 `http://127.0.0.1:<포트>`). 다른 프로그램이 그 포트를 쓰면 켜지 않는다(`DORI-HERDR-WEB-PORT-BUSY`) |
+| `dori-herdr-lead` | config 를 이번에 새로 복사했을 때만 리드 폴더에 herdr workspace 를 열어 `omo --session-id <새 id>` 를 띄우고 `leadPane`·`defaultCwd` 를 적는다. omo 입력창이 뜨면 `DORI-LEAD-STARTED`, 아니면 화면 끝 줄과 함께 `DORI-LEAD-NOT-READY` |
+
+`systemctl --user` 를 쓸 수 없는 곳(macOS 등)은 바이너리만 깔고 유닛·리드는 건너뛴다(`DORI-HERDR-NO-SYSTEMD`).
+이미 aoe 로 쓰던 계정에서 다시 돌리면 config·웹 포트·비밀번호를 그대로 두고 herdr 만 준비한다 — 옮기는 순서는
+[aoe·tmux 도리를 herdr로 옮기기](herdr-전환.md).
 
 `--dry-run` 은 쓰기도 네트워크도 없다(git·bun 이 없어도 계획은 나온다). 실제 설치에는 git 과
 bun 이 PATH 에 있어야 한다(`DORI-INSTALL-BLOCK`). 설치 뒤 `~/.dori/dori.env`(0600)에 봇 토큰·
-채널·소유자 id 를 넣고, 리드 작업 폴더에서 에이전트를 열어 "Dori mode" 라고 한다.
+채널·소유자 id 를 넣고, 웹(또는 `herdr`)에서 리드 탭을 열어 "Dori mode" 라고 한다(`--backend aoe` 면 리드 작업
+폴더의 aoe 세션에서 에이전트를 연다).
 
 ### 선택 컴포넌트
 

@@ -61,5 +61,5 @@ def test_compose_result_closes_reused_owner_thread_after_post(
     assert "message_reference" not in writes[0][2]
     assert writes[1] == (
         "PATCH", f"/channels/{THREAD}",
-        {"archived": True, "name": f"{origin_notice.ThreadOutcome[outcome].value} · mail request"},
+        {"archived": True, "name": f"{origin_notice.ThreadOutcome[outcome].value} mail request"},
     )

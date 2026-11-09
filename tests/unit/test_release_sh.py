@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 _REPO: Final = Path(__file__).resolve().parents[2]
 _COMMAND: Final = _REPO / "automation" / "release.sh"
 _LIB: Final = _REPO / "automation" / "release_tag_lib.sh"
@@ -658,6 +660,22 @@ def test_an_approved_release_publishes_its_note_with_the_tag(tmp_path: Path) -> 
     assert str(assets[0]["content"]).startswith("ssh-ed25519 ")
     gh_calls = [line for line in _call_lines(tmp_path) if line.startswith("gh release create")]
     assert len(gh_calls) == 1
+
+
+@pytest.mark.parametrize("first", [
+    "# v1.0.0 — 메일 다이제스트 형식 개편",
+    "# v1.0.0: 메일 다이제스트 형식 개편",
+    "# v1.0.0 메일 다이제스트 형식 개편",
+])
+def test_a_note_title_that_names_its_version_shows_the_version_once(first: str, tmp_path: Path) -> None:
+    # 2026-11-04: v2.7.25 was published as "v2.7.25 — v2.7.25 — …" from such a draft.
+    _origin, work = _origin_with_commits(tmp_path)
+
+    note = first + _NOTE[_NOTE.index("\n"):]
+    result = _run(tmp_path, work, decisions="0", arguments=("--no-deploy",), note=note)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _published(tmp_path, "v1.0.0")["title"] == "v1.0.0 — 메일 다이제스트 형식 개편"
 
 
 def test_a_release_without_a_note_draft_is_refused_before_any_approval_traffic(

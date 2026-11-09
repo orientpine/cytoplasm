@@ -174,7 +174,7 @@ def test_new_reply_draft_posts_to_the_agent_chat_thread(
         ):
             return {"id": AGENT_CHAT_THREAD}
         if method == "GET" and path == f"/channels/{AGENT_CHAT_THREAD}":
-            return {"type": 11, "name": "↩️ 메일 회신 · Re: 민감 문의", "parent_id": AGENT_CHAT_CHANNEL}
+            return {"type": 11, "name": "🔔 ↩️ 민감 문의", "parent_id": AGENT_CHAT_CHANNEL}
         if method == "GET" and path == f"/channels/{APPROVALS_CHANNEL}":
             return {"type": 0, "name": "approvals", "recipients": []}
         if method == "POST" and path.endswith("/messages"):
@@ -216,7 +216,7 @@ def test_new_reply_draft_posts_to_the_agent_chat_thread(
     ] == [
         (
             f"/channels/{AGENT_CHAT_CHANNEL}/messages/{ANNOUNCEMENT_MESSAGE_ID}/threads",
-            {"name": "↩️ 메일 회신 · Re: 민감 문의", "auto_archive_duration": 10080},
+            {"name": "🔔 ↩️ 민감 문의", "auto_archive_duration": 10080},
         )
     ]
     # ...and the one approval message is in that thread with full reply and hash
@@ -270,11 +270,14 @@ def test_post_survives_reaction_http_error(monkeypatch: pytest.MonkeyPatch, caps
         raise HTTPError("https://discord.invalid", 503, "Service Unavailable", {}, None)
 
     monkeypatch.setattr(triage_confirm, "add_reaction", fail_reaction)
+    bound: list[str] = []
+    monkeypatch.setattr(triage_approval.MailApprovalGate, "_bind", lambda _self, _intent, message_id: bound.append(message_id))
 
     posted = triage_approval.MailApprovalGate(draft).post(
-        SimpleNamespace(channel_id=APPROVALS_CHANNEL)
+        SimpleNamespace(channel_id=APPROVALS_CHANNEL, key="mail:reply:x")
     )
 
+    assert bound == [MESSAGE_ID]
     assert posted.message_id == MESSAGE_ID
     assert posted.channel_id == APPROVALS_CHANNEL
     assert "APPROVAL-REACTION-FAIL" in capsys.readouterr().err
@@ -680,7 +683,7 @@ def test_notify_result_falls_back_to_owner_when_helper_is_unavailable(
 # ------------------------------------------------ per-request approval thread (S6)
 
 REQUEST_THREAD = "400000000000000001"
-REQUEST_THREAD_NAME = "↩️ 메일 회신 · Re: 일정 문의"
+REQUEST_THREAD_NAME = "↩️ 일정 문의"
 
 
 class _RequestThreadDirectory:
@@ -959,7 +962,7 @@ def test_watch_closes_the_request_thread_when_the_mail_is_sent(
     # ...and the thread is renamed with its terminal status and archived.
     assert [(path, payload) for method, path, payload in calls if method == "PATCH"] == [
         (f"/channels/{REQUEST_THREAD}",
-         {"archived": True, "name": f"✅ 완료 · {REQUEST_THREAD_NAME}"}),
+         {"archived": True, "name": f"✅ {REQUEST_THREAD_NAME}"}),
     ]
 
 
@@ -978,5 +981,5 @@ def test_watch_closes_the_request_thread_when_the_owner_cancels(
     assert "발송 취소" in thread_posts[0][1]
     assert [(path, payload) for method, path, payload in calls if method == "PATCH"] == [
         (f"/channels/{REQUEST_THREAD}",
-         {"archived": True, "name": f"⛔ 취소 · {REQUEST_THREAD_NAME}"}),
+         {"archived": True, "name": f"⛔ {REQUEST_THREAD_NAME}"}),
     ]

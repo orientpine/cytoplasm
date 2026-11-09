@@ -2,7 +2,9 @@
 
 New file like test_yoodori_gate_mail_search.py: test_yoodori_gate.py pins the original argv byte
 for byte. A card counts as YooDori's only when the gate's own log shows a mail-compose or mail-draft
-call that succeeded while that draft was created; every other card is refused before any child runs.
+call that ran while that draft was created - one that succeeded, or one the gate killed at its timeout
+(rc=124; 2026-11-04 draft 36b605 was created and posted by a compose killed at 150 s); every other
+card is refused before any child runs.
 """
 from __future__ import annotations
 
@@ -46,6 +48,7 @@ def _argv(draft_id: str = DRAFT, reason: str = REASON) -> list[str]:
     "2026-10-26T09:47:40Z mail-compose rc=0 s=3.4",
     "2026-10-26T09:47:37Z mail-compose rc=0 s=0.2",
     "2026-10-26T09:48:10Z mail-draft rc=0 s=40.0",
+    "2026-10-26T09:50:07Z mail-compose rc=124 s=150.0",
 ])
 def test_a_card_the_gate_posted_runs_only_the_withdraw_subcommand(node, line: str) -> None:
     put, _log = node
@@ -57,6 +60,8 @@ def test_a_card_the_gate_posted_runs_only_the_withdraw_subcommand(node, line: st
 @pytest.mark.parametrize("line", [
     "2026-10-26T09:47:30Z mail-compose rc=0 s=1.0",
     "2026-10-26T09:47:40Z mail-compose rc=2 s=3.4",
+    "2026-10-26T09:47:40Z mail-compose rc=3 s=3.4",
+    "2026-10-26T09:47:30Z mail-compose rc=124 s=150.0",
     "2026-10-26T09:47:40Z mail-search rc=0 s=3.4",
     "2026-10-26T09:47:40Z card-withdraw rc=0 s=3.4",
     "2026-10-26T09:49:00Z mail-compose rc=0 s=3.4",

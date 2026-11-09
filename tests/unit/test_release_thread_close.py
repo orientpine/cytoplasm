@@ -74,7 +74,7 @@ def test_applied_notice_closes_thread_when_found(wire: Wire, archived: bool) -> 
     assert rc == 0
     assert wire.effects == [
         ("NOTICE", "", {}),
-        ("PATCH", f"/channels/{THREAD}", {"name": f"✅ 완료 · {NAME}", "archived": True}),
+        ("PATCH", f"/channels/{THREAD}", {"name": f"✅ {NAME}", "archived": True}),
     ]
 
 
@@ -93,7 +93,7 @@ def test_cancel_reply_precedes_archive_when_owner_denies(
     assert [(method, path) for method, path, _ in wire.effects] == [
         ("POST", f"/channels/{THREAD}/messages"), ("PATCH", f"/channels/{THREAD}"),
     ]
-    assert wire.effects[-1][2] == {"name": f"⛔ 취소 · {NAME}", "archived": True}
+    assert wire.effects[-1][2] == {"name": f"⛔ {NAME}", "archived": True}
 
 
 def test_abandon_reply_precedes_archive_when_superseded(wire: Wire, tmp_path: Path) -> None:
@@ -109,7 +109,7 @@ def test_abandon_reply_precedes_archive_when_superseded(wire: Wire, tmp_path: Pa
     assert [(method, path) for method, path, _ in wire.effects] == [
         ("POST", f"/channels/{THREAD}/messages"), ("PATCH", f"/channels/{THREAD}"),
     ]
-    assert wire.effects[-1][2] == {"name": f"⌛ 만료 · {NAME}", "archived": True}
+    assert wire.effects[-1][2] == {"name": f"💤 {NAME}", "archived": True}
 
 
 def test_applied_notice_closes_older_open_release_threads(wire: Wire) -> None:
@@ -128,9 +128,9 @@ def test_applied_notice_closes_older_open_release_threads(wire: Wire) -> None:
     assert rc == 0
     assert wire.effects == [
         ("NOTICE", "", {}),
-        ("PATCH", f"/channels/{THREAD}", {"name": f"✅ 완료 · {NAME}", "archived": True}),
-        ("PATCH", "/channels/601", {"name": "✅ 완료 · 🏷️ 릴리스 v1.2.2", "archived": True}),
-        ("PATCH", "/channels/602", {"name": "✅ 완료 · 🏷️ 릴리스 v1.1.10", "archived": True}),
+        ("PATCH", f"/channels/{THREAD}", {"name": f"✅ {NAME}", "archived": True}),
+        ("PATCH", "/channels/601", {"name": "✅ 🏷️ 릴리스 v1.2.2", "archived": True}),
+        ("PATCH", "/channels/602", {"name": "✅ 🏷️ 릴리스 v1.1.10", "archived": True}),
     ]
 
 

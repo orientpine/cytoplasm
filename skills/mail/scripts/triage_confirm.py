@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import os
 import sys
@@ -64,6 +66,26 @@ def bot_token() -> str:
 #: 이미 누른 ⛔ 4건이 반영되지 않은 채 "아직 안 누름"과 구분되지 않았다.
 _RATE_LIMIT_ATTEMPTS = 5
 _RATE_LIMIT_FALLBACK_SECONDS = 1.0
+#: 2026-11-04: a thread rename hit Discord's name-edit limit (two per ten minutes) right
+#: after a withdrawn card marked the thread 💤; sleeping on its Retry-After held compose
+#: past the node gate's 150 s, so the posted card lost its reactions and its binding.
+_NO_RATE_LIMIT_WAIT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "triage_no_rate_limit_wait", default=False,
+)
+
+
+@contextlib.contextmanager
+def no_rate_limit_wait():
+    """Inside this block ``_api`` tries once and raises a 429 instead of sleeping on it.
+
+    Only for cosmetic calls (a thread's state mark) whose caller records the miss and
+    retries on a later tick; reading the owner's decision keeps waiting as before.
+    """
+    token = _NO_RATE_LIMIT_WAIT.set(True)
+    try:
+        yield
+    finally:
+        _NO_RATE_LIMIT_WAIT.reset(token)
 
 
 def _retry_after(error: HTTPError) -> float:
@@ -92,7 +114,8 @@ def _api(method: str, path: str, payload: dict | None = None) -> object:
         },
         method=method,
     )
-    for _ in range(_RATE_LIMIT_ATTEMPTS - 1):
+    attempts = 1 if _NO_RATE_LIMIT_WAIT.get() else _RATE_LIMIT_ATTEMPTS
+    for _ in range(attempts - 1):
         try:
             return _send(request)
         except HTTPError as error:
