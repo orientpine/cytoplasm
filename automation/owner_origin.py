@@ -188,12 +188,13 @@ def _owner_reacted(users: object, owner_id: str) -> bool:
 def verify_owner_todo(
     todo_id: str, owner_id: str, token: str, *, ask: Ask, fetch: FetchAny, now: float | None = None,
 ) -> TodoBasis:
-    """The todo must have come in through the owner's ✅ on its card, be open and approved in the last 24 hours.
+    """The todo must have come in through the owner's ✅ on its card and still be open.
 
     ``ask(method, path)`` reads the dashboard's gate API (``/api/todos/<id>``): the todo id must match,
-    ``auto_applied`` must be exactly false with the card's channel and message, status 열림/진행, approval
-    0-24 hours old, and a source to bind the use to. Then the card itself is read on Discord: it must be this
-    node bot's own message, the owner's own account (not a bot) reacted ✅ and not ⛔. Nothing is recorded here;
+    ``auto_applied`` must be exactly false with the card's channel and message, status 열림/진행, an approval
+    time with zone that is not in the future, and a source to bind the use to. There is no 24-hour window: the
+    todo is the owner's basis while it is open, until it is finished, held or deleted (owner 2026-11-03 10:53
+    KST). Then the card itself is read on Discord: it must be this node bot's own message, the owner's own account (not a bot) reacted ✅ and not ⛔. Nothing is recorded here;
     the caller checks its target against the source and then calls ``record_todo_use``.
     """
     if not token:
@@ -212,8 +213,8 @@ def verify_owner_todo(
     if data.get("status") not in TODO_OPEN_STATUSES:
         raise OriginRefused("the todo is not open (done or on hold)")
     age = _approved_age(data.get("approved_at"), now if now is not None else time.time())
-    if age is None or not 0 <= age <= ORIGIN_MAX_AGE_S:
-        raise OriginRefused("the todo's card approval is older than 24 hours; ask the owner")
+    if age is None or age < 0:
+        raise OriginRefused("the todo's card approval time is unreadable or in the future; ask the owner")
     source = data.get("source")
     kind = str(source.get("kind", "")) if isinstance(source, dict) else ""
     source_id = str(source.get("id", "")) if isinstance(source, dict) else ""
