@@ -65,8 +65,11 @@ _PREVIEW_LIMIT: Final = 1200
 #: The draft path needs an instruction; ✍️ carries none, so the draft stays factual.
 DRAFT_INSTRUCTION: Final = (
     "다이제스트에서 ✍️ 로 요청한 회신 초안입니다. 원문 내용에 맞춰 정중하게 쓰되, "
-    "사실·일정·수치는 원문에 있는 것만 쓰고 소유자 판단이 필요한 부분은 [확인 필요]로 남겨 주세요."
+    "사실·일정·수치는 원문에 있는 것만 씁니다. 소유자가 정해야 할 값(참석 여부 등)은 "
+    "본문에 빈칸으로 남기지 말고 questions로 물어 주세요."
 )
+#: Said under the card when the reply needs the owner's answer first — no draft, no card.
+QUESTION_HEAD: Final = "✍️ **회신을 쓰기 전에 정해 주실 것이 있습니다**"
 _URL: Final = re.compile(r"\burl=(\S+)")
 DRAFT_ACK: Final = (
     "✍️ 회신 초안을 쓰고 있습니다 — 1분쯤 걸려요. 다 쓰면 이 카드 아래에 미리보기와 승인 카드 링크를 올립니다."
@@ -267,6 +270,25 @@ def draft_preview(draft: dict, *, existed: bool) -> str:
     ]))[:2000]
 
 
+def question_text(questions: tuple[str, ...], reply_key: str = "") -> str:
+    """The owner's question under a mail card: what to decide and how to answer."""
+    where = (f"이 글이나 위 메일 카드(회신 키 `{reply_key}`)에 답장으로" if reply_key
+             else "위 메일 카드에 답장으로")
+    return _inert("\n".join([
+        QUESTION_HEAD,
+        *(f"- {question}" for question in questions[:8]),
+        f"-# 아직 아무것도 보내지 않았습니다. {where} 알려 주시면 그대로 보낼 수 있는 초안과 승인 카드를 올립니다.",
+    ]))[:2000]
+
+
+def post_question(card: dict, questions: tuple[str, ...]) -> None:
+    """Ask the owner under the digest card instead of posting a card with blanks."""
+    message_id = str(card.get("message_id") or "")
+    reply_key = triage_store.reply_key_for_message(triage_gate.db_path(), message_id)
+    triage_confirm.post_in(str(card["channel_id"]), question_text(questions, reply_key),
+                           reply_to=message_id)
+
+
 def _write_draft(card: dict, attempt: int = 1) -> str:
     """Draft through the owner-instruction path, under the reply-request lock."""
     import fcntl
@@ -288,6 +310,8 @@ def _write_draft(card: dict, attempt: int = 1) -> str:
                 with_evidence=False, reply_all=False,
                 digest_card={"channel_id": card["channel_id"], "message_id": card["message_id"]},
             ))
+            if not triage_gate.has_draft_for(uid):  # the owner was asked under the card instead
+                return "done"
     draft = _pending_draft(uid)
     if draft is None:  # a draft exists but is no longer pending (sent/discarded)
         triage_confirm.post_in(

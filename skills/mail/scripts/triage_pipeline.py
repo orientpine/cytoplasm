@@ -25,7 +25,7 @@ from triage_transport import (
 
 mail_evidence = importlib.import_module("mail_evidence")
 
-DEFAULT_REPLY_PROMPT = SKILL_DIR / "prompts/reply-draft-v2.md"
+DEFAULT_REPLY_PROMPT = SKILL_DIR / "prompts/reply-draft-v3.md"
 
 
 def _post_draft_for_approval(draft: dict, *, notice: str = "") -> str:
@@ -207,7 +207,10 @@ def _process_one(uid: str, *, post: bool) -> tuple[str, str]:
         else:
             actions.append("calendar-no-text")
     if cls.reply_needed:
-        actions += _draft_and_post({**detail, "uid": uid}, cls, post=post)  # ③④
+        try:
+            actions += _draft_and_post({**detail, "uid": uid}, cls, post=post)  # ③④
+        except triage_core.ReplyNeedsOwner:  # no sendable text without the owner — no card
+            actions.append("reply-question")
     return ",".join(actions) or "logged", cls.category
 
 

@@ -54,6 +54,41 @@ class LlmParseError(ValueError):
     """The LLM response does not contain the required JSON contract."""
 
 
+class ReplyNeedsOwner(ValueError):
+    """A reply cannot be written as sendable text until the owner decides something.
+
+    ``questions`` are the owner-facing questions (Korean, one each); a draft is never
+    made from a body that still holds a blank (owner 2026-11-11 "회신 앞으로 작성할 때,
+    보낼 때 처럼 써줘").
+    """
+
+    def __init__(self, questions: tuple[str, ...]) -> None:
+        super().__init__("reply needs the owner's answer first")
+        self.questions = questions
+
+
+#: Fill-in blanks a sendable mail body must never hold: a bracketed note asking someone
+#: to check or fill a value ([이름 확인 필요], [참석/불참 확인 필요], [… 기재 …]), a bare
+#: bracketed field name ([이름], [날짜]), an unreplaced prompt token (<owner-name>) or a
+#: template slot ({{X}}). Mail-drive-share's ``<Drive 링크>`` is not one: the send fills it.
+_BLANKS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\[[^\[\]\n]{0,60}?(?:확인\s*필요|기재|입력|미정|채워|TBD|TODO)[^\[\]\n]{0,60}\]",
+               re.IGNORECASE),
+    re.compile(r"\[(?:이름|성함|직함|직위|소속|날짜|일시|시간|장소|금액|연락처|전화번호|참석\s*여부)"
+               r"(?:/[^\[\]\n]{1,20})?\]"),
+    re.compile(r"<owner-[a-z-]+>"),
+    re.compile(r"\{\{[^{}\n]{1,40}\}\}"),
+)
+
+
+def unfilled_blanks(body: str) -> tuple[str, ...]:
+    """Each fill-in blank left in a mail body, in order, once (empty when it is sendable)."""
+    found = sorted(
+        (match.start(), match.group(0)) for pattern in _BLANKS for match in pattern.finditer(body)
+    )
+    return tuple(dict.fromkeys(text for _start, text in found))
+
+
 @dataclass(frozen=True, slots=True)
 class Classification:
     """Validated triage verdict for one mail."""
@@ -136,12 +171,26 @@ def parse_classification(raw: str) -> Classification:
 
 
 def parse_reply(raw: str) -> tuple[str, str]:
-    """Return (subject, body) from the reply-draft LLM response."""
+    """Return (subject, body) from the reply-draft LLM response.
+
+    A v3 response may instead carry ``questions`` for the owner; then, or when the body
+    still holds a blank, :class:`ReplyNeedsOwner` is raised and no draft is made.
+    """
     payload = first_json_object(raw)
     subject = str(payload.get("subject") or "").strip()
     body = str(payload.get("body") or "").strip()
+    raw_questions = payload.get("questions")
+    questions = tuple(
+        str(item).strip() for item in (raw_questions if isinstance(raw_questions, list) else [])
+        if str(item).strip()
+    )
+    if questions:
+        raise ReplyNeedsOwner(questions)
     if not body:
         raise LlmParseError("reply draft has an empty body")
+    blanks = unfilled_blanks(body)
+    if blanks:
+        raise ReplyNeedsOwner(tuple(f"회신 본문의 {blank} 자리에 넣을 내용을 알려 주세요." for blank in blanks))
     return subject, body
 
 

@@ -23,6 +23,8 @@ def drafting(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".hermes").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MAIL_OWNER_NAME", "홍길동")
+    monkeypatch.delenv("MAIL_OWNER_EMPLOYER", raising=False)
     _setup_env(tmp_path, monkeypatch, _detail(tmp_path))
     capture = tmp_path / "draft-prompt.txt"
     hermes = _write_stub(
@@ -47,19 +49,23 @@ def _draft(monkeypatch) -> str:
 
 
 @pytest.mark.parametrize("marker", [None, b"keep"])
-def test_keep_sends_the_unchanged_v2_prompt_and_body(drafting, monkeypatch, marker):
+def test_keep_sends_the_unchanged_v3_prompt_and_body(drafting, monkeypatch, marker):
     # Given: no marker (every node today) or an explicit keep.
     path, capture = drafting
     if marker is not None:
         path.write_bytes(marker)
     # When
     body = _draft(monkeypatch)
-    # Then: the model saw exactly today's prompt and the reply keeps the model's closing.
-    template = triage_core.load_prompt_template(PROMPTS / "reply-draft-v2.md")
+    # Then: the model saw exactly today's prompt (only the owner's name in its slots, no
+    # organisation set so the outside greeting is the name alone) and the reply keeps
+    # the model's closing.
+    template = triage_core.load_prompt_template(PROMPTS / "reply-draft-v3.md")
+    tail = template.split("{{INSTRUCTION}}")[1].replace(
+        '"<owner-employer> <owner-name>입니다."', '"<owner-name>입니다."').replace("<owner-name>", "홍길동")
     received = capture.read_text(encoding="utf-8")
     assert received.startswith(template.split("{{SUBJECT}}")[0])
-    assert received.endswith("참석" + template.split("{{INSTRUCTION}}")[1])
-    assert '"감사합니다." → "<owner-name> 올림" 순으로 고정한다' in received
+    assert received.endswith("참석" + tail)
+    assert '"감사합니다." → "홍길동 올림" 순으로 고정한다' in received
     assert body.startswith("참석 가능합니다.\n\n검토하신 후 의견 주시면 감사하겠습니다.\n\n감사합니다.\n홍길동 올림\n")
 
 

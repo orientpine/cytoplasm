@@ -94,15 +94,18 @@ def cmd_draft(args: argparse.Namespace) -> int:
                 counterparty, subject, args.instruction,
             )
     cls = triage_pipeline._classify(args.uid, detail)
-    actions = triage_pipeline._draft_and_post(
-        {**detail, "uid": args.uid}, cls,
-        post=not args.no_post, instruction=args.instruction,
-        attachments=tuple(getattr(args, "attachment", ()) or ()),
-        evidence_pack=pack,
-        reply_all=bool(getattr(args, "reply_all", False)),
-        digest_card=getattr(args, "digest_card", None),
-        **({"format_test": args.format_test} if getattr(args, "format_test", "") else {}),
-    )
+    try:
+        actions = triage_pipeline._draft_and_post(
+            {**detail, "uid": args.uid}, cls,
+            post=not args.no_post, instruction=args.instruction,
+            attachments=tuple(getattr(args, "attachment", ()) or ()),
+            evidence_pack=pack,
+            reply_all=bool(getattr(args, "reply_all", False)),
+            digest_card=getattr(args, "digest_card", None),
+            **({"format_test": args.format_test} if getattr(args, "format_test", "") else {}),
+        )
+    except triage_core.ReplyNeedsOwner as needs:
+        return _ask_owner(args, needs.questions)
     if "reply-no-address" in actions:
         raise triage_gate.GateError("회신 주소를 찾을 수 없음 — 초안 생성 불가", 2)
     draft_id = actions[0].removeprefix("draft:")
@@ -116,6 +119,26 @@ def cmd_draft(args: argparse.Namespace) -> int:
     print(f"DRAFTED draft={draft_id} posted={posted}")
     if posted:
         _print_thread_line(triage_gate.load_draft(draft_id))
+    return 0
+
+
+def _ask_owner(args: argparse.Namespace, questions: tuple[str, ...]) -> int:
+    """No draft and no card: the reply needs the owner's answer first.
+
+    Under a digest card the question goes there (his answer, a reply, comes back through
+    ``reply-request`` as the next instruction); otherwise the agent asks him. Nothing is
+    recorded as processed, so the same mail can be drafted once he answers.
+    """
+    card = getattr(args, "digest_card", None) or {}
+    posted = 0
+    if card.get("channel_id") and card.get("message_id") and not args.no_post:
+        import digest_reaction_actions
+
+        digest_reaction_actions.post_question(card, questions)
+        posted = 1
+    print(f"DRAFT-QUESTION uid={triage_core.mask_value(args.uid)} posted={posted}")
+    for question in questions:
+        print(f"QUESTION {question}")
     return 0
 
 

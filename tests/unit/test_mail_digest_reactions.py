@@ -232,6 +232,39 @@ def test_the_draft_reaction_writes_a_draft_that_the_watch_tick_does_not_send(
     assert "> 확인했습니다." in previews[0] and "아직 보내지 않았습니다" in previews[0]
 
 
+def test_a_draft_reaction_that_needs_the_owner_asks_under_the_card_without_a_card(
+    tmp_path: Path, db: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    posted = _discord(monkeypatch, {actions.DRAFT_EMOJI: [BOT, OWNER]})
+    monkeypatch.setenv("TRIAGE_MAIL_HOME", str(tmp_path / "mail"))
+    monkeypatch.setenv("TRIAGE_LLM_LOG", str(tmp_path / "llm-calls.jsonl"))
+    hermes = tmp_path / "hermes-stub"
+    hermes.write_text(
+        "#!/usr/bin/env python3\n"
+        "print('{\"subject\": \"Re: x\", \"body\": \"\", \"questions\": [\"참석하시나요?\"]}')\n",
+        encoding="utf-8",
+    )
+    hermes.chmod(0o755)
+    monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
+    monkeypatch.setattr(triage_mode, "effective_mode", lambda: "full-go")
+    monkeypatch.setattr(triage_cli, "_get_mail", _mail)
+    monkeypatch.setattr(triage_llm, "classify", lambda **_k: (triage_core.Classification(
+        category="important", reply_needed=True, schedule_needed=False, budget=False,
+        schedule_text="", reason="synthetic"), "stub"))
+    monkeypatch.setattr(triage_pipeline, "_post_draft_for_approval",
+                        lambda *_a, **_k: pytest.fail("an approval card was posted"))
+
+    assert actions.run_tick(now=_NOW) == 1
+    assert actions.run_tick(now=_NOW) == 0  # once per card and action
+
+    assert list((tmp_path / "gate" / "drafts").glob("*.json")) == []
+    replies = [body for channel, body in posted if channel == "thread-1"]
+    assert replies[0] == actions.DRAFT_ACK
+    assert len(replies) == 2 and replies[1].startswith(actions.QUESTION_HEAD)
+    assert "- 참석하시나요?" in replies[1] and "`1016-0800-1`" in replies[1]
+    assert "이미 처리됐습니다" not in "".join(replies)
+
+
 def test_the_digest_attaches_both_emoji_to_each_card_and_records_its_channel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
