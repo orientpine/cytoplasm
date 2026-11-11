@@ -98,6 +98,17 @@ def _draft_path(draft_id: str) -> Path | None:
     return None
 
 
+def refuse_blanks(body: str) -> None:
+    """No approval card for a body that still holds a fill-in blank: the owner's ✅ sends it
+    as it is (owner 2026-11-11 "실행 버튼 눌러도 그대로 나가면 안되는 거잖아")."""
+    blanks = triage_core.unfilled_blanks(body)
+    if blanks:
+        raise GateError(
+            f"MAIL-BODY-BLANK {' '.join(blanks)[:200]} — 본문에 정해지지 않은 빈칸이 있어 승인 카드를 올리지 않았다. "
+            "그 값을 소유자에게 먼저 물어 채운 본문으로 다시 요청한다", 2,
+        )
+
+
 def create_draft(
     *, uid: str, sender: str, mail_subject: str, to: str, subject: str, body: str,
     category: str, flags: tuple[str, ...],
@@ -119,6 +130,7 @@ def create_draft(
     """
     import mail_reply_format
 
+    refuse_blanks(body)
     reply_format = mail_reply_format.select(format_test, to, cc, bcc)
     directory = _public_drafts_dir()
     draft_id = secrets.token_hex(3)
@@ -201,6 +213,7 @@ def create_gmail_draft(
     record = gmail_approval_gate.approval_draft(
         snapshot, draft_id=draft_id, created_at=triage_core.utc_now()
     )
+    refuse_blanks(str(record.get("body") or ""))
     if origin_channel_id or origin_message_id:
         record.update(origin_channel_id=origin_channel_id, origin_message_id=origin_message_id)
     if reply_inherit is not None:

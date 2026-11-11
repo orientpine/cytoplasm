@@ -4,7 +4,8 @@ Pins: `draft --uid --instruction [--no-post]` creates an instruction-aware
 reply draft (classification annotates, never gates), refuses duplicates /
 missing reply address (exit 2) and no-go mode (exit 3); `watch` no longer
 auto-processes new mail (approval/send loop only); the default reply prompt
-is reply-draft-v2.md (with the {{INSTRUCTION}} placeholder).
+is reply-draft-v3.md (with the {{INSTRUCTION}} placeholder). A reply that needs
+the owner's decision (questions, or a body with a blank) makes no draft and asks.
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ def _write_stub(path: Path, text: str) -> Path:
 def _setup_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, mode: str = "full-go",
     category: str = "important", detail: dict | None = None,
+    reply: str = '{"subject": "Re: x", "body": "참석 가능합니다. 감사합니다."}',
 ) -> Path:
     """Wire the full draft-pipeline test env; returns the hermes prompt capture path."""
     mode_file = tmp_path / "runtime" / "mail-mode.json"
@@ -72,7 +74,7 @@ def _setup_env(
         "\"schedule_text\": \"\", \"reason\": \"test\"}')\n"
         "else:\n"
         "    pathlib.Path(" + repr(str(capture)) + ").write_text(prompt, encoding='utf-8')\n"
-        "    print('{\"subject\": \"Re: x\", \"body\": \"참석 가능합니다. 감사합니다.\"}')\n",
+        f"    print({reply!r})\n",
     )
     monkeypatch.setenv("AUTOPHAGY_HERMES_BIN", str(hermes))
     monkeypatch.setattr(triage_cli, "_get_mail", lambda _uid: dict(detail or MAIL_DETAIL))
@@ -187,9 +189,89 @@ def test_watch_no_longer_auto_processes(monkeypatch: pytest.MonkeyPatch) -> None
     assert rc == 0
 
 
-def test_default_reply_prompt_is_v2() -> None:
+def test_no_card_is_made_from_a_body_with_a_blank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: a compose (the agent's own body) that still holds a blank
+    _setup_env(tmp_path, monkeypatch)
+    # When/Then: the gate refuses the draft before anything is written
+    with pytest.raises(triage_gate.GateError) as refused:
+        triage_gate.create_draft(
+            uid="compose:x", sender="", mail_subject="", to="peer@example.invalid",
+            subject="일정", body="[날짜]에 뜵겠습니다.", category="compose", flags=(),
+            kind="compose",
+        )
+    assert refused.value.exit_code == 2 and "MAIL-BODY-BLANK [날짜]" in str(refused.value)
+    assert list((tmp_path / "gate" / "drafts").glob("*.json")) == []
+
+
+def test_default_reply_prompt_is_v3() -> None:
     # Given: the module-level default reply prompt constant
     prompt = Path(triage_cli.DEFAULT_REPLY_PROMPT)
-    # Then: it points at the v2 instruction-aware template, and that file exists
-    assert str(prompt).endswith("prompts/reply-draft-v2.md")
+    # Then: it points at the v3 no-blank template, and that file exists
+    assert str(prompt).endswith("prompts/reply-draft-v3.md")
     assert prompt.exists()
+
+
+def test_the_prompt_carries_the_node_owner_name_and_no_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Given: the node's owner name and organisation (synthetic)
+    capture = _setup_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("MAIL_OWNER_NAME", "가나다")
+    monkeypatch.setenv("MAIL_OWNER_EMPLOYER", "합성연구원")
+    # When: a draft is written
+    assert _run_cli(monkeypatch, "draft", "--uid", "u-1", "--instruction", INSTRUCTION,
+                    "--no-post") == 0
+    capsys.readouterr()
+    # Then: the model is told the real name and organisation, never a slot it could copy
+    prompt = capture.read_text(encoding="utf-8")
+    assert '"가나다입니다."' in prompt and '"합성연구원 가나다입니다."' in prompt
+    assert '"가나다 올림"' in prompt and "<owner-" not in prompt
+
+
+def test_without_an_owner_name_the_prompt_forbids_the_name_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    capture = _setup_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("MAIL_OWNER_NAME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # no ~/.env.secrets either
+    assert _run_cli(monkeypatch, "draft", "--uid", "u-1", "--instruction", INSTRUCTION,
+                    "--no-post") == 0
+    capsys.readouterr()
+    assert "보내는 사람 이름이 설정되어 있지 않다" in capture.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("reply", [
+    '{"subject": "Re: x", "body": "", "questions": ["송년회에 참석하시나요?"]}',
+    '{"subject": "Re: x", "body": "12월 15일 송년회에 [참석/불참 확인 필요] 회신드립니다."}',
+], ids=["questions", "blank-in-body"])
+def test_a_reply_that_needs_the_owner_asks_under_the_card_and_makes_no_draft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    reply: str,
+) -> None:
+    # Given: the model cannot write sendable text without the owner's decision
+    _setup_env(tmp_path, monkeypatch, reply=reply)
+    triage_store.record_digest_run(tmp_path / "triage.db", "2026-11-10T23:00:00Z", [{
+        "item_no": 1, "uid": "u-1", "subject": "일정 문의", "sender_masked": "h",
+        "category": "important", "flags": "", "summary": "", "note": "", "recv_date": "",
+        "reply_key": "1111-0800-1", "message_id": "card-1", "channel_id": "thread-1",
+    }])
+    posted: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(triage_confirm, "post_in", lambda channel, body, reply_to="":
+                        posted.append((channel, body, reply_to)) or "q-1")
+    # When: the owner's reply on the digest card asks for the draft
+    rc = triage_cli.cmd_draft(argparse.Namespace(
+        uid="u-1", instruction=INSTRUCTION, attachment=[], no_post=False, with_evidence=False,
+        reply_all=False, digest_card={"channel_id": "thread-1", "message_id": "card-1"},
+    ))
+    # Then: no draft, no approval card, nothing marked processed; one question under the card
+    assert rc == 0
+    assert "DRAFT-QUESTION uid=" in capsys.readouterr().out
+    assert list((tmp_path / "gate" / "drafts").glob("*.json")) == []
+    assert triage_store.processed_rows(tmp_path / "triage.db") == []
+    assert len(posted) == 1
+    channel, text, reply_to = posted[0]
+    assert (channel, reply_to) == ("thread-1", "card-1")
+    assert "아직 아무것도 보내지 않았습니다" in text and "`1111-0800-1`" in text
+    assert ("송년회에 참석하시나요?" in text) or ("[참석/불참 확인 필요]" in text)

@@ -25,11 +25,29 @@ from pathlib import Path
 
 _ADDR = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _SECRETS_LINE = re.compile(r"^(?:export\s+)?MAILON_ID\s*=\s*(.+?)\s*$")
+_NAME_LINE = re.compile(r"^(?:export\s+)?MAIL_OWNER_NAME\s*=\s*(.+?)\s*$")
+_EMPLOYER_LINE = re.compile(r"^(?:export\s+)?MAIL_OWNER_EMPLOYER\s*=\s*(.+?)\s*$")
 
 
 def owner_address(*, secrets_path: Path | None = None) -> str:
     """Owner institutional address: env MAILON_ID, else ~/.env.secrets, else ''."""
-    value = os.environ.get("MAILON_ID", "").strip()
+    return _owner_value("MAILON_ID", _SECRETS_LINE, secrets_path)
+
+
+def owner_name(*, secrets_path: Path | None = None) -> str:
+    """The name a reply introduces and signs the owner with: env MAIL_OWNER_NAME, else
+    ~/.env.secrets, else '' (a node value, never in code — 개인화 코드 금지 규칙)."""
+    return _owner_value("MAIL_OWNER_NAME", _NAME_LINE, secrets_path)
+
+
+def owner_employer(*, secrets_path: Path | None = None) -> str:
+    """The owner's organisation for an outside recipient's greeting: env MAIL_OWNER_EMPLOYER,
+    else ~/.env.secrets, else ''."""
+    return _owner_value("MAIL_OWNER_EMPLOYER", _EMPLOYER_LINE, secrets_path)
+
+
+def _owner_value(key: str, line_pattern: re.Pattern[str], secrets_path: Path | None) -> str:
+    value = os.environ.get(key, "").strip()
     if value:
         return value
     path = secrets_path if secrets_path is not None else Path.home() / ".env.secrets"
@@ -38,7 +56,7 @@ def owner_address(*, secrets_path: Path | None = None) -> str:
     except OSError:
         return ""
     for line in text.splitlines():
-        matched = _SECRETS_LINE.match(line.strip())
+        matched = line_pattern.match(line.strip())
         if matched:
             return matched.group(1).strip().strip("'\"")
     return ""

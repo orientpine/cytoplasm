@@ -379,6 +379,18 @@ def digest_item_by_reply_key(db_path: Path, reply_key: str) -> dict[str, int | s
     }
 
 
+def reply_key_for_message(db_path: Path, message_id: str) -> str:
+    """The reply key a digest card showed (newest run), or '' — a question under the card repeats it."""
+    if not message_id or not db_path.exists():
+        return ""
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT reply_key FROM digest_items WHERE message_id = ? ORDER BY run_id DESC LIMIT 1",
+            (message_id,),
+        ).fetchone()
+    return str(row[0]) if row else ""
+
+
 def consecutive_send_failures(db_path: Path) -> int:
     if not db_path.exists():
         return 0

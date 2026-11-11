@@ -162,6 +162,34 @@ def classify(
     return triage_core.parse_classification(raw), CODEX_PROVIDER
 
 
+#: Said instead when the node has no MAIL_OWNER_NAME, so the model never writes a name blank.
+_NO_OWNER_NAME_RULE = (
+    "- 보내는 사람 이름이 설정되어 있지 않다: 자기소개 줄과 이름 맺음 줄(… 올림)은 쓰지 않는다. "
+    "이름 자리를 빈칸·자리표시로 남기지 않는다."
+)
+
+
+def _with_owner(template: str) -> str:
+    """Put the node's owner name (and organisation) into the reply prompt's ``<owner-*>`` slots.
+
+    The public prompt keeps only the slots; the values are the node's MAIL_OWNER_NAME /
+    MAIL_OWNER_EMPLOYER. Without an organisation the outside greeting uses the name alone;
+    without a name the model is told to write no introduction or name line at all.
+    """
+    import triage_recipient
+
+    name = triage_recipient.owner_name()
+    employer = triage_recipient.owner_employer()
+    if not name:
+        rule_head = "회신 작성 규칙:\n"
+        if rule_head in template:
+            return template.replace(rule_head, f"{rule_head}{_NO_OWNER_NAME_RULE}\n", 1)
+        return f"{template}\n{_NO_OWNER_NAME_RULE}"
+    if not employer:
+        template = template.replace('"<owner-employer> <owner-name>입니다."', '"<owner-name>입니다."')
+    return template.replace("<owner-employer>", employer).replace("<owner-name>", name)
+
+
 def draft_reply(
     *, subject: str, sender: str, body: str, uid_opaque: str,
     prompt_path: Path, instruction: str = "", evidence: str = "",
@@ -171,7 +199,7 @@ def draft_reply(
 
     closing, template = mail_reply_format.closing_template(triage_core.load_prompt_template(prompt_path))
     prompt = triage_core.build_prompt(
-        template,
+        _with_owner(template),
         subject=subject, sender=sender, body=body, instruction=instruction,
         evidence=evidence,
     )

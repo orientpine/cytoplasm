@@ -93,6 +93,31 @@ def test_parse_reply_requires_body() -> None:
         triage_core.parse_reply('{"subject": "Re: x", "body": ""}')
 
 
+def test_parse_reply_turns_questions_and_blanks_into_owner_questions() -> None:
+    with pytest.raises(triage_core.ReplyNeedsOwner) as asked:
+        triage_core.parse_reply('{"body": "", "questions": ["참석하시나요?", " "]}')
+    assert asked.value.questions == ("참석하시나요?",)
+    with pytest.raises(triage_core.ReplyNeedsOwner) as blank:
+        triage_core.parse_reply('{"body": "안녕하세요.\\n[이름 확인 필요]입니다.", "questions": []}')
+    assert "[이름 확인 필요]" in blank.value.questions[0]
+
+
+def test_unfilled_blanks_finds_fill_in_slots_and_nothing_else() -> None:
+    # The 2026-11-10 card's three blanks (synthetic copy), a bare field, a prompt slot, a template slot
+    body = (
+        "[이름 확인 필요]입니다. 송년회에 [참석/불참 확인 필요] 회신드립니다.\n"
+        "- 추천 식당: [추천 식당이 있을 경우 기재, 없으면 이 줄 삭제 – 확인 필요]\n"
+        "[날짜]까지 <owner-name> {{NAME}}"
+    )
+    assert triage_core.unfilled_blanks(body) == (
+        "[이름 확인 필요]", "[참석/불참 확인 필요]",
+        "[추천 식당이 있을 경우 기재, 없으면 이 줄 삭제 – 확인 필요]",
+        "[날짜]", "<owner-name>", "{{NAME}}",
+    )
+    # A sendable body: a subject tag, the Drive-share slot the send fills, a real date
+    assert triage_core.unfilled_blanks("[공지] 자료는 <Drive 링크> 에 있습니다. 12월 15일까지.") == ()
+
+
 def test_prompt_template_is_line_anchored_and_substitutes() -> None:
     template = triage_core.load_prompt_template(
         _REPO / "skills" / "mail" / "prompts" / "triage-classify-v1.md"
