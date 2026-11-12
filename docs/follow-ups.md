@@ -22,6 +22,10 @@
 
 - **낮음 · `deploy_lab_node.sh` 는 출처 확인 없이 부른 체크아웃의 러너와 `bank_state.py` 를 그대로 깐다**: 「배포 provenance 규칙」의 명시 예외라 `deploy_provenance_check` 를 부르지 않고, 체크아웃 전체를 하네스로 rsync 한 뒤 `remote_bank_runner.sh` 와 노드 agent 홈의 `bank_state.py` 를 그 체크아웃에서 복사한다. 하네스는 러너가 매 회 서명된 릴리스 트리로 다시 맞추지만 러너 자체와 `bank_state.py` 는 다음 수동 설치까지 그대로 남는다(2026-11-02 재설치 때 체크아웃은 origin/main 보다 뒤였고 두 파일은 우연히 같았다) → 러너·`bank_state.py` 복사 단계에만 `deploy_provenance_check` 를 걸고, 작업 트리를 시험하는 하네스 rsync(`REGRESSION_BANK_REFRESH=0`)는 예외로 남길지 정한다. 영향: 뒤처지거나 더러운 체크아웃에서 깐 러너가 주간 실행을 계속 맡을 수 있음 · 심각도 낮음.
 
+## 릴리스 카드 버튼 답에서 남긴 것 (2026-11-12)
+
+- **중간 · 카드 버튼 답은 누른 사람을 디스코드가 보증하지 않는다**: 탭으로 접힌 카드(type 7 갱신)에는 interaction 정보가 남지 않아, 노드는 그 카드를 올린 봇의 리스너가 형의 탭만 접는다는 것을 믿는다 — 그 봇 토큰으로 손으로 고친 카드도 같아 보인다(유돌 카드는 바깥 게이트가 손으로 접은 카드를 막지만 다른 도리 봇 앞에는 게이트가 없다) → 탭 때 interaction 토큰으로 후속 글(followup)을 남기면 디스코드가 `interaction_metadata.user`·`interacted_message_id` 를 붙이므로, 포크 리스너가 그 영수증 글을 남기고 노드가 형 id·카드 id 를 거기서 확인하게 한다(고른 답은 영수증에 없으니 카드 접힘과 시각으로 묶는다). 영향: 카드를 올린 봇 계정이 형 탭 없이 릴리스 근거를 만들 수 있음 · 심각도 중간.
+
 ## 릴리스 형 명령 전환에서 남긴 것 (2026-11-02)
 
 - **낮음 · `release.sh` 의 호스트 스위치 판독도 호출한 곳의 다른 체크아웃에 가려질 수 있다**: 스위치마다 `PYTHONPATH="$SCRIPT_DIR/.." python3 -B -m automation.<스위치>` 를 cwd 에서 돌리는데, `python3 -m` 은 cwd 를 먼저 보므로 다른 체크아웃에서 실행하면 그 체크아웃의 옛 모듈이 판정한다. 형 명령 첨부 단계는 이번에 `cd` 로 고쳤다(격리 QA 에서 실제로 `No module named automation.release_command` 로 멈춤) → 스위치 판독도 같은 `cd` 로 묶는다. 영향: 메인 체크아웃이 아닌 곳에서 릴리스할 때 옛 스위치 판정 · 심각도 낮음.

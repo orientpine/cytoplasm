@@ -29,6 +29,7 @@ _THREAD = "1500000000000000002"
 _DIGEST = "d" * 64
 _EPOCH_MS = 1420070400000
 _AUDIO = b"OggS voice bytes"
+_CARD_BOT = "1500000000000000005"
 
 
 def _snowflake(seconds_ago: float) -> str:
@@ -92,6 +93,21 @@ def _message(content: str, *, seconds_ago: float = 60, author: str = _OWNER, bot
             "url": "https://cdn.example.invalid/voice-message.ogg",
             "filename": "voice-message.ogg", "content_type": "audio/ogg",
         }]}
+    return message
+
+
+def _card(question: str, answer: str, *, by: str = "버튼", seconds_ago: float = 60, author: str = _CARD_BOT,
+          bot: bool = True, webhook: bool = False, folded: bool = True) -> dict[str, object]:
+    """A dori question card (dori ask) as Discord shows it once the owner's tap folded it into his answer."""
+    text = (f"✅ **Q37** {question}\n→ **{answer}**\n-# {by} · 11. 12. 15:04" if folded
+            else f"<@{_OWNER}> **Q37** {question}")
+    message: dict[str, object] = {
+        "id": _snowflake(seconds_ago), "channel_id": _THREAD, "content": "", "flags": 1 << 15,
+        "author": {"id": author, "bot": bot}, "edited_timestamp": "2026-11-12T06:04:50.320000+00:00",
+        "components": [{"type": 17, "components": [{"type": 10, "content": text}]}],
+    }
+    if webhook:
+        message["webhook_id"] = author
     return message
 
 
@@ -191,6 +207,66 @@ def test_a_message_that_cannot_command_a_release_records_nothing(
     assert not (gate_dir / "pending/release.json").exists()
     assert discord.posts == []
     assert _authorize() == 2
+
+
+def test_the_owners_tap_on_a_release_card_records_the_release_and_authorizes_its_surfaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Owner 2026-11-12 (#soodori): "봇 카드 버튼 답도 받게 해." The card is another Dori bot's, not the node's own.
+    discord = FakeDiscord(_card("사이토플라즘 릴리스 낼까? 들어갈 것: #237 + #238", "릴리스 해"))
+    gate_dir = _gate(tmp_path, monkeypatch, discord)
+
+    assert _command(_plan(tmp_path, discord.message)) == 0
+
+    record = _record(gate_dir)
+    text = "✅ **Q37** 사이토플라즘 릴리스 낼까? 들어갈 것: #237 + #238\n→ **릴리스 해**\n-# 버튼 · 11. 12. 15:04"
+    assert record["owner_command_kind"] == "card"
+    assert record["owner_command_card_sha256"] == hashlib.sha256(text.encode()).hexdigest()
+    assert record["owner_command_card_bot_id"] == _CARD_BOT
+    assert discord.posts == []
+    assert _decision() == 0
+    assert _authorize() == 0
+
+
+@pytest.mark.parametrize(
+    "card",
+    [
+        pytest.param(_card("사이토플라즘 릴리스 낼까?", "나중에"), id="later-answer"),
+        pytest.param(_card("사이토플라즘 릴리스 낼까?", "릴리스는 미뤄"), id="defer-answer-naming-release"),
+        pytest.param(_card("이 초안 올릴까?", "올려"), id="card-without-release-word"),
+        pytest.param(_card("메일 정리할까?", "릴리스 해"), id="question-without-release-word"),
+        pytest.param(_card("사이토플라즘 릴리스 낼까?", "릴리스 해", by="글"), id="typed-not-tapped"),
+        pytest.param(_card("사이토플라즘 릴리스 낼까?", "릴리스 해", author="1" * 18, bot=False),
+                     id="another-persons-card-shaped-message"),
+        pytest.param(_card("사이토플라즘 릴리스 낼까?", "릴리스 해", webhook=True), id="webhook-card"),
+        pytest.param(_card("사이토플라즘 릴리스 낼까?", "릴리스 해", folded=False), id="card-not-answered"),
+        pytest.param(_card("사이토플라즘 릴리스 낼까?", "릴리스 해", seconds_ago=25 * 3600), id="card-older-than-a-day"),
+    ],
+)
+def test_a_card_that_is_not_the_owners_release_tap_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, card: dict[str, object],
+) -> None:
+    discord = FakeDiscord(card)
+    gate_dir = _gate(tmp_path, monkeypatch, discord)
+
+    assert _command(_plan(tmp_path, card)) == 4
+
+    assert not (gate_dir / "pending/release.json").exists()
+    assert _authorize() == 2
+
+
+def test_a_release_card_edited_after_the_record_is_not_an_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discord = FakeDiscord(_card("사이토플라즘 릴리스 낼까?", "릴리스 해"))
+    _ = _gate(tmp_path, monkeypatch, discord)
+    assert _command(_plan(tmp_path, discord.message)) == 0
+
+    discord.message = {**discord.message, "components": [{"type": 17, "components": [
+        {"type": 10, "content": "✅ **Q37** 사이토플라즘 릴리스 낼까? v9도\n→ **릴리스 해**\n-# 버튼 · 11. 12. 15:04"}]}]}
+
+    assert _authorize() == 1
+    assert _decision() == 7
 
 
 def test_one_owner_message_cannot_release_a_second_head(

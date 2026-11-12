@@ -154,7 +154,8 @@ agent+peer 게이트웨이를 함께 재시동한다. 내장 USER.md·MEMORY.md�
 3. `automation/release.sh --owner-command <형이 릴리스를 시킨 디스코드 글 링크> [--owner-inbox <수신기 inbox.jsonl>]
    [--bump …] --notes-file <노트>` — 카드는 올라가지 않는다(2026-11-02 형 결정 Q447). 노드 agent 계정이 그 글을
    확인하고(형 본인·봇 아님·릴리스 서버·24시간 안·릴리스/릴리즈/release/배포/deploy 낱말, 음성 글은 inbox 의 전사,
-   한 글=한 HEAD) 승인 기록을 쓴 뒤 그 main 커밋에 update-trust 서명 태그가 잘린다. 링크가 없거나 확인에
+   한 글=한 HEAD; 형이 도리 질문 카드에서 누른 버튼 답이면 그 카드 링크 — 봇 자신의 글·버튼으로 접힌 답·질문과 답 모두
+   릴리스 낱말·답에 「나중에」 같은 미룸 말 없음, 2026-11-12) 승인 기록을 쓴 뒤 그 main 커밋에 update-trust 서명 태그가 잘린다. 링크가 없거나 확인에
    실패하면 태그 없이 exit 4 다. 노드는 2분 리컨실러로 그 태그에 수렴하고
    `deploy_all.sh --apply` 까지 이어진다.
 4. 노트는 3의 같은 실행이 게시한다 — `release.sh --notes-file <노트>` 로 초안을 승인 요청 **전에**

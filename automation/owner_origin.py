@@ -2,7 +2,8 @@
 
 One implementation for the YooDori gate's owner-command jobs and the cardless release (owner
 2026-11-02 Q447), and for the card-approved dashboard todo the gate also takes as the owner's basis. The gate's
-jobs also take the owner's tap on a question card (owner 2026-11-06 17:04 KST); the release does not.
+jobs also take the owner's tap on a question card (owner 2026-11-06 17:04 KST), and so does the release, from another
+Dori bot's card (owner 2026-11-12 #soodori "봇 카드 버튼 답도 받게 해.").
 It imports nothing from automation at module level, so the deploy gate can stage it alone and the gate's standalone libexec copy can import it lazily.
 """
 from __future__ import annotations
@@ -23,7 +24,7 @@ ORIGIN_MAX_AGE_S = 24 * 3600
 # "카드 버튼 답을 노드가 근거로 받게 바꿔.", Q523 2026-11-07 for the egress gate): the same rule as the fork's dori-gate
 # (orientpine/omo-dori-mode-experimental#370). The fork folds a tapped card into one text,
 # "✅ **Q<n>** <question>\n→ **<answer>**\n-# <by> · <when>", <by> being its words.byButton.
-CARD_ANSWER = re.compile(r"(?:✅|\[[^\]\n]+\]) \*\*Q[1-9][0-9]*\*\* (?s:.+?)\n→ \*\*(?P<answer>(?s:.+?))\*\*\n"
+CARD_ANSWER = re.compile(r"(?:✅|\[[^\]\n]+\]) \*\*Q[1-9][0-9]*\*\* (?P<question>(?s:.+?))\n→ \*\*(?P<answer>(?s:.+?))\*\*\n"
                          r"-# (?P<by>[^\n·]+?) · [^\n]+")
 CARD_ANSWER_WORDS = frozenset({"button", "버튼"})
 COMPONENTS_V2 = 1 << 15
@@ -58,13 +59,14 @@ def _discord_get(path: str, token: str) -> dict:
 
 def verify_owner_origin(
     channel_id: str, message_id: str, owner_id: str, token: str, *,
-    now: float | None = None, fetch: Fetch = _discord_get, card_answers: bool = False,
+    now: float | None = None, fetch: Fetch = _discord_get, card_answers: bool = False, any_card_bot: bool = False,
 ) -> Origin:
     """The origin must be the owner's own (non-bot) message from the last 24 hours.
 
     With ``card_answers`` (the YooDori gate's jobs, not the release) the owner's tap on a question card counts too:
     see ``_card_answered``. Its 24 hours run from the card's posting (the message id's time), which no later edit of
-    the bot's own message can move, as on the egress gate (fork #370).
+    the bot's own message can move, as on the egress gate (fork #370). With ``any_card_bot`` (the release) the card may
+    be any bot's own post, not only this node bot's: the release card is asked by the Dori that cuts the release.
     """
     if not token:
         raise OriginRefused("origin check needs the node Discord credential")
@@ -81,7 +83,7 @@ def verify_owner_origin(
     if (isinstance(author, dict) and str(author.get("id")) == owner_id
             and not author.get("bot") and str(message.get("id")) == message_id):
         when = sent
-    elif card_answers and _card_answered(message, channel_id, message_id, token, fetch):
+    elif card_answers and _card_answered(message, channel_id, message_id, token, fetch, any_bot=any_card_bot):
         when = sent
     else:
         raise OriginRefused("origin message is not the owner's own message")
@@ -90,7 +92,20 @@ def verify_owner_origin(
     return Origin(channel_id, message_id, _place(channel_id, message_id, channel, "origin"))
 
 
-def _card_answered(message: dict, channel_id: str, message_id: str, token: str, fetch: Fetch) -> bool:
+def card_text(message: dict) -> str | None:
+    """The one text of a components-v2 card that is one container holding one text, else None."""
+    outer = message.get("components")
+    inner = (outer[0].get("components") if isinstance(outer, list) and len(outer) == 1 and isinstance(outer[0], dict)
+             and outer[0].get("type") == 17 else None)
+    if (not isinstance(message.get("flags"), int) or not message["flags"] & COMPONENTS_V2
+            or not isinstance(inner, list) or len(inner) != 1 or not isinstance(inner[0], dict)
+            or inner[0].get("type") != 10):
+        return None
+    return str(inner[0].get("content", ""))
+
+
+def _card_answered(message: dict, channel_id: str, message_id: str, token: str, fetch: Fetch, *,
+                   any_bot: bool = False) -> bool:
     """Whether the message at these coordinates is a question card the owner's tap folded into a button answer.
 
     The message must be this node bot's own post (``/users/@me``; the node's notice bot is YooDori's, which posts
@@ -98,23 +113,22 @@ def _card_answered(message: dict, channel_id: str, message_id: str, token: str, 
     the answered form with a non-empty answer and a button word as its by-line (a reply or a typed answer is not a
     tap). Discord does not say who tapped: the fork answers only the owner's tap, and the egress gate in front of
     YooDori refuses any hand-made answered card (card-answer-forged) but the tap's own UPDATE_MESSAGE callback.
+    With ``any_bot`` the card may be another bot's: no egress gate stands in front of that bot, so the fold is trusted
+    as far as Discord shows it (a bot's own non-webhook post, folded by its edit), not past what its token could write.
     """
     author = message.get("author")
-    outer = message.get("components")
-    inner = (outer[0].get("components") if isinstance(outer, list) and len(outer) == 1 and isinstance(outer[0], dict)
-             and outer[0].get("type") == 17 else None)
+    content = card_text(message)
     if (str(message.get("id")) != message_id or str(message.get("channel_id")) != channel_id
             or message.get("webhook_id") or not isinstance(author, dict) or author.get("bot") is not True
-            or not isinstance(message.get("flags"), int) or not message["flags"] & COMPONENTS_V2
-            or not isinstance(inner, list) or len(inner) != 1 or not isinstance(inner[0], dict)
-            or inner[0].get("type") != 10):
+            or content is None):
         return False
-    content = str(inner[0].get("content", ""))
     answered = CARD_ANSWER.fullmatch(content) if len(content) <= CARD_TEXT_MAX else None
     # The edit only shows the card was folded; its time is not the clock (any later edit would move it).
     if not answered or not answered["answer"].strip() or answered["by"].casefold() not in CARD_ANSWER_WORDS \
             or _epoch(message.get("edited_timestamp")) is None:
         return False
+    if any_bot:
+        return True
     try:
         me = fetch("/users/@me", token)
     except (OSError, ValueError, urllib.error.URLError):

@@ -7,6 +7,13 @@ the record is written (the owner's own non-bot message in the release server, at
 hours old, naming a release or a deploy, never used for another HEAD) and again, without
 the age limit, every time a deploy step asks the record to authorize a surface.
 
+Owner 2026-11-12 (#soodori): "봇 카드 버튼 답도 받게 해." His tap on a Dori question card (dori ask) counts
+too: the link names the card, a bot's own non-webhook components-v2 post folded into a button answer, posted in the
+release server at most 24 hours ago, whose question names a release or a deploy and whose answer does too and is no
+"later" or "not" answer. Discord does not show who tapped, so this trusts the card as far as Discord shows it: the
+Dori listener folds only the owner's taps, and a card its own bot rewrote by hand would read the same. The record
+keeps the card text's sha256 and the bot's id, and every later check refuses a card edited since.
+
 Nothing else about the release changes: the record still binds version, HEAD and every
 surface digest in its action hash, the tag is still signed on the workstation, and the
 node still converges only to a verified signed tag. Stored card records keep their ✅
@@ -36,6 +43,11 @@ BASIS: Final = "owner-command"
 #: Words that name a release. Short verbs such as "내" are deliberately absent: they turn up
 #: in unrelated owner messages, and a stray match here would cut and deploy a release.
 KEYWORD: Final = re.compile(r"릴리스|릴리즈|release|배포|deploy", re.IGNORECASE)
+#: A card's options are the asking Dori's words, so an answer naming a release can still put it off ("릴리스는 미뤄").
+DEFER: Final = re.compile(
+    r"나중|다음에|미뤄|미루|보류|취소|그만|말고|말아|하지\s*마|안\s*해|않|없이|later|cancel|hold|wait|don'?t|\bnot?\b",
+    re.IGNORECASE,
+)
 _LINK: Final = re.compile(
     r"https://(?:ptb\.|canary\.)?discord(?:app)?\.com/channels/([0-9]{1,20})/([0-9]{1,20})/([0-9]{1,20})/?\Z"
 )
@@ -107,7 +119,7 @@ def verify(
     (the inbox row the caller looked up); the record then keeps the audio and transcript
     digests so the words that authorized the release can be traced to that recording.
     """
-    from automation.owner_origin import OriginRefused, verify_owner_origin
+    from automation.owner_origin import CARD_ANSWER, OriginRefused, card_text, verify_owner_origin
 
     link = parse_link(url)
     if link.guild_id != guild_id:
@@ -122,6 +134,7 @@ def verify(
     try:
         origin = verify_owner_origin(
             link.channel_id, link.message_id, owner_id, token, now=now, fetch=cached,
+            card_answers=True, any_card_bot=True,
         )
     except OriginRefused as error:
         raise CommandRefused(str(error)) from None
@@ -136,7 +149,21 @@ def verify(
         "owner_command_guild_id": guild_id,
         "owner_command_verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
     }
-    if content:
+    author = message.get("author")
+    card = card_text(message) if isinstance(author, dict) and author.get("bot") is True else None
+    answered = CARD_ANSWER.fullmatch(card) if card is not None else None
+    if card is not None:
+        if answered is None:  # verify_owner_origin took it as a folded card, so this does not happen
+            raise CommandRefused("owner card answer could not be read")
+        words = answered["question"]
+        if KEYWORD.search(answered["answer"]) is None or DEFER.search(answered["answer"]) is not None:
+            raise CommandRefused("owner card answer does not ask for a release or a deploy")
+        fields |= {
+            "owner_command_kind": "card",
+            "owner_command_card_sha256": _sha256(card.encode()),
+            "owner_command_card_bot_id": str(author["id"]),
+        }
+    elif content:
         words = content
         fields |= {"owner_command_kind": "text", "owner_command_text_sha256": _sha256(content.encode())}
     else:
@@ -244,8 +271,17 @@ def probe(
     except (OSError, ValueError, urllib.error.URLError):
         return Probe.UNVERIFIABLE
     author = message.get("author")
-    if (not isinstance(author, dict) or str(author.get("id")) != owner_id or author.get("bot")
-            or str(message.get("id")) != message_id):
+    if not isinstance(author, dict) or str(message.get("id")) != message_id:
+        return Probe.BINDING_MISMATCH
+    if record.get("owner_command_kind") == "card":
+        from automation.owner_origin import card_text
+
+        card = card_text(dict(message))
+        if (author.get("bot") is not True or message.get("webhook_id")
+                or str(author.get("id")) != record.get("owner_command_card_bot_id")
+                or card is None or _sha256(card.encode()) != record.get("owner_command_card_sha256")):
+            return Probe.BINDING_MISMATCH
+    elif str(author.get("id")) != owner_id or author.get("bot"):
         return Probe.BINDING_MISMATCH
     return Probe.APPROVED
 
