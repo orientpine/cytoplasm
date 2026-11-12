@@ -259,7 +259,7 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
     message = result_message(draft, content, outcome)
     transport = _dm_transport
     thread = str(draft.get("approval_thread_id") or "")
-    mark = ""
+    api, mark = _api, ""
     if _in_digest_thread(draft):  # other cards in the thread still wait — never close it
         outcome = ""
         card = str(draft.get("message_id") or "")
@@ -268,29 +268,40 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
         # The request's own approval thread gets its end mark from one place, after the notice:
         # 🔔 while another card waits there, and a rate-limited rename kept for the watch tick
         # (2026-11-12: ⛔ under a waiting card at 04:26, then ✅ refused with 429 and never retried).
-        mark, outcome = origin_notice.ThreadOutcome[outcome].value, ""
+        # deliver keeps its outcome (a deleted thread drops the notice as before); only its own
+        # rename of this thread is left out.
+        mark = origin_notice.ThreadOutcome[outcome].value
+        api = _api_leaving_thread_name(thread)
     try:
-        return _deliver(origin_notice, draft, content, message, transport, outcome)
+        return _deliver(origin_notice, api, draft, content, message, transport, outcome)
     finally:
-        if mark:
+        if mark:  # the result is final whatever became of its notice; the title follows it
             import triage_approval_gate
-            import triage_gate
 
-            others = [item for item in triage_gate.list_drafts() if item.get("id") != draft.get("id")]
-            triage_approval_gate.mark_thread(thread, mark, others)
+            triage_approval_gate.mark_thread(thread, mark, exclude=str(draft.get("id") or ""))
 
 
-def _deliver(origin_notice, draft: dict, content: str, message, transport, outcome: str) -> str:
+def _api_leaving_thread_name(thread_id: str):
+    """``_api`` that answers the thread's own PATCH (name, archive) with nothing done."""
+    def call(method: str, path: str, payload: dict | None = None) -> object:
+        if method == "PATCH" and path == f"/channels/{thread_id}":
+            return {}
+        return _api(method, path, payload)
+
+    return call
+
+
+def _deliver(origin_notice, api, draft: dict, content: str, message, transport, outcome: str) -> str:
     if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
         return str(origin_notice.deliver(
-            api=_api, transport_factory=transport, record=draft,
+            api=api, transport_factory=transport, record=draft,
             thread_name=f"메일: {triage_core.shown(draft, 'subject')} (draft {draft['id']})",
             content=content, fallback=dm_owner,
             outcome=origin_notice.ThreadOutcome[outcome] if outcome else None,
             message=message, fallback_destination=None,
         ))
     return str(origin_notice.deliver(
-        api=_api,
+        api=api,
         transport_factory=transport,
         record=draft,
         thread_name=f"메일: {triage_core.shown(draft, 'subject')} (draft {draft['id']})",

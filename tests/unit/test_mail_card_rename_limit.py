@@ -107,9 +107,10 @@ def test_watch_tick_drops_a_mark_whose_card_is_no_longer_pending(
     api.responses[("PATCH", f"/channels/{THREAD}")] = _rate_limited()
     assert _compose() == 0
     draft, = triage_gate.list_drafts()
+    triage_gate.write_json(triage_gate._draft_path(str(draft["id"])), {**draft, "status": "sent"})
     calls = len(api.calls)
     # When: the owner decided the card before the tick (its close set the end mark).
-    triage_approval_gate.retry_thread_marks([{**draft, "status": "sent"}])
+    triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
     # Then: the tick never renames the decided thread back and forgets it.
     assert len(api.calls) == calls
     assert _marks(tmp_path) == []
@@ -142,14 +143,16 @@ def test_a_result_whose_end_mark_is_rate_limited_is_remembered_and_a_later_tick_
     _open_thread(api, "🔔 ✉️ request")
     _notices_through_api(monkeypatch)
     api.responses[("PATCH", f"/channels/{THREAD}")] = _rate_limited()
-    # When: the sent result closes the thread.
-    triage_confirm.notify_result({**draft, "status": "sent"}, "sent", outcome=triage_confirm.SENT_OUTCOME)
+    # When: the card is sent (the watch records it first) and its result closes the thread.
+    sent = {**draft, "status": "sent"}
+    triage_gate.write_json(triage_gate._draft_path(str(draft["id"])), sent)
+    triage_confirm.notify_result(sent, "sent", outcome=triage_confirm.SENT_OUTCOME)
     # Then: the wanted ✅ is remembered for the watch tick.
     assert _marks(tmp_path) == [THREAD]
     # When: a later tick runs after the limit lifted, with no card waiting there.
     api.responses[("PATCH", f"/channels/{THREAD}")] = {}
     calls = len(api.calls)
-    triage_approval_gate.retry_thread_marks([])
+    triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
     # Then: the thread gets its end mark once and is closed.
     assert _renames(api, calls) == [{"name": "✅ ✉️ request", "archived": True}]
     assert _marks(tmp_path) == []
@@ -193,6 +196,63 @@ def test_a_rename_never_sleeps_on_429_even_outside_no_wait() -> None:
         with pytest.raises(HTTPError):
             triage_confirm._api("PATCH", f"/channels/{THREAD}", {"archived": False})
         assert sleeps == [300.0] * (triage_confirm._RATE_LIMIT_ATTEMPTS - 1)
+
+
+def test_a_finished_older_mark_attempt_never_forgets_a_newer_wanted_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a tick settles the remembered 🔔 while, during its rename, the sent result asks for ✅
+    # (gate review of #238: the older attempt deleted that newer record and the thread stayed 🔔).
+    _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
+    root.mkdir(parents=True, exist_ok=True)
+    (root / THREAD).write_text("🔔", encoding="utf-8")
+
+    def apply_while_a_result_arrives(thread: str, _mark: str) -> bool:
+        (root / thread).write_text("✅", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(triage_approval_gate, "_apply_mark", apply_while_a_result_arrives)
+    # When: the older attempt finishes.
+    triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
+    # Then: the newer wanted mark is still there for the next tick.
+    assert (root / THREAD).read_text(encoding="utf-8") == "✅"
+
+
+def test_a_tick_reads_the_cards_again_before_marking_never_its_old_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the remembered mark is ⛔ but a card was bound in that thread after the tick listed
+    # its drafts (gate review of #238: the tick closed the thread over the new waiting card).
+    api = _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    _open_thread(api, "🔔 ✉️ request")
+    root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
+    root.mkdir(parents=True, exist_ok=True)
+    (root / THREAD).write_text("⛔", encoding="utf-8")
+    calls = len(api.calls)
+    # When: the tick settles marks with its stale, empty list.
+    triage_approval_gate.retry_thread_marks([])
+    # Then: the waiting card keeps 🔔 and no rename is spent.
+    assert _renames(api, calls) == []
+    assert _marks(tmp_path) == []
+
+
+def test_a_result_for_a_deleted_thread_is_dropped_as_before_and_never_sent_to_the_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    draft, = triage_gate.list_drafts()
+    _notices_through_api(monkeypatch)
+    gone = HTTPError("https://discord.test", 404, "unknown channel", Message(), None)
+    api.responses[("POST", f"/channels/{THREAD}/messages")] = gone
+    api.responses[("GET", f"/channels/{THREAD}")] = gone
+    # When: the sent result finds its thread deleted.
+    triage_confirm.notify_result({**draft, "status": "sent"}, "sent", outcome=triage_confirm.SENT_OUTCOME)
+    # Then: nothing reached the owner's DM (dm_owner fails the test) and nothing is left to retry.
+    assert _marks(tmp_path) == []
 
 
 def test_a_half_posted_card_is_adopted_instead_of_wedging_the_key(

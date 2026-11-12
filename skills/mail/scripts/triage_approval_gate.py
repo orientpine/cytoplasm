@@ -1,9 +1,11 @@
 """Mail lifecycle adapter, retaining facade injection seams."""
 from __future__ import annotations
 import calendar
+import contextlib
+import fcntl
 import sys
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -288,6 +290,8 @@ def _thread_marks() -> Path:
 
 
 PENDING_MARK = "🔔"
+#: How long a mark waits for another process marking the same thread (one GET and one PATCH, no 429 wait).
+_THREAD_LOCK_SECONDS = 20.0
 #: End marks that close (archive) the thread; ❗ failed stays open for the owner, like 🔔.
 _CLOSING_MARKS = frozenset({"✅", "⛔", "💤"})
 
@@ -301,28 +305,70 @@ def waiting_threads(drafts: Iterable[Mapping[str, JsonValue]]) -> set[str]:
     }
 
 
-def mark_thread(thread_id: str, mark: str, drafts: Iterable[Mapping[str, JsonValue]] | None = None) -> bool:
+def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "") -> bool:
     """The one place a mail approval thread's state mark is set; a miss is kept for the next tick.
 
-    A card still waiting in the thread wins over any end mark (lead 2026-11-12: what the owner
-    still has to press comes first). The wanted mark is written to ``thread-marks/<thread>``
-    before the rename, so only the last wanted state is kept and a process killed mid-rename
-    leaves it to ``retry_thread_marks``. A name that already shows it costs no rename: Discord
-    allows two name edits per ten minutes, and a 429 is never waited on (2026-11-04: the wait
-    killed compose; 2026-11-12: four cards and results in eleven minutes left the thread 🔔
-    after its card was sent).
+    ``mark`` (when given) becomes the thread's last wanted mark in ``thread-marks/<thread>``;
+    without it the stored one is settled (the watch tick). A card still waiting in the thread wins
+    with 🔔 (lead 2026-11-12: what the owner still has to press comes first), read from the draft
+    store at that moment (``exclude``: the draft whose result is being delivered). Every step runs
+    under the thread's lock, so compose, results and the tick never act on each other's stale view
+    (an older attempt cannot acknowledge a newer wanted mark, a tick cannot close a thread a new
+    card just reopened). A name that already shows the mark costs no rename: Discord allows two
+    name edits per ten minutes, and a 429 is never waited on (2026-11-04: the wait killed compose;
+    2026-11-12: four cards and results in eleven minutes left a sent mail's thread 🔔).
     """
     if not thread_id.isdigit():
         return False
-    waiting = waiting_threads(triage_gate.list_drafts() if drafts is None else drafts)
-    wanted = PENDING_MARK if thread_id in waiting else mark
     path = _thread_marks() / thread_id
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.write_text(wanted, encoding="utf-8")
-    done = _apply_mark(thread_id, wanted)
-    if done:
-        path.unlink(missing_ok=True)
-    return done
+    with _thread_lock(path) as locked:
+        if mark is not None:
+            path.write_text(mark, encoding="utf-8")
+        if not locked:
+            print(f"THREAD-MARK-BUSY thread={thread_id}", file=sys.stderr)
+            return False
+        stored = _stored_mark(path)
+        if stored is None:
+            return True
+        waiting = thread_id in waiting_threads(
+            draft for draft in triage_gate.list_drafts() if not exclude or draft.get("id") != exclude)
+        if stored == PENDING_MARK and not waiting:
+            path.unlink(missing_ok=True)  # its card was decided: that result asked for its own end mark
+            return True
+        done = _apply_mark(thread_id, PENDING_MARK if waiting else stored)
+        if done and _stored_mark(path) == stored:  # a newer wanted mark (one that could not wait) stays
+            path.unlink(missing_ok=True)
+        return done
+
+
+def _stored_mark(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip() or PENDING_MARK
+    except FileNotFoundError:
+        return None
+
+
+@contextlib.contextmanager
+def _thread_lock(path: Path) -> Iterator[bool]:
+    """Hold ``thread-marks.locks/<thread>``; give up after a while rather than outlive a gate."""
+    locks = path.parent.with_name(f"{THREAD_MARKS_DIRNAME}.locks")
+    locks.mkdir(mode=0o700, exist_ok=True)
+    with open(locks / path.name, "a", encoding="utf-8") as handle:
+        deadline = time.monotonic() + _THREAD_LOCK_SECONDS
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.1)
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _apply_mark(thread_id: str, mark: str) -> bool:
@@ -362,23 +408,20 @@ def resume_pending_mark(thread_id: str) -> bool:
     return mark_thread(thread_id, PENDING_MARK)
 
 
-def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]]) -> None:
-    """Watch tick: set each remembered thread's last wanted mark, 🔔 while a card there still waits.
+def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]] = ()) -> None:
+    """Watch tick: settle each remembered thread's last wanted mark, 🔔 while a card there still waits.
 
     A remembered 🔔 whose card no longer waits is forgotten: that card's own result asked for its
-    end mark, so the tick never renames a decided thread back.
+    end mark, so the tick never renames a decided thread back. The draft store is read again under
+    each thread's lock, so ``drafts`` (the tick's own list) is not needed and kept for callers.
     """
+    del drafts
     root = _thread_marks()
     if not root.is_dir():
         return
-    drafts = tuple(drafts)
-    waiting = waiting_threads(drafts)
     for path in sorted(root.iterdir()):
-        mark = path.read_text(encoding="utf-8").strip() or PENDING_MARK
-        if mark == PENDING_MARK and path.name not in waiting:
-            path.unlink(missing_ok=True)
-        else:
-            mark_thread(path.name, mark, drafts)
+        if path.name.isdigit():
+            mark_thread(path.name)
 
 
 def _snowflake_before(stamp: str) -> int | None:
