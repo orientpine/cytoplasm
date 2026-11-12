@@ -145,7 +145,8 @@ def test_relay_logs_only_metadata_and_uses_empty_private_cwd(tmp_path, monkeypat
         assert kwargs["text"] == "private prompt"
         assert not {"--model", "-m"} & set(argv)
         assert {"--no-tools", "--no-extensions", "--no-context-files",
-                "--no-skills", "--no-session", "--offline"} <= set(argv)
+                "--no-skills", "--no-session", "--offline",
+                "--omo-senpi-memory-disabled"} <= set(argv)
         return subprocess.CompletedProcess(argv, 0, json.dumps({
             "type": "agent_end", "messages": [{"role": "assistant", "provider": "actual",
                 "model": "answerer", "content": [{"type": "text", "text": "private answer"}]}]
