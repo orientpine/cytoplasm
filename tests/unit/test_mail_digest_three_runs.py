@@ -30,7 +30,7 @@ import triage_digest_thread  # noqa: E402
 import triage_transport  # noqa: E402
 
 from automation.cron_schedule import on_calendar  # noqa: E402
-from automation.interop import digest_thread  # noqa: E402
+from automation.interop import digest_thread, owner_message  # noqa: E402
 
 KST = ZoneInfo("Asia/Seoul")
 THREAD = "1529000000000000710"
@@ -111,7 +111,7 @@ def node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         return SimpleNamespace(channel_id=THREAD, surface="agent-chat-thread", policy_version=8, guild_id="1")
 
     surface.resolve_new_binding = resolve
-    modules = {"approval_surface": surface, "digest_thread": digest_thread}
+    modules = {"approval_surface": surface, "digest_thread": digest_thread, "owner_message": owner_message}
     monkeypatch.setattr(triage_approval, "_repo_module", lambda name: modules[name])
     monkeypatch.setattr(triage_binding, "approval_directory", object)
     monkeypatch.setattr(triage_confirm, "owner_id", lambda: "100000000000000001")
@@ -162,7 +162,7 @@ def test_the_days_runs_share_one_thread_named_by_the_day_and_each_run_heads_its_
     assert {channel for channel, _ in first + second} == {THREAD}
     assert first[0][1].splitlines()[0] == "## 📬 09:00 다이제스트 · 신규 1건 (일정 1)"
     assert second[0][1].splitlines()[0] == "## 📬 13:00 다이제스트 · 신규 1건 (일정 1)"
-    assert node.flat == []
+    assert [body.split(" (", 1)[0] for body in node.flat] == ["📬 다이제스트에 1건 추가됨"]
 
 
 def test_a_later_empty_run_stays_silent_but_the_days_first_empty_run_still_says_so(
@@ -176,3 +176,40 @@ def test_a_later_empty_run_stays_silent_but_the_days_first_empty_run_still_says_
     assert _run(node, 9, next_day) == []
     assert len(node.flat) == 1 and node.flat[0].splitlines()[-1] == "신규 메일 없음"
     assert _run(node, 13, next_day) == [] and len(node.flat) == 1
+
+
+def test_a_later_run_with_new_mail_posts_one_channel_line_linking_the_days_thread(
+    node: SimpleNamespace,
+) -> None:
+    node.inbox = [_mail("u-1", _DAY.replace(hour=7))]
+    _run(node, 9)
+    assert node.flat == []
+    node.inbox += [_mail("u-2", _DAY.replace(hour=11)), _mail("u-3", _DAY.replace(hour=12))]
+    second = _run(node, 13)
+
+    assert _cards(second) == ["### 1. 합성 u-2", "### 2. 합성 u-3"]
+    assert node.flat == [f"📬 다이제스트에 2건 추가됨 ([스레드](<https://discord.com/channels/1/{THREAD}>))"]
+    assert _run(node, 19) == [] and len(node.flat) == 1
+
+
+def test_a_failed_channel_line_keeps_the_run_recorded_and_never_shows_a_mail_twice(
+    node: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    node.inbox = [_mail("u-1", _DAY.replace(hour=7))]
+    _run(node, 9)
+
+    def refuse(_body: str) -> str:
+        raise OSError("synthetic discord outage")
+
+    monkeypatch.setattr(triage_confirm, "dm_owner", refuse)
+    node.inbox.append(_mail("u-2", _DAY.replace(hour=11)))
+    assert _cards(_run(node, 13)) == ["### 1. 합성 u-2"]
+    assert "DIGEST-ADDED-LINE-FAIL" in capsys.readouterr().err
+    assert _run(node, 19) == []
+
+
+def test_a_later_run_that_opens_the_days_thread_itself_posts_no_added_line(node: SimpleNamespace) -> None:
+    assert _run(node, 9) == [] and node.flat[-1].splitlines()[-1] == "신규 메일 없음"
+    node.inbox = [_mail("u-1", _DAY.replace(hour=11))]
+    assert _cards(_run(node, 13)) == ["### 1. 합성 u-1"]
+    assert len(node.flat) == 1 and node.opened == ["다이제스트 10-30"]

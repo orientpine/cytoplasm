@@ -55,6 +55,31 @@ def open_for(kst_now: datetime) -> object:
     return thread
 
 
+def existed(kst_now: datetime) -> bool:
+    """Whether the day's thread was already open before this run (an unreadable state says no)."""
+    try:
+        return _shared().load(kst_now.date().isoformat()) is not None
+    except Exception as error:  # noqa: BLE001 — unknown: the run posts no added line
+        print(f"DIGEST-THREAD-FAIL stage=load err={type(error).__name__}", file=sys.stderr)
+        return False
+
+
+def added_line(channel_id: str, count: int) -> str:
+    """The one channel line saying a later run added ``count`` cards to the day's thread (Q40)."""
+    thread = _thread(channel_id)
+    guild = str(getattr(thread, "guild_id", "") or "")
+    try:
+        owner_message = triage_approval._repo_module("owner_message")
+        url = owner_message.discord_link(
+            space="guild" if guild else "unknown", channel_id=channel_id, guild_id=guild or None,
+        ).url
+    except triage_gate.GateError:
+        url = None
+    where = (owner_message.masked_discord_link(url, "스레드") if url
+             else f"스레드 「{getattr(thread, 'name', '') or ICON + ' ' + LABEL}」")
+    return f"{ICON} 다이제스트에 {count}건 추가됨 ({where})"
+
+
 def _thread(channel_id: str) -> object | None:
     try:
         return _shared().find(channel_id)
