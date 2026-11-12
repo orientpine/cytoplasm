@@ -3,6 +3,7 @@ from __future__ import annotations
 import calendar
 import contextlib
 import fcntl
+import os
 import sys
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -308,45 +309,61 @@ def waiting_threads(drafts: Iterable[Mapping[str, JsonValue]]) -> set[str]:
 def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "") -> bool:
     """The one place a mail approval thread's state mark is set; a miss is kept for the next tick.
 
-    ``mark`` (when given) becomes the thread's last wanted mark in ``thread-marks/<thread>``;
-    without it the stored one is settled (the watch tick). A card still waiting in the thread wins
-    with 🔔 (lead 2026-11-12: what the owner still has to press comes first), read from the draft
-    store at that moment (``exclude``: the draft whose result is being delivered). Every step runs
-    under the thread's lock, so compose, results and the tick never act on each other's stale view
-    (an older attempt cannot acknowledge a newer wanted mark, a tick cannot close a thread a new
-    card just reopened). A name that already shows the mark costs no rename: Discord allows two
-    name edits per ten minutes, and a 429 is never waited on (2026-11-04: the wait killed compose;
-    2026-11-12: four cards and results in eleven minutes left a sent mail's thread 🔔).
+    ``mark`` (when given) is recorded as its own file ``thread-marks/<thread>.<time>-<pid>``, made
+    at once and without waiting, so no writer ever overwrites or removes another's wish; without
+    ``mark`` the recorded ones are settled (the watch tick). Settling runs under the thread's lock:
+    it lists the recorded marks first (the newest wins), then reads the draft store, where a card
+    still waiting in the thread wins with 🔔 (lead 2026-11-12: what the owner still has to press
+    comes first; ``exclude`` is the draft whose result is being delivered). A card is bound before
+    its 🔔 is recorded and a result's status before its end mark, so a wish recorded after the
+    listing is never decided on a staler store, and only the listed files are removed. A name that
+    already shows the mark costs no rename: Discord allows two name edits per ten minutes, and a
+    429 is never waited on (2026-11-04: the wait killed compose; 2026-11-12: four cards and
+    results in eleven minutes left a sent mail's thread 🔔).
     """
     if not thread_id.isdigit():
         return False
-    path = _thread_marks() / thread_id
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with _thread_lock(path) as locked:
-        if mark is not None:
-            path.write_text(mark, encoding="utf-8")
+    root = _thread_marks()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if mark is not None:
+        _record_mark(root, thread_id, mark)
+    with _thread_lock(root / thread_id) as locked:
         if not locked:
             print(f"THREAD-MARK-BUSY thread={thread_id}", file=sys.stderr)
             return False
-        stored = _stored_mark(path)
-        if stored is None:
+        wishes = _recorded_marks(root, thread_id)
+        if not wishes:
             return True
         waiting = thread_id in waiting_threads(
             draft for draft in triage_gate.list_drafts() if not exclude or draft.get("id") != exclude)
-        if stored == PENDING_MARK and not waiting:
-            path.unlink(missing_ok=True)  # its card was decided: that result asked for its own end mark
-            return True
-        done = _apply_mark(thread_id, PENDING_MARK if waiting else stored)
-        if done and _stored_mark(path) == stored:  # a newer wanted mark (one that could not wait) stays
-            path.unlink(missing_ok=True)
+        ended = [wish for _, wish in wishes if wish != PENDING_MARK]
+        if waiting or ended:
+            done = _apply_mark(thread_id, PENDING_MARK if waiting else ended[-1])
+        else:
+            done = True  # a 🔔 whose card was decided: that result records its own end mark
+        if done:
+            for path, _ in wishes:
+                path.unlink(missing_ok=True)
         return done
 
 
-def _stored_mark(path: Path) -> str | None:
-    try:
-        return path.read_text(encoding="utf-8").strip() or PENDING_MARK
-    except FileNotFoundError:
-        return None
+def _record_mark(root: Path, thread_id: str, mark: str) -> None:
+    path = root / f"{thread_id}.{time.time_ns():020d}-{os.getpid()}"
+    with open(path, "x", encoding="utf-8") as handle:
+        handle.write(mark)
+
+
+def _recorded_marks(root: Path, thread_id: str) -> list[tuple[Path, str]]:
+    """The thread's recorded marks, oldest first; a bare ``<thread>`` file is an older runtime's 🔔."""
+    paths = [root / thread_id] if (root / thread_id).is_file() else []
+    paths += sorted(root.glob(f"{thread_id}.*"))
+    wishes: list[tuple[Path, str]] = []
+    for path in paths:
+        try:
+            wishes.append((path, path.read_text(encoding="utf-8").strip() or PENDING_MARK))
+        except FileNotFoundError:
+            continue
+    return wishes
 
 
 @contextlib.contextmanager
@@ -419,9 +436,9 @@ def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]] = ()) -> None:
     root = _thread_marks()
     if not root.is_dir():
         return
-    for path in sorted(root.iterdir()):
-        if path.name.isdigit():
-            mark_thread(path.name)
+    for thread_id in sorted({path.name.partition(".")[0] for path in root.iterdir()}):
+        if thread_id.isdigit():
+            mark_thread(thread_id)
 
 
 def _snowflake_before(stamp: str) -> int | None:

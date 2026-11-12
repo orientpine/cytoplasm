@@ -27,7 +27,7 @@ def _rate_limited() -> HTTPError:
 
 def _marks(tmp_path: Path) -> list[str]:
     root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
-    return sorted(path.name for path in root.glob("*")) if root.is_dir() else []
+    return sorted({path.name.partition(".")[0] for path in root.glob("*")}) if root.is_dir() else []
 
 
 def test_rate_limited_rename_keeps_the_card_bound_with_reactions_and_remembers_the_mark(
@@ -201,23 +201,48 @@ def test_a_rename_never_sleeps_on_429_even_outside_no_wait() -> None:
 def test_a_finished_older_mark_attempt_never_forgets_a_newer_wanted_mark(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: a tick settles the remembered 🔔 while, during its rename, the sent result asks for ✅
-    # (gate review of #238: the older attempt deleted that newer record and the thread stayed 🔔).
+    # Given: a tick settles a remembered ✅ while, during its rename, another result records ✅ again
+    # without the lock (gate reviews of #238: the older attempt deleted that newer record).
     _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
     assert _compose() == 0
     root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
     root.mkdir(parents=True, exist_ok=True)
-    (root / THREAD).write_text("🔔", encoding="utf-8")
+    (root / THREAD).write_text("✅", encoding="utf-8")
+    monkeypatch.setattr(triage_approval_gate, "_THREAD_LOCK_SECONDS", 0.0)
 
     def apply_while_a_result_arrives(thread: str, _mark: str) -> bool:
-        (root / thread).write_text("✅", encoding="utf-8")
+        assert triage_approval_gate.mark_thread(thread, "✅") is False  # the lock is held: recorded only
         return True
 
     monkeypatch.setattr(triage_approval_gate, "_apply_mark", apply_while_a_result_arrives)
     # When: the older attempt finishes.
     triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
-    # Then: the newer wanted mark is still there for the next tick.
-    assert (root / THREAD).read_text(encoding="utf-8") == "✅"
+    # Then: the newer wanted mark is still there for the next tick, and only it.
+    assert _marks(tmp_path) == [THREAD]
+
+
+def test_a_mark_that_cannot_wait_for_the_lock_is_kept_whatever_the_holder_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: another process holds the thread's lock (gate re-review of #238: a writer that gave
+    # up waiting lost its ✅ to the holder's cleanup, same value or not).
+    api = _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    draft, = triage_gate.list_drafts()
+    _open_thread(api, "🔔 ✉️ request")
+    triage_gate.write_json(triage_gate._draft_path(str(draft["id"])), {**draft, "status": "sent"})
+    root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
+    monkeypatch.setattr(triage_approval_gate, "_THREAD_LOCK_SECONDS", 0.0)
+    with triage_approval_gate._thread_lock(root / THREAD) as held:
+        assert held
+        # When: the sent result cannot get the lock.
+        assert triage_approval_gate.mark_thread(THREAD, "✅") is False
+    # Then: its ✅ waits for the next settle, which sets it.
+    assert _marks(tmp_path) == [THREAD]
+    calls = len(api.calls)
+    triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
+    assert _renames(api, calls) == [{"name": "✅ ✉️ request", "archived": True}]
+    assert _marks(tmp_path) == []
 
 
 def test_a_tick_reads_the_cards_again_before_marking_never_its_old_list(
