@@ -55,13 +55,14 @@ def open_for(kst_now: datetime) -> object:
     return thread
 
 
-def existed(kst_now: datetime) -> bool:
-    """Whether the day's thread was already open before this run (an unreadable state says no)."""
+def opened_before(kst_now: datetime) -> str:
+    """The day's thread id when it was open before this run, else '' (an unreadable state says no)."""
     try:
-        return _shared().load(kst_now.date().isoformat()) is not None
+        thread = _shared().load(kst_now.date().isoformat())
     except Exception as error:  # noqa: BLE001 — unknown: the run posts no added line
         print(f"DIGEST-THREAD-FAIL stage=load err={type(error).__name__}", file=sys.stderr)
-        return False
+        return ""
+    return str(thread.channel_id) if thread is not None else ""
 
 
 def added_line(channel_id: str, count: int) -> str:

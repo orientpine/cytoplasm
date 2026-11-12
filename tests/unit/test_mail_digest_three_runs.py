@@ -213,3 +213,20 @@ def test_a_later_run_that_opens_the_days_thread_itself_posts_no_added_line(node:
     node.inbox = [_mail("u-1", _DAY.replace(hour=11))]
     assert _cards(_run(node, 13)) == ["### 1. 합성 u-1"]
     assert len(node.flat) == 1 and node.opened == ["다이제스트 10-30"]
+
+
+def test_a_later_run_whose_cards_fall_back_under_a_channel_header_posts_no_added_line(
+    node: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node.inbox = [_mail("u-1", _DAY.replace(hour=7))]
+    _run(node, 9)
+
+    def unreachable(_now: datetime) -> object:
+        raise OSError("synthetic thread outage")
+
+    monkeypatch.setattr(triage_digest_thread, "open_for", unreachable)
+    monkeypatch.setattr(triage_confirm, "digest_thread", lambda _header, _name: "1529000000000000999")
+    node.inbox.append(_mail("u-2", _DAY.replace(hour=11)))
+    posts = _run(node, 13)
+    assert [(channel, body.splitlines()[0]) for channel, body in posts] == [("1529000000000000999", "### 1. 합성 u-2")]
+    assert len(node.flat) == 1 and node.flat[0].startswith("## 📬 기관메일 다이제스트")

@@ -614,7 +614,7 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
     import triage_digest_thread
 
     # A later run only joins the day's open thread, which the channel never shows (owner Q40).
-    joins_thread = bool(dm_items) and triage_digest_thread.existed(kst_now)
+    open_thread = triage_digest_thread.opened_before(kst_now) if dm_items else ""
     try:  # Delivery first — failure leaves every mail undigested
         message_ids, thread_id = _deliver(parts, dm_items, kst_now)
     except Exception as error:  # noqa: BLE001 — cron alert needs one structured marker
@@ -632,7 +632,7 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
         _attach_reactions(card_channel, str(message_id or ""))
     run_id = triage_store.record_digest_run(db, triage_core.utc_now(), store_items)
     triage_digest_thread.settle()
-    if joins_thread and thread_id:
+    if open_thread and thread_id == open_thread:
         _post_added_line(thread_id, len(dm_items))
     print(f"DIGEST run={run_id} items={len(dm_items)}")
     return 0
