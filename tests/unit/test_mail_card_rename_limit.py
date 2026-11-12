@@ -27,7 +27,7 @@ def _rate_limited() -> HTTPError:
 
 def _marks(tmp_path: Path) -> list[str]:
     root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
-    return sorted({path.name.partition(".")[0] for path in root.glob("*")}) if root.is_dir() else []
+    return sorted({path.name.partition(".")[0] for path in root.glob("[!.]*")}) if root.is_dir() else []
 
 
 def test_rate_limited_rename_keeps_the_card_bound_with_reactions_and_remembers_the_mark(
@@ -299,6 +299,47 @@ def test_an_approved_card_waiting_for_a_send_retry_keeps_its_failed_mark(
     triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
     # Then: it shows ❗ (open), not 🔔: nothing is left for the owner to press.
     assert _renames(api, calls) == [{"name": "❗ ✉️ request", "archived": False}]
+
+
+def test_a_cards_final_result_wins_over_its_failure_whatever_the_order_of_the_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the same card recorded ✅ (sent on retry) and, in a later-named file, ❗ (gate review
+    # of #238: file names ordered by clock let an older failure beat the send).
+    api = _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    draft, = triage_gate.list_drafts()
+    triage_gate.write_json(triage_gate._draft_path(str(draft["id"])), {**draft, "status": "sent"})
+    _open_thread(api, "🔔 ✉️ request")
+    root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{THREAD}.1-1-a").write_text("⛔ 300000000000000001", encoding="utf-8")
+    (root / f"{THREAD}.5-1-b").write_text(f"✅ {CARD}", encoding="utf-8")
+    (root / f"{THREAD}.9-1-c").write_text(f"❗ {CARD}", encoding="utf-8")
+    calls = len(api.calls)
+    triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
+    # Then: the newest card's final result is shown; the older card's ⛔ and the ❗ lose.
+    assert _renames(api, calls) == [{"name": "✅ ✉️ request", "archived": True}]
+    assert _marks(tmp_path) == []
+
+
+def test_a_mark_still_being_written_is_never_seen_or_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a writer stopped after creating its record but before it was complete (gate review of
+    # #238: an empty record read as 🔔 was removed, and the writer's ✅ was lost).
+    root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
+    root.mkdir(parents=True)
+    monkeypatch.setenv("TRIAGE_GATE_DIR", str(tmp_path / "gate"))
+
+    def stop(*_args: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(triage_approval_gate.os, "replace", stop)
+    with pytest.raises(KeyboardInterrupt):
+        triage_approval_gate._record_mark(root, THREAD, "✅", CARD)
+    # Then: no settler can see (and so remove) a record that is not complete.
+    assert triage_approval_gate._recorded_marks(root, THREAD) == []
 
 
 def test_a_half_posted_card_is_adopted_instead_of_wedging_the_key(

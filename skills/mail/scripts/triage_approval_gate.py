@@ -6,6 +6,7 @@ import fcntl
 import os
 import sys
 import time
+import uuid
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -307,15 +308,17 @@ def waiting_threads(drafts: Iterable[Mapping[str, JsonValue]]) -> set[str]:
     }
 
 
-def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "") -> bool:
+def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "", card: str = "") -> bool:
     """The one place a mail approval thread's state mark is set; a miss is kept for the next tick.
 
-    ``mark`` (when given) is recorded as its own file ``thread-marks/<thread>.<time>-<pid>``, made
-    at once and without waiting, so no writer ever overwrites or removes another's wish; without
-    ``mark`` the recorded ones are settled (the watch tick). Settling runs under the thread's lock:
-    it lists the recorded marks first (the newest wins), then reads the draft store, where a card
-    still waiting in the thread wins with 🔔 (lead 2026-11-12: what the owner still has to press
-    comes first; ``exclude`` is the draft whose result is being delivered). A card is bound before
+    ``mark`` (when given) is recorded with its card's message id as its own file in
+    ``thread-marks/`` (written aside, then renamed in, at once and without waiting), so no writer
+    ever overwrites, half-shows or removes another's wish; without ``mark`` the recorded ones are
+    settled (the watch tick). Settling runs under the thread's lock: it lists the recorded marks
+    first, then reads the draft store, where a card still waiting in the thread wins with 🔔 (lead
+    2026-11-12: what the owner still has to press comes first; ``exclude`` is the draft whose
+    result is being delivered). Otherwise the newest card's result wins, a final one (✅ ⛔ 💤)
+    over ❗ for the same card, so no clock decides the order. A card is bound before
     its 🔔 is recorded and a result's status before its end mark, so a wish recorded after the
     listing is never decided on a staler store, and only the listed files are removed. A name that
     already shows the mark costs no rename: Discord allows two name edits per ten minutes, and a
@@ -327,7 +330,7 @@ def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "") -
     root = _thread_marks()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if mark is not None:
-        _record_mark(root, thread_id, mark)
+        _record_mark(root, thread_id, mark, card)
     with _thread_lock(root / thread_id) as locked:
         if not locked:
             print(f"THREAD-MARK-BUSY thread={thread_id}", file=sys.stderr)
@@ -337,9 +340,10 @@ def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "") -
             return True
         waiting = thread_id in waiting_threads(
             draft for draft in triage_gate.list_drafts() if not exclude or draft.get("id") != exclude)
-        ended = [wish for _, wish in wishes if wish != PENDING_MARK]
+        ended = [wish for _, wish in wishes if wish[0] != PENDING_MARK]
         if waiting or ended:
-            done = _apply_mark(thread_id, PENDING_MARK if waiting else ended[-1])
+            newest = max(ended, key=lambda wish: (wish[1], wish[0] in _CLOSING_MARKS), default=(PENDING_MARK, 0))
+            done = _apply_mark(thread_id, PENDING_MARK if waiting else newest[0])
         else:
             done = True  # a 🔔 whose card was decided: that result records its own end mark
         if done:
@@ -348,22 +352,24 @@ def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "") -
         return done
 
 
-def _record_mark(root: Path, thread_id: str, mark: str) -> None:
-    path = root / f"{thread_id}.{time.time_ns():020d}-{os.getpid()}"
-    with open(path, "x", encoding="utf-8") as handle:
-        handle.write(mark)
+def _record_mark(root: Path, thread_id: str, mark: str, card: str = "") -> None:
+    token = f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    aside = root / f".{thread_id}.{token}"
+    aside.write_text(f"{mark} {card if card.isdigit() else 0}", encoding="utf-8")
+    os.replace(aside, root / f"{thread_id}.{token}")
 
 
-def _recorded_marks(root: Path, thread_id: str) -> list[tuple[Path, str]]:
-    """The thread's recorded marks, oldest first; a bare ``<thread>`` file is an older runtime's 🔔."""
+def _recorded_marks(root: Path, thread_id: str) -> list[tuple[Path, tuple[str, int]]]:
+    """The thread's recorded marks as (mark, card message id); a bare ``<thread>`` file is an older runtime's 🔔."""
     paths = [root / thread_id] if (root / thread_id).is_file() else []
     paths += sorted(root.glob(f"{thread_id}.*"))
-    wishes: list[tuple[Path, str]] = []
+    wishes: list[tuple[Path, tuple[str, int]]] = []
     for path in paths:
         try:
-            wishes.append((path, path.read_text(encoding="utf-8").strip() or PENDING_MARK))
+            mark, _, card = path.read_text(encoding="utf-8").strip().partition(" ")
         except FileNotFoundError:
             continue
+        wishes.append((path, (mark or PENDING_MARK, int(card) if card.isdigit() else 0)))
     return wishes
 
 
@@ -437,7 +443,7 @@ def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]] = ()) -> None:
     root = _thread_marks()
     if not root.is_dir():
         return
-    for thread_id in sorted({path.name.partition(".")[0] for path in root.iterdir()}):
+    for thread_id in sorted({path.name.partition(".")[0] for path in root.iterdir() if not path.name.startswith(".")}):
         if thread_id.isdigit():
             mark_thread(thread_id)
 

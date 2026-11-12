@@ -278,7 +278,8 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
         if mark:  # the result is final whatever became of its notice; the title follows it
             import triage_approval_gate
 
-            triage_approval_gate.mark_thread(thread, mark, exclude=str(draft.get("id") or ""))
+            triage_approval_gate.mark_thread(
+                thread, mark, exclude=str(draft.get("id") or ""), card=str(draft.get("message_id") or ""))
 
 
 def _api_leaving_thread_name(thread_id: str):
