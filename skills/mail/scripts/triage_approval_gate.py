@@ -287,48 +287,98 @@ def _thread_marks() -> Path:
     return triage_gate.gate_dir() / THREAD_MARKS_DIRNAME
 
 
-def resume_pending_mark(thread_id: str) -> bool:
-    """Give a reused thread 🔔 with one rename attempt; remember the thread when it fails.
-
-    Discord allows two name edits per ten minutes, so a withdrawn card's 💤 followed by the
-    new card's 🔔 may be refused with 429. The card never waits for that (2026-11-04: the
-    wait killed compose); ``retry_thread_marks`` sets the mark on a later watch tick.
-    """
-    if not thread_id.isdigit():
-        return False
-    try:
-        with triage_confirm.no_rate_limit_wait():
-            done = triage_confirm._origin_notice().resume_thread(triage_confirm._api, thread_id)
-    except Exception as error:  # noqa: BLE001 — an older interop runtime must not cost the card its reactions
-        print(f"THREAD-RENAME-FAIL thread={thread_id} err={type(error).__name__}", file=sys.stderr)
-        done = False
-    mark = _thread_marks() / thread_id
-    if done:
-        mark.unlink(missing_ok=True)
-    else:
-        mark.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        mark.write_text("", encoding="utf-8")
-    return bool(done)
+PENDING_MARK = "🔔"
+#: End marks that close (archive) the thread; ❗ failed stays open for the owner, like 🔔.
+_CLOSING_MARKS = frozenset({"✅", "⛔", "💤"})
 
 
-def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]]) -> None:
-    """Watch tick: 🔔 for a remembered thread whose card still waits, else forget the thread.
-
-    A decided card's own result notice sets its end mark, so the tick never renames it back.
-    """
-    root = _thread_marks()
-    if not root.is_dir():
-        return
-    waiting = {
+def waiting_threads(drafts: Iterable[Mapping[str, JsonValue]]) -> set[str]:
+    """Approval threads holding a bound card that still waits for the owner."""
+    return {
         str(draft.get("channel_id")) for draft in drafts
         if draft.get("status") == "pending" and draft.get("message_id")
         and draft.get("approval_thread_id") == draft.get("channel_id")
     }
+
+
+def mark_thread(thread_id: str, mark: str, drafts: Iterable[Mapping[str, JsonValue]] | None = None) -> bool:
+    """The one place a mail approval thread's state mark is set; a miss is kept for the next tick.
+
+    A card still waiting in the thread wins over any end mark (lead 2026-11-12: what the owner
+    still has to press comes first). The wanted mark is written to ``thread-marks/<thread>``
+    before the rename, so only the last wanted state is kept and a process killed mid-rename
+    leaves it to ``retry_thread_marks``. A name that already shows it costs no rename: Discord
+    allows two name edits per ten minutes, and a 429 is never waited on (2026-11-04: the wait
+    killed compose; 2026-11-12: four cards and results in eleven minutes left the thread 🔔
+    after its card was sent).
+    """
+    if not thread_id.isdigit():
+        return False
+    waiting = waiting_threads(triage_gate.list_drafts() if drafts is None else drafts)
+    wanted = PENDING_MARK if thread_id in waiting else mark
+    path = _thread_marks() / thread_id
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.write_text(wanted, encoding="utf-8")
+    done = _apply_mark(thread_id, wanted)
+    if done:
+        path.unlink(missing_ok=True)
+    return done
+
+
+def _apply_mark(thread_id: str, mark: str) -> bool:
+    closed = mark in _CLOSING_MARKS
+    try:
+        with triage_confirm.no_rate_limit_wait():
+            current = triage_confirm._api("GET", f"/channels/{thread_id}")
+            if not isinstance(current, dict):
+                raise ValueError("thread is not an object")
+            name = str(current.get("name") or "")
+            archived = bool((current.get("thread_metadata") or {}).get("archived"))
+            wanted = triage_confirm._origin_notice().state_thread_name(name, mark) if name else name
+            if wanted == name and archived == closed:
+                return True
+            if archived and wanted != name:  # Discord renames an archived thread only while reopening it
+                triage_confirm._api("PATCH", f"/channels/{thread_id}", {"name": wanted, "archived": False})
+                if closed:
+                    triage_confirm._api("PATCH", f"/channels/{thread_id}", {"archived": True})
+            else:
+                payload: dict[str, JsonValue] = {"archived": closed}
+                if wanted != name:
+                    payload["name"] = wanted
+                triage_confirm._api("PATCH", f"/channels/{thread_id}", payload)
+    except HTTPError as error:
+        if error.code == 404:
+            return True  # the thread is gone: nothing left to mark
+        print(f"THREAD-RENAME-FAIL thread={thread_id} err=HTTPError:{error.code}", file=sys.stderr)
+        return False
+    except Exception as error:  # noqa: BLE001 — a mark never costs the card or the result behind it
+        print(f"THREAD-RENAME-FAIL thread={thread_id} err={type(error).__name__}", file=sys.stderr)
+        return False
+    return True
+
+
+def resume_pending_mark(thread_id: str) -> bool:
+    """Give a reused thread 🔔 once its new card is bound; a miss is retried by the watch tick."""
+    return mark_thread(thread_id, PENDING_MARK)
+
+
+def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]]) -> None:
+    """Watch tick: set each remembered thread's last wanted mark, 🔔 while a card there still waits.
+
+    A remembered 🔔 whose card no longer waits is forgotten: that card's own result asked for its
+    end mark, so the tick never renames a decided thread back.
+    """
+    root = _thread_marks()
+    if not root.is_dir():
+        return
+    drafts = tuple(drafts)
+    waiting = waiting_threads(drafts)
     for path in sorted(root.iterdir()):
-        if path.name in waiting:
-            resume_pending_mark(path.name)
-        else:
+        mark = path.read_text(encoding="utf-8").strip() or PENDING_MARK
+        if mark == PENDING_MARK and path.name not in waiting:
             path.unlink(missing_ok=True)
+        else:
+            mark_thread(path.name, mark, drafts)
 
 
 def _snowflake_before(stamp: str) -> int | None:

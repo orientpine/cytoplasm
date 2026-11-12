@@ -115,6 +115,86 @@ def test_watch_tick_drops_a_mark_whose_card_is_no_longer_pending(
     assert _marks(tmp_path) == []
 
 
+def _open_thread(api: object, name: str) -> None:
+    api.responses[("GET", f"/channels/{THREAD}")] = {  # type: ignore[attr-defined]
+        **api.responses[("GET", f"/channels/{THREAD}")],  # type: ignore[attr-defined]
+        "name": name, "thread_metadata": {"archived": False},
+    }
+
+
+def _notices_through_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(triage_confirm, "_dm_transport", lambda channel: triage_confirm._CardReply(channel, ""))
+    monkeypatch.setattr(triage_confirm, "dm_owner", lambda _body: pytest.fail("the result left its thread"))
+
+
+def _renames(api: object, since: int) -> list[dict]:
+    return [call[2] for call in api.calls[since:] if call[0] == "PATCH"]  # type: ignore[attr-defined]
+
+
+def test_a_result_whose_end_mark_is_rate_limited_is_remembered_and_a_later_tick_sets_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 2026-11-12 thread 1570290417285726290 - the card was sent while the thread's two renames of
+    # the last ten minutes were used up, so the ✅ rename was refused with 429.
+    api = _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    draft, = triage_gate.list_drafts()
+    _open_thread(api, "🔔 ✉️ request")
+    _notices_through_api(monkeypatch)
+    api.responses[("PATCH", f"/channels/{THREAD}")] = _rate_limited()
+    # When: the sent result closes the thread.
+    triage_confirm.notify_result({**draft, "status": "sent"}, "sent", outcome=triage_confirm.SENT_OUTCOME)
+    # Then: the wanted ✅ is remembered for the watch tick.
+    assert _marks(tmp_path) == [THREAD]
+    # When: a later tick runs after the limit lifted, with no card waiting there.
+    api.responses[("PATCH", f"/channels/{THREAD}")] = {}
+    calls = len(api.calls)
+    triage_approval_gate.retry_thread_marks([])
+    # Then: the thread gets its end mark once and is closed.
+    assert _renames(api, calls) == [{"name": "✅ ✉️ request", "archived": True}]
+    assert _marks(tmp_path) == []
+
+
+def test_an_older_cards_result_never_marks_a_thread_where_a_newer_card_still_waits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the newer card waits in the thread (🔔); the owner then cancels an older card of the
+    # same thread (2026-11-12 04:26 the thread turned ⛔ under the waiting card 3677a7).
+    api = _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    waiting, = triage_gate.list_drafts()
+    _open_thread(api, "🔔 ✉️ request")
+    _notices_through_api(monkeypatch)
+    calls = len(api.calls)
+    older = {**waiting, "id": "0ld0ld", "status": "cancelled", "message_id": "300000000000000009"}
+    # When: the older card's cancel result is delivered in that thread.
+    triage_confirm.notify_result(older, "cancelled", outcome=triage_confirm.CANCELLED_OUTCOME)
+    # Then: the notice is posted but the thread keeps 🔔 with no rename spent on it.
+    assert ("POST", f"/channels/{THREAD}/messages") in [call[:2] for call in api.calls[calls:]]
+    assert _renames(api, calls) == []
+    assert _marks(tmp_path) == []
+
+
+def test_a_rename_never_sleeps_on_429_even_outside_no_wait() -> None:
+    # A thread joined by compose is renamed through the same helper (approval_directory._join_thread);
+    # Discord's name limit answers minutes, so a rename that waited would outlive the gate's 150 s.
+    sleeps: list[float] = []
+
+    def send(_request: object) -> object:
+        raise _rate_limited()
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(triage_confirm, "bot_token", lambda: "identity-a")
+        patch.setattr(triage_confirm, "_send", send)
+        patch.setattr(triage_confirm.time, "sleep", sleeps.append)
+        with pytest.raises(HTTPError):
+            triage_confirm._api("PATCH", f"/channels/{THREAD}", {"name": "🔔 x", "archived": False})
+        assert sleeps == []
+        with pytest.raises(HTTPError):
+            triage_confirm._api("PATCH", f"/channels/{THREAD}", {"archived": False})
+        assert sleeps == [300.0] * (triage_confirm._RATE_LIMIT_ATTEMPTS - 1)
+
+
 def test_a_half_posted_card_is_adopted_instead_of_wedging_the_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

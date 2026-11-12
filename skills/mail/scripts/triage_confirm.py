@@ -114,7 +114,10 @@ def _api(method: str, path: str, payload: dict | None = None) -> object:
         },
         method=method,
     )
-    attempts = 1 if _NO_RATE_LIMIT_WAIT.get() else _RATE_LIMIT_ATTEMPTS
+    # A thread rename never waits either (2026-11-12): Discord's name limit answers minutes, and every
+    # rename here is a best-effort state mark that triage_approval_gate.mark_thread remembers and retries.
+    renames = method == "PATCH" and path.startswith("/channels/") and "name" in (payload or {})
+    attempts = 1 if _NO_RATE_LIMIT_WAIT.get() or renames else _RATE_LIMIT_ATTEMPTS
     for _ in range(attempts - 1):
         try:
             return _send(request)
@@ -255,10 +258,29 @@ def notify_result(draft: dict, content: str, *, outcome: str = "") -> str:
         return dm_owner(content)
     message = result_message(draft, content, outcome)
     transport = _dm_transport
+    thread = str(draft.get("approval_thread_id") or "")
+    mark = ""
     if _in_digest_thread(draft):  # other cards in the thread still wait — never close it
         outcome = ""
         card = str(draft.get("message_id") or "")
         transport = lambda channel: _CardReply(channel, card)  # noqa: E731
+    elif outcome and thread:
+        # The request's own approval thread gets its end mark from one place, after the notice:
+        # 🔔 while another card waits there, and a rate-limited rename kept for the watch tick
+        # (2026-11-12: ⛔ under a waiting card at 04:26, then ✅ refused with 429 and never retried).
+        mark, outcome = origin_notice.ThreadOutcome[outcome].value, ""
+    try:
+        return _deliver(origin_notice, draft, content, message, transport, outcome)
+    finally:
+        if mark:
+            import triage_approval_gate
+            import triage_gate
+
+            others = [item for item in triage_gate.list_drafts() if item.get("id") != draft.get("id")]
+            triage_approval_gate.mark_thread(thread, mark, others)
+
+
+def _deliver(origin_notice, draft: dict, content: str, message, transport, outcome: str) -> str:
     if message is not None and getattr(origin_notice, "ACCEPTS_OWNER_MESSAGE", False):
         return str(origin_notice.deliver(
             api=_api, transport_factory=transport, record=draft,
