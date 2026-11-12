@@ -1,9 +1,13 @@
 """Mail lifecycle adapter, retaining facade injection seams."""
 from __future__ import annotations
 import calendar
+import contextlib
+import fcntl
+import os
 import sys
 import time
-from collections.abc import Iterable, Mapping
+import uuid
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -287,48 +291,181 @@ def _thread_marks() -> Path:
     return triage_gate.gate_dir() / THREAD_MARKS_DIRNAME
 
 
-def resume_pending_mark(thread_id: str) -> bool:
-    """Give a reused thread 🔔 with one rename attempt; remember the thread when it fails.
-
-    Discord allows two name edits per ten minutes, so a withdrawn card's 💤 followed by the
-    new card's 🔔 may be refused with 429. The card never waits for that (2026-11-04: the
-    wait killed compose); ``retry_thread_marks`` sets the mark on a later watch tick.
-    """
-    if not thread_id.isdigit():
-        return False
-    try:
-        with triage_confirm.no_rate_limit_wait():
-            done = triage_confirm._origin_notice().resume_thread(triage_confirm._api, thread_id)
-    except Exception as error:  # noqa: BLE001 — an older interop runtime must not cost the card its reactions
-        print(f"THREAD-RENAME-FAIL thread={thread_id} err={type(error).__name__}", file=sys.stderr)
-        done = False
-    mark = _thread_marks() / thread_id
-    if done:
-        mark.unlink(missing_ok=True)
-    else:
-        mark.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        mark.write_text("", encoding="utf-8")
-    return bool(done)
+PENDING_MARK = "🔔"
+#: How long a mark waits for another process marking the same thread (one GET and one PATCH, no 429 wait).
+_THREAD_LOCK_SECONDS = 20.0
+#: End marks that close (archive) the thread; ❗ failed stays open for the owner, like 🔔.
+_CLOSING_MARKS = frozenset({"✅", "⛔", "💤"})
 
 
-def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]]) -> None:
-    """Watch tick: 🔔 for a remembered thread whose card still waits, else forget the thread.
-
-    A decided card's own result notice sets its end mark, so the tick never renames it back.
-    """
-    root = _thread_marks()
-    if not root.is_dir():
-        return
-    waiting = {
+def waiting_threads(drafts: Iterable[Mapping[str, JsonValue]]) -> set[str]:
+    """Approval threads holding a bound card that still waits for the owner."""
+    return {
         str(draft.get("channel_id")) for draft in drafts
         if draft.get("status") == "pending" and draft.get("message_id")
         and draft.get("approval_thread_id") == draft.get("channel_id")
+        and not draft.get("last_error")  # approved, its send waits for a retry: nothing left to press
     }
-    for path in sorted(root.iterdir()):
-        if path.name in waiting:
-            resume_pending_mark(path.name)
+
+
+def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "", card: str = "") -> bool:
+    """The one place a mail approval thread's state mark is set; a miss is kept for the next tick.
+
+    ``mark`` (when given) is recorded with its card's message id as its own file in
+    ``thread-marks/`` (written aside, then renamed in, at once and without waiting), so no writer
+    ever overwrites, half-shows or removes another's wish; without ``mark`` the recorded ones are
+    settled (the watch tick). Settling runs under the thread's lock: it lists the recorded marks
+    first, then reads the draft store, where a card still waiting in the thread wins with 🔔 (lead
+    2026-11-12: what the owner still has to press comes first; ``exclude`` is the draft whose
+    result is being delivered). Otherwise the newest card's result wins, a final one (✅ ⛔ 💤)
+    over ❗ for the same card, so no clock decides the order. A card is bound before
+    its 🔔 is recorded and a result's status before its end mark, so a wish recorded after the
+    listing is never decided on a staler store, and only the listed files are removed. A name that
+    already shows the mark costs no rename: Discord allows two name edits per ten minutes, and a
+    429 is never waited on (2026-11-04: the wait killed compose; 2026-11-12: four cards and
+    results in eleven minutes left a sent mail's thread 🔔).
+    """
+    if not thread_id.isdigit():
+        return False
+    root = _thread_marks()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if mark is not None:
+        _record_mark(root, thread_id, mark, card)
+    with _thread_lock(root / thread_id) as locked:
+        if not locked:
+            print(f"THREAD-MARK-BUSY thread={thread_id}", file=sys.stderr)
+            return False
+        wishes = _recorded_marks(root, thread_id)
+        if not wishes:
+            return True
+        waiting = thread_id in waiting_threads(
+            draft for draft in triage_gate.list_drafts() if not exclude or draft.get("id") != exclude)
+        ended = [wish for _, wish in wishes if wish[0] != PENDING_MARK]
+        shown = _settled_mark(root, thread_id)
+        if waiting or ended:
+            newest = max([*ended, *([shown] if shown else [])], key=lambda wish: (wish[1], wish[0] in _CLOSING_MARKS), default=(PENDING_MARK, 0))
+            done = _apply_mark(thread_id, PENDING_MARK if waiting else newest[0])
+            if done and not waiting:
+                _settle_mark(root, thread_id, newest)
         else:
-            path.unlink(missing_ok=True)
+            done = True  # a 🔔 whose card was decided: that result records its own end mark
+        if done:
+            for path, _ in wishes:
+                path.unlink(missing_ok=True)
+        return done
+
+
+def _settled_mark(root: Path, thread_id: str) -> tuple[str, int] | None:
+    """The end mark last shown on the thread, so a late record of an older result never beats it."""
+    try:
+        mark, _, card = (root.parent / f"{THREAD_MARKS_DIRNAME}.settled" / thread_id).read_text(encoding="utf-8").partition(" ")
+    except FileNotFoundError:
+        return None
+    return (mark, int(card)) if mark and card.isdigit() else None
+
+
+def _settle_mark(root: Path, thread_id: str, wish: tuple[str, int]) -> None:
+    settled = root.parent / f"{THREAD_MARKS_DIRNAME}.settled"
+    settled.mkdir(mode=0o700, exist_ok=True)
+    aside = settled / f".{thread_id}.{uuid.uuid4().hex[:8]}"
+    aside.write_text(f"{wish[0]} {wish[1]}", encoding="utf-8")
+    os.replace(aside, settled / thread_id)
+
+
+def _record_mark(root: Path, thread_id: str, mark: str, card: str = "") -> None:
+    token = f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    aside = root / f".{thread_id}.{token}"
+    aside.write_text(f"{mark} {card if card.isdigit() else 0}", encoding="utf-8")
+    os.replace(aside, root / f"{thread_id}.{token}")
+
+
+def _recorded_marks(root: Path, thread_id: str) -> list[tuple[Path, tuple[str, int]]]:
+    """The thread's recorded marks as (mark, card message id); a bare ``<thread>`` file is an older runtime's 🔔."""
+    paths = [root / thread_id] if (root / thread_id).is_file() else []
+    paths += sorted(root.glob(f"{thread_id}.*"))
+    wishes: list[tuple[Path, tuple[str, int]]] = []
+    for path in paths:
+        try:
+            mark, _, card = path.read_text(encoding="utf-8").strip().partition(" ")
+        except FileNotFoundError:
+            continue
+        wishes.append((path, (mark or PENDING_MARK, int(card) if card.isdigit() else 0)))
+    return wishes
+
+
+@contextlib.contextmanager
+def _thread_lock(path: Path) -> Iterator[bool]:
+    """Hold ``thread-marks.locks/<thread>``; give up after a while rather than outlive a gate."""
+    locks = path.parent.with_name(f"{THREAD_MARKS_DIRNAME}.locks")
+    locks.mkdir(mode=0o700, exist_ok=True)
+    with open(locks / path.name, "a", encoding="utf-8") as handle:
+        deadline = time.monotonic() + _THREAD_LOCK_SECONDS
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.1)
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _apply_mark(thread_id: str, mark: str) -> bool:
+    closed = mark in _CLOSING_MARKS
+    try:
+        with triage_confirm.no_rate_limit_wait():
+            current = triage_confirm._api("GET", f"/channels/{thread_id}")
+            if not isinstance(current, dict):
+                raise ValueError("thread is not an object")
+            name = str(current.get("name") or "")
+            archived = bool((current.get("thread_metadata") or {}).get("archived"))
+            wanted = triage_confirm._origin_notice().state_thread_name(name, mark) if name else name
+            if wanted == name and archived == closed:
+                return True
+            if archived and wanted != name:  # Discord renames an archived thread only while reopening it
+                triage_confirm._api("PATCH", f"/channels/{thread_id}", {"name": wanted, "archived": False})
+                if closed:
+                    triage_confirm._api("PATCH", f"/channels/{thread_id}", {"archived": True})
+            else:
+                payload: dict[str, JsonValue] = {"archived": closed}
+                if wanted != name:
+                    payload["name"] = wanted
+                triage_confirm._api("PATCH", f"/channels/{thread_id}", payload)
+    except HTTPError as error:
+        if error.code == 404:
+            return True  # the thread is gone: nothing left to mark
+        print(f"THREAD-RENAME-FAIL thread={thread_id} err=HTTPError:{error.code}", file=sys.stderr)
+        return False
+    except Exception as error:  # noqa: BLE001 — a mark never costs the card or the result behind it
+        print(f"THREAD-RENAME-FAIL thread={thread_id} err={type(error).__name__}", file=sys.stderr)
+        return False
+    return True
+
+
+def resume_pending_mark(thread_id: str) -> bool:
+    """Give a reused thread 🔔 once its new card is bound; a miss is retried by the watch tick."""
+    return mark_thread(thread_id, PENDING_MARK)
+
+
+def retry_thread_marks(drafts: Iterable[Mapping[str, JsonValue]] = ()) -> None:
+    """Watch tick: settle each remembered thread's last wanted mark, 🔔 while a card there still waits.
+
+    A remembered 🔔 whose card no longer waits is forgotten: that card's own result asked for its
+    end mark, so the tick never renames a decided thread back. The draft store is read again under
+    each thread's lock, so ``drafts`` (the tick's own list) is not needed and kept for callers.
+    """
+    del drafts
+    root = _thread_marks()
+    if not root.is_dir():
+        return
+    for thread_id in sorted({path.name.partition(".")[0] for path in root.iterdir() if not path.name.startswith(".")}):
+        if thread_id.isdigit():
+            mark_thread(thread_id)
 
 
 def _snowflake_before(stamp: str) -> int | None:

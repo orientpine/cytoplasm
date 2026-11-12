@@ -148,7 +148,8 @@ def test_a_rate_limited_rename_does_not_cost_the_adopted_card_its_reactions(
     assert triage_approval.post_for_approval(triage_gate.load_draft(posted["id"])) == CARD
     # Then: the reopen is not a rename, so the reactions are there and the mark waits for a tick.
     assert discord.reactions == set(EMOJIS)
-    assert (tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME / THREAD).exists()
+    root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
+    assert [mark for _, (mark, _card) in triage_approval_gate._recorded_marks(root, THREAD)] == ["🔔"]
     err = capsys.readouterr().err
     assert "THREAD-RENAME-FAIL" in err and "APPROVAL-REACTION-FAIL" not in err
 

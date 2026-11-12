@@ -16,7 +16,6 @@
 
 ## 메일 카드 스레드 이름 제한 수리에서 남긴 것 (2026-11-04)
 
-- **중간 · 결정된 카드의 끝 표시도 같은 `_api` 로 바꿔 429 면 watch tick 이 Retry-After 만큼 잠든다**: `origin_notice.close_thread` 는 `triage_confirm._api` 를 받아 이름을 바꾸고, 그 helper 는 429 에 최대 네 번 기다린다. 이번에는 compose 쪽(🔔)만 기다리지 않게 했다 → 결과 통지의 이름 바꾸기도 `no_rate_limit_wait` 로 한 번만 시도하고, 못 바꾼 끝 표시를 같은 `thread-marks` 로 다음 tick 에 다시 붙인다. 영향: 거두기·새 카드·결정이 10분 안에 몰리면 watch tick 이 늦어짐 · 심각도 중간.
 - **낮음 · 반쯤 올라간 카드 회수는 알림 꼬리(`notice`)가 없는 카드만 찾는다**: watch tick 은 `notice` 없이 다시 게시하므로, 증거·제외 수신자 꼬리가 붙어 올라간 카드는 글 바이트가 달라 `APPROVAL-ADOPT-MISS` 로 남는다 → 초안에 꼬리를 저장해 같은 바이트로 찾는다. 영향: 그런 카드는 예전처럼 posting-journal-stale 로 멈춤 · 심각도 낮음.
 
 ## 회귀 은행 실패 다섯 개 수리에서 남긴 것 (2026-11-02)
