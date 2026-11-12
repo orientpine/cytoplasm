@@ -342,6 +342,29 @@ def test_a_mark_still_being_written_is_never_seen_or_removed(
     assert triage_approval_gate._recorded_marks(root, THREAD) == []
 
 
+def test_a_failure_published_after_the_same_cards_send_was_shown_never_reopens_the_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the card's retried send set ✅ and its record was consumed; then an older ❗ of the same
+    # card, delayed before publication, appears (gate review of #238 delta4).
+    api = _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    draft, = triage_gate.list_drafts()
+    triage_gate.write_json(triage_gate._draft_path(str(draft["id"])), {**draft, "status": "sent"})
+    _open_thread(api, "🔔 ✉️ request")
+    root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
+    assert triage_approval_gate.mark_thread(THREAD, "✅", card=CARD)
+    _open_thread(api, "✅ ✉️ request")
+    api.responses[("GET", f"/channels/{THREAD}")]["thread_metadata"] = {"archived": True}
+    calls = len(api.calls)
+    triage_approval_gate._record_mark(root, THREAD, "❗", CARD)
+    # When: the next tick settles it.
+    triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
+    # Then: the shown send stays; the late failure is dropped.
+    assert _renames(api, calls) == []
+    assert _marks(tmp_path) == []
+
+
 def test_a_half_posted_card_is_adopted_instead_of_wedging_the_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

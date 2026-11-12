@@ -341,15 +341,35 @@ def mark_thread(thread_id: str, mark: str | None = None, *, exclude: str = "", c
         waiting = thread_id in waiting_threads(
             draft for draft in triage_gate.list_drafts() if not exclude or draft.get("id") != exclude)
         ended = [wish for _, wish in wishes if wish[0] != PENDING_MARK]
+        shown = _settled_mark(root, thread_id)
         if waiting or ended:
-            newest = max(ended, key=lambda wish: (wish[1], wish[0] in _CLOSING_MARKS), default=(PENDING_MARK, 0))
+            newest = max([*ended, *([shown] if shown else [])], key=lambda wish: (wish[1], wish[0] in _CLOSING_MARKS), default=(PENDING_MARK, 0))
             done = _apply_mark(thread_id, PENDING_MARK if waiting else newest[0])
+            if done and not waiting:
+                _settle_mark(root, thread_id, newest)
         else:
             done = True  # a 🔔 whose card was decided: that result records its own end mark
         if done:
             for path, _ in wishes:
                 path.unlink(missing_ok=True)
         return done
+
+
+def _settled_mark(root: Path, thread_id: str) -> tuple[str, int] | None:
+    """The end mark last shown on the thread, so a late record of an older result never beats it."""
+    try:
+        mark, _, card = (root.parent / f"{THREAD_MARKS_DIRNAME}.settled" / thread_id).read_text(encoding="utf-8").partition(" ")
+    except FileNotFoundError:
+        return None
+    return (mark, int(card)) if mark and card.isdigit() else None
+
+
+def _settle_mark(root: Path, thread_id: str, wish: tuple[str, int]) -> None:
+    settled = root.parent / f"{THREAD_MARKS_DIRNAME}.settled"
+    settled.mkdir(mode=0o700, exist_ok=True)
+    aside = settled / f".{thread_id}.{uuid.uuid4().hex[:8]}"
+    aside.write_text(f"{wish[0]} {wish[1]}", encoding="utf-8")
+    os.replace(aside, settled / thread_id)
 
 
 def _record_mark(root: Path, thread_id: str, mark: str, card: str = "") -> None:
