@@ -303,6 +303,7 @@ def waiting_threads(drafts: Iterable[Mapping[str, JsonValue]]) -> set[str]:
         str(draft.get("channel_id")) for draft in drafts
         if draft.get("status") == "pending" and draft.get("message_id")
         and draft.get("approval_thread_id") == draft.get("channel_id")
+        and not draft.get("last_error")  # approved, its send waits for a retry: nothing left to press
     }
 
 

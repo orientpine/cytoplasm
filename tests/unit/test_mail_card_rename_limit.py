@@ -280,6 +280,27 @@ def test_a_result_for_a_deleted_thread_is_dropped_as_before_and_never_sent_to_th
     assert _marks(tmp_path) == []
 
 
+def test_an_approved_card_waiting_for_a_send_retry_keeps_its_failed_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the owner approved the card, the send failed retryably (mail_send_retry keeps it
+    # pending with last_error) and the ❗ rename met the limit.
+    api = _compose_api(tmp_path, monkeypatch, "🔔 " + NAME)
+    assert _compose() == 0
+    draft, = triage_gate.list_drafts()
+    _open_thread(api, "🔔 ✉️ request")
+    retrying = {**draft, "status": "pending", "failed_attempts": 1, "last_error": {"retryable": True}}
+    triage_gate.write_json(triage_gate._draft_path(str(draft["id"])), retrying)
+    root = tmp_path / "gate" / triage_approval_gate.THREAD_MARKS_DIRNAME
+    root.mkdir(parents=True, exist_ok=True)
+    (root / THREAD).write_text("❗", encoding="utf-8")
+    calls = len(api.calls)
+    # When: the next tick settles the thread.
+    triage_approval_gate.retry_thread_marks(triage_gate.list_drafts())
+    # Then: it shows ❗ (open), not 🔔: nothing is left for the owner to press.
+    assert _renames(api, calls) == [{"name": "❗ ✉️ request", "archived": False}]
+
+
 def test_a_half_posted_card_is_adopted_instead_of_wedging_the_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
