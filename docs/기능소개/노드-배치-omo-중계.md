@@ -48,7 +48,10 @@ command="env PATH=<omo-bin-dir>:/usr/bin:/bin <relay-script-absolute-path>",rest
 
 - 밤 메일 분류가 프롬프트를 SSH stdin으로 보낸다. 이 PC는 빈 0700 임시 폴더에서
   `omo -p --mode json --no-tools --no-extensions --no-skills --no-context-files
-  --no-session --offline --system-prompt <고정 문구>`로 답한다. 모델 인자는 없다.
+  --no-session --offline --omo-senpi-memory-disabled --system-prompt <고정 문구>`로 답한다. 모델 인자는 없다.
+  `--no-extensions`는 omo 내장 기억을 끄지 않는다. `--omo-senpi-memory-disabled`가 빠지면 몇 KB 넘는 프롬프트가
+  `~/.omo/memory/transient-runs`에 남고, 종료 때 도는 기억 정리가 답을 낸 뒤에도 omo를 붙잡아 300초 시간 초과(rc 124)로
+  끝난다(2026-11-12 mail-daily-digest 실패 실측).
   `agent_end.messages` 또는 `message_end.message`의 마지막 assistant에서 텍스트와
   실제 provider/model을 읽어 `{text, provider, model}` JSON 하나만 돌려준다.
 - 256 KiB 초과는 rc 2, 동시 두 슬롯이 차면 rc 75, 실행 300초 초과는 rc 124다.

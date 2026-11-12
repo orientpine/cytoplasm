@@ -22,8 +22,12 @@ TIMEOUT = 300
 CANCELLED = 130
 _POLL_SECONDS = 0.5
 _GRACE_SECONDS = 2.0
+# --no-extensions does not stop omo's built-in memory: without --omo-senpi-memory-disabled every
+# prompt over a few KB was copied into ~/.omo/memory/transient-runs and a shutdown reflection kept
+# omo alive after its answer until the 300 s timeout (mail-daily-digest, 2026-11-12).
 ARGV = ("omo", "-p", "--mode", "json", "--no-tools", "--no-extensions", "--no-skills",
-        "--no-context-files", "--no-session", "--offline", "--system-prompt",
+        "--no-context-files", "--no-session", "--offline", "--omo-senpi-memory-disabled",
+        "--system-prompt",
         "Answer the request using only the supplied text. You have no tools.")
 
 
