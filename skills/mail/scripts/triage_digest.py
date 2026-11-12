@@ -531,6 +531,16 @@ def _delegate_after_post(
         print(f"DIGEST-CARD-EDIT-FAIL msg={message_id} err={type(error).__name__}", file=sys.stderr)
 
 
+def _post_added_line(thread_id: str, count: int) -> None:
+    """Tell the owner channel a later run added cards to the day's thread; the run stays recorded."""
+    import triage_digest_thread
+
+    try:
+        triage_confirm.dm_owner(triage_digest_thread.added_line(thread_id, count))
+    except Exception as error:  # noqa: BLE001 — the cards are posted and recorded; never resend them
+        print(f"DIGEST-ADDED-LINE-FAIL err={type(error).__name__}", file=sys.stderr)
+
+
 def _ran_today(db: Path, kst_now: datetime) -> bool:
     """Whether an earlier digest run was recorded since 00:00 KST of ``kst_now``'s day."""
     midnight = kst_now.astimezone(ZoneInfo("Asia/Seoul")).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -601,6 +611,10 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
         run_id = triage_store.record_digest_run(db, triage_core.utc_now(), [])
         print(f"DIGEST run={run_id} items=0 quiet")
         return 0
+    import triage_digest_thread
+
+    # A later run only joins the day's open thread, which the channel never shows (owner Q40).
+    open_thread = triage_digest_thread.opened_before(kst_now) if dm_items else ""
     try:  # Delivery first — failure leaves every mail undigested
         message_ids, thread_id = _deliver(parts, dm_items, kst_now)
     except Exception as error:  # noqa: BLE001 — cron alert needs one structured marker
@@ -617,8 +631,8 @@ def run_digest(*, limit: int, sync: bool, dry_run: bool) -> int:
         store_item["channel_id"] = card_channel
         _attach_reactions(card_channel, str(message_id or ""))
     run_id = triage_store.record_digest_run(db, triage_core.utc_now(), store_items)
-    import triage_digest_thread
-
     triage_digest_thread.settle()
+    if open_thread and thread_id == open_thread:
+        _post_added_line(thread_id, len(dm_items))
     print(f"DIGEST run={run_id} items={len(dm_items)}")
     return 0
