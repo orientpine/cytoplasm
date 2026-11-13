@@ -118,3 +118,18 @@ def test_the_origin_is_required_and_a_link_outside_the_mail_runtime_is_refused(
     with pytest.raises(runtime.Refused):
         runtime.stage_mail_attachment(tmp_path / "other", tmp_path / "stage", "1", "secret.txt")
     assert not (tmp_path / "stage").exists()
+
+
+def test_all_stages_every_saved_attachment_and_names_the_ones_not_on_the_node(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Issue #241: one command stages a mail's attachments for one drive-save card.
+    monkeypatch.setattr(jobs, "verify_owner_origin", lambda *a, **k: SimpleNamespace(link="l"))
+    assert _run(monkeypatch, "9793361", "--all") == 0
+    out = capsys.readouterr().out.splitlines()
+    staged = gate.STAGING / "mail-9793361-2.hwpx"
+    assert out[0].startswith("NOT-STAGED original=목록.hwpx reason=")
+    assert out[1] == (f"STAGED mail-9793361-2.hwpx sha256={hashlib.sha256(PAYLOAD).hexdigest()} "
+                      f"bytes={len(PAYLOAD)} path={staged} original={NAME}")
+    assert out[2].startswith("NOT-STAGED original=missing.pdf reason=")
+    assert _run(monkeypatch, "555", "--all") == 2

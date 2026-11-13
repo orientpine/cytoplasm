@@ -32,6 +32,8 @@ _PERMISSION_FIELDS = "permissions(id,type,role)"
 _SHARE_FIELDS = "permissions(id,type,role,emailAddress)"
 #: The only role a per-person share may grant: view and download, nothing more.
 SHARE_ROLE = "reader"
+#: How many parent folders ``folder_info`` walks before it refuses (a Drive path is never this deep).
+_MAX_FOLDER_DEPTH = 32
 
 
 class DriveClientError(RuntimeError):
@@ -239,6 +241,32 @@ class DriveClient:
         except ValueError as error:
             raise DriveClientError(f"크기 값이 정수가 아님: {file_id} size={raw_size!r}") from error
         return checksum, size
+
+    def folder_info(self, folder_id: str) -> tuple[str, tuple[str, ...]]:
+        """The name and path (top folder first) of the live folder ``folder_id``.
+
+        Fails closed when the id is not a folder, is in the trash, or the parent chain
+        cannot be read, so a card never names a place the save would not land in.
+        """
+        names: list[str] = []
+        current = folder_id
+        for _ in range(_MAX_FOLDER_DEPTH):
+            result = self._run(
+                [self.gws_bin, "drive", "files", "get", "--params",
+                 json.dumps({"fileId": current, "fields": "id,name,mimeType,trashed,parents"})]
+            )
+            if not isinstance(result, dict):
+                raise DriveClientError(f"폴더 응답이 올바르지 않음: {current}")
+            if current == folder_id and (
+                result.get("mimeType") != _FOLDER_MIME or result.get("trashed") is True
+            ):
+                raise DriveClientError(f"폴더가 아니거나 휴지통에 있음: {folder_id}")
+            names.append(str(result.get("name", "")))
+            parents = result.get("parents")
+            if not isinstance(parents, list) or not parents:
+                return names[0], tuple(reversed(names))
+            current = str(parents[0])
+        raise DriveClientError(f"폴더 경로가 너무 깊음(fail-closed): {folder_id}")
 
     def _folder_alive(self, file_id: str) -> bool:
         return folder_alive(file_id, gws_bin=self.gws_bin, run=self._run)

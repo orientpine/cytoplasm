@@ -17,7 +17,7 @@ from automation.interop import origin_notice
 from automation.interop.approval_lifecycle import ApprovalRequest, ApprovalSurfaceError, Probe
 from automation.interop.discord_transport import DiscordTransport as NoticeSender
 
-from .execute import Publisher, Runner, execute
+from .execute import BatchIncomplete, FolderSaver, Publisher, Runner, execute
 from .model import COMMAND, EffectRequest, EffectRequestError, EffectRequestStore
 from .gate import DiscordRuntime, EffectApprovalGate
 from .render import drive_location
@@ -44,6 +44,7 @@ def run_tick(
     now: datetime,
     publisher: Publisher,
     runner: Runner | None = None,
+    folder_saver: FolderSaver | None = None,
 ) -> TickResult:
     done: list[str] = []
     cancelled: list[str] = []
@@ -60,7 +61,7 @@ def run_tick(
                 cancelled.append(record.request_id)
                 _notify(record, runtime, token, "cancelled")
         if record.status == "approved":
-            record = _execute(record, store, now, publisher, runner)
+            record = _execute(record, store, now, publisher, runner, folder_saver)
             if record.status == "done":
                 done.append(record.request_id)
                 _notify(record, runtime, token, "done")
@@ -103,17 +104,21 @@ def _execute(
     now: datetime,
     publisher: Publisher,
     runner: Runner | None,
+    folder_saver: FolderSaver | None = None,
 ) -> EffectRequest:
     attempts = record.attempts + 1
     if record.effect == COMMAND:
         record = replace(record, status="running", attempts=attempts)
         store.update(record)
     try:
-        receipt = execute(record, publisher=publisher, **({"runner": runner} if runner else {}))
+        receipt = execute(record, publisher=publisher, folder_saver=folder_saver,
+                          **({"runner": runner} if runner else {}))
     except EffectRequestError as error:
         final = record.effect == COMMAND or not error.retryable or attempts >= MAX_ATTEMPTS
+        # A batch keeps each file's result, so the next tick tries only the failed files (Q549).
+        partial = error.receipt if isinstance(error, BatchIncomplete) else record.receipt
         updated = replace(
-            record, attempts=attempts, last_error=str(error)[:300],
+            record, attempts=attempts, last_error=str(error)[:300], receipt=partial,
             status="failed" if final else "approved", finished_at=_stamp(now) if final else "",
         )
         store.update(updated)
@@ -129,6 +134,13 @@ def notice_text(record: EffectRequest, outcome: str) -> str:
     match outcome:
         case "done" if record.effect == COMMAND:
             return f"✅ 외부 작업 실행 완료: {what}\n종료 코드 0 · 출력 끝부분: {receipt.get('tail') or '(없음)'}"
+        case "done" if record.payload.get("version") == 2:
+            return f"✅ Drive 저장 완료(비공개) {receipt.get('saved')}개: {drive_location(record.payload)}\n" + _file_lines(receipt)
+        case "failed" if record.payload.get("version") == 2 and receipt.get("files"):
+            return (
+                f"❌ 일부만 저장됨: {what} — {receipt.get('total')}개 중 {receipt.get('saved')}개 저장 "
+                f"(시도 {record.attempts}회, 실패한 파일만 다시 올렸다)\n" + _file_lines(receipt)
+            )
         case "done":
             links = ", ".join(str(link) for link in receipt.get("links", ())) or "(링크 없음)"
             return (
@@ -141,6 +153,17 @@ def notice_text(record: EffectRequest, outcome: str) -> str:
             return f"⛔ 취소됨: {what} — 아무것도 실행하지 않았다."
         case _:
             return f"❌ 실패: {what} — {record.last_error} (시도 {record.attempts}회)"
+
+
+def _file_lines(receipt: dict[str, object]) -> str:
+    lines = []
+    for row in receipt.get("files", ()):  # type: ignore[union-attr]
+        if row.get("status") == "ok":
+            links = row.get("links") or ["(링크 없음)"]
+            lines.append(f"{row.get('index')}. ✅ {row.get('name')} — {links[0]}")
+        else:
+            lines.append(f"{row.get('index')}. ❌ {row.get('name')} — {row.get('error')}")
+    return "\n".join(lines)
 
 
 def _notice_record(record: EffectRequest) -> dict[str, str]:

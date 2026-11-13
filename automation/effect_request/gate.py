@@ -34,7 +34,7 @@ from automation.interop.approval_surface import (
 from automation.interop.reaction_approval import DiscordTransport
 
 from .model import DRIVE_SAVE, EffectRequest, EffectRequestError, EffectRequestStore
-from .render import RENDER_VERSION, RenderError, render_effect_approval
+from .render import RenderError, render_effect_approval, version_for
 
 APPROVE_EMOJI: Final = "\u2705"
 CANCEL_EMOJI: Final = "\u26d4"
@@ -95,7 +95,8 @@ class EffectApprovalGate:
             message_id = self.transport.post_message(intent.channel_id, content)
             if self.journal is not None:
                 self.journal.enrich(intent.key, intent.action_hash, message_id, intent.channel_id)
-                self.store.set_message(self.record.request_id, message_id, intent.channel_id, RENDER_VERSION)
+                self.store.set_message(self.record.request_id, message_id, intent.channel_id,
+                                       version_for(self.record))
                 self.journal.clear(intent.key)
         except (*_TRANSPORT_ERRORS, EffectRequestError, RenderError) as error:
             raise ApprovalSurfaceError(str(error)) from error
@@ -108,7 +109,8 @@ class EffectApprovalGate:
 
     def commit(self, intent: ApprovalIntent, posted: PostedApproval, created_at: str) -> None:
         del intent, created_at
-        self.store.set_message(self.record.request_id, posted.message_id, posted.channel_id, RENDER_VERSION)
+        self.store.set_message(self.record.request_id, posted.message_id, posted.channel_id,
+                               version_for(self.record))
 
 
 @dataclass(frozen=True, slots=True)

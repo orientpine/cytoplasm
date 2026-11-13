@@ -17,8 +17,9 @@ import unicodedata
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
+import shutil
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from automation.interop.approval_lifecycle import Outcome
 
@@ -35,10 +36,17 @@ from .model import (
 )
 from .policy import refusal
 
+if TYPE_CHECKING:
+    from automation.drive_taxonomy import Category
+
 EXIT_REFUSED: Final = 4
 DEFAULT_KIND: Final = "doctype"
 DEFAULT_TIMEOUT: Final = 600
 MAX_TIMEOUT: Final = 3600
+#: Files one drive-save card may carry (issue #241); the 1900-character card cap may refuse fewer.
+MAX_FILES: Final = 20
+#: Rounds an owner-command save tries the failed files of a batch again (owner Q549).
+SAVE_NOW_ROUNDS: Final = 3
 
 
 def _summary(raw: str) -> str:
@@ -48,25 +56,75 @@ def _summary(raw: str) -> str:
     return text[:120]
 
 
-def _drive_payload(args: argparse.Namespace, request_id: str, store: EffectRequestStore) -> dict[str, object]:
-    from automation.drive_taxonomy import (
-        TaxonomyError, artifact_name, category, ensure_depth, folder_parts, period_key,
-    )
+def _sources(args: argparse.Namespace) -> tuple[list[Path], list[str | None]]:
+    # The parser appends; a caller that builds the namespace itself may still pass one value.
+    raw_files = [args.file] if isinstance(args.file, str) else list(args.file)
+    raw_titles = [args.title] if isinstance(args.title, str) else list(args.title or [])
+    files = [Path(item).expanduser() for item in raw_files]
+    titles: list[str | None] = list(raw_titles)
+    if not 1 <= len(files) <= MAX_FILES:
+        raise EffectRequestError(f"--file 은 1~{MAX_FILES}개 — 더 많으면 나눠서 요청한다")
+    if titles and len(titles) != len(files):
+        raise EffectRequestError("--title 은 주지 않거나 --file 마다 하나씩 같은 순서로 준다")
+    for source in files:
+        if not source.is_file():
+            raise EffectRequestError(f"파일 없음: {source}")
+    return files, titles or [None] * len(files)
 
-    source = Path(args.file).expanduser()
-    if not source.is_file():
-        raise EffectRequestError(f"파일 없음: {source}")
+
+def _title(raw: str | None, source: Path) -> str:
+    title = unicodedata.normalize("NFC", raw or source.stem).strip()
+    if not title or "/" in title:
+        raise EffectRequestError(f"파일 제목이 비었거나 / 가 있다: {source.name}")
+    return title
+
+
+def _drive_payload(args: argparse.Namespace, request_id: str, store: EffectRequestStore) -> dict[str, object]:
+    """One file into the standard tree keeps the v1 payload; several files or a folder id use v2.
+
+    v1 is the payload every stored card and action hash was made from, so a one-file request
+    without ``--folder`` still builds it byte for byte (issue #241 keeps old cards replayable).
+    """
+    files, titles = _sources(args)
+    folder = getattr(args, "folder", "")
+    if folder and args.project:
+        raise EffectRequestError("--folder 와 --project 는 함께 쓰지 않는다 — 폴더 id 가 위치를 정한다")
+    if len(files) == 1 and not folder:
+        return _tree_single(args, files[0], titles[0], request_id, store)
+    return _batch_payload(args, files, titles, request_id, store)
+
+
+def _tree_place(args: argparse.Namespace) -> tuple[Category, date, tuple[str, ...]]:
+    from automation.drive_taxonomy import TaxonomyError, category, folder_parts
+
     try:
         selected = category(args.kind)
         if selected.gate_only or selected.skill_owned:
             raise EffectRequestError(f"kind={args.kind} 는 전용 경로로만 저장한다")
         on = date.fromisoformat(args.on) if args.on else date.today()
-        title = unicodedata.normalize("NFC", args.title or source.stem).strip()
         parts = folder_parts(args.kind, on.year, project=args.project or None)
-        drive_name = artifact_name(period_key(selected.periodicity, on), title, source.suffix)
+    except (TaxonomyError, ValueError) as error:
+        raise EffectRequestError(f"Drive 위치를 정할 수 없다: {error}") from error
+    return selected, on, parts
+
+
+def _tree_name(selected: Category, on: date, parts: tuple[str, ...], title: str, suffix: str) -> str:
+    from automation.drive_taxonomy import TaxonomyError, artifact_name, ensure_depth, period_key
+
+    try:
+        drive_name = artifact_name(period_key(selected.periodicity, on), title, suffix)
         ensure_depth((*parts, drive_name))
     except (TaxonomyError, ValueError) as error:
         raise EffectRequestError(f"Drive 위치를 정할 수 없다: {error}") from error
+    return drive_name
+
+
+def _tree_single(
+    args: argparse.Namespace, source: Path, raw_title: str | None, request_id: str, store: EffectRequestStore,
+) -> dict[str, object]:
+    selected, on, parts = _tree_place(args)
+    title = _title(raw_title, source)
+    drive_name = _tree_name(selected, on, parts, title, source.suffix)
     frozen = store.freeze_file(request_id, source)
     digest, size = file_sha256(frozen)
     return {
@@ -74,6 +132,41 @@ def _drive_payload(args: argparse.Namespace, request_id: str, store: EffectReque
         "folder_parts": list(parts), "drive_name": drive_name, "frozen_path": str(frozen),
         "sha256": digest, "size": size, "sharing": "owner-only",
     }
+
+
+def _batch_payload(
+    args: argparse.Namespace, files: list[Path], titles: list[str | None], request_id: str,
+    store: EffectRequestStore,
+) -> dict[str, object]:
+    """v2: every file frozen and listed in order; the action hash binds the whole list and place."""
+    place: dict[str, object]
+    if getattr(args, "folder", ""):
+        from automation.drive_outputs import folder_target
+
+        try:
+            target = folder_target(args.folder)
+        except Exception as error:  # noqa: BLE001 - any lookup or permission doubt refuses the request
+            raise EffectRequestError(
+                f"Drive 폴더를 쓸 수 없다(형만 볼 수 있는 폴더여야 한다): {type(error).__name__}: {error}"[:300]
+            ) from error
+        place = {"mode": "folder", "folder_id": target.folder_id, "folder_name": target.name,
+                 "folder_path": list(target.path)}
+        names = [f"{_title(raw, source)}{source.suffix}" for source, raw in zip(files, titles, strict=True)]
+    else:
+        selected, on, parts = _tree_place(args)
+        place = {"mode": "tree", "kind": args.kind, "project": args.project or "", "on": on.isoformat(),
+                 "folder_parts": list(parts)}
+        names = [_tree_name(selected, on, parts, _title(raw, source), source.suffix)
+                 for source, raw in zip(files, titles, strict=True)]
+    if len(set(names)) != len(names):
+        raise EffectRequestError("같은 Drive 이름이 둘 이상이다 — --title 로 이름을 다르게 준다")
+    items: list[dict[str, object]] = []
+    for index, (source, raw, name) in enumerate(zip(files, titles, names, strict=True)):
+        frozen = store.freeze_file(f"{request_id}/{index + 1}", source)
+        digest, size = file_sha256(frozen)
+        items.append({"title": _title(raw, source), "drive_name": name, "frozen_path": str(frozen),
+                      "sha256": digest, "size": size})
+    return {"version": 2, **place, "files": items, "sharing": "owner-only"}
 
 
 def _command_payload(args: argparse.Namespace) -> dict[str, object]:
@@ -94,6 +187,18 @@ def _command_payload(args: argparse.Namespace) -> dict[str, object]:
     return {"argv": argv, "target": target, "cwd": str(cwd), "timeout": timeout}
 
 
+def _postable(record: EffectRequest) -> None:
+    """Refuse before anything is stored when the card would exceed the postable length."""
+    from .render import RenderError, render_effect_approval
+
+    try:
+        render_effect_approval(record)
+    except RenderError as error:
+        raise EffectRequestError(
+            f"카드 한 장에 다 들어가지 않는다({error}) — 파일을 나눠 두 번 요청한다"
+        ) from error
+
+
 def _new_record(args: argparse.Namespace, store: EffectRequestStore, *, reuse_live: bool = True) -> EffectRequest:
     summary = _summary(args.summary)
     effect = args.effect
@@ -110,6 +215,12 @@ def _new_record(args: argparse.Namespace, store: EffectRequestStore, *, reuse_li
         action_hash=digest, created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         origin_channel_id=args.origin_channel_id, origin_message_id=args.origin_message_id,
     )
+    if reuse_live:
+        try:
+            _postable(record)
+        except EffectRequestError:
+            shutil.rmtree(store.frozen_dir(seed), ignore_errors=True)
+            raise
     store.create(record)
     return record
 
@@ -151,9 +262,14 @@ def cmd_request(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     chosen = [r for r in EffectRequestStore().all() if not args.request or r.request_id == args.request]
     for record in sorted(chosen, key=lambda item: item.created_at):
+        rows = (record.receipt or {}).get("files") if record.payload.get("version") == 2 else None
+        saved = ""
+        if isinstance(rows, list):
+            ok = sum(1 for row in rows if isinstance(row, dict) and row.get("status") == "ok")
+            saved = f" saved={ok}/{len(record.payload.get('files', ()))}"  # type: ignore[arg-type]
         print(
             f"EFFECT-REQUEST request={record.request_id} effect={record.effect} status={record.status} "
-            f"attempts={record.attempts} error={record.last_error or '-'}"
+            f"attempts={record.attempts}{saved} error={record.last_error or '-'}"
         )
     return 0 if chosen else 1
 
@@ -171,6 +287,8 @@ def cmd_save_now(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     store = EffectRequestStore()
     record = _new_record(args, store, reuse_live=False)
+    if record.payload.get("version") == 2:
+        return _save_now_batch(record, store, publish)
     try:
         receipt = execute(record, publisher=publish)
     except EffectRequestError as error:
@@ -194,6 +312,43 @@ def cmd_save_now(args: argparse.Namespace) -> int:
     return 0
 
 
+def _save_now_batch(record: EffectRequest, store: EffectRequestStore, publish: object) -> int:
+    """Save every file; a failed file is tried again (failed ones only), then one line per file.
+
+    Owner Q549: the rest is saved when one fails, each file keeps its own result, and only
+    the failed files are tried again under the same owner command. Exit 0 only when all saved.
+    """
+    from .execute import BatchIncomplete, execute
+
+    attempts, error_text, receipt = 0, "", record.receipt
+    for _ in range(SAVE_NOW_ROUNDS):
+        attempts += 1
+        try:
+            receipt = execute(replace(record, receipt=receipt), publisher=publish)  # type: ignore[arg-type]
+            error_text = ""
+            break
+        except BatchIncomplete as error:
+            receipt, error_text = error.receipt, str(error)
+            if not error.retryable:
+                break
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    complete = not error_text
+    assert receipt is not None
+    receipt.update(method="owner_command", origin_channel_id=record.origin_channel_id,
+                   origin_message_id=record.origin_message_id)
+    store.update(replace(record, status="done" if complete else "failed", attempts=attempts,
+                         receipt=receipt, last_error=error_text[:300], finished_at=stamp))
+    for row in receipt.get("files", ()):  # type: ignore[union-attr]
+        if row.get("status") == "ok":
+            links = row.get("links") or [row.get("name")]
+            print(f"OWNER-COMMAND-WRITTEN drive-save {links[0]}")
+        else:
+            print(f"DRIVE-SAVE-FAILED {row.get('name')} {row.get('error')}")
+    if not complete:
+        print(f"EFFECT-REQUEST-ERROR {error_text}", file=sys.stderr)
+    return 0 if complete else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python3 -m automation.effect_request")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -211,10 +366,14 @@ def build_parser() -> argparse.ArgumentParser:
         if immediate:
             sub.set_defaults(effect=DRIVE_SAVE)
         if name == DRIVE_SAVE or immediate:
-            sub.add_argument("--file", required=True)
-            sub.add_argument("--title", default=None, help="Drive 파일 제목(기본: 파일 이름)")
+            sub.add_argument("--file", required=True, action="append",
+                             help=f"저장할 파일 — 여러 개면 반복(최대 {MAX_FILES}개, 카드 하나·승인 한 번)")
+            sub.add_argument("--title", default=None, action="append",
+                             help="Drive 파일 제목(기본: 파일 이름) — 여러 파일이면 --file 마다 하나씩")
             sub.add_argument("--kind", default=DEFAULT_KIND, help="Drive 카테고리(기본 doctype=문서)")
             sub.add_argument("--project", default="", help="과제 폴더 한 단(선택)")
+            sub.add_argument("--folder", default="",
+                             help="저장할 Drive 폴더 id(선택) — 형만 볼 수 있는 폴더여야 한다")
             sub.add_argument("--on", default=None, help="기준 날짜 YYYY-MM-DD(기본 오늘)")
         else:
             sub.add_argument("--target", required=True, help="영향을 받는 대상(사람·서비스·위치)")

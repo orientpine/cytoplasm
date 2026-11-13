@@ -127,7 +127,8 @@ Drive 저장은 공용 `automation.drive_outputs` 파사드를 통해 `autophagy
 
 ```bash
 cd /srv/autophagy-agent-current && python3 -m automation.effect_request request drive-save \
-  --file <파일> --summary '<한 줄 설명>' [--title <Drive 제목>] [--kind doctype] [--project <과제>] \
+  --file <파일> [--file <파일> ...] --summary '<한 줄 설명>' [--title <Drive 제목> (파일마다 하나씩)] \
+  [--kind doctype] [--project <과제> | --folder <Drive 폴더 id>] \
   --origin-channel-id <지시 메시지 채널 id> --origin-message-id <지시 메시지 id>
 
 cd /srv/autophagy-agent-current && python3 -m automation.effect_request request command \
@@ -136,6 +137,7 @@ cd /srv/autophagy-agent-current && python3 -m automation.effect_request request 
 ```
 
 - drive-save 카드는 파일 이름·Drive 위치·공유 범위(비공개)·크기·sha256 을 보여 준다. 다른 사람에게 공유하려면 메일 `compose --drive-share --share-with` 를 쓴다.
+- 여러 파일은 파일마다 카드를 올리지 말고 `--file` 을 반복해 카드 하나로 올린다(최대 20개, 카드가 1900자를 넘으면 나눠서). `--folder` 는 형만 볼 수 있는 폴더만 받는다. 일부가 실패하면 나머지는 저장되고 실패한 파일만 같은 승인으로 다시 시도된다([소개](../../docs/기능소개/drive-여러-파일-한-카드.md)).
 - command 카드는 실행할 명령 전체를 보여 주고, ✅ 뒤 한 번만 실행한다.
 - 출력의 `APPROVAL-THREAD … url=<링크>` 를 답장에 그대로 싣는다. 결과는 `python3 -m automation.effect_request status` 로 본다.
 - `EFFECT-REQUEST-REFUSED code=owner-only:…`(exit 4)는 형만 할 수 있는 일(비밀번호·결제·로그인 인증·sudo·승인 대리 누름)이다. 사유를 형에게 그대로 전한다. `code=dedicated:…` 는 전용 명령이 있다는 뜻이니 안내된 명령을 쓴다.
