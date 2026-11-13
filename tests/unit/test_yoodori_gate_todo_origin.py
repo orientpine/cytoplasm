@@ -324,3 +324,15 @@ def test_attachment_text_reads_the_source_mail_under_the_todo(node: Node, monkey
     assert node.uses() == 1
     assert _gate(monkeypatch, "mail-attachment-text", OTHER_UID, "남의.pdf", "--origin-todo", TODO) == 2
     assert len(node.ran) == 1 and node.uses() == 1
+
+
+def test_drive_save_batch_under_a_todo_checks_every_file_not_only_the_first(
+    node: Node, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Issue #241: a second --file from another mail must not ride on the source mail's first file.
+    assert _gate(monkeypatch, "mail-attachment", UID, NAME, "--origin-todo", TODO) == 0
+    gate.STAGING.joinpath(f"mail-{OTHER_UID}-1.pdf").write_bytes(b"other mail")
+    gate.STAGING.joinpath(f"mail-{OTHER_UID}-1.pdf.name").write_text("남의.pdf", encoding="utf-8")
+    rc = _gate(monkeypatch, "drive-save", "--file", f"mail-{UID}-1.hwp", "--file", f"mail-{OTHER_UID}-1.pdf",
+               "--summary", "s", "--origin-todo", TODO)
+    assert rc == 2 and node.ran == [] and node.uses() == 1

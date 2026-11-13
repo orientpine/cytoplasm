@@ -182,3 +182,26 @@ def test_actual_isolated_gate_accepts_ssh_stdin(tmp_path: Path) -> None:
     assert path.read_bytes() == data
     assert process.stdout.decode() == (
         f"STAGED file.txt sha256={hashlib.sha256(data).hexdigest()} bytes={len(data)} path={path}\n")
+
+
+def test_drive_save_batch_passes_every_file_folder_and_kind_and_keeps_received_names(
+    private_staging: Path,
+) -> None:
+    # Issue #241: repeated --file, --folder (owner Q548) and --kind reach the card request intact.
+    from automation.effect_request.cli import build_parser
+
+    private_staging.mkdir(parents=True)
+    first, second = private_staging / "mail-7-1.pdf", private_staging / "upload.hwp"
+    for path in (first, second):
+        path.write_bytes(b"x")
+    (private_staging / "mail-7-1.pdf.name").write_text("공고문 최종.pdf", encoding="utf-8")
+    name, argv, _cwd = gate.build(["drive-save", "--file", str(first), "--file", second.name,
+                                   "--summary", "첨부 저장", "--folder", "1AbCdEfGhIjKlMnOp",
+                                   "--kind", "doctype", *ORIGIN])
+    assert name == "drive-save" and argv[:5] == [PY, "-m", "automation.effect_request", "request", "drive-save"]
+    parsed = build_parser().parse_args(argv[3:])
+    assert parsed.file == [str(first), str(second)] and parsed.title == ["공고문 최종", "upload"]
+    assert (parsed.folder, parsed.kind) == ("1AbCdEfGhIjKlMnOp", "doctype")
+    for bad in (["--folder", "../x"], ["--kind", "Doc Type"], ["--file", "/etc/passwd"]):
+        with pytest.raises(gate.Refused):
+            gate.build(["drive-save", "--file", str(first), "--summary", "s", *bad, *ORIGIN])

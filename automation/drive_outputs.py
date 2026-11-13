@@ -352,6 +352,56 @@ def share(
                        invited_by_google=tuple(invited))
 
 
+_FOLDER_ID: Final = re.compile(r"[A-Za-z0-9_-]{10,128}")
+
+
+@dataclass(frozen=True, slots=True)
+class FolderTarget:
+    folder_id: str
+    name: str
+    path: tuple[str, ...]
+
+
+def folder_target(folder_id: str, *, client: DriveClient | None = None) -> FolderTarget:
+    """Any folder of the owner's Drive by id (owner Q548), read and checked owner-only.
+
+    A file put into a folder other people can open is shared with them, and sharing goes
+    only through mail ``compose --drive-share``; so a folder holding any permission beyond
+    the owner is refused here, at request time and again right before the upload.
+    """
+    if not _FOLDER_ID.fullmatch(folder_id):
+        raise ValueError("a Drive folder id is letters, digits, - and _ only")
+    drive = client or client_from_environment()
+    name, path = drive.folder_info(folder_id)
+    drive.verify_owner_only(folder_id)
+    return FolderTarget(folder_id, _nfc(name), tuple(_nfc(part) for part in path))
+
+
+def save_to_folder(
+    local: Path,
+    name: str,
+    folder_id: str,
+    *,
+    sha256: str,
+    size: int,
+    client: DriveClient | None = None,
+) -> PublishResult:
+    """Upsert ``local`` as ``name`` directly into the owner-only folder ``folder_id``.
+
+    The folder is re-checked first, the local bytes must still be the approved ones, and
+    the upload is verified owner-only and read back for sha256 equality like :func:`publish`.
+    """
+    drive = client or client_from_environment()
+    _ = folder_target(folder_id, client=drive)
+    if _local_digest(local) != (sha256, size):
+        raise ValueError("the approved file changed before upload")
+    result = drive.upsert_file(local, _nfc(name), folder_id)
+    file_id = result["id"]
+    drive.verify_owner_only(file_id)
+    _ = drive.download_and_verify(file_id, local)
+    return PublishResult((result["webViewLink"],), result["action"], folder_id)
+
+
 def publish_state_file(
     parts: Sequence[str],
     name: str,

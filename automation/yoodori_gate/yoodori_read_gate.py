@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from yoodori_request_runtime import (  # noqa: E402
     Refused, card_env, calendar_card, checked_value, job_env, named_attachment, original_name, stage_body,
-    stage_file, stage_mail_attachment, stage_name, stage_named,
+    saved_attachment_names, stage_file, stage_mail_attachment, stage_name, stage_named,
 )
 import yoodori_jobs  # noqa: E402
 
@@ -68,7 +68,13 @@ REFUSED_WORDS = frozenset({
 }) | GMAIL_WRITE_WORDS
 _ORIGIN = {"--origin-channel-id": "id", "--origin-message-id": "id"}
 # --to repeats like --cc/--bcc, one checked address each (owner 2026-11-03: five people in To).
-_REPEATABLE = {"mail-compose": frozenset({"--to", "--cc", "--bcc", "--share-with", "--attachment"})}
+_REPEATABLE = {"mail-compose": frozenset({"--to", "--cc", "--bcc", "--share-with", "--attachment"}),
+               # Issue #241: several files on one Drive save card, one --title per --file when given.
+               "drive-save": frozenset({"--file", "--title"})}
+_DRIVE_FOLDER_ID = re.compile(r"[A-Za-z0-9_-]{10,128}")
+_KIND = re.compile(r"[a-z][a-z0-9-]{0,31}")
+#: Saved attachments one ``mail-attachment <uid> --all`` stages at most (the drive-save card cap).
+MAX_ALL_ATTACHMENTS = 20
 _FLAGS = {
     "mail-compose": {"--to": "email", "--cc": "email", "--bcc": "email",
                      "--subject": "short", "--body": "body", "--in-reply-to": "id",
@@ -81,7 +87,7 @@ _FLAGS = {
     "calendar-request": {"--text": "text", "--summary": "short"},
     "todo-request": {"--title": "short", "--notes": "body", "--due": "date"},
     "drive-save": {"--file": "file", "--summary": "short", "--title": "short",
-                   "--project": "short"},
+                   "--project": "short", "--kind": "short", "--folder": "short"},
     "command-request": {"--summary": "short", "--target": "short", "--argv-b64": "argv"},
     "obsidian-request": {"--relpath": "relpath", "--body-file": "file", "--body": "body", "--title": "short"},
 }
@@ -170,9 +176,13 @@ USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          "  sender, body or address, no order author login or device; long text is cut).\n"
          "Private upload: stage <name> [--name <display name>] (file bytes on SSH stdin, at most 64 MiB;\n"
          "  <name> is plain ASCII, --name is the Korean name a mail attachment shows, same extension).\n"
-         "Received attachment: mail-attachment <uid> <file name as mail-get shows it> + origin\n"
-         "  (copies that file of the owner's mail into staging; prints its staged path).\n"
+         "Received attachment: mail-attachment <uid> <file name as mail-get shows it>|--all + origin\n"
+         "  (copies that file, or with --all every saved attachment (at most 20), of the owner's mail into\n"
+         "  staging; prints one STAGED line per file).\n"
          "Card requests (origin channel/message ids required): " + ", ".join(CARD_COMMANDS) + "\n"
+         "  drive-save --file <staged> [--file <staged> ...] [--title <t> per file] [--kind <category>]\n"
+         "  [--project <p> | --folder <Drive folder id, owner-only>]: one card, one approval for all files;\n"
+         "  a received attachment keeps its own name.\n"
          "  calendar-request --card: post the event card even for the owner's own message\n"
          "  (without --card his own event is written at once when the node switch is on).\n"
          "Owner-command jobs (origin = the owner's own message or his tap on a question card, checked on the node):\n"
@@ -248,6 +258,10 @@ def _card(name: str, args: list[str]) -> tuple[str, list[str], Path]:
         value = _value(_decode(raw) if flag != decoded else raw, kind)
         if decoded in ("--forward-gmail", "--reply-gmail") and not _GMAIL_ID.fullmatch(value):
             raise Refused(f"{decoded} needs a hex Gmail message id")
+        if name == "drive-save" and decoded == "--folder" and not _DRIVE_FOLDER_ID.fullmatch(value):
+            raise Refused("--folder needs a Drive folder id")
+        if name == "drive-save" and decoded == "--kind" and not _KIND.fullmatch(value):
+            raise Refused("--kind needs a Drive category name")
         if decoded in values:
             repeats.append((decoded, value))
             continue
@@ -274,6 +288,15 @@ def _card(name: str, args: list[str]) -> tuple[str, list[str], Path]:
         received = original_name(STAGING, values["--drive-share"])
         if received:
             values["--drive-name"] = _value(received, "short")
+    if name == "drive-save" and "--title" not in values:
+        # A received attachment is saved under its own name, not the staging name mail-<uid>-<n>.
+        files = [values["--file"], *(value for flag, value in repeats if flag == "--file")]
+        received = [original_name(STAGING, path) for path in files]
+        if any(received):
+            titles = [_value(Path(shown).stem or Path(path).stem, "short") if shown else Path(path).stem
+                      for path, shown in zip(files, received, strict=True)]
+            values["--title"] = titles[0]
+            repeats += [("--title", title) for title in titles[1:]]
     if name == "mail-compose":
         # A staged file goes out under its display name (stage --name or a received attachment's own).
         if "--attachment" in values:
@@ -455,20 +478,44 @@ def todo_target(name: str, argv: list[str], uid: str) -> None:
     elif name == "mail-attachment-text":
         target = argv[3]
     else:
-        path = Path(argv[argv.index("--file") + 1])
-        match = re.fullmatch(r"mail-([0-9]{1,20})-[1-9][0-9]{0,3}(?:\.[A-Za-z][A-Za-z0-9]{0,9})?", path.name)
-        received = original_name(STAGING, str(path))
-        if match is None or match[1] != uid or path.parent != STAGING or not received:
-            raise Refused("with --origin-todo, drive-save takes only a staged attachment of the todo's source mail")
-        try:
-            again, _digest, _size = stage_mail_attachment(HOME, STAGING, uid, received)
-        except OSError:
-            raise Refused("staging file unreadable") from None
-        if again != path:
-            raise Refused("with --origin-todo, drive-save takes only a staged attachment of the todo's source mail")
+        # Every file of a batch, not only the first, must be a staged attachment of the source mail.
+        for path in (Path(argv[i + 1]) for i, word in enumerate(argv[:-1]) if word == "--file"):
+            match = re.fullmatch(r"mail-([0-9]{1,20})-[1-9][0-9]{0,3}(?:\.[A-Za-z][A-Za-z0-9]{0,9})?", path.name)
+            received = original_name(STAGING, str(path))
+            if match is None or match[1] != uid or path.parent != STAGING or not received:
+                raise Refused("with --origin-todo, drive-save takes only a staged attachment of the todo's source mail")
+            try:
+                again, _digest, _size = stage_mail_attachment(HOME, STAGING, uid, received)
+            except OSError:
+                raise Refused("staging file unreadable") from None
+            if again != path:
+                raise Refused("with --origin-todo, drive-save takes only a staged attachment of the todo's source mail")
         return
     if target != uid:
         raise Refused("with --origin-todo, only the todo's own source mail can be read")
+
+
+def stage_all_attachments(uid: str) -> int:
+    """``mail-attachment <uid> --all`` (issue #241): every saved attachment, for one drive-save card.
+
+    An attachment not saved on the node is reported and skipped; none staged at all is a refusal.
+    """
+    names = saved_attachment_names(HOME, uid)
+    if len(names) > MAX_ALL_ATTACHMENTS:
+        raise Refused(f"that mail has {len(names)} saved attachments; --all stages at most "
+                      f"{MAX_ALL_ATTACHMENTS}, name them one by one")
+    staged = 0
+    for shown in names:
+        try:
+            path, digest, size = stage_mail_attachment(HOME, STAGING, uid, shown)
+        except Refused as exc:
+            print(f"NOT-STAGED original={shown} reason={exc}")
+            continue
+        staged += 1
+        print(f"STAGED {path.name} sha256={digest} bytes={size} path={path} original={shown}")
+    if not staged:
+        raise Refused("no saved attachment of that mail could be staged")
+    return 0
 
 
 def _origin(args: list[str]) -> tuple[list[str], str, str]:
@@ -692,8 +739,9 @@ def build(words: list[str]) -> tuple[str, list[str], Path]:
     if name == "mail-attachment":
         rest, channel, message = _origin(args)
         if len(rest) != 2 or not _UID.fullmatch(rest[0]):
-            raise Refused("mail-attachment needs <uid> <file name> --origin-channel-id N --origin-message-id N")
-        return name, [rest[0], _value(rest[1], "short"), channel, message], STAGING
+            raise Refused("mail-attachment needs <uid> <file name>|--all --origin-channel-id N --origin-message-id N")
+        shown = rest[1] if rest[1] == "--all" else _value(rest[1], "short")
+        return name, [rest[0], shown, channel, message], STAGING
     if name in CARD_COMMANDS:
         if name == "mail-draft":
             if not args or not _REPLY_KEY.fullmatch(args[0]):
@@ -963,9 +1011,12 @@ def main() -> int:
                 _, notice_bot = _release_modules()
                 token = notice_bot.resolve_token(environ=job_env(HOME, RELEASE, ENV))
                 yoodori_jobs.verify_owner_origin(argv[2], argv[3], _owner_id(), token)
-            path, digest, size = stage_mail_attachment(HOME, STAGING, argv[0], argv[1])
-            print(f"STAGED {path.name} sha256={digest} bytes={size} path={path} original={argv[1]}")
-            rc = 0
+            if argv[1] != "--all":
+                path, digest, size = stage_mail_attachment(HOME, STAGING, argv[0], argv[1])
+                print(f"STAGED {path.name} sha256={digest} bytes={size} path={path} original={argv[1]}")
+                rc = 0
+            else:
+                rc = stage_all_attachments(argv[0])
         else:
             env = card_env(HOME, RELEASE, ENV) if name in (*CARD_COMMANDS, "card-withdraw") else ENV
             if name == "obsidian-request":

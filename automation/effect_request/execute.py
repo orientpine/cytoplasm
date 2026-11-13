@@ -17,7 +17,21 @@ from typing import Final
 from .model import COMMAND, DRIVE_SAVE, EffectRequest, EffectRequestError, action_hash, file_sha256
 
 Publisher = Callable[..., object]
+FolderSaver = Callable[..., object]
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+class BatchIncomplete(EffectRequestError):
+    """Some files of a batch were not saved; ``receipt`` holds every file's own result.
+
+    Owner Q549: the rest is saved, each file keeps its result, and a retry under the same
+    approval tries only the failed files. ``retryable`` is true while any failure may pass
+    on a later try (a Drive error), false when every failure is final (changed bytes).
+    """
+
+    def __init__(self, message: str, receipt: dict[str, object], retryable: bool) -> None:
+        super().__init__(message, retryable=retryable)
+        self.receipt = receipt
 
 _EMAIL: Final = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _LONG_DIGITS: Final = re.compile(r"\d{7,}")
@@ -63,6 +77,67 @@ def save_to_drive(record: EffectRequest, publisher: Publisher) -> dict[str, obje
             "sha256": payload["sha256"], "owner_only": True}
 
 
+def _frozen_item(item: dict[str, object]) -> Path:
+    path = Path(str(item["frozen_path"]))
+    try:
+        digest, size = file_sha256(path)
+    except OSError as error:
+        raise EffectRequestError("동결한 파일을 읽을 수 없다 — 저장하지 않았다") from error
+    if (digest, size) != (item["sha256"], item["size"]):
+        raise EffectRequestError("동결한 파일이 승인 뒤 바뀌었다 — 저장하지 않았다")
+    return path
+
+
+def _save_item(payload: dict[str, object], item: dict[str, object], path: Path,
+               publisher: Publisher, folder_saver: FolderSaver | None) -> object:
+    if payload["mode"] == "folder":
+        if folder_saver is None:
+            from automation.drive_outputs import save_to_folder as folder_saver
+        return folder_saver(path, str(item["drive_name"]), str(payload["folder_id"]),
+                            sha256=str(item["sha256"]), size=int(item["size"]))  # type: ignore[call-overload]
+    return publisher(
+        str(payload["kind"]), str(item["title"]), [(path, str(item["title"]))],
+        on=date.fromisoformat(str(payload["on"])), project=payload.get("project") or None,
+    )
+
+
+def save_batch(record: EffectRequest, publisher: Publisher,
+               folder_saver: FolderSaver | None = None) -> dict[str, object]:
+    """Save each listed file once; files the stored receipt already holds as saved are skipped."""
+    payload = record.payload
+    prior = (record.receipt or {}).get("files")
+    kept = {int(row["index"]): row for row in prior if isinstance(row, dict)} if isinstance(prior, list) else {}
+    rows: list[dict[str, object]] = []
+    for index, item in enumerate(payload["files"], start=1):  # type: ignore[arg-type]
+        before = kept.get(index)
+        if before is not None and (before.get("status") == "ok" or before.get("retryable") is False):
+            rows.append(before)
+            continue
+        row: dict[str, object] = {"index": index, "name": item["drive_name"], "sha256": item["sha256"]}
+        try:
+            result = _save_item(payload, item, _frozen_item(item), publisher, folder_saver)
+        except EffectRequestError as error:
+            row.update(status="failed", error=str(error)[:200], retryable=False)
+        except Exception as error:  # noqa: BLE001 - every Drive failure is this file's retryable result
+            row.update(status="failed", error=f"{type(error).__name__}: {mask(str(error))[:160]}", retryable=True)
+        else:
+            row.update(status="ok", links=list(getattr(result, "links", ()) or ()),
+                       action=str(getattr(result, "action", "")))
+        rows.append(row)
+    failed = [row for row in rows if row["status"] != "ok"]
+    receipt: dict[str, object] = {
+        "files": rows, "links": [link for row in rows if row["status"] == "ok" for link in row.get("links", ())],  # type: ignore[union-attr]
+        "saved": len(rows) - len(failed), "total": len(rows), "owner_only": True,
+    }
+    if failed:
+        reasons = "; ".join(f"{row['name']}: {row['error']}" for row in failed)
+        raise BatchIncomplete(
+            f"{len(rows)}개 중 {len(failed)}개 저장 실패 — {reasons}",
+            receipt, retryable=any(row.get("retryable") for row in failed),
+        )
+    return receipt
+
+
 def run_command(record: EffectRequest, runner: Runner = subprocess.run) -> dict[str, object]:
     """Run the frozen argv once; a non-zero exit is a final failure, never re-run."""
     payload = record.payload
@@ -83,8 +158,11 @@ def run_command(record: EffectRequest, runner: Runner = subprocess.run) -> dict[
     return receipt
 
 
-def execute(record: EffectRequest, *, publisher: Publisher, runner: Runner = subprocess.run) -> dict[str, object]:
+def execute(record: EffectRequest, *, publisher: Publisher, runner: Runner = subprocess.run,
+            folder_saver: FolderSaver | None = None) -> dict[str, object]:
     verify_binding(record)
+    if record.effect == DRIVE_SAVE and record.payload.get("version") == 2:
+        return save_batch(record, publisher, folder_saver)
     if record.effect == DRIVE_SAVE:
         return save_to_drive(record, publisher)
     if record.effect == COMMAND:

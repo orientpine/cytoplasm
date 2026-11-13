@@ -118,18 +118,28 @@ def stage_file(root: Path, name: str, source: BinaryIO) -> tuple[Path, str, int]
     return destination, digest.hexdigest(), size
 
 
-def saved_attachment(home: Path, uid: str, filename: str) -> tuple[int, Path]:
-    """The 1-based position and node path of one saved attachment of the owner's mail."""
+def _saved_rows(home: Path, uid: str) -> list[tuple[object, object]]:
     data = home / ".hermes/mailon-runtime/state/data"
     try:
         db = sqlite3.connect(f"file:{data / 'state.db'}?mode=ro", uri=True)
         try:
-            rows = db.execute("SELECT filename, local_path FROM attachments WHERE uid = ? AND status = 'ok' "
+            return db.execute("SELECT filename, local_path FROM attachments WHERE uid = ? AND status = 'ok' "
                               "ORDER BY rowid", (uid,)).fetchall()
         finally:
             db.close()
     except sqlite3.Error:
         raise Refused("mailbox index unreadable") from None
+
+
+def saved_attachment_names(home: Path, uid: str) -> list[str]:
+    """Every saved attachment name of one mail in the owner's mailbox, in order, each once."""
+    return list(dict.fromkeys(str(row[0]) for row in _saved_rows(home, uid)))
+
+
+def saved_attachment(home: Path, uid: str, filename: str) -> tuple[int, Path]:
+    """The 1-based position and node path of one saved attachment of the owner's mail."""
+    data = home / ".hermes/mailon-runtime/state/data"
+    rows = _saved_rows(home, uid)
     names = [str(row[0]) for row in rows]
     if filename not in names:
         raise Refused("no saved attachment by that name in that mail of the owner's mailbox")
