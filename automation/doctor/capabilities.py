@@ -274,7 +274,9 @@ def _cron(f: Facts) -> Verdict:
                             *(f"{check.name}({check.detail})" for check in semantic_failures)])
         return _fail(f"{len(broken) + len(orphaned) + len(semantic_failures)}개 반복 실패·멈춤 — {detail}",
                      (*(job.name for job in broken), *orphaned, *(check.name for check in semantic_failures)))
-    stopped = [job for job in cron if (not job.enabled or job.paused) and job.name not in moved]
+    # 한 번만 도는 잡이 끝나면 Hermes 는 꺼짐+completed 로 둔다 — 멈춘 게 아니라 할 일을 마친 것이다(#188).
+    stopped = [job for job in cron
+               if (not job.enabled or job.paused) and job.name not in moved and job.state != "completed"]
     if failing or stopped or f.job_checks:
         names = (*(job.name for job in (*failing, *stopped)), *(check.name for check in f.job_checks))
         return _warn(f"최근 실패·중지: {', '.join(names)}", names)
