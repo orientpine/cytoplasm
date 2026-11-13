@@ -97,3 +97,41 @@ def test_release_observation_takes_the_account_side_verdict() -> None:
     assert _observe("TIMER-CHECK state=stale detail=hermes-job-active want=abc\n")[0] == "stale"
     assert _observe("", rc=127) == ("unknown", "?")
     assert _observe("garbage\n") == ("unknown", "?")
+
+
+RETIRED_ROW = ("agent|skills/w/x.py|wiki-confirm-watch|v2:cron;policy=retired;reason=r;schedule=*/1 * * * *;"
+               "script=w.py;deliver=local;mode=no-agent;runner=systemd\n")
+
+
+def _hermes_only(root: Path, jobs: list[dict[str, object]]) -> Path:
+    home = root / "home"
+    (home / ".hermes" / "cron").mkdir(parents=True)
+    _ = (home / ".hermes" / "cron" / "jobs.json").write_text(json.dumps({"jobs": jobs}), encoding="utf-8")
+    return home
+
+
+def test_a_retired_job_left_paused_in_hermes_is_not_a_job_that_runs_nowhere(tmp_path: Path) -> None:
+    # #188: the cleaner removed the timer of a declared-retired job, Hermes still lists it paused.
+    repo = _repo(tmp_path)
+    _ = (repo / "automation" / "xw" / "deploy-manifest.txt").write_text(ROW + RETIRED_ROW, encoding="utf-8")
+    home = _hermes_only(tmp_path, [{"name": "wiki-confirm-watch", "enabled": True, "paused_at": "t"}])
+
+    assert _cron(home, repo, "active").status is Status.PASS
+
+
+def test_retired_and_finished_one_shot_hermes_entries_are_not_stopped_jobs(tmp_path: Path) -> None:
+    home = _hermes_only(tmp_path, [
+        {"name": "budget-watch", "enabled": True, "paused_at": "t"},
+        {"name": "once-reminder", "enabled": False, "state": "completed", "last_status": "ok"},
+    ])
+
+    assert _cron(home, _repo(tmp_path), "active").status is Status.PASS
+
+
+def test_any_other_paused_hermes_job_still_warns(tmp_path: Path) -> None:
+    home = _hermes_only(tmp_path, [{"name": "someone-else-watch", "enabled": True, "paused_at": "t"}])
+
+    finding = _cron(home, _repo(tmp_path), "active")
+
+    assert finding.status is Status.WARN
+    assert finding.subjects == ("someone-else-watch",)

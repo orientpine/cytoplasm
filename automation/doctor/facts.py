@@ -52,6 +52,7 @@ class CronJob:
     last_status: str
     failure_streak: int
     last_error: str
+    state: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +296,7 @@ def _cron(path: Path) -> tuple[CronJob, ...] | None:
             last_status=str(job.get("last_status") or ""),
             failure_streak=int(job.get("failure_streak") or 0),
             last_error=mask(str(job.get("last_error") or "")),
+            state=str(job.get("state") or ""),
         )
         for job in jobs
         if isinstance(job, dict)
@@ -395,7 +397,13 @@ def gather(
     if notice_override:
         names = frozenset({*(names or ()), TOKEN_KEY})
     provider, custom, fallback, default, fallback_models = _hermes_models(hermes_dir / "config.yaml")
+    from automation.retired_jobs import JOBS as RETIRED_JOBS
+
     cron = _cron(hermes_dir / "cron" / "jobs.json")
+    if cron is not None:
+        # 은퇴 정리기(retired_jobs)는 타이머·스크립트만 지우고, 게이트웨이를 끄기 전에 Hermes 에 걸려 있던
+        # 같은 이름 항목은 일시정지로 남는다(#188). 은퇴한 잡은 아무도 안 돌리는 게 정상이라 세지 않는다.
+        cron = tuple(job for job in cron if job.name not in RETIRED_JOBS)
     timers = _timers(repo, role, home, run, os.getuid() if uid is None else uid)
     registered = frozenset(job.name for job in cron or () if job.enabled and not job.paused) | frozenset(
         timer.name for timer in timers if timer.timer == "active")
