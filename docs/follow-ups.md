@@ -503,3 +503,7 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 
 - **`test_deploy_tree_swap` 의 between_switch 두 건은 호출자 env 의 `PYTHONPYCACHEPREFIX` 를 지우지 않는다** — 그 변수가 잡힌 셸(에이전트 세션 등)에서 `local_ci.sh run` 을 돌리면 자식 python 이 `__pycache__` 를 모듈 옆에 만들지 않아 항상 실패한다(변수를 빼면 통과) → 시험이 자식 env 에서 `PYTHONPYCACHEPREFIX`·`PYTHONDONTWRITEBYTECODE` 를 빼고 부른다. 영향: 영수증 없이 local_ci 재실행 · 심각도 낮음.
 - **`test_recall_cancel::test_relay_ssh_child_dies_with_its_caller` 가 부하가 높을 때 이미 끝난 pid 를 읽다 `ProcessLookupError` 로 실패한다** — load 13 아래 전체 실행에서 1회 실패, 단독 5/5 통과 → 끝난 프로세스를 '죽었음'으로 읽도록 그 예외를 성공 신호로 다룬다. 영향: local_ci 일시 실패 · 심각도 낮음.
+
+## Drive 저장 여러 파일 한 카드에서 남긴 것 (2026-11-13, #241)
+
+- **공유 드라이브(shared drive) 폴더 id 는 거절된다** — `drive_client.folder_info`·`verify_owner_only` 가 `supportsAllDrives` 없이 조회해, 공유 드라이브 폴더를 `drive-save --folder` 로 주면 권한 확인을 못 해 요청이 거절된다(fail-closed, 잘못 저장되지는 않음) → 공유 드라이브를 쓸 일이 생기면 조회에 그 인자를 넣고, 공유 드라이브는 구성원이 함께 보므로 형 결정으로 허용 범위를 정한다. 영향: 내 드라이브 밖 폴더 저장 불가 · 심각도 낮음.
