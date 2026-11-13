@@ -25,6 +25,7 @@ from automation.install.plan import (
     EnsureFile,
     EnsureGroup,
     EnsurePeerAttestKey,
+    EnsureRepairLogKey,
     EnsureRepository,
     GenerateDeployKey,
     InstallAction,
@@ -33,6 +34,7 @@ from automation.install.plan import (
     ProvisionHealthcheckProbe,
 )
 from automation.node_config import NodeConfig
+from automation.install.repair_log_key import ensure_repair_log_key
 
 
 class MutationDispatchError(RuntimeError):
@@ -80,6 +82,8 @@ class SystemMutator:
                 helper(action, self.run, self._write_file)
             case ProvisionHealthcheckProbe():
                 provision_probe(action, self.run)
+            case EnsureRepairLogKey():
+                ensure_repair_log_key(action, self.run)
             case InstallGitleaks(version=version):
                 self._install_gitleaks(version)
             case EnsureRepository():

@@ -15,6 +15,7 @@ from automation.install.component_assets import (
 )
 from automation.node_config import NodeConfig
 from automation.update_trust_state import release_floor_path
+from automation.install.repair_log_key import EnsureRepairLogKey as EnsureRepairLogKey
 
 
 CheckName: TypeAlias = Literal["hermes-gateway", "discord-readiness", "deploy-key-registration",
@@ -93,7 +94,7 @@ class Check:
 
 InstallAction: TypeAlias = (
     EnsureAccount | EnsureGroup | EnsureDirectory | EnsureFile | GenerateDeployKey | EnsurePeerAttestKey
-    | ProvisionHealthcheckProbe | InstallGitleaks | EnsureRepository | EnableTimer | Check
+    | EnsureRepairLogKey | ProvisionHealthcheckProbe | InstallGitleaks | EnsureRepository | EnableTimer | Check
     | EnableUserUnit | EnsureSymlink
 )
 
@@ -120,6 +121,7 @@ class SystemState:
     repositories: Mapping[Path, str] = field(default_factory=dict[Path, str])
     operator_home: Path | None = None
     healthcheck_probe_ready: bool = False
+    repair_log_ready: bool = False
     enabled_timers: frozenset[str] = frozenset()
     enabled_user_units: frozenset[EnableUserUnit] = frozenset()
     symlinks: frozenset[EnsureSymlink] = frozenset()
@@ -144,6 +146,7 @@ class SystemState:
         symlinks: set[EnsureSymlink] = set()
         gitleaks_version: str | None = None
         healthcheck_probe_ready = False
+        repair_log_ready = False
         for action in actions:
             match action:
                 case EnsureAccount(name=name):
@@ -161,6 +164,8 @@ class SystemState:
                     peer_attest_keys.add(private_path)
                 case ProvisionHealthcheckProbe():
                     healthcheck_probe_ready = True
+                case EnsureRepairLogKey():
+                    repair_log_ready = True
                 case InstallGitleaks(version=version):
                     gitleaks_version = version
                 case EnsureRepository(path=path, origin_url=origin_url):
@@ -189,6 +194,7 @@ class SystemState:
             symlinks=frozenset(symlinks),
             gitleaks_version=gitleaks_version,
             healthcheck_probe_ready=healthcheck_probe_ready,
+            repair_log_ready=repair_log_ready,
         )
 
 
@@ -278,6 +284,11 @@ def build_plan(inputs: InstallInputs, state: SystemState) -> InstallPlan:
         home = state.operator_home or (Path('/root') if config.operator_account == 'root' else Path('/home') / config.operator_account)
         actions.append(ProvisionHealthcheckProbe(config.operator_account, home, config.ops_account, config.ops_home,
                        config.ops_home / '.ssh/autophagy-healthcheck', config.deploy_checkout, config.primary_node_name))
+    if not state.repair_log_ready:
+        actions.append(EnsureRepairLogKey(
+            config.agent_account, config.agent_home, config.ops_account, config.ops_home,
+            config.release_current / "automation/repair/repair_private_log.py",
+        ))
     for timer in inputs.timers:
         if timer not in state.enabled_timers:
             actions.append(EnableTimer(timer))
