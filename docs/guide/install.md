@@ -344,6 +344,17 @@ INSTALL PLAN
 - **`account`/`group`/`directory`/`file`** — 만들어질 계정·디렉터리·파일과 그 소유·모드.
   파일은 내용 sha256으로 비교하므로, 이미 같은 내용이면 다음 실행의 계획에서 사라진다.
 - **`deploy-key` / `peer-attest-key`** — 키를 **생성**한다. 개인키는 절대 출력되지 않는다.
+- **`repair-log-key`** — 레거시 노드 설치가 agent의
+  `~/.ssh/autophagy-repair-log` 키 쌍을 준비한다(개인키 0600, 공개키 0644).
+  ops의 `~/.ssh/authorized_keys`(ops 소유 0600)에
+  `restrict,command="/usr/bin/python3 -I <release_current>/automation/repair/repair_private_log.py"`
+  바인딩을 추가하고, agent의 `~/.ssh/known_hosts`(agent 소유 0600)에 로컬
+  `/etc/ssh/ssh_host_ed25519_key.pub`의 공개키를 `127.0.0.1`용으로 등록한다.
+  기존 줄은 보존하며 같은 바인딩은 중복하지 않는다. 두 계정의 `.ssh`는 각 계정 소유 0700이다.
+  키 쌍의 한쪽만 있거나 같은 키가 다른 명령에 묶여 있으면 재생성·덮어쓰기 없이 중단한다.
+  로컬 호스트 공개키가 없거나 잘못됐어도 중단한다. 외부 origin 호스트키의 대역외 확인
+  절차(§6.2)는 별개이며, `StrictHostKeyChecking=yes`는 유지한다.
+  [사용 시나리오](../기능소개/수리-로그-SSH-설치.md).
 - **`check`** — 쓰기가 아니라 판정이다. `--dry-run`에서는 실행되지 않고 자리만 보인다.
 - **`timer`** — systemd 타이머 활성화. 여기가 자동 업데이트가 켜지는 지점이다.
 

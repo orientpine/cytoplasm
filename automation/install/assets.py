@@ -22,6 +22,7 @@ from automation.install.plan import (
     EnsureFile,
     EnsureGroup,
     EnsurePeerAttestKey,
+    EnsureRepairLogKey,
     EnsureRepository,
     FileSpec,
     GenerateDeployKey,
@@ -102,6 +103,12 @@ def describe_action(action: InstallAction) -> str:
             return (
                 f"peer-attest-key private={private_path} public={public_path} "
                 f"owner={owner} comment={comment} private-content=never-printed"
+            )
+        case EnsureRepairLogKey():
+            return (
+                f"repair-log-key {action.private_path} receiver={action.receiver} "
+                f"authorized={action.authorized_path} known-hosts={action.known_hosts_path} "
+                "private-content=never-printed"
             )
         case ProvisionHealthcheckProbe(operator_home=home, private_path=key):
             return f"healthcheck-probe 키={key} 래퍼={home}/.local/libexec/autophagy-healthcheck-probe"

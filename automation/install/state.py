@@ -17,9 +17,11 @@ from automation.install.plan import (
     FileState,
     InstallInputs,
     ProvisionHealthcheckProbe,
+    EnsureRepairLogKey,
     SystemState,
     build_plan,
 )
+from automation.install.repair_log_key import inspect_repair_log_key
 
 
 def _owner(path: Path) -> tuple[str, str] | None:
@@ -91,6 +93,7 @@ def inspect_state(inputs: InstallInputs) -> SystemState:
     except KeyError:
         operator_home = None
     probe = next(action for action in desired.actions if isinstance(action, ProvisionHealthcheckProbe))
+    repair_log = next(action for action in desired.actions if isinstance(action, EnsureRepairLogKey))
     return SystemState(
         accounts=accounts,
         ready_accounts=ready_accounts,
@@ -106,6 +109,7 @@ def inspect_state(inputs: InstallInputs) -> SystemState:
         gitleaks_version=_gitleaks_version(),
         operator_home=operator_home,
         healthcheck_probe_ready=inspect_probe(replace(probe, operator_home=operator_home)) if operator_home is not None else False,
+        repair_log_ready=inspect_repair_log_key(repair_log),
     )
 
 
