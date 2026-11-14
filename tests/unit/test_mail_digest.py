@@ -539,7 +539,7 @@ def test_render_digest_dm_card_format() -> None:
 
     lines = text.splitlines()
     assert lines[0] == "## 📬 기관메일 다이제스트"
-    assert lines[1] == "2026-07-18 09:30 KST · 신규 2건"
+    assert lines[1] == "2026-07-18 09:30 KST · 할 일 2건 / 회신 완료 0건"
     assert "### 1. Synthetic first" in lines
     assert "### 2. Synthetic second" in lines
     assert text.index("### 1.") < text.index("### 2.")
