@@ -160,8 +160,8 @@ def test_the_days_runs_share_one_thread_named_by_the_day_and_each_run_heads_its_
 
     assert node.opened == ["다이제스트 10-30"]
     assert {channel for channel, _ in first + second} == {THREAD}
-    assert first[0][1].splitlines()[0] == "## 📬 09:00 다이제스트 · 신규 1건 (일정 1)"
-    assert second[0][1].splitlines()[0] == "## 📬 13:00 다이제스트 · 신규 1건 (일정 1)"
+    assert first[0][1].splitlines()[0] == "## 📬 09:00 다이제스트 · 할 일 1건 / 회신 완료 0건 (일정 1)"
+    assert second[0][1].splitlines()[0] == "## 📬 13:00 다이제스트 · 할 일 1건 / 회신 완료 0건 (일정 1)"
     assert [body.split(" (", 1)[0] for body in node.flat] == ["📬 다이제스트에 1건 추가됨"]
 
 

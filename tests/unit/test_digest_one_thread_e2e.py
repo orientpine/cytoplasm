@@ -260,7 +260,7 @@ def test_one_digest_day_on_the_owners_screen(world: World, monkeypatch: pytest.M
     assert parent["content"].splitlines()[0] == "## 📬 기관메일 · 다이제스트 10-17"
     assert "🔔 승인 대기" in parent["content"] and "대상:" not in parent["content"]
     assert thread["name"] == "🔔 📬 다이제스트 10-17"
-    assert "✅" not in inside[0]["content"] and "신규 2건" in inside[0]["content"]
+    assert "✅" not in inside[0]["content"] and "할 일 2건 / 회신 완료 0건" in inside[0]["content"]
     # Q3: the event card is in the same thread, under its mail card, which links it.
     assert calendar_card["reply_to"] == cards[1]["id"]
     assert "[승인 카드](" in world.messages[cards[1]["id"]]["content"]

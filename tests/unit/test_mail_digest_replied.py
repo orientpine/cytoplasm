@@ -147,3 +147,77 @@ def test_owner_replied_at_skips_unreadable_candidate(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(triage_digest.triage_transport, "_get_mail", get_mail)
     mail = _inbox("u", _SUBJECT, _PARTNER, "2026-10-14T05:02:01")
     assert triage_digest._owner_replied_at(mail, [_sent("s", "Re: " + _SUBJECT, "2026-10-14T08:06:14")]) == ""
+
+
+# Owner 2026-11-14 ("답변 한건 표시하는 기능 만들어"): a replied mail must be told apart at a glance.
+_NOV_14_0900 = datetime(2026, 11, 14, 9, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+
+
+def _card(item_no: int, *, flags: tuple[str, ...] = ("reply_needed",), replied_at: str = "",
+          subject: str = "s", summary: str = "x") -> dict:
+    return {"item_no": item_no, "subject": subject, "category": "important", "flags": flags,
+            "summary": summary, "note": "", "recv_date": "", "replied_at": replied_at}
+
+
+def _replied(item_no: int, *, replied_at: str = "2026-11-13T12:37:00", subject: str = "s",
+             summary: str = "x") -> dict:
+    return _card(item_no, flags=("replied",), replied_at=replied_at, subject=subject, summary=summary)
+
+
+def _heading(item: dict) -> str:
+    return triage_digest.render_item(item, kst_now=_NOV_14_0900).splitlines()[0]
+
+
+def test_replied_card_title_starts_with_done_mark_and_reply_time() -> None:
+    assert _heading(_replied(1, subject="H200 문의")) == "### 1. ✅ 회신 완료(11-13 21:37) · H200 문의"
+
+
+def test_replied_card_without_a_readable_time_still_says_done() -> None:
+    assert _heading(_replied(2, replied_at="")) == "### 2. ✅ 회신 완료 · s"
+
+
+def test_unreplied_card_title_is_unchanged() -> None:
+    assert _heading(_card(3)) == "### 3. s"
+    assert _heading(_card(4, flags=())) == "### 4. s"
+
+
+def test_headers_split_mail_to_do_from_mail_already_answered() -> None:
+    items = [_replied(1), _card(2), _card(3, flags=())]
+    intro = triage_digest.thread_intro(items, kst_now=_NOV_14_0900).splitlines()[0]
+    flat = triage_digest.render_digest_parts(items, kst_now=_NOV_14_0900)[0].splitlines()[1]
+    assert intro == "## 📬 09:00 다이제스트 · 할 일 2건 / 회신 완료 1건 (회신 필요 1)"
+    assert flat == "2026-11-14 09:00 KST · 할 일 2건 / 회신 완료 1건"
+
+
+def test_all_answered_digest_has_nothing_to_do() -> None:
+    items = [_replied(1), _replied(2)]
+    intro = triage_digest.thread_intro(items, kst_now=_NOV_14_0900).splitlines()[0]
+    assert intro == "## 📬 09:00 다이제스트 · 할 일 0건 / 회신 완료 2건"
+
+
+def test_longest_replied_card_still_fits_one_discord_message() -> None:
+    card = triage_digest.render_item(
+        _replied(999, subject="제" * 5000, summary="요" * 5000), kst_now=_NOV_14_0900)
+    assert card.startswith("### 999. ✅ 회신 완료(11-13 21:37) · ")
+    assert len(card) <= 2000
+
+
+def test_run_digest_puts_the_done_mark_on_the_answered_card(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    inbox = [
+        _inbox("u-answered", "[RE]Re: " + _SUBJECT, _PARTNER, "2026-10-14T05:02:01"),
+        _inbox("u-open", "FW: 수지분석 협조요청", '"동료" <peer@inst.example>', "2026-10-14T04:23:18"),
+    ]
+    sent = [_sent("s-reply", "Re: " + _SUBJECT, "2026-10-14T08:06:14")]
+    bodies = {"u-answered": _body(_OWNER), "u-open": _body(_OWNER),
+              "s-reply": _body("partner@corp.example")}
+    _patch_run(monkeypatch, tmp_path, inbox, sent, bodies)
+
+    assert triage_digest.run_digest(limit=10, sync=False, dry_run=True) == 0
+    out = capsys.readouterr().out
+
+    assert "KST · 할 일 1건 / 회신 완료 1건" in out
+    headings = [line for line in out.splitlines() if line.startswith("### ")]
+    assert headings[0] == "### 1. FW: 수지분석 협조요청"
+    assert headings[1].startswith("### 2. ✅ 회신 완료(10-14 17:06) · ")

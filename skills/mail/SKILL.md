@@ -161,7 +161,7 @@ cron `mail-sync-watch`(`*/10 7-23 * * *`, no_agent, 2026-10-19 — 형 "매 분�
   자동 회신 초안을 만들지 않는다(`cc-no-reply`). 판별 불가 시에는 기존 동작 유지(fail-open).
   **대화형 요약/보고에서도** `cc` 플래그 메일은 '회신 필요'가 아닌 '참조(CC)' 항목으로 묶어 제시한다.
 - **대량 공지**: To 수신 메일이라도 no-reply 계열 발신자와 뉴스레터/대량배포/수신거부 신호가 함께 있으면 `reply_needed`를 억제한다. 이 판정은 Cc-only 판정과 독립적이며 Cc 배지를 덮어쓰지 않는다.
-- **이미 회신한 메일 (2026-10-15 소유자 지시)**: 다이제스트는 `회신 필요`를 달기 전에 `state.db` 의 보낸메일함(`mail_wrapper.py list --all-folders` 중 `folder=sent`, 최근 300행)을 본다. 받은 뒤에 보낸 메일 가운데 제목이 같고(`Re:`·`FW:`·`[RE]`·`회신:` 접두어 제외) 그 메일 발신자 주소가 To/Cc 에 있는 것이 있으면 `회신 필요` 대신 `📤 회신함 · MM-DD HH:MM`(KST, 가장 이른 회신)을 단다(`triage_recipient.reply_candidates`·`addressed_to`, `triage_digest._owner_replied_at`). 보낸메일 조회가 실패하거나 후보 본문을 못 읽으면 `회신 필요`를 그대로 둔다(fail-open, stderr `DIGEST-SENT-LOOKUP-FAIL`). 보낸메일함은 평일 매시 수집과 다이제스트 동기화가 함께 채운다.
+- **이미 회신한 메일 (2026-10-15 소유자 지시)**: 다이제스트는 `회신 필요`를 달기 전에 `state.db` 의 보낸메일함(`mail_wrapper.py list --all-folders` 중 `folder=sent`, 최근 300행)을 본다. 받은 뒤에 보낸 메일 가운데 제목이 같고(`Re:`·`FW:`·`[RE]`·`회신:` 접두어 제외) 그 메일 발신자 주소가 To/Cc 에 있는 것이 있으면 `회신 필요` 대신 `📤 회신함 · MM-DD HH:MM`(KST, 가장 이른 회신)을 단다(`triage_recipient.reply_candidates`·`addressed_to`, `triage_digest._owner_replied_at`). 그 카드 제목 앞에는 `✅ 회신 완료(MM-DD HH:MM)`(시각을 못 읽으면 `✅ 회신 완료`)를 붙이고, 다이제스트 머리 줄은 `신규 N건` 대신 `할 일 N건 / 회신 완료 M건`으로 나눈다(2026-11-14 형 지시, `triage_digest._replied_mark`·`_work_counts`). 새 메일이 없는 다이제스트는 예전처럼 `신규 0건`·`신규 메일 없음`이다. 보낸메일 조회가 실패하거나 후보 본문을 못 읽으면 `회신 필요`를 그대로 둔다(fail-open, stderr `DIGEST-SENT-LOOKUP-FAIL`). 보낸메일함은 평일 매시 수집과 다이제스트 동기화가 함께 채운다.
 - `scripts/mail_search.py`는 제목·발신자·본문·스레드·첨부파일의 순수 읽기 점수와 To/Cc 역할, `mass_notice`/`direct_inquiry` 접촉 유형을 계산하며 외부효과나 저장을 수행하지 않는다.
 
 ### 3. 소유자 지시 기반 초안 생성

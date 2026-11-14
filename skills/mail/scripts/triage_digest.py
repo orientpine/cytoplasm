@@ -270,6 +270,23 @@ def _badge_line(item: dict) -> str:
     return " · ".join(badges)
 
 
+def _replied_mark(item: dict) -> str:
+    """``✅ 회신 완료(MM-DD HH:MM)`` before the title of a mail the owner already answered, else ''.
+
+    The small ``📤 회신함`` badge alone was missed (owner 2026-11-14), so the card says it first.
+    """
+    if "replied" not in item["flags"]:
+        return ""
+    stamp = _kst_stamp(str(item.get("replied_at") or ""))
+    return f"✅ 회신 완료({stamp})" if stamp else "✅ 회신 완료"
+
+
+def _work_counts(dm_items: list[dict]) -> str:
+    """``할 일 N건 / 회신 완료 M건``: each listed mail is still to handle or already answered."""
+    answered = sum(1 for item in dm_items if "replied" in item["flags"])
+    return f"할 일 {len(dm_items) - answered}건 / 회신 완료 {answered}건"
+
+
 def _owner_replied_at(mail: dict, sent_mails: list[dict]) -> str:
     """Date of the owner's first reply to this mail's sender in the same thread, or ''.
 
@@ -296,8 +313,9 @@ def render_item(item: dict, *, kst_now: datetime) -> str:
     sees names only, and Cc collapses to ``A, B, C 외 N명`` without the owner.
     """
     subject = _clip(_sanitize_inline(str(item["subject"])), _SUBJECT_LIMIT)
+    mark = _replied_mark(item)
     lines = [
-        f"### {item['item_no']}. {subject}",
+        f"### {item['item_no']}. " + (f"{mark} · " if mark else "") + subject,
         f"-# 📄 누르면 전문 · ✍️ 누르면 회신 초안 · ↩️ 답장하면 지시대로 초안 · "
         f"회신 키 `{reply_key(kst_now, int(item['item_no']))}`",
         _badge_line(item),
@@ -406,9 +424,9 @@ def render_digest_parts(dm_items: list[dict], *, kst_now: datetime) -> list[str]
     transport's 2000-char chunker, and each mail message is a reply target.
     """
     stamp = kst_now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M")
-    header = ["## 📬 기관메일 다이제스트", f"{stamp} KST · 신규 {len(dm_items)}건"]
     if not dm_items:
-        return ["\n".join([*header, "", "신규 메일 없음"])]
+        return ["\n".join(["## 📬 기관메일 다이제스트", f"{stamp} KST · 신규 0건", "", "신규 메일 없음"])]
+    header = ["## 📬 기관메일 다이제스트", f"{stamp} KST · {_work_counts(dm_items)}"]
     header_text = "\n".join([*header, "메일별 카드는 이 메시지의 스레드에 이어집니다.", "", _footer()])
     return [header_text, *(render_item(item, kst_now=kst_now) for item in dm_items)]
 
@@ -428,7 +446,7 @@ def thread_intro(dm_items: list[dict], *, kst_now: datetime) -> str:
     tally = " · ".join(f"{label} {count}" for label, count in counts if count)
     return "\n".join([
         # The day's thread (named by the day) holds every run, so each run opens with its own title.
-        f"## 📬 {clock} 다이제스트 · 신규 {len(dm_items)}건" + (f" ({tally})" if tally else ""),
+        f"## 📬 {clock} 다이제스트 · {_work_counts(dm_items)}" + (f" ({tally})" if tally else ""),
         "👇 메일 카드에서 📄 전문 · ✍️ 회신 초안 · 답장하면 그 말대로 초안",
         "회신 초안과 일정의 승인 카드는 그 메일 카드 아래 답글로 이 스레드에 올라옵니다",
     ])
