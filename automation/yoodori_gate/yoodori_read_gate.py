@@ -162,7 +162,8 @@ USAGE = ("YooDori gate: calendar <days 1-31> [query...], mail-list <n 1-50>,\n"
          "Institutional mail search: mail-search <words...> [--limit n 1-50, default 20] (every folder,\n"
          "  subject/sender/saved body, all words must match, newest first; read-only).\n"
          "Institutional mail address by name: mail-resolve <name> (webmail autocomplete, read-only).\n"
-         "Gmail reads: gmail-list <n 1-50> [query...], gmail-get <hex id> [--body].\n"
+         "Gmail reads: gmail-list <n 1-50> [query...], gmail-list <n 1-50> --ids (ids only),\n"
+         "  gmail-get <hex id> [--body].\n"
          "Obsidian read: note-get <PARA path>.\n"
          "Daily memory copy: memory-copy (note body on SSH stdin; fixed note, no origin).\n"
          "Daily conversation summary: day-summary <YYYY-MM-DD> (body on stdin; overwrites that day's note).\n"
@@ -782,10 +783,12 @@ def build(words: list[str]) -> tuple[str, list[str], Path]:
         return _card(name, args)
     py = "/usr/bin/python3"
     if name == "gmail-list":
-        if not args or any(word.startswith("--") for word in args[1:]):
-            raise Refused("gmail-list needs <n> [query...]")
-        return name, [py, str(Path(__file__).with_name("gmail_read.py")), "list",
-                      _int(args[0], 1, 50), *([_text(args[1:], 200)] if args[1:] else [])], HOME
+        # Exactly <n> --ids: the listed ids only, no get per mail (the new-mail watcher gets just the new ones).
+        ids_only = args[1:] == ["--ids"]
+        if not args or (not ids_only and any(word.startswith("--") for word in args[1:])):
+            raise Refused("gmail-list needs <n> [query...] or <n> --ids")
+        tail = ["--ids"] if ids_only else [_text(args[1:], 200)] if args[1:] else []
+        return name, [py, str(Path(__file__).with_name("gmail_read.py")), "list", _int(args[0], 1, 50), *tail], HOME
     if name == "gmail-get":
         if (not args or not _GMAIL_ID.fullmatch(args[0]) or len(args) > 2
                 or (len(args) == 2 and args[1] != "--body")):

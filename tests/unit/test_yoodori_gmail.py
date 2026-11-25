@@ -22,6 +22,7 @@ OTHER = "fedcba9876543210"
     (["gmail-list", "050"], ["list", "50"]),
     (["gmail-list", "2", "from:a@example.invalid", "is:unread"],
      ["list", "2", "from:a@example.invalid is:unread"]),
+    (["gmail-list", "30", "--ids"], ["list", "30", "--ids"]),
     (["gmail-get", ID], ["get", ID]),
     (["gmail-get", ID, "--body"], ["get", ID, "--body"]),
 ])
@@ -36,6 +37,8 @@ def test_gate_builds_only_the_gmail_read_helper(words: list[str], expected: list
     ["gmail-list"], ["gmail-list", "0"], ["gmail-list", "51"], ["gmail-list", "2", "x" * 201],
     ["gmail-get"], ["gmail-get", "abcdef0"], ["gmail-get", "a" * 33],
     ["gmail-get", "ABCDEF012345"], ["gmail-get", "../" + ID], ["gmail-get", ID, "--raw"],
+    ["gmail-list", "--ids"], ["gmail-list", "2", "--ids", "is:unread"], ["gmail-list", "2", "is:unread", "--ids"],
+    ["gmail-list", "2", "--ids", "--ids"], ["gmail-list", "2", "--id"],
 ])
 def test_bad_gmail_arguments_are_gate_refusals(words: list[str]) -> None:
     # Given / When / Then
@@ -140,6 +143,34 @@ def test_gws_reads_only_list_and_get_and_outputs_compact_json(
         assert all(call[1]["format"] == "metadata" for call in calls[1:])
     else:
         assert calls[0][1] == {"userId": "me", "id": ID, "format": "full" if "--body" in words else "metadata"}
+
+
+def test_ids_mode_is_one_list_call_without_any_get(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: a watcher that already saw most ids asks only for the ids (2 ticks/min x 30 gets was ~19,000 gets a day).
+    calls: list[tuple[str, dict[str, gmail.Json]]] = []
+    def run(argv: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append((argv[4], json.loads(argv[6])))
+        return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+            {"messages": [{"id": ID, "threadId": ID}, {"id": OTHER, "threadId": ID}], "resultSizeEstimate": 2}))
+    monkeypatch.setattr(gmail.subprocess, "run", run)
+    # When
+    assert gmail.main(["list", "30", "--ids"]) == 0
+    # Then
+    assert json.loads(capsys.readouterr().out) == {"status": "ok", "ids": [ID, OTHER]}
+    assert calls == [("list", {"userId": "me", "maxResults": 30})]
+
+
+def test_ids_mode_refuses_a_bad_id_from_the_list(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given
+    monkeypatch.setattr(gmail.subprocess, "run", lambda *_a, **_k: SimpleNamespace(
+        returncode=0, stderr="", stdout=json.dumps({"messages": [{"id": "../" + ID}]})))
+    # When / Then
+    assert gmail.main(["list", "30", "--ids"]) == 3
+    assert json.loads(capsys.readouterr().out) == {"status": "error", "error": "gmail-read-failed"}
 
 
 def test_html_fallback_and_attachment_exclusion() -> None:
