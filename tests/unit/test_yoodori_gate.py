@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from automation.yoodori_gate import yoodori_read_gate as gate
+from automation.yoodori_gate import yoodori_request_runtime as runtime
 
 REPO = Path(__file__).resolve().parents[2]
 PY = "/usr/bin/python3"
@@ -175,7 +176,7 @@ def test_only_staged_regular_files_are_accepted(
         path = gate.STAGING / "absent"
     else:
         with path.open("wb") as stream:
-            stream.truncate(64 * 1024 * 1024 + 1)
+            stream.truncate(runtime.MAX_STAGE_BYTES + 1)
     # When / Then
     with pytest.raises(gate.Refused):
         gate.build(["drive-save", "--file", str(path), "--summary", "s", *ORIGIN])
