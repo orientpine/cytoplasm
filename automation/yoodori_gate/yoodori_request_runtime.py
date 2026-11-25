@@ -14,7 +14,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO
 
-MAX_STAGE_BYTES = 64 * 1024 * 1024
+# 2026-11-25 owner card: a 192 MiB build had to go out as a mail Drive share link and 64 MiB refused it.
+# The node uploads a staged file itself in one multipart request (Drive takes files up to 5,120 GB).
+MAX_STAGE_BYTES = 256 * 1024 * 1024
+MAX_STAGE_TEXT = f"{MAX_STAGE_BYTES // (1024 * 1024)} MiB"
 
 
 class Refused(Exception):
@@ -107,7 +110,7 @@ def stage_file(root: Path, name: str, source: BinaryIO) -> tuple[Path, str, int]
             while chunk := source.read(min(65536, MAX_STAGE_BYTES - size + 1)):
                 size += len(chunk)
                 if size > MAX_STAGE_BYTES:
-                    raise Refused("stage file exceeds 64 MiB")
+                    raise Refused(f"stage file exceeds {MAX_STAGE_TEXT}")
                 output.write(chunk)
                 digest.update(chunk)
             output.flush()
@@ -153,7 +156,7 @@ def saved_attachment(home: Path, uid: str, filename: str) -> tuple[int, Path]:
     if source is None:
         raise Refused("that attachment is not saved on the node")
     if source.stat().st_size > MAX_STAGE_BYTES:
-        raise Refused("attachment exceeds 64 MiB")
+        raise Refused(f"attachment exceeds {MAX_STAGE_TEXT}")
     return index + 1, source
 
 
@@ -263,7 +266,7 @@ def checked_value(value: str, kind: str, staging: Path) -> str:
             if (not path.is_absolute() or ".." in path.parts or path.is_symlink()
                     or not path.resolve().is_relative_to(staging.resolve())
                     or not path.is_file() or path.stat().st_size > MAX_STAGE_BYTES):
-                raise Refused("file must be a staged regular file of at most 64 MiB")
+                raise Refused(f"file must be a staged regular file of at most {MAX_STAGE_TEXT}")
         except OSError:
             raise Refused("staging file unreadable") from None
     if kind == "relpath":

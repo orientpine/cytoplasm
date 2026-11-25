@@ -18,6 +18,7 @@ import pytest
 from automation import auto_write
 from automation.yoodori_gate import yoodori_jobs as jobs
 from automation.yoodori_gate import yoodori_read_gate as gate
+from automation.yoodori_gate import yoodori_request_runtime as runtime
 
 REPO = Path(__file__).resolve().parents[2]
 PY = "/usr/bin/python3"
@@ -69,6 +70,24 @@ def test_forward_and_drive_share_reach_the_real_compose_parser(staged: Path) -> 
         assert argv.count("--share-with") == args.count("--share-with")
         assert argv.count("--cc") == args.count("--cc")
         _parses(mail, "triage_cli", argv[2:])
+
+
+@pytest.mark.parametrize(("extra", "accepted"), [(0, True), (1, False)])
+def test_drive_share_takes_a_staged_file_up_to_exactly_the_cap(
+    staged: Path, extra: int, accepted: bool,
+) -> None:
+    # Given: a sparse staged build of exactly 256 MiB, or one byte more.
+    build = staged.with_name("build.zip")
+    with build.open("wb") as stream:
+        stream.truncate(runtime.MAX_STAGE_BYTES + extra)
+    args = ["mail-compose", "--to", "a@example.invalid", "--subject", "s", "--body", "b",
+            "--drive-share", "build.zip", "--share-with", "a@example.invalid", *ORIGIN]
+    # When / Then: the cap itself passes, one byte over is refused before any card producer runs.
+    if accepted:
+        assert str(build) in gate.build(args)[1]
+    else:
+        with pytest.raises(gate.Refused, match="at most 256 MiB"):
+            gate.build(args)
 
 
 @pytest.mark.parametrize("args", [

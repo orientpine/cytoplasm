@@ -546,3 +546,8 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 
 - 수리 쪽 다른 상태 저장(`repair_lifecycle.RepairLifecycleStore.transition`·`repair_ops_pending` 저장)과 다이제스트 수리 워처의 위치 파일은 임시 파일 뒤 `os.replace` 라 디스크가 차도 원본은 남지만, fsync 가 없고 실패하면 임시 파일이 남는다 → 같은 공유 도우미 `credential_rotation.files.atomic_write` 로 옮기기. 영향: 전원이 끊기면 빈 기록이 될 수 있고 임시 파일이 쌓임, 낮음.
 - `repair_private_log.persist` 는 회차 원문 로그를 `write_text` 로 바로 쓴다 → 디스크가 차면 그 회차 원문이 잘린 채 남는다(다시 파싱하지 않아 수리 길은 막히지 않음). 원자적 쓰기로 옮기기. 영향: 그 회차 원문 일부 손실, 낮음.
+
+## 유돌 stage 한도 256 MiB 에서 남긴 것 (2026-11-25)
+
+- 노드 staging(`~/.local/share/yoodori-staging/`)과 Drive 공유 사본(`~/.hermes/mail-triage/drive-share/`)은 지우는 길이 없다 — 한도가 256 MiB 로 커져 큰 빌드 몇 번이면 수 GB 가 쌓인다(이번 작업 시점 staging 719 MB) → 보낸 지 오래된 사본·staging 파일을 정리하는 단계를 기존 정리 잡에 넣기. 영향: 노드 디스크 압박, 중간.
+- Drive 업로드는 gws `+upload` 한 번(multipart)이고 재개가 없으며 gws 호출 상한은 600초다 — 200 MB 급 파일은 초당 약 340 KB 보다 느린 망에서 끝나기 전에 끊기고 처음부터 다시 올린다(메일은 나가지 않음) → 실제 업로드 시간을 재 보고 필요하면 업로드 호출만 상한을 늘리기. 영향: 느린 망에서 재시도 반복, 낮음.

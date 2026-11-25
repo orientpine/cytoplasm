@@ -78,6 +78,19 @@ def test_an_owner_mail_attachment_is_staged_and_only_its_path_is_printed(
     assert gate.checked_value(str(staged), "file", gate.STAGING) == str(staged)
 
 
+@pytest.mark.parametrize(("extra", "accepted"), [(0, True), (1, False)])
+def test_a_saved_attachment_is_taken_up_to_exactly_the_cap(home: Path, extra: int, accepted: bool) -> None:
+    # Given: the saved attachment is a sparse file of exactly 256 MiB, or one byte more.
+    with (home / ".hermes/mailon-runtime/state/data/attachments/9793361" / NAME).open("r+b") as stream:
+        stream.truncate(runtime.MAX_STAGE_BYTES + extra)
+    # When / Then
+    if accepted:
+        assert runtime.saved_attachment(home, "9793361", NAME)[0] == 2
+    else:
+        with pytest.raises(runtime.Refused, match="attachment exceeds 256 MiB"):
+            runtime.saved_attachment(home, "9793361", NAME)
+
+
 @pytest.mark.parametrize(("uid", "name"), [
     ("555", "남의.pdf"),        # not a saved attachment of the owner's mailbox
     ("9793361", "없음.pdf"),     # no such attachment in that mail

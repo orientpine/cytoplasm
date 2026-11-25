@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from automation.yoodori_gate import yoodori_read_gate as gate
+from automation.yoodori_gate import yoodori_request_runtime as runtime
 from tests.unit.test_yoodori_gate import ORIGIN, PY, b64
 
 
@@ -49,25 +50,48 @@ def test_stage_reads_binary_stdin_without_a_child_and_builds_drive_request(
                        "--file", str(path), "--summary", "파일 저장", *ORIGIN], gate.RELEASE)
 
 
+class _Zeros:
+    """SSH stdin of ``size`` zero bytes, read in chunks so a 256 MiB stream never sits in memory."""
+
+    def __init__(self, size: int) -> None:
+        self.left = size
+
+    def read(self, n: int) -> bytes:
+        n = min(n, self.left)
+        self.left -= n
+        return bytes(n)
+
+
+def test_stage_accepts_exactly_the_cap(private_staging: Path) -> None:
+    # Given: a build of exactly 256 MiB (2026-11-25: a 192 MiB zip for a Drive share link was refused at 64 MiB).
+    size = runtime.MAX_STAGE_BYTES
+    assert size == 256 * 1024 * 1024
+    # When
+    path, digest, staged = gate.stage_file(private_staging, "build.zip", _Zeros(size))
+    # Then: the whole file is kept and the gate takes it as a staged file.
+    assert (staged, path.stat().st_size) == (size, size)
+    assert digest == hashlib.sha256(bytes(size)).hexdigest()
+    assert gate.build(["drive-save", "--file", "build.zip", "--summary", "s", *ORIGIN])[1][6] == str(path)
+
+
 @pytest.mark.parametrize("existing", [False, True])
 def test_stage_oversize_refuses_and_removes_only_the_partial_file(
     private_staging: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str], existing: bool,
 ) -> None:
-    # Given: one byte over the actual 64 MiB cap and optionally an older completed upload.
+    # Given: one byte over the actual 256 MiB cap and optionally an older completed upload.
     private_staging.mkdir(parents=True)
     path = private_staging / "large.bin"
     if existing:
         path.write_bytes(b"previous")
     monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "stage large.bin")
-    monkeypatch.setattr(gate.sys, "stdin", SimpleNamespace(
-        buffer=io.BytesIO(b"x" * (64 * 1024 * 1024 + 1))))
+    monkeypatch.setattr(gate.sys, "stdin", SimpleNamespace(buffer=_Zeros(runtime.MAX_STAGE_BYTES + 1)))
     # When
     assert gate.main() == 2
     # Then: no ACK, no partial, and a prior completed file is not lost.
     output = capsys.readouterr()
     assert output.out == ""
-    assert "YOODORI-GATE-REFUSED stage file exceeds 64 MiB" in output.err
+    assert "YOODORI-GATE-REFUSED stage file exceeds 256 MiB" in output.err
     assert sorted(p.name for p in private_staging.iterdir()) == (["large.bin"] if existing else [])
     if existing:
         assert path.read_bytes() == b"previous"
