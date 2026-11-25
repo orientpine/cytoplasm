@@ -129,8 +129,11 @@ def request(words: list[str]) -> dict[str, Json]:
     if (words[0] != "list" or len(words) not in {2, 3}
             or not re.fullmatch(r"[0-9]{1,2}", words[1]) or not 1 <= int(words[1]) <= 50):
         raise GmailReadError("usage")
+    # --ids answers the listed ids from the one list call and gets none of them: the new-mail watcher keeps
+    # the ids it has seen and gets only a new one (gmail-get), instead of 30 gets every 2 minutes.
+    ids_only = words[2:] == ["--ids"]
     params: dict[str, Json] = {"userId": "me", "maxResults": int(words[1])}
-    if len(words) == 3:
+    if len(words) == 3 and not ids_only:
         if not 1 <= len(words[2]) <= 200:
             raise GmailReadError("usage")
         params["q"] = words[2]
@@ -138,12 +141,14 @@ def request(words: list[str]) -> dict[str, Json]:
     messages = result.get("messages", [])
     if not isinstance(messages, list) or len(messages) > int(words[1]):
         raise GmailReadError("invalid-list")
-    mails: list[Json] = []
+    ids: list[str] = []
     for row in messages:
         if not isinstance(row, dict):
             raise GmailReadError("invalid-list")
-        mails.append(_mail(_id(row.get("id")), False))
-    return {"status": "ok", "mails": mails}
+        ids.append(_id(row.get("id")))
+    if ids_only:
+        return {"status": "ok", "ids": [*ids]}
+    return {"status": "ok", "mails": [_mail(message_id, False) for message_id in ids]}
 
 
 def main(words: list[str]) -> int:
