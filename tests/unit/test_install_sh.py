@@ -81,6 +81,17 @@ def test_the_newest_signed_release_is_installed_with_the_trust_key_and_the_roles
                           "--role", "okdori", "--role", "moodori", "--owner-call", "boss"]
 
 
+def test_no_roles_installs_without_a_role_option(tmp_path: Path, channel: tuple[Path, Path, str]) -> None:
+    # macOS's /bin/bash is 3.2, where an empty array under set -u is "unbound" (2026-11-26: CYTO_ROLES unset stopped there)
+    origin, key, fingerprint = channel
+
+    done = _install(tmp_path, origin, key, fingerprint)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    [update] = [line.split() for line in done.stdout.splitlines() if line.startswith("FAKE-UPDATE")]
+    assert "--role" not in update
+
+
 def test_an_omo_installer_that_refuses_leaves_the_install_going_with_the_omo_line(
     tmp_path: Path, channel: tuple[Path, Path, str]
 ) -> None:
