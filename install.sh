@@ -113,7 +113,8 @@ cyto_main() {
     update_args+=(--trust-key "$key" --expect-fingerprint "$expect")
     local role
     IFS=',' read -r -a roles <<<"${CYTO_ROLES:-}"
-    for role in "${roles[@]}"; do
+    # ${roles[@]+...}: macOS's bash 3.2 calls an empty array unbound under set -u, so no CYTO_ROLES stopped the one line here
+    for role in ${roles[@]+"${roles[@]}"}; do
       role="${role// /}"
       [ -z "$role" ] || update_args+=(--role "$role")
     done
