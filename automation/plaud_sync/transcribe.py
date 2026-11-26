@@ -24,6 +24,7 @@ from datetime import datetime
 from .duration import DEFAULT_MIN_DURATION_MS, abandon_short
 from .lifelog_model import LifelogExtractError
 from .model import PlaudSyncRecord, PlaudSyncState
+from .note import split_lifelog_body
 from .transcribe_policy import DEFAULT_GIVE_UP, RetryPolicy, utc_now
 from .transcribe_promote import (
     REASON_LIMIT,
@@ -35,7 +36,7 @@ from .transcribe_promote import (
     local_transcript as _local_transcript,
     promote as _promote,
 )
-from .transcribe_queue import candidates as candidates
+from .transcribe_queue import DEFAULT_LONG_RECORDING_MS, candidates as candidates
 from .transcribe_text import (
     SPEAKER_LEGEND_PREFIX as SPEAKER_LEGEND_PREFIX,
     recording_from_source as _recording,
@@ -51,28 +52,44 @@ from .transcribe_model import (
 )
 
 
-def recheck(record: PlaudSyncRecord, effects: TranscribeEffects, policy: RetryPolicy) -> Outcome | None:
-    """Cloud-only pass; None means a local slot may be assigned, never an attempt."""
+def recheck(
+    record: PlaudSyncRecord, effects: TranscribeEffects, policy: RetryPolicy
+) -> tuple[Outcome | None, PlaudSyncRecord]:
+    """Cloud-only pass; None means a local slot may be assigned to the returned record, never an attempt."""
     try:
         summary = effects.fetch_summary(record.recording_id)
         cloud = effects.fetch_transcript(record.recording_id)
         source = effects.fetch_source(record.recording_id)
     except TranscribeError as error:
-        if not error.counted:
-            after = replace(record, last_recheck_error=error.reason[:REASON_LIMIT])
-            return "retry" if effects.commit(record, after, None) else "stale"
-        return _block(record, effects, error.reason)
+        if error.counted:
+            return _block(record, effects, error.reason), record
+        reason = error.reason[:REASON_LIMIT]
+        if policy.waiting(record):
+            after = replace(record, last_recheck_error=reason)
+            return ("retry" if effects.commit(record, after, None) else "stale"), after
+        # Due and the cloud cannot be read. Keeping next_transcribe_at retried this on every tick with a
+        # time five days past (2026-11-21..26); move it by the backoff, and let the local slot try it,
+        # since a cloud outage says nothing about the audio. Past the failure cap only the backoff.
+        after = replace(record, last_recheck_error=reason,
+                        next_transcribe_at=policy.next_at(record.transcribe_attempts))
+        if not effects.commit(record, after, None):
+            return "stale", record
+        return ("retry" if record.transcribe_attempts >= policy.give_up else None), after
     if source.duration_ms < policy.min_duration_ms:
-        return abandon_short(record, effects, source.duration_ms)
+        return abandon_short(record, effects, source.duration_ms), record
     if (summary.strip() and summary.strip() != _NO_SUMMARY) or (cloud.text.strip() and cloud.text.strip() != _NO_TRANSCRIPT):
         draft = effects.draft_body(record.recording_id)
         if draft is None:
-            return _block(record, effects, "동결 본문이 없다 — notes/<id>.md 를 확인한다")
+            return _block(record, effects, "동결 본문이 없다 — notes/<id>.md 를 확인한다"), record
         return _fallback(record, source, draft, effects, attempts=record.transcribe_attempts,
-                         reason=record.last_block_reason or "", policy=policy)
+                         reason=record.last_block_reason or "", policy=policy), record
     if record.transcribe_attempts >= policy.give_up:
-        return abandon(record, effects, record.transcribe_attempts)
-    return "waiting" if policy.waiting(record) else None
+        return abandon(record, effects, record.transcribe_attempts), record
+    return ("waiting" if policy.waiting(record) else None), record
+
+
+def _needs_recheck(record: PlaudSyncRecord, policy: RetryPolicy) -> bool:
+    return record.next_transcribe_at is not None or record.transcribe_attempts >= policy.give_up
 
 
 def process(
@@ -82,10 +99,26 @@ def process(
 ) -> Outcome:
     """Keep the existing max_attempts API; clock and total cap are independent test/runtime knobs."""
     policy = RetryPolicy(max_attempts, give_up, now, min_duration_ms)
-    if record.next_transcribe_at is not None or record.transcribe_attempts >= give_up:
-        outcome = recheck(record, effects, policy)
+    if _needs_recheck(record, policy):
+        outcome, record = recheck(record, effects, policy)
         if outcome is not None:
             return outcome
+    return _transcribe_locally(record, effects, policy)
+
+
+def _summary(record: PlaudSyncRecord, draft: str, effects: TranscribeEffects) -> str:
+    """Plaud's summary for the note; a cloud the API cannot serve now must not throw away a finished
+    local transcript (2026-11-21: get_note kept failing for a day-long piece), so the frozen draft's
+    summary stands in and the extractor writes its own from the transcript."""
+    try:
+        return effects.fetch_summary(record.recording_id)
+    except TranscribeError:
+        draft_summary, _ = split_lifelog_body(draft)
+        return "" if draft_summary == _NO_SUMMARY else draft_summary
+
+
+def _transcribe_locally(record: PlaudSyncRecord, effects: TranscribeEffects, policy: RetryPolicy) -> Outcome:
+    max_attempts, give_up, min_duration_ms = policy.max_attempts, policy.give_up, policy.min_duration_ms
     draft = effects.draft_body(record.recording_id)
     if draft is None:
         return _block(record, effects, "동결 본문이 없다 — notes/<id>.md 를 확인한다")
@@ -107,7 +140,7 @@ def process(
     recording = _recording(
         source,
         draft,
-        summary=effects.fetch_summary(record.recording_id),
+        summary=_summary(record, draft, effects),
         transcript_text=transcript.note_text,
         transcript_source=transcript.source_label,
     )
@@ -127,20 +160,26 @@ def run_step(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS, give_up: int = DEFAULT_GIVE_UP,
     now: Callable[[], datetime] = utc_now,
     min_duration_ms: int = DEFAULT_MIN_DURATION_MS,
+    long_recording_ms: int = DEFAULT_LONG_RECORDING_MS,
 ) -> tuple[tuple[str, Outcome], ...]:
-    """Preserve the public tick knobs; all cloud checks finish before any local work."""
+    """Preserve the public tick knobs; all cloud checks finish before any local work, each once."""
     policy = RetryPolicy(max_attempts, give_up, now, min_duration_ms)
     outcomes: list[tuple[str, Outcome]] = []
     eligible: list[PlaudSyncRecord] = []
-    for record in candidates(state, limit=len(state.records)):
-        if record.next_transcribe_at is not None or record.transcribe_attempts >= give_up:
-            outcome = recheck(record, effects, policy)
+    moved: set[str] = set()
+    for record in candidates(state, limit=len(state.records), long_ms=long_recording_ms):
+        if _needs_recheck(record, policy):
+            outcome, current = recheck(record, effects, policy)
             if outcome is not None:
                 outcomes.append((record.recording_id, outcome))
                 continue
+            if current != record:
+                moved.add(record.recording_id)
+            record = current
         eligible.append(record)
-    for record in eligible[:max(limit, 0)]:
-        outcome = process(record, effects=effects, max_attempts=max_attempts,
-                          give_up=give_up, now=now, min_duration_ms=min_duration_ms)
-        outcomes.append((record.recording_id, outcome))
+    slots = max(limit, 0)
+    for record in eligible[:slots]:
+        outcomes.append((record.recording_id, _transcribe_locally(record, effects, policy)))
+    # A record whose schedule moved but got no slot still shows in this tick's journal.
+    outcomes.extend((record.recording_id, "retry") for record in eligible[slots:] if record.recording_id in moved)
     return tuple(outcomes)

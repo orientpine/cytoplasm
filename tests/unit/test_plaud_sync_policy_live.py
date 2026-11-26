@@ -72,7 +72,7 @@ def test_cloud_outage_keeps_record_when_give_up_is_reached(tmp_path: Path, monke
     assert after.status == "transcribing"
     assert after.transcribe_attempts == 5
     assert after.last_block_reason == record.last_block_reason
-    assert after.last_recheck_error == "get_note: OSError"
+    assert after.last_recheck_error == "get_note: OSError: offline"
 
 
 def test_commit_refuses_stale_retry_state_when_another_tick_changed_the_schedule(tmp_path: Path) -> None:

@@ -65,6 +65,10 @@ URL을 만든다. 길드가 없는 옛 레코드나 불완전한 좌표는 `thre
   만들며 노트 출처 줄에 그 사실이 적힌다. 클라우드 요약·전사도 비면 로컬 재시도는
   1·2·4·8·16·24시간(상한) 백오프로 미루고, 클라우드만 매 틱 다시 확인한다. 총 실패 상한
   `PLAUD_SYNC_TRANSCRIBE_GIVE_UP`(기본 5)에 닿아도 클라우드가 비어 있으면 `abandoned`로 닫는다.
+- "왜 늦었어"에는 저널을 본다. 발견 줄 `outcome=discovered recorded_at=… plaud_created_at=… lag_days=…`가
+  녹음 시작·Plaud 업로드·노드가 처음 본 시각의 차이를 말하고(`plaud_created_at`은 레코드에도 남는다), 조회 창
+  절반을 넘겨 나타난 녹음은 `outcome=late`, 전사는 `transcribe=start`·`transcribe=end … seconds=…` 줄이 있다.
+  3시간 이상 녹음은 짧은 녹음 뒤에 전사한다.
 - 틱 저널의 `outcome=waiting next_transcribe_at=…`는 전사 슬롯을 쓰지 않는 백오프 대기다.
   `outcome=abandoned`는 폐기 사유를 동반한다. 재확인 오류는 아래 별도 필드로 구분한다.
 - `PLAUD_SYNC_MIN_DURATION_MS`(기본 5000) 미만은 발견 시 건너뛰어 레코드·노트·카드를 만들지 않는다.
@@ -90,8 +94,10 @@ python3 ~/.hermes/scripts/plaud_sync_watch.py --migrate-aliases --apply
 `state.json.bak-<UTC stamp>`에 원본을 먼저 백업한 뒤 상태만 원자적으로 교체한다.
 카드·노트·외부 승인 원장을 삭제하지 않으며, 이 명령은 폴·전사·승인 처리를 실행하지 않는다.
 
-백오프 중 클라우드 재확인의 비집계 오류는 `last_recheck_error`에 따로 남는다.
-`last_block_reason`과 시도 횟수·재시도 시각을 보존하므로 원래 녹음 실패 사유를 잃지 않는다.
+백오프 중 클라우드 재확인의 비집계 오류는 `last_recheck_error`에 API 메시지까지 따로 남는다.
+`last_block_reason`과 시도 횟수를 보존하므로 원래 녹음 실패 사유를 잃지 않는다. 재시도 시각이
+이미 지난 레코드면 재시도 시각만 백오프만큼 뒤로 민다(지난 시각으로 매 틱 되풀이하지 않는다).
+틱 저널의 `outcome=retry` 줄에는 그 오류가 `recheck_error=`로 함께 찍힌다.
 `plaud 상태`는 전사 대기의 원래 사유와 마지막 재확인 오류를 함께 보여 주며,
 `status --json`의 `transcribing[]`에는 오류가 있을 때만 `last_recheck_error`가 추가된다.
 이 값은 마지막 오류 이력이지 현재 클라우드 장애 여부 판정은 아니다. 옛 상태 파일도 그대로 읽는다.

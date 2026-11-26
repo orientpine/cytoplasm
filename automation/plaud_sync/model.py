@@ -38,7 +38,7 @@ _RECORD_KEYS: Final = frozenset(
         "last_block_reason",
     }
 )
-_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "approval_guild_id", "transcribe_attempts", "next_transcribe_at", "render_version", "aliases", "last_recheck_error"})
+_OPTIONAL_RECORD_KEYS: Final = frozenset({"approval_thread_id", "approval_guild_id", "transcribe_attempts", "next_transcribe_at", "render_version", "aliases", "last_recheck_error", "plaud_created_at", "duration_ms"})
 
 
 class PlaudSyncError(ValueError):
@@ -73,6 +73,10 @@ class PlaudSyncRecord:
     render_version: str | None = None
     aliases: tuple[str, ...] = ()
     last_recheck_error: str | None = None
+    #: Plaud's own ``created_at`` from the file list, so a late upload can be told from a slow node.
+    plaud_created_at: str | None = None
+    #: Recording length at discovery; the transcription queue puts long recordings last.
+    duration_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +194,8 @@ def parse_record(raw: object) -> PlaudSyncRecord:
         render_version=_string_or_none(data.get("render_version"), "render_version"),
         aliases=tuple(_string(alias, "aliases entry") for alias in aliases),
         last_recheck_error=_string_or_none(data.get("last_recheck_error"), "last_recheck_error"),
+        plaud_created_at=_string_or_none(data.get("plaud_created_at"), "plaud_created_at"),
+        duration_ms=None if data.get("duration_ms") is None else _integer(data["duration_ms"], "duration_ms"),
     )
 
 
@@ -246,6 +252,10 @@ def serialize_record(record: PlaudSyncRecord) -> dict[str, object]:
         row["aliases"] = list(record.aliases)
     if record.last_recheck_error is not None:
         row["last_recheck_error"] = record.last_recheck_error
+    if record.plaud_created_at is not None:
+        row["plaud_created_at"] = record.plaud_created_at
+    if record.duration_ms is not None:
+        row["duration_ms"] = record.duration_ms
     return row
 
 

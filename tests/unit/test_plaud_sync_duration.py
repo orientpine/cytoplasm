@@ -77,7 +77,7 @@ def test_discovery_journals_duration_when_no_note_or_card_is_created(tmp_path: P
         def __exit__(self, *_exception: None) -> bool:
             return False
     monkeypatch.setattr(mcp_client, "PlaudMcpClient", Client)
-    monkeypatch.setattr(fetch, "fetch_recordings", lambda client, *, date_from: recordings)
+    monkeypatch.setattr(fetch, "fetch_recordings", lambda client, *, date_from, **_filters: recordings)
     # When
     result = watch._discover(PlaudSyncState(1, None, {}), NOW)
     # Then
