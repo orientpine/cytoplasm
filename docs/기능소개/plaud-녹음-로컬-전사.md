@@ -29,7 +29,7 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
    녹음이 이 경로가 있는 이유다(2026-09-05 까지는 빈 노트 가드가 `initial_status` 앞에 있어 매 폴 skip 됐고, 64분
    녹음이 로컬 전사에 닿지 못했다).
 2. **resolve** — 카드 게시·✅ 판독·vault 저장(watch.lock 아래, 기존 그대로). `transcribing` 은 건드리지 않는다.
-3. **watch.lock 을 푼다** → 전사 스텝(`transcribe_live.run_transcribe_step`, 틱당 1건 — **시도 횟수가 적은 녹음부터**, 같으면 예전 순):
+3. **watch.lock 을 푼다** → 전사 스텝(`transcribe_live.run_transcribe_step`, 틱당 1건 — **3시간 미만 녹음 먼저**, 그 안에서 **시도 횟수가 적은 녹음부터**, 같으면 예전 순):
    보류 건의 클라우드 재확인(전사 슬롯과 별도, 잠금이 바빠도 수행) →
    `pipeline_lock`(speechtotext 워처와 공유 — whisper 는 같은 자원, 못 잡으면 로컬 전사 양보) →
    `get_file` presigned URL(24h, JSON 뒤 산문이 붙어 `raw_decode`) → 스트리밍 다운로드(상한 1 GiB,
@@ -66,6 +66,17 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
 `transcribing` 을 떠날 때(`planned`·폴백·폐기 commit)까지 다음 시도가 CLI 없이 그 전사본을 쓴다
 (stderr `PLAUD-TRANSCRIPT-REUSED`). 가리키는 파일만 지우고 전사본 파일은 지우지 않는다.
 
+**긴 녹음은 짧은 녹음 뒤로, 어디서 늦었는지는 저널에(2026-11-27)**: 켜 둔 녹음기가 11/10 16:39 녹음을 24시간짜리
+조각으로 잘랐다. 조각은 Plaud 목록에 5~13일 늦게 나타났고, 그 뒤 3.5일은 노드에서 밀렸다. 하루짜리 조각 한 번의 로컬
+전사가 잡 하나(최대 1시간) 내내 슬롯을 잡는데, 순서가 시도 횟수·녹음 시각뿐이라 뒤에 온 짧은 녹음까지 그 뒤에 섰다.
+이제 발견 때 녹음 길이를 레코드(`duration_ms`)에 남기고, `PLAUD_SYNC_LONG_RECORDING_MS`(기본 3시간) 이상이거나
+길이를 모르는 옛 레코드는 짧은 녹음 뒤로 간다. 짧은 녹음은 지금 돌고 있는 잡 하나만 기다린다. 전사 CLI 는 녹음마다
+`plaud-sync: recording_id=<id> transcribe=start audio_bytes=… timeout_s=…`, 끝나면 `transcribe=end rc=… seconds=…`
+(시간 초과는 `transcribe=timeout`, 끝난 전사본을 다시 쓰면 `transcribe=reused`)를 stderr(저널)에 남긴다. 필드 추출
+프롬프트는 240 KiB 를 넘지 않는다. 하루짜리 전사본(276,748 B)이 omo 중계 입력 상한(256 KiB)을 넘어 매 틱 읽히지도 않고
+`CodexUnavailableError` 로 거부됐기 때문이다. 넘으면 첫 문단(화자 범례)과 고르게 고른 문단만 보내고 노트의 `## 전문` 은
+그대로 둔다. 추출 실패 사유에는 예외 종류와 함께 메시지 앞 120자가 남는다.
+
 **2026-09-16 · `.ogg` 사고**: Plaud `get_file` 이 전날 15:31 UTC 부터 presigned URL 을 `.ogg` 로 주기 시작했고
 (그 전 녹음은 전부 `.mp3`), speechtotext 의 형식 게이트 `stt_audio.SUPPORTED_SUFFIXES` 에 `.ogg` 가 없어
 **ffmpeg 가 돌기도 전에** rc=5「지원하지 않는 형식입니다」로 거부됐다 — 녹음 실패로 세어져 3건이 `transcribing`
@@ -73,9 +84,8 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
 게이트에 `.ogg` 를 더한 것 하나(speechtotext 1.3.1) — 로컬 경로는 어떤 형식이든 ffmpeg 로 16 kHz wav 를 만들므로
 워처에서 따로 변환할 이유가 없다(두 번째 형식 정책이 생긴다). 릴리스 수렴 뒤 보류 3건은 각자의
 `next_transcribe_at` 에 스스로 재시도하고(캐시된 오디오를 다시 받지 않는다), `abandoned` 2건은 소유자가
-`plaud_sync_watch.py --reprocess <녹음 id>` 로 되살린다. 진단상 주의: 보류 중 클라우드 재확인이 일시적
-`get_note: PlaudMcpError` 를 내면 그것이 `last_block_reason` 을 덮어써 원래 rc=5 사유가 `plaud 상태` 에서 사라진다
-([후속 과제](../follow-ups.md#plaud-ogg-형식-사고-착지-후-남긴-것-2026-09-16)).
+`plaud_sync_watch.py --reprocess <녹음 id>` 로 되살린다. (그때의 진단상 결함, 재확인 오류가 `last_block_reason` 을
+덮어쓰던 것은 `last_recheck_error` 로 고쳤다 — [재확인 오류 보존](kfx-plaud-폴더-이동-별칭과-재확인-오류.md).)
 
 ## 사용 시나리오
 
@@ -118,7 +128,8 @@ whisper.cpp + sherpa-onnx 화자 분리를 그대로 써서, 결과 전사본(.m
 - 테스트: `tests/unit/test_plaud_sync_{audio,transcribe,transcribe_live,transcribing_status,policy_live,watch_transcribe}.py`
 - env(노드의 기존 환경 설정 경로): `PLAUD_SYNC_TRANSCRIBE`(1) · `PLAUD_SYNC_TRANSCRIBE_PER_TICK`(1) ·
   `PLAUD_SYNC_TRANSCRIBE_ATTEMPTS`(2) · `PLAUD_SYNC_TRANSCRIBE_GIVE_UP`(5) · `PLAUD_SYNC_MIN_DURATION_MS`(5000) ·
-  `PLAUD_SYNC_TRANSCRIBE_TIMEOUT`(21600, 워처에서는 잡 상한−600초로 깎임) · `PLAUD_SYNC_MAX_AUDIO_BYTES`(1 GiB);
+  `PLAUD_SYNC_TRANSCRIBE_TIMEOUT`(21600, 워처에서는 잡 상한−600초로 깎임) · `PLAUD_SYNC_MAX_AUDIO_BYTES`(1 GiB) ·
+  `PLAUD_SYNC_LONG_RECORDING_MS`(10800000, 이 길이 이상은 짧은 녹음 뒤로);
   CLI 경로 주입은 `SPEECHTOTEXT_CLI` / `SPEECHTOTEXT_SCRIPTS`
 - 규약: `automation/pipeline_lock.py`(규약 (n) — plaud 도 같은 lock), [plaud lifelog 동기화](plaud-lifelog-동기화.md),
   [음성 녹취 → 전사본 → 회의록](음성-녹취-회의록-자동화.md)

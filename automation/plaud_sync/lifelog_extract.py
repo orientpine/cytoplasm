@@ -23,6 +23,12 @@ _PLACEHOLDER_RE: Final = re.compile(r"\{\{(SUMMARY|TRANSCRIPT)\}\}")
 _FENCE_RE: Final = re.compile(r"(?m)^\s*```[^\n]*$")
 _AT_RE: Final = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?$")
 _MAX_ITEMS: Final = 20
+#: The omo relay refuses a prompt over 256 KiB unread (``automation/omo_relay/runner.LIMIT``) and a
+#: day-long lifelog transcript is larger (2026-11-22: 276,748 B), so its extraction failed on every
+#: tick. Such a transcript reaches the model as evenly spaced paragraphs under this size instead.
+MAX_PROMPT_BYTES: Final = 240 * 1024
+_NOTICE_BYTES: Final = 200
+_CAUSE_TEXT: Final = 120
 _MAX_TEXT: Final = 200
 #: 이미 불릿인 줄은 다시 표시하지 않는다.
 _BULLETS: Final = ("-", "*", "+", "•")
@@ -85,6 +91,42 @@ def build_prompt(template: str, *, summary: str, transcript: str) -> str:
     return _PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], template)
 
 
+def _fitted_prompt(template: str, recording: LifelogRecording) -> str:
+    """The prompt, with an oversized transcript cut to evenly spaced paragraphs (the first one, the
+    speaker legend, always kept) so the whole prompt stays under ``MAX_PROMPT_BYTES``."""
+    prompt = build_prompt(template, summary=recording.summary_markdown, transcript=recording.transcript_text)
+    excess = len(prompt.encode("utf-8")) - MAX_PROMPT_BYTES
+    if excess <= 0:
+        return prompt
+    paragraphs = [part for part in recording.transcript_text.split("\n\n") if part.strip()]
+    if len(paragraphs) < 2:
+        return prompt
+    budget = len(recording.transcript_text.encode("utf-8")) - excess - _NOTICE_BYTES
+    head, rest = paragraphs[0], paragraphs[1:]
+    sizes = [len(part.encode("utf-8")) + 2 for part in rest]
+    room = budget - len(head.encode("utf-8"))
+    count = min(len(rest) - 1, len(rest) * max(room, 0) // max(sum(sizes), 1))
+    while count > 0 and sum(sizes[index] for index in _spread(len(rest), count)) > room:
+        count -= max(1, count // 50)
+    picked = [rest[index] for index in _spread(len(rest), count)]
+    notice = f"[전사가 길어 추출에는 문단 {len(paragraphs)}개 중 {len(picked) + 1}개를 고르게 골라 넣었다]"
+    return build_prompt(template, summary=recording.summary_markdown,
+                        transcript="\n\n".join([notice, head, *picked]))
+
+
+def _spread(total: int, count: int) -> list[int]:
+    """``count`` indices spread evenly over ``range(total)``, first and last included."""
+    if count <= 1:
+        return [0][: max(count, 0)]
+    return [round(index * (total - 1) / (count - 1)) for index in range(count)]
+
+
+def _failure(label: str, error: Exception) -> LifelogExtractError:
+    """Keep the cause: a bare CodexUnavailableError hid that the relay refused the prompt's size."""
+    message = str(error).strip()[:_CAUSE_TEXT]
+    return LifelogExtractError(f"{label}: {type(error).__name__}" + (f": {message}" if message else ""))
+
+
 def parse_extraction(raw: str) -> LifelogExtraction:
     """모델 응답에서 JSON 객체 하나를 건져 구조화 필드로 만든다 (형식 이탈에 관대)."""
     payload = _json_object(raw)
@@ -136,16 +178,14 @@ def extract(
     recording: LifelogRecording, *, template: str, complete: Callable[[str], str]
 ) -> LifelogExtraction:
     """녹취 하나를 모델에 보내 구조화 필드를 얻는다. 모든 전송 실패는 이번 폴의 실패다."""
-    prompt = build_prompt(
-        template, summary=recording.summary_markdown, transcript=recording.transcript_text
-    )
+    prompt = _fitted_prompt(template, recording)
     try:
         raw = complete(prompt)
     except LifelogExtractError:
         raise
     except Exception as error:
         # 어떤 예외든 다음 폴에서 재시도할 일시 실패로 접는다 (노트를 열화 동결하지 않는다).
-        raise LifelogExtractError(f"LLM 호출 실패: {type(error).__name__}") from None
+        raise _failure("LLM 호출 실패", error) from None
     return parse_extraction(raw)
 
 
@@ -158,15 +198,13 @@ def summarize(
     요약만 빈 채로 답하는 일이 실제로 일어났다(2026-09-04 노트). 요약 하나만 묻는
     좁은 요청은 그 실패 모양을 다시 만들지 않는다.
     """
-    prompt = build_prompt(
-        template, summary=recording.summary_markdown, transcript=recording.transcript_text
-    )
+    prompt = _fitted_prompt(template, recording)
     try:
         raw = complete(prompt)
     except LifelogExtractError:
         raise
     except Exception as error:
-        raise LifelogExtractError(f"요약 재시도 실패: {type(error).__name__}") from None
+        raise _failure("요약 재시도 실패", error) from None
     try:
         payload = _json_object(raw)
     except LifelogExtractError:

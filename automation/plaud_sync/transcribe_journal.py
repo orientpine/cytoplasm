@@ -28,5 +28,6 @@ def summarize(outcomes: tuple[tuple[str, Outcome], ...], state: PlaudSyncState) 
                 f"plaud-sync: recording_id={recording_id} outcome={outcome} "
                 + f"next_transcribe_at={record.next_transcribe_at or '-'} "
                 + f"reason={record.last_block_reason or '-'}"
+                + (f" recheck_error={record.last_recheck_error}" if record.last_recheck_error else "")
             )
     return StepSummary("\n".join(lines), counts["planned"] + counts["fallback"])

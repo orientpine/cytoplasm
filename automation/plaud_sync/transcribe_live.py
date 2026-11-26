@@ -31,6 +31,7 @@ from .transcribe_live_effects import (
 )
 from .transcribe_model import Outcome
 from .transcribe_policy import DEFAULT_GIVE_UP, utc_now
+from .transcribe_queue import DEFAULT_LONG_RECORDING_MS
 
 KILL_SWITCH_ENV: Final = "PLAUD_SYNC_TRANSCRIBE"
 BUSY_LINE: Final = "plaud-sync: transcribe busy (pipeline lock held)"
@@ -78,6 +79,7 @@ def run_transcribe_step(
             max_attempts=_env_int(env, "PLAUD_SYNC_TRANSCRIBE_ATTEMPTS", DEFAULT_MAX_ATTEMPTS),
             give_up=_env_int(env, "PLAUD_SYNC_TRANSCRIBE_GIVE_UP", DEFAULT_GIVE_UP),
             min_duration_ms=_env_int(env, "PLAUD_SYNC_MIN_DURATION_MS", DEFAULT_MIN_DURATION_MS),
+            long_recording_ms=_env_int(env, "PLAUD_SYNC_LONG_RECORDING_MS", DEFAULT_LONG_RECORDING_MS),
             now=now,
         )
     if not acquired and not outcomes:

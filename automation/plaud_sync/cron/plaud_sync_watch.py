@@ -47,7 +47,7 @@ from automation.plaud_sync.store import (  # noqa: E402
     save_note_body,
     save_state,
 )
-from automation.plaud_sync.sync import plan_new_records, poll_due  # noqa: E402
+from automation.plaud_sync.sync import known_recording_ids, plan_new_records, poll_due  # noqa: E402
 from automation.plaud_sync import terms, transcribe_live  # noqa: E402
 from automation.plaud_sync.watch_step import ResolveResult, resolve_tick  # noqa: E402
 from automation.plaud_sync.transcript_corrector import CommandCorrector  # noqa: E402
@@ -75,10 +75,15 @@ def _discover(state: PlaudSyncState, now: datetime) -> PlaudSyncState:
         from automation.plaud_sync.fetch import fetch_recordings
         from automation.plaud_sync.mcp_client import PlaudMcpClient
 
-        lookback = _env_int("PLAUD_SYNC_LOOKBACK_DAYS", 14)
+        # 60 days, not 14: a recording can surface in the Plaud list long after it began (2026-11-23,
+        # 12.8 days), and known recordings cost no note/transcript calls any more, so a wide window is cheap.
+        lookback = _env_int("PLAUD_SYNC_LOOKBACK_DAYS", 60)
         date_from = (now - timedelta(days=lookback)).date().isoformat()
+        min_duration_ms = _env_int("PLAUD_SYNC_MIN_DURATION_MS", DEFAULT_MIN_DURATION_MS)
         with PlaudMcpClient() as client:
-            recordings = fetch_recordings(client, date_from=date_from)
+            recordings = fetch_recordings(
+                client, date_from=date_from, known=known_recording_ids(state), min_duration_ms=min_duration_ms,
+            )
         initial_status = "transcribing" if transcribe_live.enabled(os.environ) else "planned"
         result = plan_new_records(
             state,
@@ -89,7 +94,7 @@ def _discover(state: PlaudSyncState, now: datetime) -> PlaudSyncState:
             tz=_note_timezone(),
             initial_status=initial_status,
             glossary=terms.glossary(),
-            min_duration_ms=_env_int("PLAUD_SYNC_MIN_DURATION_MS", DEFAULT_MIN_DURATION_MS),
+            min_duration_ms=min_duration_ms,
             transcript_corrector=CommandCorrector(os.environ),
         )
         for recording_id, body in result.bodies.items():
@@ -99,7 +104,7 @@ def _discover(state: PlaudSyncState, now: datetime) -> PlaudSyncState:
             # 그 초안까지 적으면 같은 녹음이 로그에 두 번 남아 오탐을 되짚기 어려워진다.
             for label, corrections in result.corrections:
                 _ = terms.record(corrections, label=label)
-        for line in result.skipped_lines:
+        for line in (*result.skipped_lines, *result.discovered_lines, *result.late_lines(lookback_days=lookback)):
             print(line, file=sys.stderr)
         for recording_id in result.deferred:
             print(

@@ -94,7 +94,7 @@ def test_cron_discover_freezes_new_recordings_as_transcribing_unless_the_switch_
     import automation.plaud_sync.fetch as fetch_module
     import automation.plaud_sync.mcp_client as mcp_module
 
-    monkeypatch.setattr(fetch_module, "fetch_recordings", lambda client, *, date_from: (recording,))
+    monkeypatch.setattr(fetch_module, "fetch_recordings", lambda client, *, date_from, **_filters: (recording,))
     monkeypatch.setattr(mcp_module, "PlaudMcpClient", _Client)
 
     state = watch._discover(PlaudSyncState(1, None, {}), _NOW)
@@ -167,7 +167,7 @@ def test_cron_discover_corrects_the_note_it_freezes_and_logs_only_the_owner_faci
     import automation.plaud_sync.fetch as fetch_module
     import automation.plaud_sync.mcp_client as mcp_module
 
-    monkeypatch.setattr(fetch_module, "fetch_recordings", lambda client, *, date_from: (recording,))
+    monkeypatch.setattr(fetch_module, "fetch_recordings", lambda client, *, date_from, **_filters: (recording,))
     monkeypatch.setattr(mcp_module, "PlaudMcpClient", _Client)
 
     state = watch._discover(PlaudSyncState(1, None, {}), _NOW)

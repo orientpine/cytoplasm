@@ -25,6 +25,13 @@ read-back)로 push 되고, RAG obsidian 소스가 자동 인제스트해 recall 
 2. **거부**: ⛔ 를 누르면 레코드는 abandoned 로 종결되고 노트는 push 되지 않는다(스레드에 취소 통지).
 3. **fail-closed**: 동결 본문이 없거나 sha 가 어긋나면 게시도 push 도 하지 않는다. 승인 뒤 본문이
    바뀌면 obsidian_write 게이트의 경로·제목·본문 바인딩이 push 를 거부한다.
+4. **늦게 올라온 녹음(2026-11-27)**: Plaud 목록 조회 창은 `PLAUD_SYNC_LOOKBACK_DAYS`(기본 60일, 예전 14일)이다.
+   11/10 녹음이 12.8일 뒤에야 목록에 나타나, 하루만 더 늦었으면 창 밖으로 조용히 빠질 뻔했다. 이미 아는 녹음과
+   최소 길이 미만 녹음은 요약·전사를 다시 부르지 않는다. 예전에는 폴마다 창 안의 모든 녹음에 `get_note`·`get_transcript` 를
+   불렀다. 그래서 넓은 창도 싸다. 새 레코드는 Plaud 의 `created_at` 을 `plaud_created_at` 에, 길이를 `duration_ms` 에
+   남기고, 저널에 `outcome=discovered recorded_at=… plaud_created_at=… lag_days=…` 한 줄을 남긴다. 창의 절반을 넘겨
+   나타난 녹음은 `outcome=late` 경고 줄이, 페이지 상한(10쪽)에 걸린 조회는 `list_files outcome=page_cap` 줄이
+   남는다. 업로드가 늦었는지 노드가 늦었는지는 이 줄로 가른다.
 
 ## 롤아웃 (1회, 소유자)
 

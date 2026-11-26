@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import UTC, datetime, tzinfo
 from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Final
@@ -44,6 +44,8 @@ class DiscoveryResult:
     deferred: tuple[str, ...] = ()
     #: (녹음 이름, 그 노트에서 고친 어절들). 감사 로그는 효과 경계가 남긴다.
     corrections: tuple[tuple[str, tuple[term_correction.Correction, ...]], ...] = ()
+    #: (planned id, days from the recording's start to this poll), None when the start is unreadable.
+    lags: tuple[tuple[str, float | None], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bodies", MappingProxyType(dict(self.bodies)))
@@ -56,6 +58,48 @@ class DiscoveryResult:
             if key in durations else f"plaud-sync: unplannable recording skipped: {key}"
             for key in self.skipped
         )
+
+    @property
+    def discovered_lines(self) -> tuple[str, ...]:
+        """One journal line per new record: when it was recorded, uploaded and first seen here."""
+        lines: list[str] = []
+        for key, lag in self.lags:
+            record = self.state.records[key]
+            lines.append(
+                f"plaud-sync: recording_id={key} outcome=discovered recorded_at={record.recorded_at} "
+                + f"plaud_created_at={record.plaud_created_at or '-'} duration_ms={record.duration_ms or '-'} "
+                + f"lag_days={'-' if lag is None else f'{lag:.1f}'}"
+            )
+        return tuple(lines)
+
+    def late_lines(self, *, lookback_days: int) -> tuple[str, ...]:
+        """Warn when a recording surfaced past half the lookback window: a little later and the
+        list query would have missed it without a trace (2026-11-23: seen 12.8 days after it began)."""
+        return tuple(
+            f"plaud-sync: recording_id={key} outcome=late lag_days={lag:.1f} lookback_days={lookback_days} "
+            + "reason=녹음 뒤 늦게 Plaud 목록에 나타났다 — 조회 창을 넘기면 가져오지 못한다"
+            for key, lag in self.lags
+            if lag is not None and lag * 2 > lookback_days
+        )
+
+
+def known_recording_ids(state: PlaudSyncState) -> frozenset[str]:
+    """Every id a record already answers to, with the folder-move ``of_`` prefix removed."""
+    return frozenset(
+        canonical_recording_id(alias)
+        for key, record in state.records.items()
+        for alias in (key, record.recording_id, *record.aliases)
+    )
+
+
+def _lag_days(recorded_at: str, now: datetime) -> float | None:
+    try:
+        started = datetime.fromisoformat(recorded_at)
+    except ValueError:
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return (now - started).total_seconds() / 86400
 
 
 def poll_due(state: PlaudSyncState, now: datetime, interval_seconds: int) -> bool:
@@ -84,17 +128,14 @@ def plan_new_records(
     transcript_corrector: Corrector | None = None,
 ) -> DiscoveryResult:
     records = dict(state.records)
-    known_ids = {
-        canonical_recording_id(alias)
-        for key, record in records.items()
-        for alias in (key, record.recording_id, *record.aliases)
-    }
+    known_ids = set(known_recording_ids(state))
     bodies: dict[str, str] = {}
     planned: list[str] = []
     skipped: list[str] = []
     skipped_durations: list[tuple[str, int]] = []
     deferred: list[str] = []
     corrections: list[tuple[str, tuple[term_correction.Correction, ...]]] = []
+    lags: list[tuple[str, float | None]] = []
 
     for recording in recordings:
         if canonical_recording_id(recording.id) in known_ids:
@@ -139,10 +180,11 @@ def plan_new_records(
             corrections.append((recording.name or recording.id, note.corrections))
         note_relpath = plan.relpath.as_posix()
         body_sha256 = hashlib.sha256(plan.body.encode("utf-8")).hexdigest()
+        recorded_at = recording.start_at or recording.created_at
         records[recording.id] = PlaudSyncRecord(
             version=1,
             recording_id=recording.id,
-            recorded_at=recording.start_at or recording.created_at,
+            recorded_at=recorded_at,
             note_relpath=note_relpath,
             note_title=plan.title,
             body_sha256=body_sha256,
@@ -166,9 +208,12 @@ def plan_new_records(
             remote_ref=None,
             note_content_sha256=None,
             last_block_reason=None,
+            plaud_created_at=recording.created_at or None,
+            duration_ms=recording.duration_ms or None,
         )
         bodies[recording.id] = plan.body
         planned.append(recording.id)
+        lags.append((recording.id, _lag_days(recorded_at, now)))
         known_ids.add(canonical_recording_id(recording.id))
 
     return DiscoveryResult(
@@ -179,4 +224,5 @@ def plan_new_records(
         skipped_durations=tuple(skipped_durations),
         deferred=tuple(deferred),
         corrections=tuple(corrections),
+        lags=tuple(lags),
     )

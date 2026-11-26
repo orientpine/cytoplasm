@@ -92,7 +92,8 @@ env: `PLAUD_SYNC_LLM_TIMEOUT`(120) · `PLAUD_SYNC_EXTRACT_PROMPT`(기본 `prompt
   `modified` 가 그 시각으로 바뀐다(`created` 는 유지 — 실측). 녹음 시각을 보존하려면 vault Linter 설정에서 modified 의
   출처를 `frontmatter` 로 바꾼다(소유자 결정, 노트 생성 코드 무관).
 - 이미 push 된 v1 노트는 소급되지 않는다(processed 원장이 재동기화를 막는다).
-- finalize 에서 추출이 실패하면 전사본은 저장되지 않고 다음 틱이 전사를 다시 한다(정확성 무영향, 비용만).
+- finalize 에서 추출이 실패하면 노트는 얼지 않고 다음 틱이 추출만 다시 한다. 끝난 전사본은 `transcripts/.kept/` 가
+  가리켜 다시 전사하지 않는다(2026-11-20). 추출 프롬프트는 240 KiB 를 넘지 않게 긴 전사본의 문단을 고르게 골라 보낸다(2026-11-27).
 
 ## 관련
 

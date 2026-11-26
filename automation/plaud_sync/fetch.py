@@ -12,10 +12,13 @@ The list/dict/plain-text fallbacks keep older or alternate shapes working.
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Final, Protocol
 
 from .mcp_client import JsonObject, JsonValue, PlaudMcpError, text_content
+from .model import canonical_recording_id
 from .note import LifelogRecording
 
 _MAX_LIST_PAGES: Final = 10
@@ -131,6 +134,10 @@ def _list_stubs(
                 added += 1
         if len(rows) < page_size or added == 0:
             break
+    else:
+        # The window holds more recordings than the pages read: the oldest ones in it were not seen.
+        print(f"plaud-sync: list_files outcome=page_cap pages={_MAX_LIST_PAGES} page_size={page_size} "
+              + f"date_from={date_from or '-'} reason=조회 창의 예전 녹음을 다 읽지 못했다", file=sys.stderr)
     return tuple(seen.values())
 
 
@@ -273,10 +280,25 @@ def fetch_transcript(client: McpToolClient, file_id: str) -> CloudTranscript:
 
 
 def fetch_recordings(
-    client: McpToolClient, *, date_from: str | None, page_size: int = 50
+    client: McpToolClient,
+    *,
+    date_from: str | None,
+    page_size: int = 50,
+    known: Collection[str] = frozenset(),
+    min_duration_ms: int = 0,
 ) -> tuple[LifelogRecording, ...]:
+    """New recordings in the window. ``known`` (canonical ids) are left out and a recording under
+    ``min_duration_ms`` comes back without its note or transcript: every poll used to fetch both for
+    every recording in the window, the ones already in the state included."""
     recordings: list[LifelogRecording] = []
     for stub in _list_stubs(client, date_from, page_size):
+        if canonical_recording_id(stub.id) in known:
+            continue
+        if stub.duration_ms < min_duration_ms:
+            recordings.append(LifelogRecording(id=stub.id, name=stub.name, created_at=stub.created_at,
+                                               start_at=stub.start_at, duration_ms=stub.duration_ms,
+                                               summary_markdown="", transcript_text=""))
+            continue
         try:
             summary = fetch_summary(client, stub.id)
             transcript = fetch_transcript(client, stub.id)

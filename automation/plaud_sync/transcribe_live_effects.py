@@ -118,6 +118,16 @@ class _BlockingLock:
         return False
 
 
+def _cause(error: Exception) -> str:
+    """Type and message: a bare PlaudMcpError hid whether Plaud answered 429, 500 or nothing."""
+    message = str(error).strip()
+    return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+
+def _journal(recording_id: str, event: str) -> None:
+    print(f"plaud-sync: recording_id={recording_id} transcribe={event}", file=sys.stderr)
+
+
 def _last_line(text: str) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return lines[-1] if lines else ""
@@ -212,14 +222,14 @@ class LiveEffects:
             with self._mcp_client() as client:
                 return fetch_summary(client, recording_id)
         except _MCP_ERRORS as error:
-            raise TranscribeError(f"get_note: {type(error).__name__}", counted=False) from error
+            raise TranscribeError(f"get_note: {_cause(error)}", counted=False) from error
 
     def fetch_transcript(self, recording_id: str) -> CloudTranscript:
         try:
             with self._mcp_client() as client:
                 return fetch_transcript(client, recording_id)
         except _MCP_ERRORS as error:
-            raise TranscribeError(f"get_transcript: {type(error).__name__}", counted=False) from error
+            raise TranscribeError(f"get_transcript: {_cause(error)}", counted=False) from error
 
     def download(self, source: AudioSource) -> Path:
         dest = self.state_dir / "audio" / f"{source.recording_id}{source.suffix}"
@@ -235,22 +245,32 @@ class LiveEffects:
         cli = cli_path(self.env)
         if not cli.is_file():
             raise TranscribeError(f"speechtotext CLI 미마운트: {cli}", counted=False)
+        recording_id = audio.stem
         kept = kept_transcript(self.state_dir, label)
         if kept is not None:
             # The CLI already finished this recording and only the promotion after it failed
             # (2026-11-20: a 23-hour transcript, then extraction timed out): never decode it again.
             print("PLAUD-TRANSCRIPT-REUSED", file=sys.stderr)
+            _journal(recording_id, "reused")
             return CliResult(0, kept[0], kept[1], "")
         work = self.state_dir / "transcripts" / ".work"
         child = {**self.env, **_CHILD_OVERRIDES, "SPEECHTOTEXT_TRANSCRIPT_DIR": str(work)}
         argv = [sys.executable, str(cli), "transcribe", "--file", str(audio), "--label", label]
         timeout = self._cli_timeout()
+        size = audio.stat().st_size if audio.is_file() else 0
+        # One start and one end line per recording: until 2026-11-27 the journal could not say when a
+        # transcription began or how long it ran, only the tick summary after it.
+        _journal(recording_id, f"start audio_bytes={size} timeout_s={timeout:.0f}")
+        started = time.monotonic()
         try:
             completed = _run_group(argv, child, timeout)
         except subprocess.TimeoutExpired as error:
+            _journal(recording_id, f"timeout seconds={time.monotonic() - started:.0f}")
             raise TranscribeError(f"로컬 전사가 시간 제한({timeout:.0f}초)을 넘겼다", counted=True) from error
         except OSError as error:
+            _journal(recording_id, f"failed reason={type(error).__name__}")
             raise TranscribeError(f"CLI 실행 실패: {type(error).__name__}", counted=False) from error
+        _journal(recording_id, f"end rc={completed.returncode} seconds={time.monotonic() - started:.0f}")
         for line in completed.stderr.splitlines():
             if line.startswith("STT-EVAL-"):
                 print(line, file=sys.stderr)
