@@ -61,6 +61,26 @@ def test_v4_card_hides_draft_and_hash_yet_owner_approval_still_resolves(owner_th
         resolve_reaction(stored)
 
 
+def test_a_different_mail_in_the_same_thread_leaves_both_cards_waiting(owner_thread) -> None:
+    import triage_supersede
+
+    # Given: one owner thread where a reply to one person was carded, then another mail to someone else
+    # (2026-11-27: a reply card was closed as "replaced" by an unrelated notice mail and never sent).
+    _fake, patched = owner_thread
+    reply = _post(_compose("회신 본문"))
+    other = mail.triage_gate.create_draft(
+        uid="compose:other", sender="", mail_subject="", to="someone@example.invalid", cc="",
+        subject="세미나 입장 안내", body="안내 본문", category="compose", flags=(), kind="compose",
+        origin_channel_id=THREAD, origin_message_id="100000000000000999",
+    )
+    other = _post(other)
+    # When: the second card is live; Then: nothing is replaced and both still wait for the owner.
+    assert triage_supersede.supersede_older(other) == []
+    assert patched == []
+    pending = sorted(str(record["id"]) for _, record, _ in mail.triage_approval._pending_drafts())
+    assert pending == sorted([reply["id"], other["id"]])
+
+
 def test_a_newer_draft_in_the_same_thread_closes_the_older_card(owner_thread) -> None:
     import triage_supersede
 

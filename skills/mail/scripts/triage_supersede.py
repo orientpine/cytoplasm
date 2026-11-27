@@ -11,11 +11,14 @@ card terminal; whose card it is, the YooDori gate decides before calling it.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import UTC, datetime
+from email.utils import getaddresses
 from importlib import import_module
 from urllib.error import HTTPError
 
+import triage_core
 import triage_gate
 
 REASON = "superseded-by-newer-draft"
@@ -31,6 +34,8 @@ _FINISHED = {
     SHARE_MOVED: "드라이브 공유 폴더가 바뀌어 닫힘",
     "approval-surface-retired": "승인 방식이 바뀌어 만료됨",
 }
+#: Reply/forward markers a revision may add or drop; only these leave the subject (not "[기관명]").
+_SUBJECT_MARKS = re.compile(r"^(?:\s*(?:(?:re|fw|fwd)\s*:|\[(?:re|fw|fwd)\]))+", re.IGNORECASE)
 #: Discord refuses to edit a message inside an archived thread with HTTP 400 and this code.
 ARCHIVED_THREAD = 50083
 
@@ -40,14 +45,25 @@ def _composed(record: dict) -> bool:
     return record.get("kind") == "compose" or isinstance(record.get("reply_inherit"), dict)
 
 
+def _mail_key(record: dict) -> tuple[frozenset[str], str]:
+    """Which mail a card sends: its recipients and its subject without reply/forward markers."""
+    recipients = frozenset(
+        address.lower() for _, address in getaddresses([triage_core.shown(record, "to")]) if address)
+    return recipients, _SUBJECT_MARKS.sub("", triage_core.shown(record, "subject")).strip().casefold()
+
+
 def _same_request(old: dict, new: dict) -> bool:
     # A thread's first draft comes from the parent-channel message that opened the thread, and a
     # Discord thread's id is that message's id (2026-10-19: af9375 was never closed for this).
+    # Only a revision of the same mail replaces it: one thread can hold cards of different mails
+    # (2026-11-27: b9d71c, a reply to one person, was closed by 17f40e, a notice to someone else,
+    # and was never sent). A changed recipient or subject keeps both cards waiting for the owner.
     thread = new.get("approval_thread_id")
     return (
         old.get("id") != new.get("id") and _composed(old) and old.get("status") == "pending"
         and bool(thread) and old.get("approval_thread_id") == thread
         and thread in (old.get("origin_channel_id"), old.get("origin_message_id"))
+        and _mail_key(old) == _mail_key(new)
     )
 
 
@@ -60,11 +76,24 @@ def supersede_older(draft: dict) -> list[str]:
         if not _same_request(record, draft):
             continue
         try:
-            if _close(record, extra={"superseded_by": str(draft["id"])}):
-                closed.append(str(record["id"]))
+            if not _close(record, extra={"superseded_by": str(draft["id"])}):
+                continue
         except Exception as error:  # noqa: BLE001 — the new card is already live; the old one stays as it was
             print(f"MAIL-SUPERSEDE-FAIL draft={record.get('id')} err={type(error).__name__}", file=sys.stderr)
+            continue
+        closed.append(str(record["id"]))
+        _notify_replaced(record)
     return closed
+
+
+def _notify_replaced(record: dict) -> None:
+    """One line in the thread for the replaced card; not an end, so the thread keeps 🔔 for the new card."""
+    try:
+        import_module("triage_confirm").notify_result(
+            record, f"🔁 앞 카드 대체: {triage_core.shown(record, 'subject')} → {triage_core.shown(record, 'to')}\n"
+                    "같은 메일을 고친 새 카드가 이 스레드에 올라와 앞 카드는 나가지 않습니다. 아래 새 카드에서 승인해 주세요.")
+    except Exception as error:  # noqa: BLE001 — the replacement is already committed
+        print(f"NOTIFY-FAIL draft={record.get('id')} err={type(error).__name__}", file=sys.stderr)
 
 
 def close_moved_share(record: dict) -> bool:
