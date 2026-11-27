@@ -544,7 +544,6 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 
 ## README 빠른 시작 다시 쓰기에서 남긴 것 (2026-11-16)
 
-- **macOS 에서 `systemctl` 자체가 없으면 도리 설치가 건너뛰기 분기로 가지 못할 수 있다** — `automation/install/dori_herdr.py` 는 `systemctl --user show-environment` 의 실패 종료값을 보고 서버·웹 유닛·리드를 건너뛰는데, `default_capture` 의 `subprocess.run` 은 명령이 없을 때 `FileNotFoundError` 를 그대로 던진다(코드 읽기로만 확인, macOS 실기 미측정) → `default_capture` 가 실행 파일 없음을 non-zero 로 돌려주게 하고 macOS 에서 한 줄 설치를 한 번 끝까지 재기. 영향: macOS 처음 설치가 리드 단계에서 멈출 수 있음 · 심각도 중.
 - **README 빠른 시작은 비개발자 역할 읽기 검토로만 검증했다** — 디스코드 개발자 포털 메뉴 이름, omo `/login` 화면, 첫 답장까지를 새 디스코드 봇·새 계정으로 실제로 따라가 보지 않았다 → 새 PC 한 대와 새 봇으로 README 만 보고 첫 답장까지 재고 다른 문구를 고치기. 영향: 화면 이름이 바뀌었으면 처음 설치자가 헤맴 · 심각도 낮음.
 - **우분투 22.04 는 기본 Python 이 3.10 이라 설치기가 `CYTO-LINUX-NEEDS` 로 멈춘다** — README 는 deadsnakes 로 `python3.12` 를 깔고 다시 실행하라고 안내만 한다 → 설치기가 그 경우 깔 명령을 직접 출력하거나 지원 우분투 버전을 설치기에서 먼저 알리기. 영향: 22.04 사용자가 한 단계 더 함 · 심각도 낮음.
 
@@ -557,3 +556,8 @@ v1.9.2 배포 영수증이 proposal 마운트 후 스모크 실패를 덮은 것
 
 - 노드 staging(`~/.local/share/yoodori-staging/`)과 Drive 공유 사본(`~/.hermes/mail-triage/drive-share/`)은 지우는 길이 없다 — 한도가 256 MiB 로 커져 큰 빌드 몇 번이면 수 GB 가 쌓인다(이번 작업 시점 staging 719 MB) → 보낸 지 오래된 사본·staging 파일을 정리하는 단계를 기존 정리 잡에 넣기. 영향: 노드 디스크 압박, 중간.
 - Drive 업로드는 gws `+upload` 한 번(multipart)이고 재개가 없으며 gws 호출 상한은 600초다 — 200 MB 급 파일은 초당 약 340 KB 보다 느린 망에서 끝나기 전에 끊기고 처음부터 다시 올린다(메일은 나가지 않음) → 실제 업로드 시간을 재 보고 필요하면 업로드 호출만 상한을 늘리기. 영향: 느린 망에서 재시도 반복, 낮음.
+
+## macOS systemctl 없음 설치 고침에서 남긴 것 (2026-11-27)
+
+- **`tests/unit/test_meeting_deploy_notice.py` 는 체크아웃 경로에 `systemctl` 이 들어 있으면 10건이 거짓으로 실패한다** — 가짜 ssh 가 남긴 명령 기록 전체에 `systemctl` 낱말이 없는지 보는데, 그 기록의 `PYTHONPATH=<체크아웃>` 에 경로가 그대로 들어간다(워크트리 이름 `cyto-mac-systemctl` 에서 실제로 났다) → 체크아웃 경로를 뺀 명령만 보거나 `systemctl ` 호출 모양으로 찾기. 영향: 그런 이름의 워크트리에서 local_ci 영수증이 안 나옴 · 심각도 낮음.
+- **도리 설치 계획 줄은 macOS 에서도 `dori-herdr-server`·`dori-serve-unit` 을 `systemctl --user` 로 켠다고 적는다** — `dori_herdr.plan` 은 systemd 가 있는지 보지 않고 윈도우만 따로 적어, 실제로는 `DORI-HERDR-NO-SYSTEMD` 로 건너뛸 두 단계를 먼저 보여 준다 → 계획에서도 `systemctl` 이 없으면 두 단계를 「건너뜀(systemd 없음), herdr 탭에서 omo·dori serve」로 적기. 영향: 맥 사용자가 계획 줄과 결과가 달라 헷갈림 · 심각도 낮음.

@@ -77,10 +77,10 @@ Update later: run the same line again. Open a new terminal so PATH picks up dori
 윈도우는 로그온 때 도는 작업 스케줄러 항목 두 개(「Dori herdr server」, 「Dori serve」)입니다. 사람이 따로 켤 것은 없습니다.
 
 > [!NOTE]
-> **macOS 는 아직 처음 설치하는 분께 권하지 않습니다.** 한 줄 설치가 macOS 에 없는 `systemctl` 을 부르다 도중에 멈출 수 있는
-> 알려진 문제가 있고(고칠 예정), 실제 기기에서 끝까지 검증하지 않았습니다. 고쳐진 뒤에도 상시 실행 장치가 없어 리드 탭과
-> 디스코드 수신을 저절로 켜지 않으므로, `herdr` 를 연 뒤 탭 하나에서 `omo` 를, 또 다른 탭에서 `dori serve` 를 실행해 두어야
-> 합니다(재부팅하면 다시). 가능하면 리눅스나 윈도우 컴퓨터를 쓰세요.
+> **macOS에서는 아직 상시 실행을 지원하지 않습니다.** 한 줄 설치는 끝까지 진행되지만, macOS에는 `systemctl`이 없어 서버·`dori serve`
+> 유닛과 리드 탭은 건너뜁니다(`DORI-HERDR-NO-SYSTEMD`). 따라서 리드 탭과 디스코드 수신이 자동으로 켜지지 않습니다. 새 터미널에서
+> `herdr`를 연 뒤 한 탭에서 `omo`를, 다른 탭에서 `dori serve`를 실행해 두세요(재부팅하면 다시 실행). 실제 Mac에서는
+> 아직 처음부터 끝까지 검증해 보지 않았으니, 항상 켜 둘 컴퓨터라면 리눅스나 윈도우를 권합니다.
 
 ### 2단계 — 디스코드 봇 만들고 값 네 개 구하기
 
@@ -683,8 +683,9 @@ logs/           # 로그 (git 미추적, 디렉토리만 유지)
 업데이트해요. 상시 실행은 작업 스케줄러 두 항목이 맡습니다. 레거시 `--profile` 노드 인프라,
 herdr 웹, 레인 체크포인트, 분리 인수인계, `dori heavy`, 송신 게이트, 음성 설정은 Linux 전용으로 남아요.
 
-macOS 에서는 도리 설치기가 포크·역할·herdr 까지 깔지만 systemd 가 없어 herdr 서버·웹 유닛은
-건너뜁니다. 다만 지금은 그 건너뛰기 전에 `systemctl` 이 없다며 멈출 수 있는 알려진 문제가 있어(고칠 예정) 처음 설치에는 권하지 않아요. 그래서 재부팅 뒤 루프를 살려 두는 장치가 없어요. 직접 띄워야 합니다.
+macOS 에서는 도리 설치기가 포크·역할·herdr 까지 깔고, systemd 가 없어 herdr 서버·`dori serve` 유닛과 리드 탭은
+건너뛴 채 끝납니다. 재부팅 뒤 루프를 살려 두는 장치가 없어서, `herdr` 를 열고 탭 하나에서 `omo`, 다른 탭에서
+`dori serve` 를 직접 띄워야 합니다.
 Linux·macOS 업데이트는 `python3 -m automation.install.update` 입니다.
 
 </details>

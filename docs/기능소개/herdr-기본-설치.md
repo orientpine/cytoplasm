@@ -25,8 +25,8 @@ aoe 를 기본으로 깔고 herdr 는 손으로 깔아야 했고, 형의 사이�
   → `dori handover`(새 리드를 herdr 탭에 열고 감시를 옮긴 뒤 옛 리드를 24시간 얼림) → `DORI_LEAD_*` 지우기 → aoe 웹 끄기.
   가장 쉬운 길은 리드에게 "herdr 로 옮겨, 안내서 순서대로"라고 쓰는 것이다.
 - **거부·실패 경로**: 받은 파일의 sha256 이 다르면 아무것도 설치하지 않고 `DORI-HERDR-SHA-MISMATCH`(exit 5). 리드 omo 입력창이
-  60초 안에 뜨지 않으면 `DORI-LEAD-NOT-READY` 와 화면 끝 줄을 보인다. `systemctl --user` 가 없으면 바이너리만 깔고 유닛·리드는
-  건너뛴다(`DORI-HERDR-NO-SYSTEMD`). aoe 를 계속 쓰려면 `--backend aoe`.
+  60초 안에 뜨지 않으면 `DORI-LEAD-NOT-READY` 와 화면 끝 줄을 보인다. `systemctl --user` 가 없으면(macOS 는 `systemctl` 자체가 없다) 바이너리만 깔고 유닛·리드는
+  건너뛴 채 끝까지 간다(`DORI-HERDR-NO-SYSTEMD`). 그 줄과 「다음:」 줄이 `herdr` 탭에서 `omo`, 다른 탭에서 `dori serve` 를 켜라고 안내한다. aoe 를 계속 쓰려면 `--backend aoe`.
 
 ## 관련
 

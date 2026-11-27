@@ -440,7 +440,9 @@ python3 -m automation.install.dori --role okdori --role moodori --owner-call 형
 | `dori-serve-unit` | 윈도우 「Dori serve」 작업과 같은 `dori serve`(watch·레인 점검·디스코드 수신·세션 감시)를 사용자 유닛 `dori-serve.service` 로 켠다. 이미 있던 유닛은 켜져 있으면 `--update` 때 새 코드로 다시 켜고, 사람이 꺼 둔 것은 그대로 둔다(`... stopped`). 루프를 유닛 하나씩 돌리는 계정(`dori-inbound.service`·`dori-lanes.service`·`dori-session-watch.service` 중 하나라도 있음)은 수신이 두 번 되지 않게 만들지 않는다(`DORI-SERVE-UNIT-SKIP`) |
 | `dori-herdr-lead` | config 를 이번에 새로 복사했을 때만 리드 폴더에 herdr workspace 를 열어 `omo --session-id <새 id>` 를 띄우고 `leadPane`·`defaultCwd` 를 적는다. omo 입력창이 뜨면 `DORI-LEAD-STARTED`, 아니면 화면 끝 줄과 함께 `DORI-LEAD-NOT-READY` |
 
-`systemctl --user` 를 쓸 수 없는 곳(macOS 등)은 바이너리만 깔고 유닛·리드는 건너뛴다(`DORI-HERDR-NO-SYSTEMD`).
+`systemctl --user` 를 쓸 수 없는 곳(macOS 처럼 `systemctl` 자체가 없는 곳 포함)은 바이너리만 깔고 유닛·리드는 건너뛴 뒤 끝까지
+간다(`DORI-HERDR-NO-SYSTEMD`). 그 줄과 마지막 「다음:」 줄이 손으로 켤 두 가지를 알려 준다: `herdr` 탭 하나에서 `omo`(리드),
+다른 탭에서 `dori serve`(디스코드 수신·감시). 재부팅하면 다시 켠다(launchd 항목은 아직 없다).
 이미 aoe 로 쓰던 계정에서 다시 돌리면 config 를 그대로 두고 herdr 만 준비한다 — 옮기는 순서는
 [aoe·tmux 도리를 herdr로 옮기기](herdr-전환.md).
 

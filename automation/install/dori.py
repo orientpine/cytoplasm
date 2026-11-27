@@ -217,7 +217,12 @@ def ensure_bun(scripts: Path, runner: Runner, capture: dori_herdr.Capture) -> bo
 
 
 def _default_runner(argv: tuple[str, ...], cwd: Path) -> int:
-    return subprocess.run(argv, cwd=cwd, check=False).returncode
+    try:
+        return subprocess.run(argv, cwd=cwd, check=False).returncode
+    except OSError as error:
+        # the same shell-like answer as dori_herdr.default_capture: the caller prints its own failure line
+        print(f"DORI-CMD-MISSING {argv[0]}: {error.strerror or error}")
+        return 127 if isinstance(error, FileNotFoundError) else 126
 
 
 def _fork_state(pin: DoriPin, src: Path, update: bool = False) -> tuple[str, str]:
@@ -363,9 +368,14 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
     if options.backend == "herdr" and layout.windows:
         print(f"다음: {env_file} 의 {_ENV_KEYS} 네 줄을 자기 봇 값으로 바꾸고, `herdr` 를 열어 리드 탭에서 /login 으로 모델에 로그인한 뒤 \"Dori mode\" 라고 한다."
               f" 도리 상시 루프는 작업 스케줄러 '{dori_herdr.SERVE_TASK}' 가 로그온마다 켭니다(토큰을 넣으면 다음 재시도 때 연결).")
-    elif options.backend == "herdr":
+    elif options.backend == "herdr" and any((layout.units / name).exists() for name in (dori_herdr.SERVE_UNIT, *dori_herdr.LOOP_UNITS)):
         print(f"다음: {env_file} 의 {_ENV_KEYS} 네 줄을 자기 봇 값으로 바꾸고, `herdr` 를 열어 리드 탭에서 /login 으로 모델에 로그인한 뒤 \"Dori mode\" 라고 한다."
               f" 도리 상시 루프는 사용자 유닛 {dori_herdr.SERVE_UNIT} 가 켭니다(토큰을 넣으면 다음 재시도 때 연결).")
+    elif options.backend == "herdr":
+        # no systemd (macOS): dori_herdr skipped the units and the lead tab, so both are started by hand
+        print(f"다음: {env_file} 의 {_ENV_KEYS} 네 줄을 자기 봇 값으로 바꾸고, 새 터미널에서 `herdr` 를 열어 탭 하나에서 `omo` 를 켜고 /login 으로"
+              " 모델에 로그인한 뒤 \"Dori mode\" 라고 한다. 이 컴퓨터에는 상시 실행 장치(systemd)가 없어 다른 탭에서 `dori serve` 를 켜 두어야"
+              " 디스코드에 답한다(재부팅하면 두 탭 모두 다시 켠다).")
     else:
         print("다음: ~/.dori/dori.env 에 봇 토큰·채널·소유자 id 를 넣고(0600), 리드 작업 폴더에서 에이전트를 열어 \"Dori mode\" 라고 한다.")
     return 0
