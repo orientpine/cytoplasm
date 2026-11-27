@@ -596,12 +596,35 @@ def expire_retired_approval(draft: dict[str, JsonValue]) -> bool:
     The approval-key lease closes the reaction/delete/store race. An owner decision
     always wins: decided requests return to the normal resolver and are never expired.
     """
-    approval = import_module("triage_approval")
     if not triage_binding.is_retired_binding(draft):
         return False
     created_at = draft.get("created")
     if not isinstance(created_at, str) or not created_at:
         return False
+    if not _expire_retired(draft, created_at):
+        return False
+    _notify_retired(draft)
+    return True
+
+
+#: What the requester's thread reads when a card expires because its approval surface retired.
+RETIRED_NOTICE = ("승인 방식이 바뀌어 이 카드는 만료되었습니다. 메일은 나가지 않았습니다. "
+                  "보내려면 요청한 쪽에 같은 메일 카드를 다시 올려 달라고 해 주세요.")
+
+
+def _notify_retired(draft: dict[str, JsonValue]) -> None:
+    """The expiry result goes to the card's own thread like every other end (2026-11-27, no silent expiry)."""
+    try:
+        triage_confirm.notify_result(
+            draft, f"💤 카드 만료: {draft['subject']} → {draft['to']}\n{RETIRED_NOTICE}",
+            outcome=triage_confirm.EXPIRED_OUTCOME,
+        )
+    except Exception as error:  # noqa: BLE001 — the expiry is already committed
+        print(f"NOTIFY-FAIL draft={draft.get('id')} err={type(error).__name__}", file=sys.stderr)
+
+
+def _expire_retired(draft: dict[str, JsonValue], created_at: str) -> bool:
+    approval = import_module("triage_approval")
     key = approval.approval_key(draft)
     with approval.confirm_lease().hold(key) as owned:
         if not owned:
