@@ -164,7 +164,12 @@ def default_fetch(url: str, dest: Path) -> None:
 def default_capture(argv: tuple[str, ...]) -> tuple[int, str]:
     # a shell inside a herdr pane carries HERDR_SOCKET_PATH and friends, which would aim herdr at that pane's server
     env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
-    done = subprocess.run(argv, check=False, capture_output=True, text=True, env=env)
+    try:
+        done = subprocess.run(argv, check=False, capture_output=True, text=True, env=env)
+    except OSError as error:
+        # a command this machine does not have (macOS has no systemctl) answers as a shell would, 127 or 126 when it
+        # cannot run, so the caller takes its own not-available branch instead of the install stopping on a traceback
+        return (127 if isinstance(error, FileNotFoundError) else 126), f"{argv[0]}: {error.strerror or error}"
     return done.returncode, done.stdout + done.stderr
 
 
@@ -477,7 +482,9 @@ def install(layout: Layout, tools: Tools, key: str, *, config: Path, lead_dir: P
         _ = layout.herdr_config.write_text("onboarding = false\n", encoding="utf-8")
 
     if _systemctl(capture, "show-environment")[0] != 0:
-        print("DORI-HERDR-NO-SYSTEMD: systemctl --user 를 쓸 수 없어 서버 유닛과 리드를 건너뛴다 — `herdr` 를 열면 서버가 뜬다")
+        print("DORI-HERDR-NO-SYSTEMD: systemctl --user 를 쓸 수 없어(macOS 등) herdr 서버·dori serve 유닛과 리드 탭을 건너뛴다 — "
+              "새 터미널에서 `herdr` 를 열면 서버가 뜬다. 탭 하나에서 `omo`(리드), 다른 탭에서 `dori serve`(디스코드 수신·감시)를 "
+              "켜 둔다(재부팅하면 다시 켠다)")
         return 0
     retire_web(layout, capture)
     state = _copy_once(layout.server_unit, layout.units / _SERVER_UNIT)

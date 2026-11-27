@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -345,6 +346,27 @@ def test_without_a_user_manager_the_binaries_land_and_units_and_lead_are_skipped
     assert (home / ".local" / "lib" / "herdr" / "herdr").is_file()
     assert not (home / ".config" / "systemd").exists()
     assert world.ran("workspace", "create") == []
+
+
+def test_where_systemctl_does_not_exist_the_install_skips_the_units_and_says_how_to_start_dori(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # macOS has no systemctl at all: the real capture is asked for it, on a PATH that has git (the fork fetch) and no systemctl
+    world = _World()
+    real = world.capture
+    bin_dir = tmp_path / "no-systemctl"
+    bin_dir.mkdir()
+    (bin_dir / "git").symlink_to(shutil.which("git") or "/usr/bin/git")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setattr(world, "capture", lambda argv: dori_herdr.default_capture(argv) if argv[0] == "systemctl" else real(argv))
+
+    assert _install(home, world) == 0
+
+    out = capsys.readouterr().out
+    assert "DORI-HERDR-NO-SYSTEMD" in out and "dori serve" in out
+    assert dori_herdr.SERVE_UNIT not in out.split("DORI-INSTALLED", 1)[1]
+    assert not (home / ".config" / "systemd").exists() and world.ran("workspace", "create") == []
+    assert dori_herdr.default_capture(("systemctl", "--user", "show-environment"))[0] == 127
 
 
 def test_the_pinned_tools_cover_linux_and_carry_real_digests() -> None:

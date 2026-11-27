@@ -2865,3 +2865,8 @@ runtime-package 프로브의 `cron/` 오탐을 고쳤다. 그 과정에서 드�
 
 - **페어 채널 장애 통지는 아직 다섯 칸 봉투(`대상:`·`사실:`·`위치:`·`인계:`·`되돌리기:`)로 나간다** — #144 는 형 채널 글만 걸렀고 `notify_owner(..., fault=True)` 경로는 봉투를 자르지 않는다. 생산자는 `healthcheck_notify`·`doctor/alarm`·`deploy_reconcile_notice`·`supply_chain_shadow_watch`·`managed_sync_watch`·`release_applied_notice` 다. 형이 2026-10-20 05:57 KST meeting 플러그인 글을 보고 "이렇게 출력되는 거 없앤 거 아니었어?" 라고 물었다. 그 글 자체는 P5 노드에서 나가지 않게 고쳤다 → 페어 채널도 형 정기 알림(`owner-ko-v5`)처럼 한 줄 판본으로 옮길지 정한다(저장된 판본·해시 불변). 영향: 페어 채널 가독성 · 심각도 중.
   ↳ 처리(2026-10-20 · 해소, RESOLVED-SOURCE): 리드 Q304 로 페어 채널 봉투는 `owner_message.render_report` 한 줄(무엇이 됐나·확인할 곳·남은 일)이 되고, 헬스체크·meeting 플러그인·doctor 의 `fact` 를 문장으로 고쳤다. 형 채널 판본·저장 봉투는 불변. 강제 `tests/unit/test_pair_report_shape.py`. 배포 증거 아님 — 실제 페어 알림 한 건 확인은 다음 릴리스 장부.
+
+## README 빠른 시작 다시 쓰기에서 남긴 것 (2026-11-16)
+
+- **macOS 에서 `systemctl` 자체가 없으면 도리 설치가 건너뛰기 분기로 가지 못할 수 있다** — `automation/install/dori_herdr.py` 는 `systemctl --user show-environment` 의 실패 종료값을 보고 서버·웹 유닛·리드를 건너뛰는데, `default_capture` 의 `subprocess.run` 은 명령이 없을 때 `FileNotFoundError` 를 그대로 던진다(코드 읽기로만 확인, macOS 실기 미측정) → `default_capture` 가 실행 파일 없음을 non-zero 로 돌려주게 하고 macOS 에서 한 줄 설치를 한 번 끝까지 재기. 영향: macOS 처음 설치가 리드 단계에서 멈출 수 있음 · 심각도 중.
+  ↳ 처리(2026-11-27 · 해소): `default_capture` 와 `dori.py` 의 기본 실행기가 없는 명령을 셸처럼 127(실행 못 하면 126)로 돌려줘, `systemctl` 이 없으면 `DORI-HERDR-NO-SYSTEMD` 로 건너뛴 뒤 설치가 끝까지 간다. 그 줄과 「다음:」 줄이 `herdr` 탭에서 `omo`, 다른 탭에서 `dori serve` 를 켜라고 안내한다. `systemctl` 없는 우분투 24.04 컨테이너에서 한 줄 설치의 도리 단계를 실제로 돌려 확인했다(`tests/unit/test_install_dori_herdr.py`). 실제 Mac 실측은 남은 일이다(「리눅스 한 줄 설치·처음 설치 막힘 고침에서 남긴 것」의 측정 불릿).
