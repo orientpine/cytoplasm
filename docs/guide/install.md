@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/orientpine/cytoplasm/main/install.s
    `DORI_DISCORD_CHANNEL`·`DORI_DISCORD_OWNER` 네 줄을 자기 봇 값으로 바꾼다(봇 만들기·토큰·개발자 모드로 ID 복사는
    [README 「빠른 시작」 2·3단계](../../README.md#2단계--디스코드-봇-만들고-값-네-개-구하기), 그 파일 주석에도 있다).
    상시 루프는 다음 재시도(최대 5분) 때 붙는다. 바로 붙이려면 `systemctl --user restart dori-serve`(윈도우는 재로그온).
-2. 리드 탭(`herdr`, 리눅스는 웹 `http://127.0.0.1:8181` 도)의 omo 에서 `/login` 으로 모델에 로그인한다.
+2. 리드 탭(터미널에서 `herdr`)의 omo 에서 `/login` 으로 모델에 로그인한다.
 3. 같은 탭에서 "Dori mode" 라고 한다.
 
 아래는 서명된 cytoplasm 릴리스의 체크아웃에서 직접 돌리는 방법이다(한 줄이 부르는 것과 같은 설치기). 포크는 `dori/pin.toml`의
@@ -128,7 +128,6 @@ omo 설치기는 관리자 PowerShell 에서 거부하므로 그때는 `CYTO-WIN
 | 기능 | 이유 |
 |---|---|
 | 레거시 `--profile core\|rag\|report-hub\|full` | root·systemd 타이머(deploy-reconcile, supply-chain-watch, smoke) |
-| herdr 웹 | ttyd + systemd 사용자 유닛 |
 | herdr-guard, 포크 호스트 가드 루프 | bash 래퍼·Linux 전용 |
 | 레인 체크포인트 | `dori checkpoint` 가 윈도우에서 거부 |
 | 분리 인수인계(리드 자기 인수인계, 자동 롤오버) | Linux 전용 |
@@ -425,7 +424,7 @@ python3 -m automation.install.dori --role okdori --role moodori --owner-call 형
 |---|---|
 | `dori-fork` | `dori/pin.toml` 의 커밋 하나만 `~/.dori/src` 에 받고 `git rev-parse HEAD` 가 같은지 확인한다. 받을 수 없으면 `DORI-PIN-FETCH-FAIL`(exit 3)이고 아무것도 남지 않는다. 이미 있는 체크아웃이 다른 커밋이면 `DORI-PIN-SRC-DIFFERS`(exit 2)로 전부 멈춘다 |
 | `dori-skill-link` | `~/.agents/skills/dori-mode` → 포크 스킬 링크(링크가 아닌 폴더가 있으면 그대로 둔다) |
-| `dori-cli` | 포크 `scripts` 에서 `bun install`·`bun link` — `dori` 명령이 생긴다 |
+| `dori-cli` | 포크 `scripts` 에서 `bun install`·`bun link` — `dori` 명령이 생긴다. bun 이 포크 `package.json` 의 `engines.bun`(지금 1.4.2 이상)보다 낮으면 먼저 `bun upgrade` 를 한 번 돌리고(`DORI-BUN-OLD`→`DORI-BUN-UPGRADED`), 그래도 낮으면 `DORI-BUN-TOO-OLD`(exit 4)로 멈춘다 |
 | `dori-config` | `~/.dori/config.json` 이 없을 때만 포크 예시를 복사한다(기본 `--backend herdr`, aoe/tmux 로 쓰려면 `--backend aoe`) |
 | `dori-env` | `~/.dori/dori.env` 가 없을 때만 포크 `setups/discord-aoe/dori.env.example` 를 0600 으로 복사한다. herdr 에서는 aoe 전용 `DORI_LEAD_*` 줄을 주석으로 둔다. 있으면 그대로(`DORI-ENV ... kept`) |
 | `dori-role-<역할>` | `~/Documents/<도리>/AGENTS.md`·`avatar.md` 를 `dori/roles/` 템플릿에서 쓴다. 기본은 리드(`zzangdori`)·비서(`yoodori`), `--role okdori`(카톡)·`--role moodori`(회사 업무·긴 문서, 안 고르면 긴 문서는 유도리)·`--role gongdori`(연구) 는 선택. 이미 있으면 덮지 않고 다르면 차이만 보인다(`DORI-ROLE-KEEP`) |
@@ -436,14 +435,13 @@ python3 -m automation.install.dori --role okdori --role moodori --owner-call 형
 | 단계 | 하는 일 |
 |---|---|
 | `dori-herdr-bin` | herdr 0.9.5 를 `~/.local/lib/herdr/herdr` 에 두고 `~/.local/bin/herdr` 를 포크의 herdr-guard 로 링크한다(pane 안에서 서버를 멈추는 명령을 막는다). 다른 herdr 가 이미 있으면 그대로 둔다(`kept`) |
-| `dori-herdr-ttyd` | 웹 터미널 ttyd 1.7.7 을 `~/.local/bin/ttyd` 에(Linux) |
 | `dori-herdr-server` | 포크 유닛 `dori-herdr.service` 를 `~/.config/systemd/user/` 에 복사해 켠다. 유닛이 이미 있으면 덮지 않는다 |
-| `dori-herdr-web` | `herdr-web@<포트>`(기본 8181, `--web-port`)를 켠다. `~/.config/herdr/web-<포트>.env`(0600)는 없을 때만 쓰고, 옛 aoe 웹 비밀번호(`~/.config/agent-of-empires/serve.env`)가 없으면 새 비밀번호 `HERDR_WEB_PASSPHRASE` 를 만든다. 주소는 `--web-origin`(기본 `http://127.0.0.1:<포트>`). 다른 프로그램이 그 포트를 쓰면 켜지 않는다(`DORI-HERDR-WEB-PORT-BUSY`) |
+| `dori-herdr-web-retire` | 예전 설치기가 깐 herdr 웹 유닛(`herdr-web@.service`·`herdr-web-terminal@.service`·`herdr-web-state@.service`, 포크 `setups/herdr-web/` 를 실행하는 것)이 있을 때만 나온다. 포크에서 herdr 웹이 없어져(포크 #392) 그 인스턴스를 `disable --now` 하고 유닛 파일을 `<이름>.bak-herdr-web-retired` 로 옮긴다(`DORI-HERDR-WEB-RETIRED`). 직접 쓴 다른 `herdr-web@.service` 는 그대로 둔다. 웹 env(`~/.config/herdr/web-<포트>.env`)와 `~/.local/bin/ttyd` 는 지우지 않는다 |
 | `dori-serve-unit` | 윈도우 「Dori serve」 작업과 같은 `dori serve`(watch·레인 점검·디스코드 수신·세션 감시)를 사용자 유닛 `dori-serve.service` 로 켠다. 이미 있던 유닛은 켜져 있으면 `--update` 때 새 코드로 다시 켜고, 사람이 꺼 둔 것은 그대로 둔다(`... stopped`). 루프를 유닛 하나씩 돌리는 계정(`dori-inbound.service`·`dori-lanes.service`·`dori-session-watch.service` 중 하나라도 있음)은 수신이 두 번 되지 않게 만들지 않는다(`DORI-SERVE-UNIT-SKIP`) |
 | `dori-herdr-lead` | config 를 이번에 새로 복사했을 때만 리드 폴더에 herdr workspace 를 열어 `omo --session-id <새 id>` 를 띄우고 `leadPane`·`defaultCwd` 를 적는다. omo 입력창이 뜨면 `DORI-LEAD-STARTED`, 아니면 화면 끝 줄과 함께 `DORI-LEAD-NOT-READY` |
 
 `systemctl --user` 를 쓸 수 없는 곳(macOS 등)은 바이너리만 깔고 유닛·리드는 건너뛴다(`DORI-HERDR-NO-SYSTEMD`).
-이미 aoe 로 쓰던 계정에서 다시 돌리면 config·웹 포트·비밀번호를 그대로 두고 herdr 만 준비한다 — 옮기는 순서는
+이미 aoe 로 쓰던 계정에서 다시 돌리면 config 를 그대로 두고 herdr 만 준비한다 — 옮기는 순서는
 [aoe·tmux 도리를 herdr로 옮기기](herdr-전환.md).
 
 `--dry-run` 은 쓰기도 네트워크도 없다(git·bun 이 없어도 계획은 나온다). 실제 설치에는 git 과

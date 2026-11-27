@@ -142,8 +142,7 @@ DORI_DISCORD_OWNER=내-사용자-ID-숫자                 ← 내 ID
 
 새 터미널(윈도우는 새 PowerShell)에서 `herdr` 를 입력하고 `Enter` 를 누릅니다. herdr 는 AI 에이전트 화면 여러 개를
 한 창에 띄워 두는 프로그램이고, 마우스로 클릭해서 씁니다. 왼쪽 목록에서 **「짱돌」** 작업 공간을 클릭하면 리드 탭이 열립니다(「짱돌」 은 설치기가 리드에 붙이는 이름입니다). 그러면
-AI 에이전트 omo 의 입력 화면이 보입니다. 리눅스는 브라우저 주소창에 `http://127.0.0.1:8181` 을 넣어도 같은 화면이 열립니다. 이때 비밀번호를 물으면
-터미널에서 `grep HERDR_WEB_PASSPHRASE ~/.config/herdr/web-8181.env` 를 실행해 `=` 뒤의 값을 넣으세요.
+AI 에이전트 omo 의 입력 화면이 보입니다.
 
 1. 그 화면에 `/login` 을 입력하고 `Enter`.
 2. 목록에서 내 구독을 고릅니다. Claude 를 쓰면 **Anthropic Subscription (Claude Pro/Max)**,
