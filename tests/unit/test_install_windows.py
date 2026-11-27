@@ -67,7 +67,6 @@ def test_windows_maps_to_the_pinned_herdr_zip() -> None:
 
     assert dori_herdr.platform_key("Windows", "AMD64") == "windows-x86_64"
     assert tools.herdr["windows-x86_64"].url.endswith("/v0.9.5/herdr-windows-x86_64.zip")
-    assert "windows-x86_64" not in tools.ttyd
 
 
 def _zip(names: tuple[str, ...]) -> bytes:
@@ -94,7 +93,7 @@ def test_the_zip_is_unpacked_only_when_its_sha256_matches(tmp_path: Path) -> Non
 
 
 def test_the_windows_plan_names_the_logon_tasks_not_systemd(tmp_path: Path) -> None:
-    layout = dori_herdr.Layout(tmp_path, tmp_path / "src", 8181, windows=True)
+    layout = dori_herdr.Layout(tmp_path, tmp_path / "src", windows=True)
     tools = dori_herdr.load_tools(Path(dori_herdr.__file__).resolve().parents[2])
 
     rows = dict(dori_herdr.plan(layout, tools, "windows-x86_64"))
@@ -136,7 +135,7 @@ def test_supervision_registers_both_tasks_and_restarts_serve_only_on_update(
     tmp_path: Path, serving: bool, restart: bool, capsys: pytest.CaptureFixture[str]
 ) -> None:
     host = _Windows(serving)
-    layout = dori_herdr.Layout(tmp_path, tmp_path / "src", 8181, windows=True)
+    layout = dori_herdr.Layout(tmp_path, tmp_path / "src", windows=True)
 
     assert dori_herdr.windows_supervise(layout, host, lambda _t: "C:/bun.exe", lambda _s: None, restart=restart) == 0
 

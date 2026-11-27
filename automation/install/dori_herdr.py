@@ -1,14 +1,16 @@
 """도리 herdr 백엔드 설치 — `dori.py` 가 `--backend herdr`(기본)일 때 부른다.
 
-`dori/herdr.toml` 에 고정한 herdr·ttyd 를 받아 sha256 을 확인하고 계정의 `~/.local` 에 둔다. 포크의 유닛으로
-herdr 서버(`dori-herdr.service`)와 웹(`herdr-web@<포트>`)을 켜고, 도리 상시 루프(디스코드 수신 등)는 윈도우의
-「Dori serve」 작업과 같은 `dori serve` 를 사용자 유닛 `dori-serve.service` 로 켠다(루프를 유닛 하나씩 따로 돌리는 계정은
-그대로 둔다). 새로 복사한 config 이면 리드를 herdr pane 에 띄워 `leadPane` 에 적는다. root 는 쓰지 않는다.
+`dori/herdr.toml` 에 고정한 herdr 를 받아 sha256 을 확인하고 계정의 `~/.local` 에 둔다. 포크의 유닛으로
+herdr 서버(`dori-herdr.service`)를 켜고, 도리 상시 루프(디스코드 수신 등)는 윈도우의 「Dori serve」 작업과 같은
+`dori serve` 를 사용자 유닛 `dori-serve.service` 로 켠다(루프를 유닛 하나씩 따로 돌리는 계정은 그대로 둔다). 새로
+복사한 config 이면 리드를 herdr pane 에 띄워 `leadPane` 에 적는다. root 는 쓰지 않는다.
+
+herdr 웹(ttyd·로그인 프록시, `herdr-web@<포트>`)은 포크에서 없어졌다(포크 #392). 예전 설치기가 깐 웹 유닛은 지운
+포크 파일을 가리키므로, 다시 실행하거나 업데이트할 때 끄고 `.bak-herdr-web-retired` 로 옮긴다.
 
 네이티브 윈도우(WSL 없음)에서는 systemd 대신 작업 스케줄러다: herdr zip 을 풀어 계정 PATH 에 넣고, 로그온 때 herdr
-서버를 띄우는 작업과 포크의 `dori serve --install-task`(도리 상시 루프) 작업을 등록해 바로 켠다. 웹(ttyd·systemd
-유닛)과 herdr-guard(bash)는 윈도우에 없다. 이미 있는 파일은 덮지 않는다 — 다른 herdr·ttyd·유닛·웹 설정이
-있으면 그대로 두고 그렇다고 말한다. 다른 프로그램(옛 aoe 웹)이 웹 포트를 쓰면 웹만 켜지 않고 넘어간다.
+서버를 띄우는 작업과 포크의 `dori serve --install-task`(도리 상시 루프) 작업을 등록해 바로 켠다. herdr-guard(bash)는
+윈도우에 없다. 이미 있는 파일은 덮지 않는다 — 다른 herdr·유닛이 있으면 그대로 두고 그렇다고 말한다.
 """
 from __future__ import annotations
 
@@ -17,8 +19,6 @@ import hashlib
 import json
 import os
 import platform
-import secrets
-import socket
 import subprocess
 import shutil
 import sys
@@ -42,6 +42,10 @@ SERVE_UNIT: Final = "dori-serve.service"
 # an account that runs the loops as one unit each (setups/discord-aoe) already has the Discord listener: a second one
 # from dori serve would answer every owner message twice
 LOOP_UNITS: Final = ("dori-inbound.service", "dori-lanes.service", "dori-session-watch.service")
+# the herdr web an earlier installer copied from the fork; their ExecStart runs files under this fork folder, gone since fork #392
+WEB_UNITS: Final = ("herdr-web@.service", "herdr-web-terminal@.service", "herdr-web-state@.service")
+_WEB_FORK_DIR: Final = "/skills/dori-mode/setups/herdr-web/"
+WEB_RETIRED_SUFFIX: Final = ".bak-herdr-web-retired"
 SERVE_UNIT_TEXT: Final = """\
 [Unit]
 Description=This Dori's always-on loops (dori serve: watch, freshness, dead-panes, guard, state-git, Discord inbound, session watch), from the cytoplasm installer
@@ -82,20 +86,11 @@ class Asset:
 class Tools:
     herdr_version: str
     herdr: Mapping[str, Asset]
-    ttyd_version: str
-    ttyd: Mapping[str, Asset]
-    web_port: int
-    ttyd_offset: int
-    state_offset: int
 
 
 def load_tools(root: Path) -> Tools:
-    data = tomllib.loads((root / TOOLS_RELPATH).read_text(encoding="utf-8"))
-    def assets(table: Mapping[str, Mapping[str, str]]) -> dict[str, Asset]:
-        return {key: Asset(v["url"], v["sha256"]) for key, v in table.items()}
-    web = data["web"]
-    return Tools(data["herdr"]["version"], assets(data["herdr"]["assets"]), data["ttyd"]["version"],
-                 assets(data["ttyd"]["assets"]), int(web["port"]), int(web["ttyd_offset"]), int(web["state_offset"]))
+    herdr = tomllib.loads((root / TOOLS_RELPATH).read_text(encoding="utf-8"))["herdr"]
+    return Tools(herdr["version"], {key: Asset(v["url"], v["sha256"]) for key, v in herdr["assets"].items()})
 
 
 def platform_key(system: str | None = None, machine: str | None = None) -> str:
@@ -108,7 +103,6 @@ def platform_key(system: str | None = None, machine: str | None = None) -> str:
 class Layout:
     home: Path
     src: Path
-    web_port: int
     windows: bool = sys.platform == "win32"
 
     @property
@@ -120,37 +114,34 @@ class Layout:
     @property
     def guard(self) -> Path: return self.src / _FORK_SETUPS / "discord-aoe" / "herdr-guard"
     @property
-    def ttyd(self) -> Path: return self.home / ".local" / "bin" / "ttyd"
-    @property
     def herdr_config(self) -> Path: return self.home / ".config" / "herdr" / "config.toml"
     @property
     def units(self) -> Path: return self.home / ".config" / "systemd" / "user"
     @property
     def server_unit(self) -> Path: return self.src / _FORK_SETUPS / "discord-aoe" / "systemd" / _SERVER_UNIT
-    @property
-    def web_units(self) -> tuple[Path, ...]: return tuple(sorted((self.src / _FORK_SETUPS / "herdr-web").glob("herdr-web*@.service")))
-    @property
-    def web_env(self) -> Path: return self.home / ".config" / "herdr" / f"web-{self.web_port}.env"
-    @property
-    def aoe_serve_env(self) -> Path: return self.home / ".config" / "agent-of-empires" / "serve.env"
+
+
+def retired_web_units(layout: Layout) -> list[Path]:
+    """The herdr web units an earlier installer copied from the fork: they run fork files that no longer exist."""
+    return [path for path in (layout.units / name for name in WEB_UNITS)
+            if path.is_file() and _WEB_FORK_DIR in path.read_text(encoding="utf-8")]
 
 
 def plan(layout: Layout, tools: Tools, key: str) -> list[tuple[str, str]]:
     herdr = tools.herdr.get(key)
-    ttyd = tools.ttyd.get(key)
     if layout.windows:
         return [
             ("herdr-bin", f"{layout.herdr} herdr {tools.herdr_version} ({key}{', zip sha256 ' + herdr.sha256[:12] if herdr else ' — 받을 바이너리 없음, 건너뜀'}), 그 폴더를 계정 PATH 에"),
             ("herdr-server", f"작업 스케줄러 '{SERVER_TASK}'(로그온, 관리자 권한 없음) — 안 돌고 있으면 바로 켠다"),
             ("serve-task", f"작업 스케줄러 '{SERVE_TASK}' = 포크 dori serve --install-task(도리 상시 루프) — 바로 켠다, --update 면 새 코드로 다시 켠다"),
-            ("herdr-web", "윈도우에는 없다(ttyd·systemd 유닛) — herdr 터미널 화면을 쓴다"),
             ("herdr-lead", "새로 복사한 config 이면 리드를 herdr pane 에 띄우고 leadPane 에 적는다"),
         ]
+    retired = retired_web_units(layout)
     return [
         ("herdr-bin", f"{layout.herdr} herdr {tools.herdr_version} ({key}{', sha256 ' + herdr.sha256[:12] if herdr else ' — 받을 바이너리 없음, 건너뜀'}), {layout.herdr_link} -> 포크 herdr-guard"),
-        ("herdr-ttyd", f"{layout.ttyd} ttyd {tools.ttyd_version} ({key}{', sha256 ' + ttyd.sha256[:12] if ttyd else ' — 받을 바이너리 없음, 웹 건너뜀'})"),
         ("herdr-server", f"{layout.units / _SERVER_UNIT} 를 켠다(systemctl --user, 이미 있으면 그대로)"),
-        ("herdr-web", f"herdr-web@{layout.web_port} (ttyd {layout.web_port + tools.ttyd_offset}, 상태 {layout.web_port + tools.state_offset}) — {layout.web_env}(0600, 없을 때만) · 포트를 다른 프로그램이 쓰면 켜지 않음"),
+        *([("herdr-web-retire", f"{' '.join(p.name for p in retired)} — 포크에서 없어진 herdr 웹이라 끄고 {WEB_RETIRED_SUFFIX} 로 옮긴다")]
+          if retired else []),
         ("serve-unit", f"{layout.units / SERVE_UNIT} = dori serve(도리 상시 루프, 디스코드 수신) — 새로 만들면 켠다, 켜져 있으면 --update 때 새 코드로 다시 켜고 꺼 둔 것은 그대로 둔다 · 루프별 유닛({LOOP_UNITS[0]} 등)이 있으면 그대로 둔다"),
         ("herdr-lead", "새로 복사한 config 이면 리드를 herdr pane 에 띄우고 leadPane 에 적는다"),
     ]
@@ -234,33 +225,6 @@ def _copy_once(source: Path, dest: Path) -> str:
     return "new"
 
 
-def port_free(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind(("127.0.0.1", port))
-        except OSError:
-            return False
-    return True
-
-
-def _web_env(layout: Layout, tools: Tools, origin: str) -> str:
-    lines = [
-        f"HERDR_TTYD_PORT={layout.web_port + tools.ttyd_offset}",
-        f"HERDR_WEB_ORIGIN={origin}",
-        f"HERDR_STATE_PORT={layout.web_port + tools.state_offset}",
-        f"HERDR_STATE_SECRET={secrets.token_hex(32)}",
-    ]
-    if not layout.aoe_serve_env.exists():
-        lines.append(f"HERDR_WEB_PASSPHRASE={secrets.token_hex(16)}")
-    return "\n".join(lines) + "\n"
-
-
-def _env_ports(layout: Layout) -> list[int]:
-    # the ports this account's web units will bind, read back from its env file (it may predate this installer)
-    values = dict(line.split("=", 1) for line in layout.web_env.read_text(encoding="utf-8").splitlines() if "=" in line)
-    return [layout.web_port, *(int(values[k]) for k in ("HERDR_TTYD_PORT", "HERDR_STATE_PORT") if values.get(k, "").isdigit())]
-
-
 def write_private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -271,6 +235,32 @@ def write_private(path: Path, text: str) -> None:
 
 def _systemctl(capture: Capture, *args: str) -> tuple[int, str]:
     return capture(("systemctl", "--user", *args))
+
+
+def retire_web(layout: Layout, capture: Capture) -> None:
+    """Stops and disables every instance of the retired web units, then moves the unit files aside (kept as a backup).
+
+    An instance is found where systemd keeps it: loaded (running or failed) or enabled under a *.wants folder. The web
+    env file (its passphrase) and the ttyd binary stay; nothing runs them any more.
+    """
+    retired = retired_web_units(layout)
+    if not retired:
+        return
+    templates = tuple(path.name.removesuffix(".service") for path in retired)  # "herdr-web@", ...
+    listed = _systemctl(capture, "list-units", "--all", "--plain", "--no-legend", "herdr-web*")[1].split()
+    enabled = [link.name for link in layout.units.glob("*.wants/herdr-web*@*.service")]
+    instances = sorted({name for name in (*listed, *enabled)
+                        if name.endswith(".service") and name.startswith(templates) and not name.endswith("@.service")})
+    if instances:
+        code, out = _systemctl(capture, "disable", "--now", *instances)
+        if code != 0:
+            print(f"DORI-HERDR-WEB-RETIRE-FAIL {' '.join(instances)}: {out.strip()[:200]} — 유닛 파일은 그대로 둔다")
+            return
+    for path in retired:
+        os.replace(path, path.with_name(path.name + WEB_RETIRED_SUFFIX))
+    _ = _systemctl(capture, "daemon-reload")
+    print(f"DORI-HERDR-WEB-RETIRED {' '.join(instances) or '-'} — 포크에서 없어진 herdr 웹을 껐다"
+          f"(유닛 파일은 {layout.units}/<이름>{WEB_RETIRED_SUFFIX}). 리드 화면은 터미널에서 herdr 로 연다")
 
 
 def open_lead(layout: Layout, config: Path, lead_dir: Path, label: str, capture: Capture, which: Which,
@@ -448,7 +438,7 @@ def serve_unit(layout: Layout, capture: Capture, *, restart: bool) -> int:
     return 0
 
 
-def install(layout: Layout, tools: Tools, key: str, *, origin: str, config: Path, lead_dir: Path, lead_label: str,
+def install(layout: Layout, tools: Tools, key: str, *, config: Path, lead_dir: Path, lead_label: str,
             capture: Capture, fetch: Fetch, which: Which, sleep: Callable[[float], None] = time.sleep,
             restart: bool = False, path_adder: Callable[[Path], str] = add_user_path) -> int:
     herdr_asset = tools.herdr.get(key)
@@ -479,9 +469,6 @@ def install(layout: Layout, tools: Tools, key: str, *, origin: str, config: Path
             layout.herdr_link.parent.mkdir(parents=True, exist_ok=True)
             layout.herdr_link.unlink(missing_ok=True)
             layout.herdr_link.symlink_to(layout.guard)
-        ttyd_asset = tools.ttyd.get(key)
-        ttyd = install_binary(layout.ttyd, ttyd_asset, fetch) if ttyd_asset else "unsupported"
-        print(f"DORI-HERDR-TTYD {layout.ttyd} {ttyd}")
     except (HerdrInstallError, OSError) as error:
         print(error if isinstance(error, HerdrInstallError) else f"DORI-HERDR-FETCH-FAIL: {error}")
         return 5
@@ -490,15 +477,11 @@ def install(layout: Layout, tools: Tools, key: str, *, origin: str, config: Path
         _ = layout.herdr_config.write_text("onboarding = false\n", encoding="utf-8")
 
     if _systemctl(capture, "show-environment")[0] != 0:
-        print("DORI-HERDR-NO-SYSTEMD: systemctl --user 를 쓸 수 없어 서버·웹 유닛과 리드를 건너뛴다 — `herdr` 를 열면 서버가 뜬다")
+        print("DORI-HERDR-NO-SYSTEMD: systemctl --user 를 쓸 수 없어 서버 유닛과 리드를 건너뛴다 — `herdr` 를 열면 서버가 뜬다")
         return 0
-    for source in (layout.server_unit, *layout.web_units):
-        state = _copy_once(source, layout.units / source.name)
-        print(f"DORI-HERDR-UNIT {layout.units / source.name} {state}")
-    web_env = "kept" if layout.web_env.exists() else "new"
-    if web_env == "new":
-        write_private(layout.web_env, _web_env(layout, tools, origin))
-    print(f"DORI-HERDR-WEB-ENV {layout.web_env} {web_env}")
+    retire_web(layout, capture)
+    state = _copy_once(layout.server_unit, layout.units / _SERVER_UNIT)
+    print(f"DORI-HERDR-UNIT {layout.units / _SERVER_UNIT} {state}")
     _ = _systemctl(capture, "daemon-reload")
     code, out = _systemctl(capture, "enable", "--now", _SERVER_UNIT)
     if code != 0:
@@ -512,18 +495,6 @@ def install(layout: Layout, tools: Tools, key: str, *, origin: str, config: Path
         print(f"DORI-HERDR-SERVER-FAIL: {_SERVER_UNIT} 가 켜졌지만 herdr 가 답하지 않는다")
         return 6
     print(f"DORI-HERDR-SERVER {_SERVER_UNIT} active")
-
-    web = f"herdr-web@{layout.web_port}.service"
-    if ttyd == "unsupported":
-        print(f"DORI-HERDR-WEB-SKIP {key}: ttyd 바이너리가 없다")
-    elif _systemctl(capture, "is-active", web)[0] == 0:
-        print(f"DORI-HERDR-WEB {web} 이미 켜짐")
-    elif busy := [p for p in _env_ports(layout) if not port_free(p)]:
-        print(f"DORI-HERDR-WEB-PORT-BUSY {' '.join(map(str, busy))}: 다른 프로그램(옛 aoe 웹, 다른 도리 계정의 웹 등)이 쓴다 — "
-              f"그것을 멈추거나 --web-port 로 다른 포트를 골라 {web} 를 켠다 (docs/guide/herdr-전환.md)")
-    else:
-        code, out = _systemctl(capture, "enable", "--now", web)
-        print(f"DORI-HERDR-WEB {web} {'active' if code == 0 else 'FAIL ' + out.strip()[:200]} — {origin}")
     code = serve_unit(layout, capture, restart=restart)
     if code != 0:
         return code

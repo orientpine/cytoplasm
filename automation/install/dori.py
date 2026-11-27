@@ -3,8 +3,8 @@
 Hermes 경로(`python3 -m automation.install`)와 따로 선다: root·업데이트 신뢰키가 필요 없고 노드의
 서비스 계정을 만들지 않는다. `dori/pin.toml` 의 커밋으로 포크를 받아 SHA 를 확인하고, 포크 스킬을
 링크하고, `dori` CLI 를 `bun link` 하고, 포크의 예시 설정을 한 번만 복사하고, `dori/roles/` 템플릿을
-작업 폴더에 렌더한다. 기본 backend herdr 는 그 뒤 `dori_herdr` 로 herdr·ttyd·서버/웹 사용자 유닛을 깔고
-리드를 herdr pane 에 띄운다. `--backend aoe` 는 예전처럼 aoe 예시 설정만 복사한다.
+작업 폴더에 렌더한다. 기본 backend herdr 는 그 뒤 `dori_herdr` 로 herdr·서버·`dori serve` 사용자 유닛을 깔고
+리드를 herdr pane 에 띄운다. bun 이 포크 `package.json` 의 `engines.bun` 보다 낮으면 `bun upgrade` 한 번 뒤 다시 본다. `--backend aoe` 는 예전처럼 aoe 예시 설정만 복사한다.
 
 이미 있는 파일은 덮지 않는다. 같으면 넘어가고, 다르면 차이만 보여 주고 그대로 둔다 — 소유자가
 고쳐 쓴 지침이 재설치로 사라지면 안 된다. 이미 있는 포크 체크아웃이 고정 커밋이 아니면 아무것도
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import os
 import re
 import shutil
@@ -33,6 +34,7 @@ ROLES_RELPATH: Final = Path("dori") / "roles"
 TEMPLATE_NAME: Final = "AGENTS.md.tmpl"
 AVATAR_NAME: Final = "avatar.md"
 _PLACEHOLDER: Final = re.compile(r"\{\{[A-Z_]+\}\}")
+_VERSION: Final = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 DIFF_LINE_LIMIT: Final = 40
 _CONFIG_EXAMPLES: Final = {"aoe": "config.aoe.example.json", "herdr": "config.example.json"}
 _ENV_EXAMPLE: Final = Path("skills") / "dori-mode" / "setups" / "discord-aoe" / "dori.env.example"
@@ -184,6 +186,36 @@ def _find_bun(home: Path, which: Callable[[str], str | None]) -> None:
         print(f"DORI-BUN-FOUND {folder} (PATH 에 없어 이 실행에만 더했다)")
 
 
+def _version(text: str) -> tuple[int, int, int] | None:
+    found = _VERSION.search(text)
+    return (int(found[1]), int(found[2]), int(found[3])) if found else None
+
+
+def bun_floor(scripts: Path) -> tuple[int, int, int] | None:
+    """The lowest bun the pinned fork's CLI declares (`engines.bun`, e.g. ">=1.4.2"); None when it declares none."""
+    engines = json.loads((scripts / "package.json").read_text(encoding="utf-8")).get("engines", {})
+    return _version(str(engines.get("bun", "")))
+
+
+def ensure_bun(scripts: Path, runner: Runner, capture: dori_herdr.Capture) -> bool:
+    # install.sh and install.ps1 only install bun when it is missing, so an older install keeps its old bun
+    floor = bun_floor(scripts)
+    if floor is None:
+        return True
+    want = ".".join(map(str, floor))
+    have = _version(capture(("bun", "--version"))[1])
+    if have is not None and have >= floor:
+        return True
+    print(f"DORI-BUN-OLD bun {'.'.join(map(str, have)) if have else '?'} < {want} (포크 바닥판) — bun upgrade")
+    _ = runner(("bun", "upgrade"), scripts)
+    have = _version(capture(("bun", "--version"))[1])
+    if have is not None and have >= floor:
+        print(f"DORI-BUN-UPGRADED bun {'.'.join(map(str, have))}")
+        return True
+    print(f"DORI-BUN-TOO-OLD: 포크는 bun {want} 이상이 필요하다 — `bun upgrade` 를 직접 돌린 뒤 같은 명령을 다시 실행한다")
+    return False
+
+
 def _default_runner(argv: tuple[str, ...], cwd: Path) -> int:
     return subprocess.run(argv, cwd=cwd, check=False).returncode
 
@@ -217,10 +249,7 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
                             help="선택 역할을 더한다(okdori, moodori, gongdori). lead·yoodori 는 기본")
     _ = parser.add_argument("--owner-call", default="소유자", help="도리가 소유자를 부르는 말(예: 형)")
     _ = parser.add_argument("--backend", choices=sorted(_CONFIG_EXAMPLES), default="herdr",
-                            help="herdr(기본: herdr·ttyd·웹까지 깔고 리드를 herdr pane 에) 또는 aoe(aoe/tmux, 예시 설정만)")
-    _ = parser.add_argument("--web-port", type=int, default=None, help="herdr 웹 앞문 루프백 포트(기본 dori/herdr.toml)")
-    _ = parser.add_argument("--web-origin", default=None,
-                            help="브라우저가 여는 주소(기본 http://127.0.0.1:<포트>, 테일넷이면 https://<호스트>[:포트])")
+                            help="herdr(기본: herdr·서버·dori serve 까지 깔고 리드를 herdr pane 에) 또는 aoe(aoe/tmux, 예시 설정만)")
     _ = parser.add_argument("--update", action="store_true",
                             help="이미 받은 포크(설치기가 받은 깨끗한 체크아웃)를 새 고정 커밋으로 옮긴다")
     _ = parser.add_argument("--src", type=Path, default=home / ".dori" / "src")
@@ -251,13 +280,12 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
     steps = [
         ("dori-fork", fork_detail),
         ("dori-skill-link", f"{link} -> {options.src / 'skills' / 'dori-mode'}"),
-        ("dori-cli", f"bun install && bun link ({options.src / 'skills' / 'dori-mode' / 'scripts'})"),
+        ("dori-cli", f"bun install && bun link ({options.src / 'skills' / 'dori-mode' / 'scripts'}) — bun 이 포크 engines.bun 보다 낮으면 먼저 bun upgrade"),
         ("dori-config", f"{config} {'유지(이미 있음)' if config.exists() else '포크 예시 복사 ' + _CONFIG_EXAMPLES[options.backend]}"),
         ("dori-env", f"{env_file} {'유지(이미 있음)' if env_file.exists() else '포크 예시 복사(0600) — ' + _ENV_KEYS + ' 네 줄만 채우면 된다'}"),
         *((f"dori-role-{e.role.key}", f"{e.path} {({'new': '새로 씀', 'same': '같음 — 넘어감', 'differs': '다름 — 그대로 두고 차이만 보임'})[e.state]}") for e in files),
     ]
-    web_port = args.web_port or tools.web_port
-    layout = dori_herdr.Layout(options.home, options.src, web_port)
+    layout = dori_herdr.Layout(options.home, options.src)
     key = dori_herdr.platform_key()
     if options.backend == "herdr":
         steps += [(f"dori-{kind}", detail) for kind, detail in dori_herdr.plan(layout, tools, key)]
@@ -298,6 +326,8 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
     link.parent.mkdir(parents=True, exist_ok=True)
     _link_skill(link, options.src / "skills" / "dori-mode")
     scripts = options.src / "skills" / "dori-mode" / "scripts"
+    if not ensure_bun(scripts, runner, capture):
+        return 4
     for command in (("bun", "install", "--silent"), ("bun", "link", "--silent")):
         if runner(command, scripts) != 0:
             print(f"DORI-CLI-FAIL: {' '.join(command)} in {scripts}")
@@ -323,7 +353,7 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
     if options.backend == "herdr":
         lead = next(r for r in roles if r.key == "lead")
         code = dori_herdr.install(
-            layout, tools, key, origin=args.web_origin or f"http://127.0.0.1:{web_port}", config=config,
+            layout, tools, key, config=config,
             lead_dir=options.workroot / lead.dir, lead_label=lead.nick, capture=capture, fetch=fetch, which=which,
             sleep=sleep, restart=args.update,
         )
@@ -334,8 +364,7 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = _default_runner,
         print(f"다음: {env_file} 의 {_ENV_KEYS} 네 줄을 자기 봇 값으로 바꾸고, `herdr` 를 열어 리드 탭에서 /login 으로 모델에 로그인한 뒤 \"Dori mode\" 라고 한다."
               f" 도리 상시 루프는 작업 스케줄러 '{dori_herdr.SERVE_TASK}' 가 로그온마다 켭니다(토큰을 넣으면 다음 재시도 때 연결).")
     elif options.backend == "herdr":
-        print(f"다음: {env_file} 의 {_ENV_KEYS} 네 줄을 자기 봇 값으로 바꾸고, 웹(또는 `herdr`)에서 리드 탭을 열어 /login 으로 모델에 로그인한 뒤 \"Dori mode\" 라고 한다."
-              f" 웹 비밀번호는 {layout.web_env} 의 HERDR_WEB_PASSPHRASE(옛 aoe 웹을 쓰던 계정은 그 비밀번호)."
+        print(f"다음: {env_file} 의 {_ENV_KEYS} 네 줄을 자기 봇 값으로 바꾸고, `herdr` 를 열어 리드 탭에서 /login 으로 모델에 로그인한 뒤 \"Dori mode\" 라고 한다."
               f" 도리 상시 루프는 사용자 유닛 {dori_herdr.SERVE_UNIT} 가 켭니다(토큰을 넣으면 다음 재시도 때 연결).")
     else:
         print("다음: ~/.dori/dori.env 에 봇 토큰·채널·소유자 id 를 넣고(0600), 리드 작업 폴더에서 에이전트를 열어 \"Dori mode\" 라고 한다.")

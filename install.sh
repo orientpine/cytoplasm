@@ -10,7 +10,7 @@
 # per user); clones cytoplasm into <CYTO_HOME>/src; on the first run checks the newest release tag's signature against
 # the update trust key whose fingerprint is published in README (nothing from the clone runs before that); then hands
 # over to `python3 -m automation.install.update`, which keeps that check for every later update and runs the Dori
-# installer (pinned fork, herdr, the user units for the herdr server, its web page and `dori serve`). No root for
+# installer (pinned fork, herdr, the user units for the herdr server and `dori serve`). No root for
 # cytoplasm itself.
 #
 # The whole script is one function called on its last line: under `curl | bash` bash reads the script from stdin, and a

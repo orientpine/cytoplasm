@@ -77,8 +77,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     real = dori.dori_herdr.load_tools(Path(dori.REPO_ROOT))
     fake = {k: dori.dori_herdr.Asset(f"https://example.invalid/{k}", hashlib.sha256(f"https://example.invalid/{k}".encode()).hexdigest())
             for k in ("linux-x86_64",)}
-    monkeypatch.setattr(dori.dori_herdr, "load_tools", lambda _root: dori.dori_herdr.Tools(
-        real.herdr_version, fake, real.ttyd_version, fake, real.web_port, real.ttyd_offset, real.state_offset))
+    monkeypatch.setattr(dori.dori_herdr, "load_tools", lambda _root: dori.dori_herdr.Tools(real.herdr_version, fake))
     monkeypatch.setattr(dori.dori_herdr, "platform_key", lambda: "linux-x86_64")
     return path
 
@@ -149,7 +148,7 @@ def test_apply_installs_the_pinned_fork_and_the_default_roles(
     assert [argv for argv, _ in runner.calls] == [("bun", "install", "--silent"), ("bun", "link", "--silent")]
     assert (home / ".dori" / "config.json").read_text(encoding="utf-8") == '{"backend": "herdr"}\n'
     assert (home / ".local" / "lib" / "herdr" / "herdr").is_file()
-    assert (home / ".local" / "bin" / "ttyd").is_file()
+    assert not (home / ".local" / "bin" / "ttyd").exists()
     assert (home / "Documents" / "zzangdori" / "AGENTS.md").is_file()
     assert (home / "Documents" / "yoodori" / "avatar.md").is_file()
     assert not (home / "Documents" / "okdori").exists()
@@ -234,3 +233,28 @@ def test_default_install_preserves_existing_node_and_dori_state(
     assert {name: (home / name).read_text(encoding="utf-8") for name in existing} == existing
     assert (home / "Documents/zzangdori/AGENTS.md").is_file()
     assert all(command[0] == "bun" for command, _cwd in runner.calls)
+
+
+@pytest.mark.parametrize(("versions", "ok"), [(["1.3.1\n", "1.4.5\n"], True), (["1.3.1\n", "1.3.1\n"], False)])
+def test_a_bun_below_the_forks_floor_is_upgraded_once_or_the_install_stops(
+    tmp_path: Path, versions: list[str], ok: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _ = (tmp_path / "package.json").write_text('{"engines": {"bun": ">=1.4.2"}}\n', encoding="utf-8")
+    answers = iter(versions)
+    runner = _Runner()
+
+    assert dori.ensure_bun(tmp_path, runner, lambda _argv: (0, next(answers))) is ok
+
+    out = capsys.readouterr().out
+    assert [argv for argv, _ in runner.calls] == [("bun", "upgrade")]
+    assert "DORI-BUN-OLD bun 1.3.1 < 1.4.2" in out
+    assert ("DORI-BUN-UPGRADED bun 1.4.5" in out) is ok and ("DORI-BUN-TOO-OLD" in out) is not ok
+
+
+def test_a_bun_at_the_floor_or_a_fork_without_one_is_left_as_it_is(tmp_path: Path) -> None:
+    runner = _Runner()
+    _ = (tmp_path / "package.json").write_text('{"engines": {"bun": ">=1.4.2"}}\n', encoding="utf-8")
+    assert dori.ensure_bun(tmp_path, runner, lambda _argv: (0, "1.4.2\n"))
+    _ = (tmp_path / "package.json").write_text("{}\n", encoding="utf-8")
+    assert dori.ensure_bun(tmp_path, runner, lambda _argv: (0, "1.0.0\n"))
+    assert runner.calls == []
