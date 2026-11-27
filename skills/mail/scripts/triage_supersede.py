@@ -23,6 +23,14 @@ NOTICE = "🔁 새 판으로 대체됨 — 이 카드는 실행되지 않습니�
 WITHDRAWN = "withdrawn-by-requester"
 SHARE_MOVED = "drive-share-folder-moved"
 SHARE_MOVED_NOTICE = "⛔ 드라이브 공유 폴더가 바뀌어 닫은 카드 — 이 메일은 나가지 않습니다. 유돌에게 새 카드를 요청해 주세요."
+#: Why a finished card can no longer be withdrawn, in the words the requester reads (2026-11-27:
+#: 4803bb, already replaced by 877274, was refused with only "상태=expired").
+_FINISHED = {
+    REASON: "같은 스레드의 새 판으로 대체되어 닫힘",
+    WITHDRAWN: "요청한 쪽이 이미 거둠",
+    SHARE_MOVED: "드라이브 공유 폴더가 바뀌어 닫힘",
+    "approval-surface-retired": "승인 방식이 바뀌어 만료됨",
+}
 #: Discord refuses to edit a message inside an archived thread with HTTP 400 and this code.
 ARCHIVED_THREAD = 50083
 
@@ -52,7 +60,7 @@ def supersede_older(draft: dict) -> list[str]:
         if not _same_request(record, draft):
             continue
         try:
-            if _close(record):
+            if _close(record, extra={"superseded_by": str(draft["id"])}):
                 closed.append(str(record["id"]))
         except Exception as error:  # noqa: BLE001 — the new card is already live; the old one stays as it was
             print(f"MAIL-SUPERSEDE-FAIL draft={record.get('id')} err={type(error).__name__}", file=sys.stderr)
@@ -78,7 +86,7 @@ def close_moved_share(record: dict) -> bool:
     return closed
 
 
-def _close(record: dict, reason: str = REASON, notice: str = NOTICE) -> bool:
+def _close(record: dict, reason: str = REASON, notice: str = NOTICE, extra: dict | None = None) -> bool:
     """Expire only the old card, never the thread holding the newer pending card."""
     approval = import_module("triage_approval")
     gate_module = import_module("triage_approval_gate")
@@ -88,14 +96,14 @@ def _close(record: dict, reason: str = REASON, notice: str = NOTICE) -> bool:
             return False
         message_id = approval._bound_message_id(record)
         if not message_id:
-            triage_gate.expire_draft(str(record["id"]), "", reason)
+            triage_gate.expire_draft(str(record["id"]), "", reason, extra)
             return True
         request = approval.request_of(record)
         state = approval.lifecycle().Probe
         probe = gate_module.MailApprovalGate(record).probe(request)
         if probe in (state.APPROVED, state.CANCELLED):
             return False
-        triage_gate.expire_draft(str(record["id"]), message_id, reason)
+        triage_gate.expire_draft(str(record["id"]), message_id, reason, extra)
         if probe is state.BOUND_PENDING:
             _mark(request.channel_id, message_id, notice)
         return True
@@ -108,7 +116,7 @@ def withdraw(draft_id: str, reason: str, by: str) -> dict:
         raise triage_gate.GateError(f"카드 없음: {draft_id}", 3)
     record = json.loads(path.read_text(encoding="utf-8"))
     if record.get("status") != "pending":
-        raise triage_gate.GateError(f"카드 {draft_id} 상태={record.get('status')} — 대기 중인 카드만 거둘 수 있습니다", 1)
+        raise triage_gate.GateError(_not_pending(draft_id, record), 1)
     approval = import_module("triage_approval")
     gate_module = import_module("triage_approval_gate")
     with approval.confirm_lease().hold(approval.approval_key(record)) as owned:
@@ -116,7 +124,7 @@ def withdraw(draft_id: str, reason: str, by: str) -> dict:
             raise triage_gate.GateError(f"카드 {draft_id} 는 지금 처리(발송) 중입니다", 1)
         record = json.loads(path.read_text(encoding="utf-8"))
         if record.get("status") != "pending":
-            raise triage_gate.GateError(f"카드 {draft_id} 상태={record.get('status')}", 1)
+            raise triage_gate.GateError(_not_pending(draft_id, record), 1)
         message_id = approval._bound_message_id(record)
         state = approval.lifecycle().Probe
         probe = None
@@ -133,6 +141,19 @@ def withdraw(draft_id: str, reason: str, by: str) -> dict:
                   f"⛔ 발송 취소 ({by} 거둠) — 이 카드의 메일은 나가지 않습니다. 사유: {reason}")
     _notify_withdrawn({**record, **stamp}, by, reason)
     return {**record, **stamp, "status": "expired", "expired_reason": WITHDRAWN}
+
+
+def _not_pending(draft_id: str, record: dict) -> str:
+    """The refusal for a card that is no longer waiting: its state, why, and the card that replaced it."""
+    status = str(record.get("status"))
+    reason = str(record.get("expired_reason") or "")
+    if status == "expired":
+        why = _FINISHED.get(reason, reason or "사유 기록 없음")
+    else:
+        why = {"executed": "이미 발송됨", "blocked": "발송이 막혀 멈춤"}.get(status, status)
+    newer = record.get("superseded_by")
+    tail = f" 새 카드는 {newer} 입니다(거두려면 그 id로)." if newer else ""
+    return f"카드 {draft_id} 상태={status} ({why}) — 대기 중인 카드만 거둘 수 있습니다.{tail}"
 
 
 def _notify_withdrawn(record: dict, by: str, reason: str) -> None:

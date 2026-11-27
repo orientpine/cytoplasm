@@ -710,10 +710,16 @@ def _run_retired_watch(
         raise AssertionError(f"unexpected Discord call: {method} {path}")
 
     monkeypatch.setattr(triage_confirm, "_api", api)
+    notices: list[tuple[str, str]] = []
+    monkeypatch.setattr(triage_confirm, "notify_result",
+                        lambda record, content, *, outcome="": notices.append((content, outcome)) or "")
     path = tmp_path / "gate" / "drafts" / f"{draft['id']}.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(draft), encoding="utf-8")
     assert triage_cli.cmd_watch(argparse.Namespace()) == 0
+    # An expired card never leaves silently: one expiry result with its reason goes to the card's thread.
+    assert len(notices) == 1 and notices[0][1] == triage_confirm.EXPIRED_OUTCOME
+    assert "만료" in notices[0][0] and "승인 방식이 바뀌어" in notices[0][0]
     return json.loads(path.read_text(encoding="utf-8")), requests
 
 

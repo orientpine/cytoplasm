@@ -91,6 +91,23 @@ def test_a_card_the_owner_approved_is_refused_and_left_pending(card) -> None:
     assert fake.contents[stored["message_id"]] == before and writes == []
 
 
+def test_a_superseded_card_is_refused_with_the_reason_and_the_newer_card(card) -> None:
+    import triage_supersede
+
+    _fake, old, writes, drafts = card
+    # Given: the same mail was composed again in its thread, so the newer card closed the old one.
+    new = _post(_compose("고친 본문"))
+    assert triage_supersede.supersede_older(new) == [old["id"]]
+    assert mail._stored(drafts, old["id"])["superseded_by"] == new["id"]
+    writes.clear()
+    # When: the requester tries to withdraw the old card; Then: the refusal says why and names the new card.
+    with pytest.raises(mail.triage_gate.GateError) as refused:
+        _withdraw(old["id"])
+    assert refused.value.exit_code == 1
+    assert "대체" in str(refused.value) and new["id"] in str(refused.value)
+    assert mail._stored(drafts, new["id"])["status"] == "pending" and writes == []
+
+
 @pytest.mark.parametrize("status", ["executed", "blocked", "expired"])
 def test_a_sent_or_finished_card_is_refused(card, status: str) -> None:
     fake, stored, writes, drafts = card
