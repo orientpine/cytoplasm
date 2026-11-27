@@ -7,4 +7,4 @@
 # 서명되지 않은 도리 코드가 설치되는 길이 없다.
 schema = 1
 repo = "https://github.com/orientpine/omo-dori-mode-experimental.git"
-commit = "23cf0fd572f5a23561558ad064922dd6553539e8"
+commit = "f7c918c0041cb8f5cd61f4f1a4cd6f685da4adf0"
