@@ -165,7 +165,10 @@ def default_capture(argv: tuple[str, ...]) -> tuple[int, str]:
     # a shell inside a herdr pane carries HERDR_SOCKET_PATH and friends, which would aim herdr at that pane's server
     env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
     try:
-        done = subprocess.run(argv, check=False, capture_output=True, text=True, env=env)
+        # bytes that are not UTF-8 never end the install: a Korean Windows wrote PowerShell's messages in CP949 while
+        # PYTHONUTF8 (install.ps1) made text=True read UTF-8, and the reader thread's UnicodeDecodeError stopped the
+        # logon-task step; they arrive replaced and the caller's own ASCII line (DORI-HERDR-TASK-FAIL ...) decides
+        done = subprocess.run(argv, check=False, capture_output=True, encoding="utf-8", errors="replace", env=env)
     except OSError as error:
         # a command this machine does not have (macOS has no systemctl) answers as a shell would, 127 or 126 when it
         # cannot run, so the caller takes its own not-available branch instead of the install stopping on a traceback
@@ -325,6 +328,9 @@ def ps_quote(value: str) -> str:
 
 
 def powershell(script: str) -> tuple[str, ...]:
+    # UTF-8 without a BOM (Windows PowerShell writes the console code page, CP949 on a Korean PC, and [Text.Encoding]::UTF8
+    # would put a BOM before the first line a caller compares)
+    script = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; " + script
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return ("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
 

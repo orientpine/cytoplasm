@@ -143,7 +143,7 @@ def test_supervision_registers_both_tasks_and_restarts_serve_only_on_update(
     assert any("Register-ScheduledTask -TaskName 'Dori herdr server'" in s and "-AtLogOn" in s for s in scripts)
     assert ("C:/bun.exe", str(layout.dori_cli), "serve", "--install-task") in host.calls
     killed = any("taskkill.exe" in s and "Stop-ScheduledTask -TaskName 'Dori serve'" in s for s in scripts)
-    started = any(s == "Start-ScheduledTask -TaskName 'Dori serve'" for s in scripts)
+    started = any(s.endswith("; Start-ScheduledTask -TaskName 'Dori serve'") for s in scripts)
     assert killed is (serving and restart)
     assert started is (not serving or restart)
     assert "DORI-HERDR-SERVER 'Dori herdr server' running" in capsys.readouterr().out
