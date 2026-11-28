@@ -89,7 +89,8 @@ PowerShell 에서:
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/orientpine/cytoplasm/main/install.ps1 | iex"
 ```
 
-같은 줄을 다시 실행하면 업데이트다. 옵션은 줄 앞에 환경변수로 준다. `CYTO_ROLES`(쉼표 목록
+같은 줄을 다시 실행하면 업데이트다. PowerShell 창에서 큰따옴표가 빠지면 바깥 창의 `iex` 가 파일을 한 줄씩 실행하는데,
+설치기가 이를 알아채고(`CYTO-WINDOWS-WHOLE-SCRIPT`) 같은 줄을 한 덩어리로 한 번 더 실행한다. 옵션은 줄 앞에 환경변수로 준다. `CYTO_ROLES`(쉼표 목록
 `okdori,moodori,gongdori`), `CYTO_OWNER_CALL`, `CYTO_HOME`(기본 `%USERPROFILE%\.cytoplasm`).
 내려받은 파일로는 `-File install.ps1 -Role ... -OwnerCall ...` 도 된다.
 

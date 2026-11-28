@@ -59,6 +59,9 @@ git 같은 기본 도구가 없으면 리눅스는 `sudo` 비밀번호(컴퓨터
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/orientpine/cytoplasm/main/install.ps1 | iex"
 ```
 
+앞뒤 큰따옴표(`"`)까지 그대로 붙여 넣습니다. 옮기다가 따옴표가 빠져도 설치기가 이를 알아채고(`CYTO-WINDOWS-WHOLE-SCRIPT` 줄)
+한 번 더 제대로 실행해 끝까지 마칩니다.
+
 몇 분 동안 글자가 흘러갑니다. 필요한 도구(git·Python·Bun·omo, 윈도우는 PowerShell 7 도)를 찾아 없으면 깔고,
 내려받은 것이 진짜 배포본인지 서명으로 확인한 뒤 도리를 설치합니다. 마지막 즈음에 이 줄이 보이면 성공입니다.
 

@@ -132,7 +132,8 @@ jobs:
           python3 -m automation.public_gate range origin/main HEAD --text-env PR_TEXT
 
   # 네이티브 윈도우(WSL 없음) 설치·상시 실행·업데이트를 깨끗한 windows-latest 에서 실제로 돌린다. README 의
-  # 한 줄(install.ps1 을 iex 로)로 설치하고, 작업 스케줄러 두 항목(herdr 서버·dori serve)이 로그온 트리거로
+  # 한 줄을 Windows PowerShell 5.1 창에 그대로 쳐서(로컬 HTTP 로 받은 install.ps1 을 irm | iex) 설치하고, 큰따옴표가 빠진
+  # 줄(바깥 창 iex 가 줄마다 실행)과 한국어 콘솔(chcp 949)에서 PowerShell 출력을 읽는 단계도 보고, 작업 스케줄러 두 항목(herdr 서버·dori serve)이 로그온 트리거로
   # 등록돼 지금 돌고 있는지, 서명 안 된 새 태그는 안 받는지, 서명된 새 판(새 포크 고정 커밋)으로 업데이트되고
   # 상시 루프가 새 코드로 다시 뜨는지까지 본다. 릴리스 채널은 이 잡이 만든 키로 서명한 로컬 저장소다(형의
   # 자격 증명·채널 없음). 시나리오 정본은 tests/windows/install-update.ps1 이다.
@@ -145,7 +146,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install, always-on tasks and update on native Windows
+      - name: Install with README's line (irm | iex in Windows PowerShell 5.1), always-on tasks and update on native Windows
         shell: pwsh
         run: ./tests/windows/install-update.ps1 -Evidence "$env:RUNNER_TEMP/cyto-windows-evidence"
 

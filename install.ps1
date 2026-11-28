@@ -10,14 +10,18 @@
 # `python -m automation.install.update`, which keeps that check for every later update and runs the Dori installer
 # (pinned fork, herdr, Task Scheduler entries for the herdr server and `dori serve`). No administrator rights needed.
 # This file stays ASCII: Windows PowerShell 5.1 reads a -File script without a BOM in the ANSI code page.
-param(
-  [string]$Repo = $(if ($env:CYTO_REPO) { $env:CYTO_REPO } else { "https://github.com/orientpine/cytoplasm.git" }),
-  [string]$InstallRoot = $(if ($env:CYTO_HOME) { $env:CYTO_HOME } else { Join-Path $env:USERPROFILE ".cytoplasm" }),
-  [string]$TrustKey = $env:CYTO_TRUST_KEY,
-  [string]$ExpectFingerprint = $(if ($env:CYTO_EXPECT_FINGERPRINT) { $env:CYTO_EXPECT_FINGERPRINT } else { "SHA256:4yOZrMFmCSiSryt6+sal+E2hROpMlalgWNUqSf9lqsU" }),
-  [string[]]$Role = $(if ($env:CYTO_ROLES) { $env:CYTO_ROLES -split "," } else { @() }),
-  [string]$OwnerCall = $env:CYTO_OWNER_CALL
-)
+# The param line and the line after it stay one line each. Typed into PowerShell without its double quotes, README's line
+# pipes this file into the outer window's iex line by line ("line:1 char:7 param(" on a seminar PC, 2026-11-28); a script
+# block then sits on line 1 of its own text, so the second line runs README's line once more, as one script, and stops.
+param([string]$Repo, [string]$InstallRoot, [string]$TrustKey, [string]$ExpectFingerprint, [string[]]$Role, [string]$OwnerCall)
+if ({}.Ast.Extent.StartLineNumber -eq 1) { $u = if ($env:CYTO_INSTALL_URL) { $env:CYTO_INSTALL_URL } else { "https://raw.githubusercontent.com/orientpine/cytoplasm/main/install.ps1" }; Write-Host "CYTO-WINDOWS-WHOLE-SCRIPT: the line ran split (its double quotes were lost) - running $u as one script"; & powershell -ExecutionPolicy Bypass -c "irm $u | iex"; Write-Host "CYTO-WINDOWS-WHOLE-SCRIPT-DONE: exit $LASTEXITCODE"; throw (New-Object System.Management.Automation.PipelineStoppedException) }
+# (line above) PipelineStoppedException stops the outer window's pipeline quietly; break there printed a red 'powershell.exe failed to run'
+if (-not $Repo) { $Repo = if ($env:CYTO_REPO) { $env:CYTO_REPO } else { "https://github.com/orientpine/cytoplasm.git" } }
+if (-not $InstallRoot) { $InstallRoot = if ($env:CYTO_HOME) { $env:CYTO_HOME } else { Join-Path $env:USERPROFILE ".cytoplasm" } }
+if (-not $TrustKey) { $TrustKey = $env:CYTO_TRUST_KEY }
+if (-not $ExpectFingerprint) { $ExpectFingerprint = if ($env:CYTO_EXPECT_FINGERPRINT) { $env:CYTO_EXPECT_FINGERPRINT } else { "SHA256:4yOZrMFmCSiSryt6+sal+E2hROpMlalgWNUqSf9lqsU" } }
+if (-not $Role) { $Role = if ($env:CYTO_ROLES) { $env:CYTO_ROLES -split "," } else { @() } }
+if (-not $OwnerCall) { $OwnerCall = $env:CYTO_OWNER_CALL }
 $ErrorActionPreference = "Stop"
 $Principal = "update-trust@autophagy"
 

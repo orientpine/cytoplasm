@@ -11,6 +11,7 @@ import json
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -368,6 +369,20 @@ def test_where_systemctl_does_not_exist_the_install_skips_the_units_and_says_how
     assert not (home / ".config" / "systemd").exists() and world.ran("workspace", "create") == []
     assert dori_herdr.default_capture(("systemctl", "--user", "show-environment"))[0] == 127
 
+
+def test_a_powershell_message_in_the_korean_console_code_page_ends_in_the_task_fail_line_not_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Korean Windows: Register-ScheduledTask's error arrives in CP949 while PYTHONUTF8 (install.ps1) reads pipes as UTF-8;
+    # the real capture runs a child that answers like it, and the step must end in its own failure line (2026-11-28)
+    said = "작업을 등록하지 못했습니다. 액세스가 거부되었습니다.".encode("cp949")
+    child = (sys.executable, "-c", f"import sys; sys.stderr.buffer.write({said!r}); sys.exit(1)")
+    layout = dori_herdr.Layout(tmp_path / "home", tmp_path / "fork", windows=True)
+
+    code = dori_herdr.windows_supervise(layout, lambda argv: dori_herdr.default_capture(child), lambda _: None, lambda _: None, restart=False)
+
+    assert code == 6
+    assert "DORI-HERDR-TASK-FAIL" in capsys.readouterr().out
 
 def test_the_pinned_tools_cover_linux_and_carry_real_digests() -> None:
     tools = dori_herdr.load_tools(Path(dori.REPO_ROOT))
