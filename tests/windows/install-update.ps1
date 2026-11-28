@@ -10,6 +10,8 @@ param(
   [string]$NewForkPin = "8ae06133705ce0e8edc9edb7f604a1ed18fd5869"
 )
 $ErrorActionPreference = "Stop"
+$script:Server = $null
+trap { if ($script:Server) { $script:Server.Stop() }; break }
 $PSNativeCommandArgumentPassing = "Standard"
 $checkout = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $work = Join-Path ([IO.Path]::GetTempPath()) ("cyto-win-" + [Guid]::NewGuid().ToString("N"))
@@ -29,12 +31,36 @@ function Check($ok, $what) {
 function FreshPath {
   $env:Path = @([Environment]::GetEnvironmentVariable("Path", "Machine"), [Environment]::GetEnvironmentVariable("Path", "User")) -join ";"
 }
-function Installer([string]$log, [hashtable]$vars) {
-  # README's line is `irm <raw main>/install.ps1 | iex`; the same script text goes through iex here, options as env vars
+function ServeInstaller {
+  # README's line fetches install.ps1 with irm; this serves the checkout's file over loopback HTTP the way
+  # raw.githubusercontent.com does (text/plain; charset=utf-8), so the line runs here as written
+  $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  # the thread job's accept loop would keep pwsh alive after the last line: the trap below and the end stop it
+  $script:Server = $listener
+  $null = Start-ThreadJob -ArgumentList $listener, ([IO.File]::ReadAllBytes((Join-Path $checkout "install.ps1"))) -ScriptBlock {
+    param($listener, $body)
+    while ($true) {
+      try { $client = $listener.AcceptTcpClient() } catch { return }
+      try {
+        $stream = $client.GetStream()
+        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII, $false, 4096, $true)
+        while ($reader.ReadLine()) { }
+        $head = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: text/plain; charset=utf-8`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")
+        $stream.Write($head, 0, $head.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
+      } finally { $client.Close() }
+    }
+  }
+  "http://127.0.0.1:$($listener.LocalEndpoint.Port)/install.ps1"
+}
+function Installer([string]$log, [hashtable]$vars, [string]$line = "powershell -ExecutionPolicy Bypass -c `"irm $url | iex`"") {
+  # README's line typed into a Windows PowerShell 5.1 window (the default: quoted, irm | iex), options as env vars
   $saved = @{}
   foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $vars[$k]) }
   try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression ([IO.File]::ReadAllText('$((Join-Path $checkout 'install.ps1').Replace("'", "''"))'))" *>&1 | Tee-Object -FilePath (Join-Path $Evidence $log) | Out-Host
+    Write-Host "PS> $line"
+    # -NonInteractive: a split run of an unfixed install.ps1 reaches Get-Content with no path, which would wait for input
+    & powershell -NoProfile -NonInteractive -Command $line *>&1 | Tee-Object -FilePath (Join-Path $Evidence $log) | Out-Host
     return $LASTEXITCODE
   } finally {
     foreach ($k in $vars.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
@@ -62,12 +88,40 @@ Sign $stage "v900.0.0"
 Native "git" @("-C", $stage, "push", "-q", "origin", "HEAD:refs/heads/main", "refs/tags/v900.0.0")
 $pin = ((Get-Content (Join-Path $checkout "dori\pin.toml")) | Where-Object { $_ -match '^commit = "([0-9a-f]{40})"' } | ForEach-Object { $Matches[1] })
 Write-Host "pinned fork $pin, update target $NewForkPin, key $fp"
+$url = ServeInstaller
+Write-Host "install.ps1 served at $url"
+
+Write-Host "== S0: a Korean console (CP949): what the Dori installer reads back from PowerShell does not end it"
+# a Korean PC writes PowerShell's messages in CP949 while install.ps1 sets PYTHONUTF8; the runner's own messages are
+# English, so the probe writes the Korean line itself and only ASCII comes back here
+$probe = Join-Path $work "cp949.py"
+[IO.File]::WriteAllText($probe, @'
+import subprocess
+from automation.install import dori_herdr
+page = subprocess.run(("powershell", "-NoProfile", "-Command", "[Console]::OutputEncoding.CodePage"), capture_output=True).stdout
+print("CP949-PAGE", page.decode("ascii", "replace").strip())
+said = "\uc791\uc5c5\uc744 \ub4f1\ub85d\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4"
+code, out = dori_herdr.default_capture(dori_herdr.powershell(f"[Console]::Error.WriteLine('{said}'); Write-Output 'CP949-MARK'; exit 1"))
+print("CP949-CAPTURE", code, "CP949-MARK" in out, said in out)
+'@, [Text.UTF8Encoding]::new($false))
+$env:PYTHONUTF8 = "1"; $env:PYTHONPATH = $checkout
+try { $said = & cmd.exe /d /c chcp 949 '>nul' '&&' python $probe 2>&1 | Out-String } finally { Remove-Item Env:PYTHONUTF8, Env:PYTHONPATH }
+$said | Set-Content -LiteralPath (Join-Path $Evidence "cp949-capture.log")
+Write-Host $said
+Check ($said -match "CP949-PAGE 949") "S0: a child PowerShell of this console writes CP949 (chcp 949)"
+Check ($said -match "CP949-CAPTURE 1 True True") "S0: the capture keeps the exit code, the ASCII marker and the Korean message"
 
 Write-Host "== S4a: a key whose fingerprint is not the published one runs nothing"
 $code = Installer "install-wrong-fingerprint.log" @{ CYTO_REPO = $origin; CYTO_HOME = (Join-Path $work "wrong"); CYTO_TRUST_KEY = "$key.pub"; CYTO_EXPECT_FINGERPRINT = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }
 Check ($code -ne 0) "wrong fingerprint: installer exits non-zero ($code)"
 Check ((Get-Content (Join-Path $Evidence "install-wrong-fingerprint.log") -Raw) -match "CYTO-WINDOWS-FINGERPRINT-MISMATCH") "wrong fingerprint: CYTO-WINDOWS-FINGERPRINT-MISMATCH printed"
 Check (-not (Test-Path (Join-Path $work "wrong\src\automation"))) "wrong fingerprint: no file of the clone was checked out"
+
+Write-Host "== S4c: the same, typed without its double quotes (the outer window's iex gets install.ps1 line by line)"
+$code = Installer "install-split-wrong-fingerprint.log" @{ CYTO_REPO = $origin; CYTO_HOME = (Join-Path $work "wrong-split"); CYTO_TRUST_KEY = "$key.pub"; CYTO_EXPECT_FINGERPRINT = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; CYTO_INSTALL_URL = $url } "powershell -ExecutionPolicy Bypass -c irm $url | iex"
+$log = Get-Content (Join-Path $Evidence "install-split-wrong-fingerprint.log") -Raw
+Check ($log -notmatch "ParserError|Missing '\)'") "split line, wrong fingerprint: no parse error"
+Check ($log -match "CYTO-WINDOWS-FINGERPRINT-MISMATCH") "split line, wrong fingerprint: the whole script ran up to the fingerprint check"
 
 Write-Host "== S1: install through iex, as README's line"
 $code = Installer "install.log" @{ CYTO_REPO = $origin; CYTO_TRUST_KEY = "$key.pub"; CYTO_EXPECT_FINGERPRINT = $fp; CYTO_OWNER_CALL = "boss" }
@@ -143,4 +197,15 @@ Check ($after.Count -eq 1) "exactly one dori serve supervisor after update ($($a
 Check ($after[0].ProcessId -ne $before[0].ProcessId -and $after[0].CreationDate -gt $started) "the supervisor is a new process started by the update"
 Check ((Get-ScheduledTask -TaskName "Dori serve").State -eq "Running") "'Dori serve' is running after the update"
 Copy-Item $serveLog (Join-Path $Evidence "serve-after-update.log")
+Write-Host "== S1b: README's line typed without its double quotes: the outer window's iex gets install.ps1 line by line"
+$code = Installer "install-split.log" @{ CYTO_REPO = $origin; CYTO_TRUST_KEY = "$key.pub"; CYTO_EXPECT_FINGERPRINT = $fp; CYTO_INSTALL_URL = $url } "powershell -ExecutionPolicy Bypass -c irm $url | iex"
+$log = Get-Content (Join-Path $Evidence "install-split.log") -Raw
+Check ($log -notmatch "ParserError|Missing '\)'") "split line: no parse error"
+Check ($log -match "CYTO-WINDOWS-WHOLE-SCRIPT") "split line: the installer noticed and ran README's line as one script"
+Check ($log -match "CYTO-WINDOWS-INSTALLED") "split line: the install still finished (CYTO-WINDOWS-INSTALLED)"
+Check ($log -match "CYTO-WINDOWS-WHOLE-SCRIPT-DONE: exit 0") "split line: the one-script run ended with exit 0 and says so"
+Check ($log -notmatch "failed to run|NativeCommandFailed") "split line: the split copy stops quietly (no red powershell.exe line after it)"
+$script:Server.Stop()
 Write-Host "WINDOWS_E2E_OK"
+# the split window above ends non-zero by design (its pipeline is stopped after the one-script run); every check passed, so the step does too
+exit 0

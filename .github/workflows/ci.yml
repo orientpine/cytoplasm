@@ -145,7 +145,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install, always-on tasks and update on native Windows
+      - name: Install with README's line (irm | iex in Windows PowerShell 5.1), always-on tasks and update on native Windows
         shell: pwsh
         run: ./tests/windows/install-update.ps1 -Evidence "$env:RUNNER_TEMP/cyto-windows-evidence"
 
