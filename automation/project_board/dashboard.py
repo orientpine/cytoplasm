@@ -72,7 +72,9 @@ _SERVED_JS: Final = """
     var on=b.dataset.archive==='1',name=b.dataset.archiveProject;
     b.disabled=true;
     return post('/project/'+encodeURIComponent(name),'archived='+(on?'1':'0')).then(function(){
-      location.hash=on?'archive':'project/'+encodeURIComponent(name);location.reload();
+      var h=on?'archive':'project/'+encodeURIComponent(name);
+      // the step the open dialog added becomes the next screen, so one back step from there is the project screen
+      if((history.state||{}).pbDialog){history.replaceState(null,'','#'+h);}else{location.hash=h;}location.reload();
     }).catch(function(error){b.disabled=false;throw error;});
   }
   PB.bind=function(root){
@@ -118,11 +120,17 @@ _SERVED_JS: Final = """
       dialog.querySelector('[data-name]').textContent=b.dataset.archiveProject;
       dialog.querySelector('.dialog-error').textContent='';
       dialog.showModal();
+      // the open dialog is one step of its own: a back step (the phone gesture too) closes it and stays on this screen
+      var st=history.state||{},step={pbDialog:1};if('pbFrom' in st){step.pbFrom=st.pbFrom;step.pbPage=st.pbPage;}
+      try{history.pushState(step,'',location.href);}catch(e){}
     });
   });
   };
   PB.bind(document);
   if(dialog){
+    window.addEventListener('popstate',function(){if(dialog.open&&!(history.state||{}).pbDialog){dialog.close();}});
+    // closed by its own button or Escape: that step is taken back, so the next back step leaves this screen as before
+    dialog.addEventListener('close',function(){if((history.state||{}).pbDialog){history.back();}});
     dialog.querySelector('[data-confirm]').addEventListener('click',function(event){
       event.preventDefault();if(!pending){return;}
       var ok=event.currentTarget;ok.disabled=true;
